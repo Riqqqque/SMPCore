@@ -1,0 +1,56 @@
+# ============================================================
+#  SMPCore Configuration
+#  Author: Rique
+# ============================================================
+
+messages:
+  # MiniMessage format - https://docs.advntr.dev/minimessage/format.html
+  prefix: "<dark_gray>[<gradient:#FF6B6B:#FFE66D>Server</gradient>]</dark_gray> "
+  join-first: "<gold><bold>* Welcome to the server, <white>{player}</white>! *</bold></gold> <gray>You are player number <yellow>{count}</yellow> to join!</gray>"
+  join-return: "<aqua>> <white>{player}</white> has joined the server.</aqua>"
+  quit: "<gray>< <white>{player}</white> has left the server.</gray>"
+
+tpa:
+  timeout: 120
+  cooldown: 30
+  teleport-delay: 3
+  move-cancels: true
+
+combat:
+  tag-seconds: 15
+
+homes:
+  default-max: 1
+  multiple-max: 5
+
+spawn:
+  world: "world"
+
+back:
+  on-death: true
+  on-teleport: true
+
+spawner:
+  silk-touch-enabled: true
+  max-stack: 64
+  hologram-view-range: 0.3
+
+  speed:
+    max-sugar: 32
+    # 1.0x to 16.0x scaling based on sugar
+    max-multiplier: 16.0
+
+  ai-nerf:
+    enabled: true
+
+  redstone:
+    # true: powered spawner is disabled
+    # false: powered spawner is enabled
+    powered-disables: true
+
+dragon-egg:
+  speed-amplifier: 1
+  check-interval: 10
+
+crafting:
+  block-netherite-armor-upgrade: true
