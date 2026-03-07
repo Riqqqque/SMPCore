@@ -276,14 +276,14 @@ public final class AdminCommands {
                         if (input.equalsIgnoreCase("off") || input.equalsIgnoreCase("reset")) {
                             player.displayName(net.kyori.adventure.text.Component.text(player.getName()));
                             player.playerListName(net.kyori.adventure.text.Component.text(player.getName()));
-                            plugin.getDatabase().setNickname(player.getUniqueId(), null);
+                            plugin.getDatabase().setNickname(player.getUniqueId(), player.getName(), null);
                             player.sendMessage(MessageUtil.success("Nickname removed."));
                         } else {
                             // Allow MiniMessage formatting in nicknames
                             var component = MM.deserialize(input);
                             player.displayName(component);
                             player.playerListName(component);
-                            plugin.getDatabase().setNickname(player.getUniqueId(), input);
+                            plugin.getDatabase().setNickname(player.getUniqueId(), player.getName(), input);
                             player.sendMessage(MessageUtil.success("Nickname set to " + input + "."));
                         }
                         return Command.SINGLE_SUCCESS;

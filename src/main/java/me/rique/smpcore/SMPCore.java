@@ -92,6 +92,7 @@ public final class SMPCore extends JavaPlugin {
             HandlerList.unregisterAll(dragonEggListener);
             dragonEggListener.cancel();
         }
+        if (backpackListener != null) backpackListener.shutdown();
         if (spawnerManager != null) spawnerManager.shutdown();
         if (databaseManager != null) databaseManager.close();
         getLogger().info("SMPCore disabled.");

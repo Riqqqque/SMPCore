@@ -204,6 +204,18 @@ public final class BackpackListener implements Listener {
         warnCooldown.remove(event.getPlayer().getUniqueId());
     }
 
+    public void shutdown() {
+        for (Map.Entry<UUID, OpenBackpackSession> entry : List.copyOf(openBackpacks.entrySet())) {
+            Player player = Bukkit.getPlayer(entry.getKey());
+            if (player == null || !player.isOnline()) continue;
+
+            OpenBackpackSession session = openBackpacks.remove(entry.getKey());
+            if (session == null) continue;
+            persistBackpack(player, session, session.inventory());
+        }
+        warnCooldown.clear();
+    }
+
     private void handleBackpackMenuClick(InventoryClickEvent event, Player player) {
         OpenBackpackSession session = openBackpacks.get(player.getUniqueId());
         if (session == null) {

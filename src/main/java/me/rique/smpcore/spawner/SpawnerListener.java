@@ -170,6 +170,10 @@ public final class SpawnerListener implements Listener {
                 manager.unregister(loc);
             }
 
+            if (player.getGameMode() == GameMode.CREATIVE) {
+                return;
+            }
+
             if (canSilk) {
                 block.getWorld().dropItemNaturally(
                     loc.clone().add(0.5, 0.5, 0.5),

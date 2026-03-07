@@ -242,15 +242,24 @@ public final class SpawnerManager {
         if (!(loc.getBlock().getState() instanceof CreatureSpawner cs)) return;
         int maxSugar = plugin.getConfigManager().spawnerMaxSugar;
         double maxMult = plugin.getConfigManager().spawnerMaxMultiplier;
-        int minDelay = data.adjustedDelay(BASE_MIN_DELAY, maxSugar, maxMult);
-        int maxDelay = data.adjustedDelay(BASE_MAX_DELAY, maxSugar, maxMult);
-        int scaledSpawnCount = Math.max(1, Math.min(512, VANILLA_SPAWN_COUNT * data.stackCount()));
+        int minDelay = Math.max(
+            plugin.getConfigManager().spawnerMinDelayFloor,
+            data.adjustedDelay(BASE_MIN_DELAY, maxSugar, maxMult)
+        );
+        int maxDelay = Math.max(minDelay, data.adjustedDelay(BASE_MAX_DELAY, maxSugar, maxMult));
+        int scaledSpawnCount = Math.max(
+            VANILLA_SPAWN_COUNT,
+            (int) Math.round(VANILLA_SPAWN_COUNT * Math.sqrt(Math.max(1, data.stackCount())))
+        );
+        scaledSpawnCount = Math.min(plugin.getConfigManager().spawnerStackSpawnCountCap, scaledSpawnCount);
+        int maxNearbyEntities = Math.max(
+            16,
+            Math.min(plugin.getConfigManager().spawnerMaxNearbyEntitiesCap, scaledSpawnCount * 4)
+        );
         cs.setMinSpawnDelay(minDelay);
         cs.setMaxSpawnDelay(maxDelay);
-        // Stack size scales output per cycle from vanilla base spawn count.
         cs.setSpawnCount(scaledSpawnCount);
-        cs.setMaxNearbyEntities(Math.max(16, scaledSpawnCount * 4));
-        // Apply speed effect immediately instead of waiting for an old delay cycle.
+        cs.setMaxNearbyEntities(maxNearbyEntities);
         cs.setDelay(minDelay);
         writeDataToSpawnerState(cs, data);
         cs.update(true, false);
