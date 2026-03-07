@@ -8,6 +8,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
+import org.bukkit.Chunk;
 import org.bukkit.Color;
 import org.bukkit.Keyed;
 import org.bukkit.Location;
@@ -18,6 +19,7 @@ import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockState;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.AbstractArrow;
 import org.bukkit.entity.Arrow;
@@ -25,6 +27,7 @@ import org.bukkit.entity.Endermite;
 import org.bukkit.entity.EnderPearl;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Item;
+import org.bukkit.entity.ItemFrame;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Mob;
 import org.bukkit.entity.Player;
@@ -47,6 +50,7 @@ import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareGrindstoneEvent;
 import org.bukkit.event.inventory.PrepareItemCraftEvent;
@@ -55,6 +59,7 @@ import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.inventory.CraftingInventory;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
@@ -62,6 +67,7 @@ import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.ShapedRecipe;
+import org.bukkit.inventory.meta.BlockStateMeta;
 import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
@@ -71,6 +77,7 @@ import org.bukkit.util.Vector;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -88,6 +95,9 @@ public final class LegendaryListener implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
 
+    private static final int LEGENDARY_ITEM_DATA_VERSION = 1;
+    private static final int STARTUP_LEGENDARY_MIGRATION_CHUNKS_PER_TICK = 24;
+    private static final int LEGENDARY_ITEM_SCAN_MAX_DEPTH = 2;
     private static final int ENDERBOW_TP_COOLDOWN = 30;
     private static final int CHRONO_READY_SECONDS = 7;
     private static final int CHRONO_COOLDOWN = 45;
@@ -108,17 +118,19 @@ public final class LegendaryListener implements Listener {
     private static final long WITHER_BLADE_SKULL_RECHARGE_MS = 4_500L;
     private static final long WITHER_BLADE_DASH_RECHARGE_MS = 3_000L;
     private static final float WITHER_BLADE_SKULL_EXPLOSION_POWER = 1.8f;
+    private static final double WITHER_BLADE_DIRECT_HIT_DAMAGE = 6.0;
     private static final double WITHER_BLADE_SKULL_SPEED = 1.35;
-    private static final double WITHER_BLADE_DASH_HORIZONTAL = 1.35;
-    private static final double WITHER_BLADE_DASH_VERTICAL = 0.60;
+    private static final double WITHER_BLADE_DASH_HORIZONTAL = 1.55;
+    private static final double WITHER_BLADE_DASH_VERTICAL = 0.72;
     private static final int WITHER_BLADE_WITHER_SECONDS = 10;
-    private static final Particle.DustOptions WITHER_BLADE_DUST = new Particle.DustOptions(Color.fromRGB(18, 18, 18), 1.35f);
+    private static final Color WITHER_BLADE_PARTICLE_COLOR = Color.fromRGB(18, 18, 18);
     private static final String GUI_TITLE_RECIPES = "<gradient:#FEE440:#00BBF9><bold>Legendary Recipes</bold></gradient>";
     private static final String GUI_TITLE_PREFIX_RECIPE = "<gradient:#A0E7E5:#B4F8C8><bold>Recipe:</bold></gradient> ";
 
     private final SMPCore plugin;
 
     private final NamespacedKey keyLegendary;
+    private final NamespacedKey keyLegendaryVersion;
     private final NamespacedKey keyLegendaryInstance;
     private final NamespacedKey keyMenuLegendary;
     private final NamespacedKey keyEnderbowForm;
@@ -156,6 +168,7 @@ public final class LegendaryListener implements Listener {
     public LegendaryListener(SMPCore plugin) {
         this.plugin = plugin;
         this.keyLegendary = new NamespacedKey(plugin, "legendary_id");
+        this.keyLegendaryVersion = new NamespacedKey(plugin, "legendary_data_version");
         this.keyLegendaryInstance = new NamespacedKey(plugin, "legendary_instance");
         this.keyMenuLegendary = new NamespacedKey(plugin, "legendary_menu_id");
         this.keyEnderbowForm = new NamespacedKey(plugin, "enderbow_form");
@@ -178,14 +191,17 @@ public final class LegendaryListener implements Listener {
         registerRecipeBookRecipes();
         Bukkit.getScheduler().runTask(plugin, () -> {
             for (Player online : Bukkit.getOnlinePlayers()) {
+                migratePlayerLegendaryItems(online);
                 refreshMagnetTracking(online);
             }
+            scheduleLoadedChunkLegendaryMigration();
         });
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickMagnets, 20L, 20L);
     }
 
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
+        migratePlayerLegendaryItems(event.getPlayer());
         refreshMagnetTracking(event.getPlayer());
     }
 
@@ -247,9 +263,23 @@ public final class LegendaryListener implements Listener {
         event.setCancelled(true);
     }
 
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onInventoryOpen(InventoryOpenEvent event) {
+        migrateLegendaryItemsInInventory(event.getInventory());
+        if (event.getPlayer() instanceof Player player) {
+            migrateLegendaryItemsInInventory(player.getInventory());
+        }
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onInventoryClick(InventoryClickEvent event) {
         if (!(event.getWhoClicked() instanceof Player player)) return;
+        if (migrateLegendaryItemTree(event.getCurrentItem())) {
+            event.setCurrentItem(event.getCurrentItem());
+        }
+        if (migrateLegendaryItemTree(event.getCursor())) {
+            event.getWhoClicked().setItemOnCursor(event.getCursor());
+        }
         queueMagnetTrackingRefresh(player);
         if (handleLegendaryCraftClick(event, player)) {
             return;
@@ -318,9 +348,17 @@ public final class LegendaryListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPickupItem(EntityPickupItemEvent event) {
+        if (migrateLegendaryItemTree(event.getItem().getItemStack())) {
+            event.getItem().setItemStack(event.getItem().getItemStack());
+        }
         if (event.getEntity() instanceof Player player) {
             queueMagnetTrackingRefresh(player);
         }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onChunkLoad(ChunkLoadEvent event) {
+        migrateLegendaryItemsInChunk(event.getChunk());
     }
 
     public void openRecipeMenu(Player player) {
@@ -1077,9 +1115,9 @@ public final class LegendaryListener implements Listener {
             next.setX(Math.max(-3.0, Math.min(3.0, next.getX())));
             next.setZ(Math.max(-3.0, Math.min(3.0, next.getZ())));
             next.setY(Math.max(next.getY(), WITHER_BLADE_DASH_VERTICAL));
-            spawnWitherBladeDashParticles(player, direction);
             player.setVelocity(next);
             player.setFallDistance(0.0f);
+            scheduleWitherBladeDashTrail(player);
             player.getWorld().playSound(player.getLocation(), Sound.ENTITY_WITHER_SHOOT, 1.0f, 0.85f);
             sendWitherBladeActionBar(player, state);
             return;
@@ -1113,6 +1151,7 @@ public final class LegendaryListener implements Listener {
         }
 
         if (event.getHitEntity() instanceof LivingEntity living && !living.equals(shooter)) {
+            living.damage(WITHER_BLADE_DIRECT_HIT_DAMAGE, shooter);
             living.addPotionEffect(new PotionEffect(
                 PotionEffectType.WITHER,
                 WITHER_BLADE_WITHER_SECONDS * 20,
@@ -1139,13 +1178,16 @@ public final class LegendaryListener implements Listener {
         skull.remove();
     }
 
-    private void spawnWitherBladeDashParticles(Player player, Vector direction) {
-        World world = player.getWorld();
-        Location start = player.getLocation().clone().add(0.0, 1.0, 0.0);
-        Vector step = direction.clone().normalize().multiply(0.28);
-        for (int i = 0; i < 10; i++) {
-            Location point = start.clone().add(step.clone().multiply(i)).add(0.0, i * 0.06, 0.0);
-            spawnBlackDragonBreath(world, point, 3, 0.08, 0.04);
+    private void scheduleWitherBladeDashTrail(Player player) {
+        UUID playerId = player.getUniqueId();
+        for (int tick = 0; tick < 7; tick++) {
+            long delay = tick;
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                Player online = Bukkit.getPlayer(playerId);
+                if (online == null || !online.isOnline()) return;
+                Location point = online.getLocation().clone().add(0.0, 1.0, 0.0);
+                spawnBlackDragonBreath(online.getWorld(), point, 4, 0.12, 0.03);
+            }, delay);
         }
     }
 
@@ -1157,8 +1199,23 @@ public final class LegendaryListener implements Listener {
     }
 
     private void spawnBlackDragonBreath(World world, Location location, int dragonBreathCount, double spread, double speed) {
-        world.spawnParticle(Particle.DRAGON_BREATH, location, dragonBreathCount, spread, spread, spread, speed);
-        world.spawnParticle(Particle.DUST, location, Math.max(4, dragonBreathCount / 2), spread, spread, spread, 0.01, WITHER_BLADE_DUST);
+        world.spawnParticle(
+            Particle.DRAGON_BREATH,
+            location,
+            dragonBreathCount,
+            spread, spread, spread,
+            speed,
+            Float.valueOf(1.0f)
+        );
+        world.spawnParticle(
+            Particle.ENTITY_EFFECT,
+            location,
+            Math.max(6, dragonBreathCount / 2),
+            spread, spread, spread,
+            0.0,
+            WITHER_BLADE_PARTICLE_COLOR
+        );
+        world.spawnParticle(Particle.SMOKE, location, Math.max(2, dragonBreathCount / 3), spread, spread * 0.6, spread, 0.01);
     }
 
     private void tickMagnets() {
@@ -1429,85 +1486,8 @@ public final class LegendaryListener implements Listener {
         ItemMeta meta = out.getItemMeta();
         if (meta == null) return out;
 
-        meta.getPersistentDataContainer().set(keyLegendary, PersistentDataType.STRING, type.id);
-        meta.getPersistentDataContainer().set(keyLegendaryInstance, PersistentDataType.STRING, UUID.randomUUID().toString());
-        meta.displayName(MM.deserialize(type.display));
-        meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
-        meta.setUnbreakable(type != LegendaryType.EMERALD_BLADE);
-        if (type != LegendaryType.EMERALD_BLADE) {
-            meta.addItemFlags(ItemFlag.HIDE_UNBREAKABLE);
-        }
-
-        List<Component> lore;
-        switch (type) {
-            case ENDERBOW -> {
-                meta.addEnchant(enchantPower, 7, true);
-                meta.getPersistentDataContainer().set(keyEnderbowForm, PersistentDataType.BYTE, (byte) 0);
-                lore = buildEnderbowLore(false);
-            }
-            case CHRONO_SWORD -> {
-                lore = List.of(
-                    MM.deserialize("<dark_gray>Legendary Sword</dark_gray>"),
-                    MM.deserialize("<gray><gold>Ability</gold>: <white>Time Rewind</white></gray>"),
-                    MM.deserialize("<gray>Right-click to mark, then right-click after <yellow>7s</yellow> to rewind.</gray>"),
-                    MM.deserialize("<gray>Lethal damage auto-rewinds and fully heals you.</gray>"),
-                    MM.deserialize("<gray>Cooldown: <white>45s</white> (<white>90s</white> if death rewind)</gray>")
-                );
-            }
-            case HARPOON_LAUNCHER -> lore = List.of(
-                MM.deserialize("<dark_gray>Legendary Launcher</dark_gray>"),
-                MM.deserialize("<gray><gold>Ability</gold>: <white>Harpoon Shot</white></gray>"),
-                MM.deserialize("<gray>Right-click to fire a harpoon arrow.</gray>"),
-                MM.deserialize("<gray>On hit, targets are pulled to you instantly.</gray>"),
-                MM.deserialize("<gray>Cooldown: <white>22s</white></gray>")
-            );
-            case HYPNOSIS_STAFF -> lore = List.of(
-                MM.deserialize("<dark_gray>Legendary Staff</dark_gray>"),
-                MM.deserialize("<gray><gold>Ability</gold>: <white>Mind Control</white></gray>"),
-                MM.deserialize("<gray>Right-click to control the first mob you hit.</gray>"),
-                MM.deserialize("<gray>Right-click controlled mobs again to heal <white>10 hearts</white>.</gray>"),
-                MM.deserialize("<gray>Control limit: <white>10</white> mobs | Cooldown: <white>5s</white></gray>")
-            );
-            case EMERALD_BLADE -> {
-                meta.addEnchant(enchantSharpness, 1, true);
-                meta.addEnchant(enchantUnbreaking, 3, true);
-                meta.getPersistentDataContainer().set(keyEmeraldLevel, PersistentDataType.INTEGER, 1);
-                lore = buildEmeraldBladeLore(1);
-            }
-            case WAR_PICK -> {
-                meta.addEnchant(enchantSharpness, 10, true);
-                meta.addEnchant(enchantEfficiency, 1, true);
-                lore = List.of(
-                    MM.deserialize("<dark_gray>Legendary Pickaxe</dark_gray>"),
-                    MM.deserialize("<gray><gold>Passive</gold>: <white>War Mining</white></gray>"),
-                    MM.deserialize("<gray>Break a block to blast a <white>3x3x3</white> area.</gray>"),
-                    MM.deserialize("<gray>Critical hits can knock players and damage armor.</gray>"),
-                    MM.deserialize("<gray>No mining cooldown.</gray>")
-                );
-            }
-            case FARADAYS_MAGNET -> {
-                meta.getPersistentDataContainer().set(keyMagnetActive, PersistentDataType.BYTE, (byte) 0);
-                lore = buildMagnetLore(false);
-            }
-            case WIND_CHARGE_CANNON -> {
-                meta.getPersistentDataContainer().set(keyWindCannonCharges, PersistentDataType.INTEGER, WIND_CHARGE_CANNON_MAX_CHARGES);
-                meta.getPersistentDataContainer().remove(keyWindCannonCooldownUntil);
-                lore = buildWindChargeCannonLore(WIND_CHARGE_CANNON_MAX_CHARGES, 0L);
-            }
-            case WITHER_BLADE -> {
-                applyWitherBladeState(meta, WITHER_BLADE_SKULL_MAX_CHARGES, 0L, WITHER_BLADE_DASH_MAX_CHARGES, 0L);
-                lore = meta.lore() == null ? List.of() : meta.lore();
-            }
-            case THORS_HAMMER -> lore = List.of(
-                MM.deserialize("<dark_gray>Legendary Mace</dark_gray>"),
-                MM.deserialize("<gray><gold>Passive</gold>: <white>Thunder Strike</white></gray>"),
-                MM.deserialize("<gray>Every hit calls lightning on the target.</gray>"),
-                MM.deserialize("<gray>Bonus true damage bypasses armor.</gray>")
-            );
-            default -> lore = List.of(MM.deserialize("<dark_gray>Legendary Item</dark_gray>"));
-        }
-
-        meta.lore(lore);
+        applyLegendaryIdentity(meta, type, UUID.randomUUID().toString());
+        applyLegendaryTypeState(meta, type);
         out.setItemMeta(meta);
         return out;
     }
@@ -1657,6 +1637,11 @@ public final class LegendaryListener implements Listener {
     }
 
     private void applyWindChargeCannonState(ItemStack cannon, ItemMeta meta, int charges, long cooldownUntil) {
+        writeWindChargeCannonState(meta, charges, cooldownUntil);
+        cannon.setItemMeta(meta);
+    }
+
+    private void writeWindChargeCannonState(ItemMeta meta, int charges, long cooldownUntil) {
         int normalizedCharges = cooldownUntil > System.currentTimeMillis()
             ? 0
             : clampWindChargeCannonCharges(charges);
@@ -1668,7 +1653,6 @@ public final class LegendaryListener implements Listener {
             pdc.remove(keyWindCannonCooldownUntil);
         }
         meta.lore(buildWindChargeCannonLore(normalizedCharges, cooldownUntil));
-        cannon.setItemMeta(meta);
     }
 
     private int clampWindChargeCannonCharges(int charges) {
@@ -1863,6 +1847,250 @@ public final class LegendaryListener implements Listener {
                 + state.dashCharges() + "/" + WITHER_BLADE_DASH_MAX_CHARGES
                 + "</white></gray>"
         ));
+    }
+
+    private void scheduleLoadedChunkLegendaryMigration() {
+        ArrayDeque<Chunk> queue = new ArrayDeque<>();
+        for (World world : Bukkit.getWorlds()) {
+            for (Chunk chunk : world.getLoadedChunks()) {
+                queue.addLast(chunk);
+            }
+        }
+        if (queue.isEmpty()) return;
+
+        final int[] taskId = new int[1];
+        taskId[0] = Bukkit.getScheduler().scheduleSyncRepeatingTask(plugin, () -> {
+            int processed = 0;
+            while (processed < STARTUP_LEGENDARY_MIGRATION_CHUNKS_PER_TICK && !queue.isEmpty()) {
+                migrateLegendaryItemsInChunk(queue.removeFirst());
+                processed++;
+            }
+            if (queue.isEmpty()) {
+                Bukkit.getScheduler().cancelTask(taskId[0]);
+            }
+        }, 1L, 1L);
+    }
+
+    private int migratePlayerLegendaryItems(Player player) {
+        int migrated = 0;
+        migrated += migrateLegendaryItemsInInventory(player.getInventory());
+        migrated += migrateLegendaryItemsInInventory(player.getEnderChest());
+        Inventory top = player.getOpenInventory().getTopInventory();
+        if (top != null) {
+            migrated += migrateLegendaryItemsInInventory(top);
+        }
+        return migrated;
+    }
+
+    private int migrateLegendaryItemsInChunk(Chunk chunk) {
+        int migrated = 0;
+        for (BlockState state : chunk.getTileEntities()) {
+            if (state instanceof InventoryHolder holder) {
+                migrated += migrateLegendaryItemsInInventory(holder.getInventory());
+            }
+        }
+        for (Entity entity : chunk.getEntities()) {
+            if (entity instanceof Item dropped) {
+                ItemStack stack = dropped.getItemStack();
+                if (migrateLegendaryItemTree(stack)) {
+                    dropped.setItemStack(stack);
+                    migrated++;
+                }
+                continue;
+            }
+            if (entity instanceof ItemFrame frame) {
+                ItemStack stack = frame.getItem();
+                if (migrateLegendaryItemTree(stack)) {
+                    frame.setItem(stack);
+                    migrated++;
+                }
+            }
+        }
+        return migrated;
+    }
+
+    private int migrateLegendaryItemsInInventory(Inventory inventory) {
+        return migrateLegendaryItemsInInventory(inventory, 0);
+    }
+
+    private int migrateLegendaryItemsInInventory(Inventory inventory, int depth) {
+        if (inventory == null || depth > LEGENDARY_ITEM_SCAN_MAX_DEPTH) {
+            return 0;
+        }
+
+        int migrated = 0;
+        ItemStack[] contents = inventory.getContents();
+        for (int slot = 0; slot < contents.length; slot++) {
+            ItemStack item = contents[slot];
+            if (!migrateLegendaryItemTree(item, depth)) continue;
+            inventory.setItem(slot, item);
+            migrated++;
+        }
+        return migrated;
+    }
+
+    private boolean migrateLegendaryItemTree(ItemStack item) {
+        return migrateLegendaryItemTree(item, 0);
+    }
+
+    private boolean migrateLegendaryItemTree(ItemStack item, int depth) {
+        if (item == null || item.getType() == Material.AIR || depth > LEGENDARY_ITEM_SCAN_MAX_DEPTH) {
+            return false;
+        }
+
+        boolean changed = migrateLegendaryItem(item);
+        ItemMeta meta = item.getItemMeta();
+        if (!(meta instanceof BlockStateMeta blockStateMeta)) {
+            return changed;
+        }
+
+        BlockState state = blockStateMeta.getBlockState();
+        if (!(state instanceof InventoryHolder holder)) {
+            return changed;
+        }
+
+        if (migrateLegendaryItemsInInventory(holder.getInventory(), depth + 1) <= 0) {
+            return changed;
+        }
+
+        blockStateMeta.setBlockState(state);
+        item.setItemMeta(blockStateMeta);
+        return true;
+    }
+
+    private boolean migrateLegendaryItem(ItemStack item) {
+        LegendaryType type = typeOf(item);
+        if (type == null) return false;
+
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) return false;
+
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        int version = pdc.getOrDefault(keyLegendaryVersion, PersistentDataType.INTEGER, 0);
+        String instanceId = pdc.get(keyLegendaryInstance, PersistentDataType.STRING);
+        if (instanceId == null || instanceId.isBlank()) {
+            instanceId = UUID.randomUUID().toString();
+        }
+
+        if (version >= LEGENDARY_ITEM_DATA_VERSION
+            && pdc.has(keyLegendaryInstance, PersistentDataType.STRING)) {
+            return false;
+        }
+
+        applyLegendaryIdentity(meta, type, instanceId);
+        applyLegendaryTypeState(meta, type);
+        item.setItemMeta(meta);
+        return true;
+    }
+
+    private void applyLegendaryIdentity(ItemMeta meta, LegendaryType type, String instanceId) {
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        pdc.set(keyLegendary, PersistentDataType.STRING, type.id);
+        pdc.set(keyLegendaryVersion, PersistentDataType.INTEGER, LEGENDARY_ITEM_DATA_VERSION);
+        pdc.set(keyLegendaryInstance, PersistentDataType.STRING, instanceId);
+        meta.displayName(MM.deserialize(type.display));
+        meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+        if (type == LegendaryType.EMERALD_BLADE) {
+            meta.setUnbreakable(false);
+            meta.removeItemFlags(ItemFlag.HIDE_UNBREAKABLE);
+            return;
+        }
+        meta.setUnbreakable(true);
+        meta.addItemFlags(ItemFlag.HIDE_UNBREAKABLE);
+    }
+
+    private void applyLegendaryTypeState(ItemMeta meta, LegendaryType type) {
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        switch (type) {
+            case ENDERBOW -> {
+                setEnchantLevel(meta, enchantPower, 7);
+                boolean teleport = pdc.getOrDefault(keyEnderbowForm, PersistentDataType.BYTE, (byte) 0) == (byte) 1;
+                pdc.set(keyEnderbowForm, PersistentDataType.BYTE, teleport ? (byte) 1 : (byte) 0);
+                meta.lore(buildEnderbowLore(teleport));
+            }
+            case CHRONO_SWORD -> meta.lore(List.of(
+                MM.deserialize("<dark_gray>Legendary Sword</dark_gray>"),
+                MM.deserialize("<gray><gold>Ability</gold>: <white>Time Rewind</white></gray>"),
+                MM.deserialize("<gray>Right-click to mark, then right-click after <yellow>7s</yellow> to rewind.</gray>"),
+                MM.deserialize("<gray>Lethal damage auto-rewinds and fully heals you.</gray>"),
+                MM.deserialize("<gray>Cooldown: <white>45s</white> (<white>90s</white> if death rewind)</gray>")
+            ));
+            case HARPOON_LAUNCHER -> meta.lore(List.of(
+                MM.deserialize("<dark_gray>Legendary Launcher</dark_gray>"),
+                MM.deserialize("<gray><gold>Ability</gold>: <white>Harpoon Shot</white></gray>"),
+                MM.deserialize("<gray>Right-click to fire a harpoon arrow.</gray>"),
+                MM.deserialize("<gray>On hit, targets are pulled to you instantly.</gray>"),
+                MM.deserialize("<gray>Cooldown: <white>22s</white></gray>")
+            ));
+            case HYPNOSIS_STAFF -> meta.lore(List.of(
+                MM.deserialize("<dark_gray>Legendary Staff</dark_gray>"),
+                MM.deserialize("<gray><gold>Ability</gold>: <white>Mind Control</white></gray>"),
+                MM.deserialize("<gray>Right-click to control the first mob you hit.</gray>"),
+                MM.deserialize("<gray>Right-click controlled mobs again to heal <white>10 hearts</white>.</gray>"),
+                MM.deserialize("<gray>Control limit: <white>10</white> mobs | Cooldown: <white>5s</white></gray>")
+            ));
+            case EMERALD_BLADE -> {
+                int level = Math.max(1, Math.min(
+                    EMERALD_BLADE_MAX_LEVEL,
+                    pdc.getOrDefault(keyEmeraldLevel, PersistentDataType.INTEGER, 1)
+                ));
+                pdc.set(keyEmeraldLevel, PersistentDataType.INTEGER, level);
+                setEnchantLevel(meta, enchantSharpness, level);
+                setEnchantLevel(meta, enchantUnbreaking, 3);
+                meta.lore(buildEmeraldBladeLore(level));
+            }
+            case WAR_PICK -> {
+                setEnchantLevel(meta, enchantSharpness, 10);
+                setEnchantLevel(meta, enchantEfficiency, 1);
+                meta.lore(List.of(
+                    MM.deserialize("<dark_gray>Legendary Pickaxe</dark_gray>"),
+                    MM.deserialize("<gray><gold>Passive</gold>: <white>War Mining</white></gray>"),
+                    MM.deserialize("<gray>Break a block to blast a <white>3x3x3</white> area.</gray>"),
+                    MM.deserialize("<gray>Critical hits can knock players and damage armor.</gray>"),
+                    MM.deserialize("<gray>No mining cooldown.</gray>")
+                ));
+            }
+            case FARADAYS_MAGNET -> {
+                boolean active = pdc.getOrDefault(keyMagnetActive, PersistentDataType.BYTE, (byte) 0) == (byte) 1;
+                pdc.set(keyMagnetActive, PersistentDataType.BYTE, active ? (byte) 1 : (byte) 0);
+                meta.lore(buildMagnetLore(active));
+            }
+            case WIND_CHARGE_CANNON -> {
+                int charges = clampWindChargeCannonCharges(
+                    pdc.getOrDefault(keyWindCannonCharges, PersistentDataType.INTEGER, WIND_CHARGE_CANNON_MAX_CHARGES)
+                );
+                long cooldownUntil = pdc.getOrDefault(keyWindCannonCooldownUntil, PersistentDataType.LONG, 0L);
+                if (cooldownUntil > 0L && cooldownUntil <= System.currentTimeMillis()) {
+                    charges = WIND_CHARGE_CANNON_MAX_CHARGES;
+                    cooldownUntil = 0L;
+                } else if (cooldownUntil > System.currentTimeMillis()) {
+                    charges = 0;
+                }
+                writeWindChargeCannonState(meta, charges, cooldownUntil);
+            }
+            case WITHER_BLADE -> {
+                WitherBladeState state = refreshWitherBladeState(meta);
+                applyWitherBladeState(
+                    meta,
+                    state.skullCharges(),
+                    state.skullRechargeStartedAt(),
+                    state.dashCharges(),
+                    state.dashRechargeStartedAt()
+                );
+            }
+            case THORS_HAMMER -> meta.lore(List.of(
+                MM.deserialize("<dark_gray>Legendary Mace</dark_gray>"),
+                MM.deserialize("<gray><gold>Passive</gold>: <white>Thunder Strike</white></gray>"),
+                MM.deserialize("<gray>Every hit calls lightning on the target.</gray>"),
+                MM.deserialize("<gray>Bonus true damage bypasses armor.</gray>")
+            ));
+        }
+    }
+
+    private void setEnchantLevel(ItemMeta meta, Enchantment enchantment, int level) {
+        if (meta.getEnchantLevel(enchantment) == level) return;
+        meta.removeEnchant(enchantment);
+        meta.addEnchant(enchantment, level, true);
     }
 
     private int emeraldLevel(ItemStack blade) {
