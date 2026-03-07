@@ -95,7 +95,7 @@ public final class LegendaryListener implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
 
-    private static final int LEGENDARY_ITEM_DATA_VERSION = 1;
+    private static final int LEGENDARY_ITEM_DATA_VERSION = 2;
     private static final int STARTUP_LEGENDARY_MIGRATION_CHUNKS_PER_TICK = 24;
     private static final int LEGENDARY_ITEM_SCAN_MAX_DEPTH = 2;
     private static final int ENDERBOW_TP_COOLDOWN = 30;
@@ -114,13 +114,13 @@ public final class LegendaryListener implements Listener {
     private static final double WIND_CHARGE_CANNON_SUPER_SHOT_STRENGTH = 0.8;
     private static final double WIND_CHARGE_CANNON_NORMAL_SHOT_STRENGTH = 1.2;
     private static final int WITHER_BLADE_SKULL_MAX_CHARGES = 10;
-    private static final int WITHER_BLADE_DASH_MAX_CHARGES = 6;
+    private static final int WITHER_BLADE_DASH_MAX_CHARGES = 4;
     private static final long WITHER_BLADE_SKULL_RECHARGE_MS = 4_500L;
     private static final long WITHER_BLADE_DASH_RECHARGE_MS = 3_000L;
     private static final float WITHER_BLADE_SKULL_EXPLOSION_POWER = 1.8f;
     private static final double WITHER_BLADE_DIRECT_HIT_DAMAGE = 6.0;
     private static final double WITHER_BLADE_SKULL_SPEED = 1.35;
-    private static final double WITHER_BLADE_DASH_HORIZONTAL = 1.55;
+    private static final double WITHER_BLADE_DASH_HORIZONTAL = 1.75;
     private static final double WITHER_BLADE_DASH_VERTICAL = 0.72;
     private static final int WITHER_BLADE_WITHER_SECONDS = 10;
     private static final Color WITHER_BLADE_PARTICLE_COLOR = Color.fromRGB(18, 18, 18);
