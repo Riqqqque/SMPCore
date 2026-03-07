@@ -640,14 +640,17 @@ public final class DatabaseManager {
     public CompletableFuture<Integer> upsertPlayer(UUID uuid, String username) {
         return CompletableFuture.supplyAsync(() -> {
             try (Connection conn = connection()) {
-                // Insert if new, or bump last_seen + join_count if returning
                 String upsert = """
                     INSERT INTO players (uuid, username, first_join, last_seen, join_count)
                     VALUES (?, ?, ?, ?, 1)
                     ON CONFLICT(uuid) DO UPDATE SET
                         username   = excluded.username,
+                        first_join = COALESCE(players.first_join, excluded.first_join),
                         last_seen  = excluded.last_seen,
-                        join_count = join_count + 1
+                        join_count = CASE
+                            WHEN players.join_count < 1 THEN 1
+                            ELSE players.join_count + 1
+                        END
                     """;
                 long now = System.currentTimeMillis();
                 try (PreparedStatement ps = conn.prepareStatement(upsert)) {
@@ -689,13 +692,22 @@ public final class DatabaseManager {
         }, executor);
     }
 
-    public CompletableFuture<Void> setNickname(UUID uuid, String nickname) {
+    public CompletableFuture<Void> setNickname(UUID uuid, String username, String nickname) {
         return CompletableFuture.runAsync(() -> {
+            String sql = """
+                INSERT INTO players (uuid, username, nickname, first_join, last_seen, join_count)
+                VALUES (?, ?, ?, NULL, ?, 0)
+                ON CONFLICT(uuid) DO UPDATE SET
+                    username  = excluded.username,
+                    nickname  = excluded.nickname,
+                    last_seen = excluded.last_seen
+                """;
             try (Connection conn = connection();
-                 PreparedStatement ps = conn.prepareStatement(
-                     "UPDATE players SET nickname=? WHERE uuid=?")) {
-                ps.setString(1, nickname);
-                ps.setString(2, uuid.toString());
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, uuid.toString());
+                ps.setString(2, username);
+                ps.setString(3, nickname);
+                ps.setLong(4, System.currentTimeMillis());
                 ps.executeUpdate();
             } catch (SQLException e) {
                 plugin.getLogger().severe("setNickname: " + e.getMessage());

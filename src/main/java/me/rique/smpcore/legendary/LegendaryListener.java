@@ -8,10 +8,12 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
+import org.bukkit.Color;
 import org.bukkit.Keyed;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
+import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.attribute.Attribute;
@@ -27,6 +29,7 @@ import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Mob;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.WindCharge;
+import org.bukkit.entity.WitherSkull;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -47,6 +50,7 @@ import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareGrindstoneEvent;
 import org.bukkit.event.inventory.PrepareItemCraftEvent;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -64,6 +68,8 @@ import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.util.RayTraceResult;
 import org.bukkit.util.Vector;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -95,6 +101,18 @@ public final class LegendaryListener implements Listener {
     private static final int WIND_CHARGE_CANNON_RECHARGE = 15;
     private static final int RECIPE_TRADE_SLOT = 26;
     private static final double THORS_HAMMER_BASE_TRUE_DAMAGE = 10.0;
+    private static final double WIND_CHARGE_CANNON_SUPER_SHOT_STRENGTH = 0.8;
+    private static final double WIND_CHARGE_CANNON_NORMAL_SHOT_STRENGTH = 1.2;
+    private static final int WITHER_BLADE_SKULL_MAX_CHARGES = 10;
+    private static final int WITHER_BLADE_DASH_MAX_CHARGES = 6;
+    private static final long WITHER_BLADE_SKULL_RECHARGE_MS = 4_500L;
+    private static final long WITHER_BLADE_DASH_RECHARGE_MS = 3_000L;
+    private static final float WITHER_BLADE_SKULL_EXPLOSION_POWER = 1.8f;
+    private static final double WITHER_BLADE_SKULL_SPEED = 1.35;
+    private static final double WITHER_BLADE_DASH_HORIZONTAL = 1.35;
+    private static final double WITHER_BLADE_DASH_VERTICAL = 0.60;
+    private static final int WITHER_BLADE_WITHER_SECONDS = 10;
+    private static final Particle.DustOptions WITHER_BLADE_DUST = new Particle.DustOptions(Color.fromRGB(18, 18, 18), 1.35f);
     private static final String GUI_TITLE_RECIPES = "<gradient:#FEE440:#00BBF9><bold>Legendary Recipes</bold></gradient>";
     private static final String GUI_TITLE_PREFIX_RECIPE = "<gradient:#A0E7E5:#B4F8C8><bold>Recipe:</bold></gradient> ";
 
@@ -110,6 +128,11 @@ public final class LegendaryListener implements Listener {
     private final NamespacedKey keyMagnetActive;
     private final NamespacedKey keyWindCannonCharges;
     private final NamespacedKey keyWindCannonCooldownUntil;
+    private final NamespacedKey keyWitherBladeSkullTag;
+    private final NamespacedKey keyWitherBladeSkullCharges;
+    private final NamespacedKey keyWitherBladeSkullRechargeStarted;
+    private final NamespacedKey keyWitherBladeDashCharges;
+    private final NamespacedKey keyWitherBladeDashRechargeStarted;
     private final Enchantment enchantPower;
     private final Enchantment enchantSharpness;
     private final Enchantment enchantEfficiency;
@@ -127,6 +150,8 @@ public final class LegendaryListener implements Listener {
     private final Map<UUID, Set<UUID>> controlledByOwner = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> ownerByMob = new ConcurrentHashMap<>();
     private final Set<UUID> warPickAoePlayers = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> activeMagnetPlayers = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> pendingMagnetRefresh = ConcurrentHashMap.newKeySet();
 
     public LegendaryListener(SMPCore plugin) {
         this.plugin = plugin;
@@ -140,18 +165,28 @@ public final class LegendaryListener implements Listener {
         this.keyMagnetActive = new NamespacedKey(plugin, "magnet_active");
         this.keyWindCannonCharges = new NamespacedKey(plugin, "wind_cannon_charges");
         this.keyWindCannonCooldownUntil = new NamespacedKey(plugin, "wind_cannon_cooldown_until");
+        this.keyWitherBladeSkullTag = new NamespacedKey(plugin, "wither_blade_skull");
+        this.keyWitherBladeSkullCharges = new NamespacedKey(plugin, "wither_blade_skull_charges");
+        this.keyWitherBladeSkullRechargeStarted = new NamespacedKey(plugin, "wither_blade_skull_recharge_started");
+        this.keyWitherBladeDashCharges = new NamespacedKey(plugin, "wither_blade_dash_charges");
+        this.keyWitherBladeDashRechargeStarted = new NamespacedKey(plugin, "wither_blade_dash_recharge_started");
         this.enchantPower = requireEnchantment("power");
         this.enchantSharpness = requireEnchantment("sharpness");
         this.enchantEfficiency = requireEnchantment("efficiency");
         this.enchantUnbreaking = requireEnchantment("unbreaking");
         this.recipes = buildRecipes();
         registerRecipeBookRecipes();
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            for (Player online : Bukkit.getOnlinePlayers()) {
+                refreshMagnetTracking(online);
+            }
+        });
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickMagnets, 20L, 20L);
     }
 
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
-        // no-op; custom items are traded through /lrecipe rather than the recipe book
+        refreshMagnetTracking(event.getPlayer());
     }
 
     @EventHandler
@@ -162,6 +197,8 @@ public final class LegendaryListener implements Listener {
         harpoonCd.remove(id);
         hypnosisCd.remove(id);
         chronoStates.remove(id);
+        activeMagnetPlayers.remove(id);
+        pendingMagnetRefresh.remove(id);
 
         Set<UUID> controlled = controlledByOwner.remove(id);
         if (controlled != null) {
@@ -213,6 +250,7 @@ public final class LegendaryListener implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onInventoryClick(InventoryClickEvent event) {
         if (!(event.getWhoClicked() instanceof Player player)) return;
+        queueMagnetTrackingRefresh(player);
         if (handleLegendaryCraftClick(event, player)) {
             return;
         }
@@ -269,9 +307,19 @@ public final class LegendaryListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onInventoryDrag(InventoryDragEvent event) {
+        if (event.getWhoClicked() instanceof Player player) {
+            queueMagnetTrackingRefresh(player);
+        }
         Inventory top = event.getView().getTopInventory();
         if (top.getHolder() instanceof RecipeMenuHolder || top.getHolder() instanceof BackpackRecipeHolder) {
             event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPickupItem(EntityPickupItemEvent event) {
+        if (event.getEntity() instanceof Player player) {
+            queueMagnetTrackingRefresh(player);
         }
     }
 
@@ -328,6 +376,7 @@ public final class LegendaryListener implements Listener {
             case "warpick", "pick" -> "war_pick";
             case "magnet", "faraday", "faradays_magnet", "faradays" -> "faradays_magnet";
             case "wind", "windcannon", "cannon", "wind_charge_cannon" -> "wind_charge_cannon";
+            case "wither", "witherblade", "wither_sword" -> "wither_blade";
             case "thor", "hammer", "thors", "mjolnir", "thors_hammer" -> "thors_hammer";
             default -> normalized;
         };
@@ -391,6 +440,12 @@ public final class LegendaryListener implements Listener {
                 useWindChargeCannon(player, hand, left);
                 player.getInventory().setItemInMainHand(hand);
             }
+            case WITHER_BLADE -> {
+                if (!right) return;
+                event.setCancelled(true);
+                useWitherBlade(player, hand);
+                player.getInventory().setItemInMainHand(hand);
+            }
             case WAR_PICK -> {
                 // passive/other event driven
             }
@@ -432,6 +487,11 @@ public final class LegendaryListener implements Listener {
                 toggleMagnet(player, hand);
                 player.getInventory().setItemInMainHand(hand);
             }
+            case WITHER_BLADE -> {
+                event.setCancelled(true);
+                useWitherBlade(player, hand);
+                player.getInventory().setItemInMainHand(hand);
+            }
             default -> {
             }
         }
@@ -465,6 +525,14 @@ public final class LegendaryListener implements Listener {
 
     @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
     public void onProjectileHit(ProjectileHitEvent event) {
+        if (event.getEntity() instanceof WitherSkull skull) {
+            PersistentDataContainer skullPdc = skull.getPersistentDataContainer();
+            if (skullPdc.has(keyWitherBladeSkullTag, PersistentDataType.BYTE)) {
+                handleWitherBladeSkullHit(event, skull);
+                return;
+            }
+        }
+
         if (!(event.getEntity() instanceof AbstractArrow arrow)) return;
         PersistentDataContainer pdc = arrow.getPersistentDataContainer();
 
@@ -934,6 +1002,7 @@ public final class LegendaryListener implements Listener {
     private void toggleMagnet(Player player, ItemStack magnet) {
         boolean active = !isMagnetActive(magnet);
         setMagnetActive(magnet, active);
+        refreshMagnetTracking(player);
         player.sendMessage(MessageUtil.info("Faraday's Magnet: <white>" + (active ? "ON" : "OFF") + "</white>."));
     }
 
@@ -958,8 +1027,12 @@ public final class LegendaryListener implements Listener {
         if (superShot) {
             Vector direction = player.getLocation().getDirection().normalize();
             Vector current = player.getVelocity();
-            Vector boost = direction.multiply(0.9);
-            boost.setY(Math.max(1.8, (direction.getY() * 0.55) + 1.8));
+            Vector boost = direction.multiply(0.9 * WIND_CHARGE_CANNON_SUPER_SHOT_STRENGTH);
+            boost.setY(Math.max(
+                1.8 * WIND_CHARGE_CANNON_SUPER_SHOT_STRENGTH,
+                (direction.getY() * (0.55 * WIND_CHARGE_CANNON_SUPER_SHOT_STRENGTH))
+                    + (1.8 * WIND_CHARGE_CANNON_SUPER_SHOT_STRENGTH)
+            ));
 
             Vector next = current.add(boost);
             next.setX(Math.max(-4.0, Math.min(4.0, next.getX())));
@@ -972,19 +1045,159 @@ public final class LegendaryListener implements Listener {
         }
 
         WindCharge charge = player.launchProjectile(WindCharge.class);
-        charge.setVelocity(player.getEyeLocation().getDirection().normalize().multiply(1.5));
+        charge.setVelocity(player.getEyeLocation().getDirection().normalize().multiply(1.5 * WIND_CHARGE_CANNON_NORMAL_SHOT_STRENGTH));
         player.getWorld().playSound(player.getLocation(), Sound.ENTITY_BREEZE_SHOOT, 1.0f, 1.0f);
         sendWindChargeCannonActionBar(player, nextCharges);
     }
 
+    private void useWitherBlade(Player player, ItemStack blade) {
+        if (!refreshWitherBladeState(blade)) {
+            return;
+        }
+
+        WitherBladeState state = witherBladeState(blade);
+        if (player.isSneaking()) {
+            if (state.dashCharges() <= 0) {
+                player.sendMessage(MessageUtil.warn(
+                    "Wither dash recharging: <white>" + formatSeconds(state.dashMillisUntilNext()) + "s</white>."
+                ));
+                sendWitherBladeActionBar(player, state);
+                return;
+            }
+
+            state = spendWitherBladeDash(state);
+            applyWitherBladeState(blade, state);
+
+            Vector direction = player.getLocation().getDirection().normalize();
+            Vector current = player.getVelocity();
+            Vector boost = direction.multiply(WITHER_BLADE_DASH_HORIZONTAL);
+            boost.setY(Math.max(WITHER_BLADE_DASH_VERTICAL, (direction.getY() * 0.35) + WITHER_BLADE_DASH_VERTICAL));
+
+            Vector next = current.add(boost);
+            next.setX(Math.max(-3.0, Math.min(3.0, next.getX())));
+            next.setZ(Math.max(-3.0, Math.min(3.0, next.getZ())));
+            next.setY(Math.max(next.getY(), WITHER_BLADE_DASH_VERTICAL));
+            spawnWitherBladeDashParticles(player, direction);
+            player.setVelocity(next);
+            player.setFallDistance(0.0f);
+            player.getWorld().playSound(player.getLocation(), Sound.ENTITY_WITHER_SHOOT, 1.0f, 0.85f);
+            sendWitherBladeActionBar(player, state);
+            return;
+        }
+
+        if (state.skullCharges() <= 0) {
+            player.sendMessage(MessageUtil.warn(
+                "Wither skulls recharging: <white>" + formatSeconds(state.skullMillisUntilNext()) + "s</white>."
+            ));
+            sendWitherBladeActionBar(player, state);
+            return;
+        }
+
+        state = spendWitherBladeSkull(state);
+        applyWitherBladeState(blade, state);
+
+        WitherSkull skull = player.launchProjectile(WitherSkull.class);
+        skull.setVelocity(player.getEyeLocation().getDirection().normalize().multiply(WITHER_BLADE_SKULL_SPEED));
+        skull.setCharged(false);
+        skull.setYield(0.0f);
+        skull.setIsIncendiary(false);
+        skull.getPersistentDataContainer().set(keyWitherBladeSkullTag, PersistentDataType.BYTE, (byte) 1);
+        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_WITHER_SHOOT, 1.0f, 1.0f);
+        sendWitherBladeActionBar(player, state);
+    }
+
+    private void handleWitherBladeSkullHit(ProjectileHitEvent event, WitherSkull skull) {
+        if (!(skull.getShooter() instanceof Player shooter)) {
+            skull.remove();
+            return;
+        }
+
+        if (event.getHitEntity() instanceof LivingEntity living && !living.equals(shooter)) {
+            living.addPotionEffect(new PotionEffect(
+                PotionEffectType.WITHER,
+                WITHER_BLADE_WITHER_SECONDS * 20,
+                0,
+                false,
+                true,
+                true
+            ));
+        }
+
+        Location hit = event.getHitBlock() != null
+            ? event.getHitBlock().getLocation().add(0.5, 0.5, 0.5)
+            : skull.getLocation();
+        spawnWitherBladeImpactParticles(hit);
+        skull.getWorld().createExplosion(
+            hit.getX(),
+            hit.getY(),
+            hit.getZ(),
+            WITHER_BLADE_SKULL_EXPLOSION_POWER,
+            false,
+            false,
+            shooter
+        );
+        skull.remove();
+    }
+
+    private void spawnWitherBladeDashParticles(Player player, Vector direction) {
+        World world = player.getWorld();
+        Location start = player.getLocation().clone().add(0.0, 1.0, 0.0);
+        Vector step = direction.clone().normalize().multiply(0.28);
+        for (int i = 0; i < 10; i++) {
+            Location point = start.clone().add(step.clone().multiply(i)).add(0.0, i * 0.06, 0.0);
+            spawnBlackDragonBreath(world, point, 3, 0.08, 0.04);
+        }
+    }
+
+    private void spawnWitherBladeImpactParticles(Location location) {
+        World world = location.getWorld();
+        if (world == null) return;
+        spawnBlackDragonBreath(world, location.clone().add(0.0, 0.1, 0.0), 30, 0.30, 0.02);
+        world.spawnParticle(Particle.SMOKE, location, 16, 0.25, 0.25, 0.25, 0.01);
+    }
+
+    private void spawnBlackDragonBreath(World world, Location location, int dragonBreathCount, double spread, double speed) {
+        world.spawnParticle(Particle.DRAGON_BREATH, location, dragonBreathCount, spread, spread, spread, speed);
+        world.spawnParticle(Particle.DUST, location, Math.max(4, dragonBreathCount / 2), spread, spread, spread, 0.01, WITHER_BLADE_DUST);
+    }
+
     private void tickMagnets() {
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (!player.isOnline() || player.isDead()) continue;
+        for (UUID playerId : new HashSet<>(activeMagnetPlayers)) {
+            Player player = Bukkit.getPlayer(playerId);
+            if (player == null || !player.isOnline() || player.isDead()) {
+                activeMagnetPlayers.remove(playerId);
+                continue;
+            }
+
             ItemStack magnet = findActiveMagnet(player);
-            if (magnet == null) continue;
+            if (magnet == null) {
+                activeMagnetPlayers.remove(playerId);
+                continue;
+            }
             if (!canAcceptAnyItem(player)) continue;
             pullNearbyItems(player);
         }
+    }
+
+    private void queueMagnetTrackingRefresh(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (!pendingMagnetRefresh.add(playerId)) return;
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            pendingMagnetRefresh.remove(playerId);
+            if (!player.isOnline()) {
+                activeMagnetPlayers.remove(playerId);
+                return;
+            }
+            refreshMagnetTracking(player);
+        });
+    }
+
+    private void refreshMagnetTracking(Player player) {
+        if (findActiveMagnet(player) == null) {
+            activeMagnetPlayers.remove(player.getUniqueId());
+            return;
+        }
+        activeMagnetPlayers.add(player.getUniqueId());
     }
 
     private ItemStack findActiveMagnet(Player player) {
@@ -1281,6 +1494,10 @@ public final class LegendaryListener implements Listener {
                 meta.getPersistentDataContainer().remove(keyWindCannonCooldownUntil);
                 lore = buildWindChargeCannonLore(WIND_CHARGE_CANNON_MAX_CHARGES, 0L);
             }
+            case WITHER_BLADE -> {
+                applyWitherBladeState(meta, WITHER_BLADE_SKULL_MAX_CHARGES, 0L, WITHER_BLADE_DASH_MAX_CHARGES, 0L);
+                lore = meta.lore() == null ? List.of() : meta.lore();
+            }
             case THORS_HAMMER -> lore = List.of(
                 MM.deserialize("<dark_gray>Legendary Mace</dark_gray>"),
                 MM.deserialize("<gray><gold>Passive</gold>: <white>Thunder Strike</white></gray>"),
@@ -1475,6 +1692,179 @@ public final class LegendaryListener implements Listener {
         ));
     }
 
+    private boolean refreshWitherBladeState(ItemStack blade) {
+        ItemMeta meta = blade.getItemMeta();
+        if (meta == null) return false;
+        applyWitherBladeState(blade, refreshWitherBladeState(meta));
+        return true;
+    }
+
+    private WitherBladeState witherBladeState(ItemStack blade) {
+        ItemMeta meta = blade.getItemMeta();
+        if (meta == null) {
+            return new WitherBladeState(
+                WITHER_BLADE_SKULL_MAX_CHARGES, 0L,
+                WITHER_BLADE_DASH_MAX_CHARGES, 0L
+            );
+        }
+        return refreshWitherBladeState(meta);
+    }
+
+    private WitherBladeState refreshWitherBladeState(ItemMeta meta) {
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        RechargeState skull = refreshRechargeState(
+            new RechargeState(
+                pdc.getOrDefault(keyWitherBladeSkullCharges, PersistentDataType.INTEGER, WITHER_BLADE_SKULL_MAX_CHARGES),
+                pdc.getOrDefault(keyWitherBladeSkullRechargeStarted, PersistentDataType.LONG, 0L)
+            ),
+            WITHER_BLADE_SKULL_MAX_CHARGES,
+            WITHER_BLADE_SKULL_RECHARGE_MS
+        );
+        RechargeState dash = refreshRechargeState(
+            new RechargeState(
+                pdc.getOrDefault(keyWitherBladeDashCharges, PersistentDataType.INTEGER, WITHER_BLADE_DASH_MAX_CHARGES),
+                pdc.getOrDefault(keyWitherBladeDashRechargeStarted, PersistentDataType.LONG, 0L)
+            ),
+            WITHER_BLADE_DASH_MAX_CHARGES,
+            WITHER_BLADE_DASH_RECHARGE_MS
+        );
+        return new WitherBladeState(skull.charges(), skull.rechargeStartedAt(), dash.charges(), dash.rechargeStartedAt());
+    }
+
+    private RechargeState refreshRechargeState(RechargeState state, int maxCharges, long rechargeMs) {
+        int charges = Math.max(0, Math.min(maxCharges, state.charges()));
+        long rechargeStartedAt = state.rechargeStartedAt();
+        if (charges >= maxCharges) {
+            return new RechargeState(maxCharges, 0L);
+        }
+
+        long now = System.currentTimeMillis();
+        if (rechargeStartedAt <= 0L || rechargeStartedAt > now) {
+            rechargeStartedAt = now;
+        }
+
+        long recovered = (now - rechargeStartedAt) / rechargeMs;
+        if (recovered <= 0L) {
+            return new RechargeState(charges, rechargeStartedAt);
+        }
+
+        charges = Math.min(maxCharges, charges + (int) recovered);
+        if (charges >= maxCharges) {
+            return new RechargeState(maxCharges, 0L);
+        }
+        return new RechargeState(charges, rechargeStartedAt + (recovered * rechargeMs));
+    }
+
+    private RechargeState spendRechargeState(RechargeState state, int maxCharges) {
+        if (state.charges() <= 0) return state;
+        long now = System.currentTimeMillis();
+        long rechargeStartedAt = state.rechargeStartedAt();
+        if (state.charges() >= maxCharges || rechargeStartedAt <= 0L) {
+            rechargeStartedAt = now;
+        }
+        return new RechargeState(state.charges() - 1, rechargeStartedAt);
+    }
+
+    private WitherBladeState spendWitherBladeSkull(WitherBladeState state) {
+        RechargeState spent = spendRechargeState(
+            new RechargeState(state.skullCharges(), state.skullRechargeStartedAt()),
+            WITHER_BLADE_SKULL_MAX_CHARGES
+        );
+        return new WitherBladeState(
+            spent.charges(),
+            spent.rechargeStartedAt(),
+            state.dashCharges(),
+            state.dashRechargeStartedAt()
+        );
+    }
+
+    private WitherBladeState spendWitherBladeDash(WitherBladeState state) {
+        RechargeState spent = spendRechargeState(
+            new RechargeState(state.dashCharges(), state.dashRechargeStartedAt()),
+            WITHER_BLADE_DASH_MAX_CHARGES
+        );
+        return new WitherBladeState(
+            state.skullCharges(),
+            state.skullRechargeStartedAt(),
+            spent.charges(),
+            spent.rechargeStartedAt()
+        );
+    }
+
+    private void applyWitherBladeState(ItemStack blade, WitherBladeState state) {
+        ItemMeta meta = blade.getItemMeta();
+        if (meta == null) return;
+        applyWitherBladeState(meta, state.skullCharges(), state.skullRechargeStartedAt(), state.dashCharges(), state.dashRechargeStartedAt());
+        blade.setItemMeta(meta);
+    }
+
+    private void applyWitherBladeState(ItemMeta meta, int skullCharges, long skullRechargeStartedAt, int dashCharges, long dashRechargeStartedAt) {
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        pdc.set(keyWitherBladeSkullCharges, PersistentDataType.INTEGER, skullCharges);
+        pdc.set(keyWitherBladeDashCharges, PersistentDataType.INTEGER, dashCharges);
+        if (skullCharges >= WITHER_BLADE_SKULL_MAX_CHARGES || skullRechargeStartedAt <= 0L) {
+            pdc.remove(keyWitherBladeSkullRechargeStarted);
+        } else {
+            pdc.set(keyWitherBladeSkullRechargeStarted, PersistentDataType.LONG, skullRechargeStartedAt);
+        }
+        if (dashCharges >= WITHER_BLADE_DASH_MAX_CHARGES || dashRechargeStartedAt <= 0L) {
+            pdc.remove(keyWitherBladeDashRechargeStarted);
+        } else {
+            pdc.set(keyWitherBladeDashRechargeStarted, PersistentDataType.LONG, dashRechargeStartedAt);
+        }
+        meta.lore(buildWitherBladeLore(skullCharges, skullRechargeStartedAt, dashCharges, dashRechargeStartedAt));
+    }
+
+    private List<Component> buildWitherBladeLore(int skullCharges, long skullRechargeStartedAt, int dashCharges, long dashRechargeStartedAt) {
+        long skullNext = millisUntilNextCharge(skullCharges, skullRechargeStartedAt, WITHER_BLADE_SKULL_MAX_CHARGES, WITHER_BLADE_SKULL_RECHARGE_MS);
+        long dashNext = millisUntilNextCharge(dashCharges, dashRechargeStartedAt, WITHER_BLADE_DASH_MAX_CHARGES, WITHER_BLADE_DASH_RECHARGE_MS);
+        List<Component> lore = new ArrayList<>();
+        lore.add(MM.deserialize("<dark_gray>Legendary Sword</dark_gray>"));
+        lore.add(MM.deserialize("<gray><gold>Right-click</gold>: <white>Fire an explosive wither skull</white></gray>"));
+        lore.add(MM.deserialize("<gray><gold>Shift + Right-click</gold>: <white>Wither dash</white></gray>"));
+        lore.add(MM.deserialize(
+            "<gray>Skull Charges: <white>" + skullCharges + "</white>/<white>" + WITHER_BLADE_SKULL_MAX_CHARGES
+                + "</white> <dark_gray>(+1 every " + formatSeconds(WITHER_BLADE_SKULL_RECHARGE_MS) + "s)</dark_gray></gray>"
+        ));
+        lore.add(MM.deserialize(
+            "<gray>Dash Charges: <white>" + dashCharges + "</white>/<white>" + WITHER_BLADE_DASH_MAX_CHARGES
+                + "</white> <dark_gray>(+1 every " + formatSeconds(WITHER_BLADE_DASH_RECHARGE_MS) + "s)</dark_gray></gray>"
+        ));
+        if (skullNext > 0L) {
+            lore.add(MM.deserialize("<gray>Next skull charge in <white>" + formatSeconds(skullNext) + "s</white></gray>"));
+        }
+        if (dashNext > 0L) {
+            lore.add(MM.deserialize("<gray>Next dash charge in <white>" + formatSeconds(dashNext) + "s</white></gray>"));
+        }
+        return lore;
+    }
+
+    private static long millisUntilNextCharge(int charges, long rechargeStartedAt, int maxCharges, long rechargeMs) {
+        if (charges >= maxCharges) return 0L;
+        if (rechargeStartedAt <= 0L) return rechargeMs;
+        long elapsed = Math.max(0L, System.currentTimeMillis() - rechargeStartedAt);
+        long remaining = rechargeMs - elapsed;
+        return Math.max(1L, remaining);
+    }
+
+    private String formatSeconds(long millis) {
+        double seconds = millis / 1000.0;
+        if (Math.abs(seconds - Math.rint(seconds)) < 0.0001) {
+            return Long.toString(Math.round(seconds));
+        }
+        return String.format(java.util.Locale.US, "%.1f", seconds);
+    }
+
+    private void sendWitherBladeActionBar(Player player, WitherBladeState state) {
+        player.sendActionBar(MM.deserialize(
+            "<dark_gray><bold>Wither Blade</bold></dark_gray><gray> skulls: <white>"
+                + state.skullCharges() + "/" + WITHER_BLADE_SKULL_MAX_CHARGES
+                + "</white> | dash: <white>"
+                + state.dashCharges() + "/" + WITHER_BLADE_DASH_MAX_CHARGES
+                + "</white></gray>"
+        ));
+    }
+
     private int emeraldLevel(ItemStack blade) {
         ItemMeta meta = blade.getItemMeta();
         if (meta == null) return 1;
@@ -1517,6 +1907,8 @@ public final class LegendaryListener implements Listener {
                 e(Material.IRON_BLOCK, 16), e(Material.REDSTONE_BLOCK, 16), e(Material.COPPER_BLOCK, 8), e(Material.NETHERITE_INGOT, 1))),
             new LegendaryRecipe(LegendaryType.WIND_CHARGE_CANNON, ingredients(
                 e(Material.PRISMARINE_SHARD, 32), e(Material.WIND_CHARGE, 32), e(Material.COPPER_BLOCK, 8), e(Material.DISPENSER, 1))),
+            new LegendaryRecipe(LegendaryType.WITHER_BLADE, ingredients(
+                e(Material.NETHERITE_SWORD, 1), e(Material.WITHER_SKELETON_SKULL, 3), e(Material.NETHER_STAR, 1), e(Material.SOUL_SAND, 32))),
             new LegendaryRecipe(LegendaryType.THORS_HAMMER, ingredients(
                 e(Material.MACE, 1), e(Material.LIGHTNING_ROD, 16), e(Material.NETHERITE_INGOT, 4), e(Material.WIND_CHARGE, 16)))
         );
@@ -1685,6 +2077,7 @@ public final class LegendaryListener implements Listener {
         WAR_PICK("war_pick", Material.DIAMOND_PICKAXE, "<gold><bold>War Pick</bold></gold>"),
         FARADAYS_MAGNET("faradays_magnet", Material.RECOVERY_COMPASS, "<gold><bold>Faraday's Magnet</bold></gold>"),
         WIND_CHARGE_CANNON("wind_charge_cannon", Material.PRISMARINE_SHARD, "<gold><bold>Wind Charge Cannon</bold></gold>"),
+        WITHER_BLADE("wither_blade", Material.NETHERITE_SWORD, "<dark_gray><bold>Wither Blade</bold></dark_gray>"),
         THORS_HAMMER("thors_hammer", Material.MACE, "<gold><bold>Thor's Hammer</bold></gold>");
 
         private static final Map<String, LegendaryType> BY_ID = new HashMap<>();
@@ -1707,4 +2100,14 @@ public final class LegendaryListener implements Listener {
 
     private record LegendaryRecipe(LegendaryType type, Map<Material, Integer> ingredients) {}
     private record ChronoState(Location loc, long readyAt) {}
+    private record RechargeState(int charges, long rechargeStartedAt) {}
+    private record WitherBladeState(int skullCharges, long skullRechargeStartedAt, int dashCharges, long dashRechargeStartedAt) {
+        private long skullMillisUntilNext() {
+            return millisUntilNextCharge(skullCharges, skullRechargeStartedAt, WITHER_BLADE_SKULL_MAX_CHARGES, WITHER_BLADE_SKULL_RECHARGE_MS);
+        }
+
+        private long dashMillisUntilNext() {
+            return millisUntilNextCharge(dashCharges, dashRechargeStartedAt, WITHER_BLADE_DASH_MAX_CHARGES, WITHER_BLADE_DASH_RECHARGE_MS);
+        }
+    }
 }

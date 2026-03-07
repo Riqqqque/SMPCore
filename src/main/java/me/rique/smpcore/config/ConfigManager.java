@@ -41,6 +41,9 @@ public final class ConfigManager {
     public double spawnerMaxMultiplier;
     public boolean spawnerAiNerfEnabled;
     public boolean spawnerRedstoneDisables;
+    public int spawnerMinDelayFloor;
+    public int spawnerStackSpawnCountCap;
+    public int spawnerMaxNearbyEntitiesCap;
 
     // ── Dragon egg ────────────────────────────────────────────────────────────
     public int dragonEggSpeedAmplifier;
@@ -86,6 +89,9 @@ public final class ConfigManager {
         spawnerMaxMultiplier     = Math.min(16.0, Math.max(1.0, c.getDouble("spawner.speed.max-multiplier", 16.0)));
         spawnerAiNerfEnabled     = c.getBoolean("spawner.ai-nerf.enabled", true);
         spawnerRedstoneDisables  = c.getBoolean("spawner.redstone.powered-disables", true);
+        spawnerMinDelayFloor     = Math.max(1, c.getInt("spawner.performance.min-delay-floor", 40));
+        spawnerStackSpawnCountCap = Math.max(4, c.getInt("spawner.performance.stack-spawn-count-cap", 32));
+        spawnerMaxNearbyEntitiesCap = Math.max(16, c.getInt("spawner.performance.max-nearby-entities-cap", 96));
 
         dragonEggSpeedAmplifier  = Math.max(0, c.getInt("dragon-egg.speed-amplifier", 1));
         dragonEggCheckInterval   = Math.max(1, c.getInt("dragon-egg.check-interval", 10));

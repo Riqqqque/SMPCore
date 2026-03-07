@@ -48,6 +48,12 @@ spawner:
     # false: powered spawner is enabled
     powered-disables: true
 
+  performance:
+    # Prevent extreme stacked/sugar spawner throughput from overwhelming the server.
+    min-delay-floor: 40
+    stack-spawn-count-cap: 32
+    max-nearby-entities-cap: 96
+
 dragon-egg:
   speed-amplifier: 1
   check-interval: 10
