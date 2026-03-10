@@ -7,10 +7,12 @@ import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import io.papermc.paper.command.brigadier.argument.resolvers.selector.PlayerSelectorArgumentResolver;
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.item.ReplenishListener;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 
 import java.util.List;
 
@@ -34,6 +36,7 @@ public final class AdminCommands {
         registerNick(commands, plugin);
         registerInvSee(commands, plugin);
         registerSetSpawn(commands, plugin);
+        registerReplenishBook(commands, plugin);
     }
 
     // ── /fly [player] ────────────────────────────────────────────────────────
@@ -338,5 +341,51 @@ public final class AdminCommands {
                 .build(),
             "Set the world spawn point to your location"
         );
+    }
+
+    private static void registerReplenishBook(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("replenishbook")
+                .requires(src -> src.getSender().hasPermission("smpcore.replenish.admin"))
+                .executes(ctx -> {
+                    if (!(ctx.getSource().getSender() instanceof Player self)) {
+                        ctx.getSource().getSender().sendMessage(MessageUtil.error("Console must specify a target."));
+                        return 0;
+                    }
+                    return giveReplenishBook(plugin, ctx.getSource().getSender(), self);
+                })
+                .then(Commands.argument("target", ArgumentTypes.player())
+                    .executes(ctx -> {
+                        List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                            .resolve(ctx.getSource());
+                        if (targets.isEmpty()) {
+                            ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
+                            return 0;
+                        }
+                        return giveReplenishBook(plugin, ctx.getSource().getSender(), targets.get(0));
+                    }))
+                .build(),
+            "Give a Replenish enchant book"
+        );
+    }
+
+    private static int giveReplenishBook(SMPCore plugin, org.bukkit.command.CommandSender sender, Player target) {
+        ReplenishListener replenish = plugin.getReplenishListener();
+        if (replenish == null) {
+            sender.sendMessage(MessageUtil.error("Replenish system is not ready yet."));
+            return 0;
+        }
+
+        ItemStack book = replenish.createReplenishBook();
+        var leftovers = target.getInventory().addItem(book);
+        leftovers.values().forEach(left -> target.getWorld().dropItemNaturally(target.getLocation(), left));
+
+        target.sendMessage(MessageUtil.success("You received a <white>Replenish Book</white>."));
+        if (!sender.equals(target)) {
+            sender.sendMessage(MessageUtil.success(
+                "Gave a <white>Replenish Book</white> to <white>" + target.getName() + "</white>."
+            ));
+        }
+        return Command.SINGLE_SUCCESS;
     }
 }

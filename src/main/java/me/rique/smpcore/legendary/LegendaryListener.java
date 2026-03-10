@@ -18,6 +18,7 @@ import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.attribute.Attribute;
+import org.bukkit.attribute.AttributeModifier;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockState;
 import org.bukkit.enchantments.Enchantment;
@@ -67,9 +68,11 @@ import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.ShapedRecipe;
+import org.bukkit.inventory.EquipmentSlotGroup;
 import org.bukkit.inventory.meta.BlockStateMeta;
 import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.LeatherArmorMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.util.RayTraceResult;
@@ -95,7 +98,7 @@ public final class LegendaryListener implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
 
-    private static final int LEGENDARY_ITEM_DATA_VERSION = 2;
+    private static final int LEGENDARY_ITEM_DATA_VERSION = 6;
     private static final int STARTUP_LEGENDARY_MIGRATION_CHUNKS_PER_TICK = 24;
     private static final int LEGENDARY_ITEM_SCAN_MAX_DEPTH = 2;
     private static final int ENDERBOW_TP_COOLDOWN = 30;
@@ -109,6 +112,16 @@ public final class LegendaryListener implements Listener {
     private static final int MAGNET_RADIUS = 20;
     private static final int WIND_CHARGE_CANNON_MAX_CHARGES = 5;
     private static final int WIND_CHARGE_CANNON_RECHARGE = 15;
+    private static final int EXECUTIONER_BLADE_STRENGTH_SECONDS = 6 * 60;
+    private static final int EXECUTIONER_BLADE_STRENGTH_COOLDOWN = 8 * 60;
+    private static final int EXECUTIONER_BLADE_STRENGTH_AMPLIFIER = 1;
+    private static final int EXECUTIONER_BLADE_STUN_SECONDS = 3;
+    private static final int EXECUTIONER_BLADE_SHOCKWAVE_COOLDOWN = 20;
+    private static final double EXECUTIONER_BLADE_SHOCKWAVE_RADIUS = 6.0;
+    private static final double EXECUTIONER_BLADE_SHOCKWAVE_HORIZONTAL = 0.65;
+    private static final double EXECUTIONER_BLADE_SHOCKWAVE_VERTICAL = 0.80;
+    private static final double HERMES_BOOTS_SPEED_SCALAR = 0.60;
+    private static final Color HERMES_BOOTS_COLOR = Color.fromRGB(245, 201, 66);
     private static final int RECIPE_TRADE_SLOT = 26;
     private static final double THORS_HAMMER_BASE_TRUE_DAMAGE = 10.0;
     private static final double WIND_CHARGE_CANNON_SUPER_SHOT_STRENGTH = 0.8;
@@ -118,11 +131,15 @@ public final class LegendaryListener implements Listener {
     private static final long WITHER_BLADE_SKULL_RECHARGE_MS = 4_500L;
     private static final long WITHER_BLADE_DASH_RECHARGE_MS = 3_000L;
     private static final float WITHER_BLADE_SKULL_EXPLOSION_POWER = 1.8f;
+    private static final double WITHER_BLADE_SKULL_DAMAGE_CAP = 3.0;
     private static final double WITHER_BLADE_DIRECT_HIT_DAMAGE = 6.0;
+    private static final double WITHER_BLADE_SPLASH_DAMAGE = 6.0;
+    private static final double WITHER_BLADE_SPLASH_RADIUS = 3.5;
     private static final double WITHER_BLADE_SKULL_SPEED = 1.35;
     private static final double WITHER_BLADE_DASH_HORIZONTAL = 1.75;
     private static final double WITHER_BLADE_DASH_VERTICAL = 0.72;
     private static final int WITHER_BLADE_WITHER_SECONDS = 10;
+    private static final double EXECUTIONER_BLADE_SKULL_DAMAGE_CAP = 6.0;
     private static final Color WITHER_BLADE_PARTICLE_COLOR = Color.fromRGB(18, 18, 18);
     private static final String GUI_TITLE_RECIPES = "<gradient:#FEE440:#00BBF9><bold>Legendary Recipes</bold></gradient>";
     private static final String GUI_TITLE_PREFIX_RECIPE = "<gradient:#A0E7E5:#B4F8C8><bold>Recipe:</bold></gradient> ";
@@ -135,11 +152,13 @@ public final class LegendaryListener implements Listener {
     private final NamespacedKey keyMenuLegendary;
     private final NamespacedKey keyEnderbowForm;
     private final NamespacedKey keyEmeraldLevel;
+    private final NamespacedKey keyEmeraldBladeItemModel;
     private final NamespacedKey keyEnderbowTag;
     private final NamespacedKey keyHarpoonTag;
     private final NamespacedKey keyMagnetActive;
     private final NamespacedKey keyWindCannonCharges;
     private final NamespacedKey keyWindCannonCooldownUntil;
+    private final NamespacedKey keyHermesBootsSpeedModifier;
     private final NamespacedKey keyWitherBladeSkullTag;
     private final NamespacedKey keyWitherBladeSkullCharges;
     private final NamespacedKey keyWitherBladeSkullRechargeStarted;
@@ -157,6 +176,8 @@ public final class LegendaryListener implements Listener {
     private final Map<UUID, Long> chronoCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> harpoonCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> hypnosisCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> executionerStrengthCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> executionerShockwaveCd = new ConcurrentHashMap<>();
 
     private final Map<UUID, ChronoState> chronoStates = new ConcurrentHashMap<>();
     private final Map<UUID, Set<UUID>> controlledByOwner = new ConcurrentHashMap<>();
@@ -173,11 +194,13 @@ public final class LegendaryListener implements Listener {
         this.keyMenuLegendary = new NamespacedKey(plugin, "legendary_menu_id");
         this.keyEnderbowForm = new NamespacedKey(plugin, "enderbow_form");
         this.keyEmeraldLevel = new NamespacedKey(plugin, "emerald_blade_level");
+        this.keyEmeraldBladeItemModel = new NamespacedKey(plugin, "emerald_blade");
         this.keyEnderbowTag = new NamespacedKey(plugin, "enderbow_endermite");
         this.keyHarpoonTag = new NamespacedKey(plugin, "harpoon");
         this.keyMagnetActive = new NamespacedKey(plugin, "magnet_active");
         this.keyWindCannonCharges = new NamespacedKey(plugin, "wind_cannon_charges");
         this.keyWindCannonCooldownUntil = new NamespacedKey(plugin, "wind_cannon_cooldown_until");
+        this.keyHermesBootsSpeedModifier = new NamespacedKey(plugin, "hermes_boots_speed");
         this.keyWitherBladeSkullTag = new NamespacedKey(plugin, "wither_blade_skull");
         this.keyWitherBladeSkullCharges = new NamespacedKey(plugin, "wither_blade_skull_charges");
         this.keyWitherBladeSkullRechargeStarted = new NamespacedKey(plugin, "wither_blade_skull_recharge_started");
@@ -212,6 +235,8 @@ public final class LegendaryListener implements Listener {
         chronoCd.remove(id);
         harpoonCd.remove(id);
         hypnosisCd.remove(id);
+        executionerStrengthCd.remove(id);
+        executionerShockwaveCd.remove(id);
         chronoStates.remove(id);
         activeMagnetPlayers.remove(id);
         pendingMagnetRefresh.remove(id);
@@ -369,7 +394,7 @@ public final class LegendaryListener implements Listener {
             inv.setItem(i, filler);
         }
 
-        int[] slots = {10, 11, 12, 13, 14, 15, 16, 20, 21, 22};
+        int[] slots = {10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23};
         LegendaryType[] types = LegendaryType.values();
         for (int i = 0; i < types.length && i < slots.length; i++) {
             LegendaryType type = types[i];
@@ -378,7 +403,7 @@ public final class LegendaryListener implements Listener {
             inv.setItem(slots[i], icon);
         }
 
-        int backpackSlot = 24;
+        int backpackSlot = 25;
         ItemStack backpackIcon = createBackpackRecipeDisplayItem();
         tagMenuLegendaryId(backpackIcon, "backpack");
         ItemMeta backpackMeta = backpackIcon.getItemMeta();
@@ -414,6 +439,8 @@ public final class LegendaryListener implements Listener {
             case "warpick", "pick" -> "war_pick";
             case "magnet", "faraday", "faradays_magnet", "faradays" -> "faradays_magnet";
             case "wind", "windcannon", "cannon", "wind_charge_cannon" -> "wind_charge_cannon";
+            case "executioner", "executionerblade", "executioner_sword", "exec" -> "executioner_blade";
+            case "hermes", "hermesboots", "hermes_boots", "boots" -> "hermes_boots";
             case "wither", "witherblade", "wither_sword" -> "wither_blade";
             case "thor", "hammer", "thors", "mjolnir", "thors_hammer" -> "thors_hammer";
             default -> normalized;
@@ -478,6 +505,11 @@ public final class LegendaryListener implements Listener {
                 useWindChargeCannon(player, hand, left);
                 player.getInventory().setItemInMainHand(hand);
             }
+            case EXECUTIONER_BLADE -> {
+                if (!right) return;
+                event.setCancelled(true);
+                useExecutionerBlade(player);
+            }
             case WITHER_BLADE -> {
                 if (!right) return;
                 event.setCancelled(true);
@@ -524,6 +556,10 @@ public final class LegendaryListener implements Listener {
                 event.setCancelled(true);
                 toggleMagnet(player, hand);
                 player.getInventory().setItemInMainHand(hand);
+            }
+            case EXECUTIONER_BLADE -> {
+                event.setCancelled(true);
+                useExecutionerBlade(player);
             }
             case WITHER_BLADE -> {
                 event.setCancelled(true);
@@ -586,6 +622,14 @@ public final class LegendaryListener implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onFallDamage(EntityDamageEvent event) {
+        if (event.getCause() != EntityDamageEvent.DamageCause.FALL) return;
+        if (!(event.getEntity() instanceof Player player)) return;
+        if (typeOf(player.getInventory().getBoots()) != LegendaryType.HERMES_BOOTS) return;
+        event.setCancelled(true);
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onLethalDamage(EntityDamageEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
         ChronoState state = chronoStates.get(player.getUniqueId());
@@ -628,12 +672,26 @@ public final class LegendaryListener implements Listener {
 
     @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
     public void onDamageByEntity(EntityDamageByEntityEvent event) {
+        if (event.getDamager() instanceof WitherSkull skull) {
+            PersistentDataContainer skullPdc = skull.getPersistentDataContainer();
+            if (skullPdc.has(keyWitherBladeSkullTag, PersistentDataType.BYTE)) {
+                event.setCancelled(true);
+                return;
+            }
+        }
+
         if (!(event.getDamager() instanceof Player attacker)) return;
         if (!(event.getEntity() instanceof LivingEntity victim)) return;
 
         directControlledMobs(attacker, victim);
 
         LegendaryType held = typeOf(attacker.getInventory().getItemInMainHand());
+        if (held == LegendaryType.WITHER_BLADE) {
+            event.setDamage(event.getDamage() + witherBladeBonusDamage(attacker));
+        } else if (held == LegendaryType.EXECUTIONER_BLADE) {
+            event.setDamage(event.getDamage() + executionerBladeBonusDamage(attacker));
+        }
+
         if (held == LegendaryType.THORS_HAMMER) {
             victim.getWorld().strikeLightningEffect(victim.getLocation());
             double bypassDamage = Math.max(
@@ -1088,6 +1146,99 @@ public final class LegendaryListener implements Listener {
         sendWindChargeCannonActionBar(player, nextCharges);
     }
 
+    private void useExecutionerBlade(Player player) {
+        if (player.isSneaking()) {
+            useExecutionerShockwave(player);
+            return;
+        }
+
+        UUID playerId = player.getUniqueId();
+        if (onCooldown(executionerStrengthCd, playerId)) {
+            player.sendMessage(MessageUtil.warn(
+                "Executioner fury cooldown: <white>" + secondsLeft(executionerStrengthCd, playerId) + "s</white>."
+            ));
+            return;
+        }
+
+        int durationTicks = EXECUTIONER_BLADE_STRENGTH_SECONDS * 20;
+        PotionEffect current = player.getPotionEffect(PotionEffectType.STRENGTH);
+        if (current == null
+            || current.getAmplifier() < EXECUTIONER_BLADE_STRENGTH_AMPLIFIER
+            || (current.getAmplifier() == EXECUTIONER_BLADE_STRENGTH_AMPLIFIER && current.getDuration() < durationTicks)) {
+            player.removePotionEffect(PotionEffectType.STRENGTH);
+            player.addPotionEffect(new PotionEffect(
+                PotionEffectType.STRENGTH,
+                durationTicks,
+                EXECUTIONER_BLADE_STRENGTH_AMPLIFIER,
+                false,
+                true,
+                true
+            ));
+        }
+        setCooldown(executionerStrengthCd, playerId, EXECUTIONER_BLADE_STRENGTH_COOLDOWN);
+
+        Location center = player.getLocation().clone().add(0.0, 1.0, 0.0);
+        World world = player.getWorld();
+        world.spawnParticle(Particle.CRIT, center, 24, 0.35, 0.5, 0.35, 0.02);
+        world.spawnParticle(Particle.ASH, center, 10, 0.20, 0.35, 0.20, 0.01);
+        world.playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 0.85f, 0.7f);
+        player.sendMessage(MessageUtil.success(
+            "Executioner fury active: <white>Strength II</white> for <white>6 minutes</white>."
+        ));
+    }
+
+    private void useExecutionerShockwave(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (onCooldown(executionerShockwaveCd, playerId)) {
+            player.sendMessage(MessageUtil.warn(
+                "Executioner shockwave cooldown: <white>" + secondsLeft(executionerShockwaveCd, playerId) + "s</white>."
+            ));
+            return;
+        }
+        setCooldown(executionerShockwaveCd, playerId, EXECUTIONER_BLADE_SHOCKWAVE_COOLDOWN);
+
+        World world = player.getWorld();
+        Location center = player.getLocation();
+        world.spawnParticle(Particle.CLOUD, center.clone().add(0.0, 0.15, 0.0), 42, 1.8, 0.10, 1.8, 0.08);
+        world.spawnParticle(Particle.SWEEP_ATTACK, center.clone().add(0.0, 1.0, 0.0), 16, 2.2, 0.25, 2.2, 0.0);
+        world.playSound(center, Sound.ENTITY_GENERIC_EXPLODE, 0.8f, 1.2f);
+        world.playSound(center, Sound.ENTITY_PLAYER_ATTACK_SWEEP, 1.0f, 0.65f);
+
+        for (Player target : world.getNearbyPlayers(center, EXECUTIONER_BLADE_SHOCKWAVE_RADIUS)) {
+            if (sameTeamOrSelf(player.getUniqueId(), target.getUniqueId())) continue;
+
+            Vector launch = target.getLocation().toVector().subtract(center.toVector());
+            launch.setY(0.0);
+            if (launch.lengthSquared() > 0.0001) {
+                launch.normalize().multiply(EXECUTIONER_BLADE_SHOCKWAVE_HORIZONTAL);
+            } else {
+                launch.zero();
+            }
+            launch.setY(Math.max(EXECUTIONER_BLADE_SHOCKWAVE_VERTICAL, target.getVelocity().getY()));
+
+            target.setVelocity(launch);
+            target.removePotionEffect(PotionEffectType.SLOWNESS);
+            target.addPotionEffect(new PotionEffect(
+                PotionEffectType.SLOWNESS,
+                EXECUTIONER_BLADE_STUN_SECONDS * 20,
+                255,
+                false,
+                true,
+                true
+            ));
+            target.removePotionEffect(PotionEffectType.JUMP_BOOST);
+            target.addPotionEffect(new PotionEffect(
+                PotionEffectType.JUMP_BOOST,
+                EXECUTIONER_BLADE_STUN_SECONDS * 20,
+                128,
+                false,
+                false,
+                true
+            ));
+            world.spawnParticle(Particle.ASH, target.getLocation().clone().add(0.0, 1.0, 0.0), 12, 0.25, 0.45, 0.25, 0.01);
+        }
+    }
+
     private void useWitherBlade(Player player, ItemStack blade) {
         if (!refreshWitherBladeState(blade)) {
             return;
@@ -1144,13 +1295,27 @@ public final class LegendaryListener implements Listener {
         sendWitherBladeActionBar(player, state);
     }
 
+    private double witherBladeBonusDamage(Player player) {
+        return Math.min(
+            WITHER_BLADE_SKULL_DAMAGE_CAP,
+            countPlayerInventoryMaterial(player, Material.WITHER_SKELETON_SKULL)
+        );
+    }
+
+    private double executionerBladeBonusDamage(Player player) {
+        return Math.min(
+            EXECUTIONER_BLADE_SKULL_DAMAGE_CAP,
+            countPlayerInventorySkulls(player)
+        );
+    }
+
     private void handleWitherBladeSkullHit(ProjectileHitEvent event, WitherSkull skull) {
         if (!(skull.getShooter() instanceof Player shooter)) {
             skull.remove();
             return;
         }
 
-        if (event.getHitEntity() instanceof LivingEntity living && !living.equals(shooter)) {
+        if (event.getHitEntity() instanceof LivingEntity living && canWitherBladeDamage(shooter, living)) {
             living.damage(WITHER_BLADE_DIRECT_HIT_DAMAGE, shooter);
             living.addPotionEffect(new PotionEffect(
                 PotionEffectType.WITHER,
@@ -1166,16 +1331,39 @@ public final class LegendaryListener implements Listener {
             ? event.getHitBlock().getLocation().add(0.5, 0.5, 0.5)
             : skull.getLocation();
         spawnWitherBladeImpactParticles(hit);
-        skull.getWorld().createExplosion(
-            hit.getX(),
-            hit.getY(),
-            hit.getZ(),
-            WITHER_BLADE_SKULL_EXPLOSION_POWER,
-            false,
-            false,
-            shooter
-        );
+        applyWitherBladeSplash(shooter, hit);
         skull.remove();
+    }
+
+    private boolean canWitherBladeDamage(Player shooter, LivingEntity target) {
+        if (target.equals(shooter)) return false;
+        return !(target instanceof Player teammate)
+            || !sameTeamOrSelf(shooter.getUniqueId(), teammate.getUniqueId());
+    }
+
+    private void applyWitherBladeSplash(Player shooter, Location center) {
+        World world = center.getWorld();
+        if (world == null) return;
+
+        world.playSound(center, Sound.ENTITY_GENERIC_EXPLODE, 1.0f, 0.95f);
+
+        for (LivingEntity living : world.getNearbyLivingEntities(center, WITHER_BLADE_SPLASH_RADIUS)) {
+            if (!canWitherBladeDamage(shooter, living)) continue;
+
+            double distance = living.getLocation().distance(center);
+            if (distance > WITHER_BLADE_SPLASH_RADIUS) continue;
+
+            double scale = 1.0 - (distance / WITHER_BLADE_SPLASH_RADIUS);
+            if (scale <= 0.0) continue;
+
+            living.damage(Math.max(1.0, WITHER_BLADE_SPLASH_DAMAGE * scale), shooter);
+
+            Vector knockback = living.getLocation().toVector().subtract(center.toVector());
+            if (knockback.lengthSquared() > 0.0001) {
+                knockback.normalize().multiply(0.25 + (0.45 * scale)).setY(Math.max(0.18, 0.28 * scale));
+                living.setVelocity(living.getVelocity().add(knockback));
+            }
+        }
     }
 
     private void scheduleWitherBladeDashTrail(Player player) {
@@ -1804,6 +1992,7 @@ public final class LegendaryListener implements Listener {
         long dashNext = millisUntilNextCharge(dashCharges, dashRechargeStartedAt, WITHER_BLADE_DASH_MAX_CHARGES, WITHER_BLADE_DASH_RECHARGE_MS);
         List<Component> lore = new ArrayList<>();
         lore.add(MM.deserialize("<dark_gray>Legendary Sword</dark_gray>"));
+        lore.add(MM.deserialize("<gray><gold>Passive</gold>: <white>+1 damage per Wither Skull</white> <dark_gray>(cap +3)</dark_gray></gray>"));
         lore.add(MM.deserialize("<gray><gold>Right-click</gold>: <white>Fire an explosive wither skull</white></gray>"));
         lore.add(MM.deserialize("<gray><gold>Shift + Right-click</gold>: <white>Wither dash</white></gray>"));
         lore.add(MM.deserialize(
@@ -2001,6 +2190,7 @@ public final class LegendaryListener implements Listener {
 
     private void applyLegendaryTypeState(ItemMeta meta, LegendaryType type) {
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        meta.setItemModel(null);
         switch (type) {
             case ENDERBOW -> {
                 setEnchantLevel(meta, enchantPower, 7);
@@ -2035,6 +2225,7 @@ public final class LegendaryListener implements Listener {
                     pdc.getOrDefault(keyEmeraldLevel, PersistentDataType.INTEGER, 1)
                 ));
                 pdc.set(keyEmeraldLevel, PersistentDataType.INTEGER, level);
+                meta.setItemModel(keyEmeraldBladeItemModel);
                 setEnchantLevel(meta, enchantSharpness, level);
                 setEnchantLevel(meta, enchantUnbreaking, 3);
                 meta.lore(buildEmeraldBladeLore(level));
@@ -2068,6 +2259,37 @@ public final class LegendaryListener implements Listener {
                 }
                 writeWindChargeCannonState(meta, charges, cooldownUntil);
             }
+            case EXECUTIONER_BLADE -> meta.lore(List.of(
+                MM.deserialize("<dark_gray>Legendary Sword</dark_gray>"),
+                MM.deserialize("<gray><gold>Passive</gold>: <white>+1 damage per skull you carry</white> <dark_gray>(cap +6)</dark_gray></gray>"),
+                MM.deserialize("<gray><gold>Right-click</gold>: <white>Strength II for 6 minutes</white></gray>"),
+                MM.deserialize("<gray>Fury cooldown: <white>" + EXECUTIONER_BLADE_STRENGTH_COOLDOWN + "s</white></gray>"),
+                MM.deserialize("<gray><gold>Shift + Right-click</gold>: <white>Executioner shockwave</white></gray>"),
+                MM.deserialize("<gray>The shockwave launches nearby enemy players and stuns them for <white>3s</white>.</gray>"),
+                MM.deserialize("<gray>Shockwave cooldown: <white>" + EXECUTIONER_BLADE_SHOCKWAVE_COOLDOWN + "s</white></gray>"),
+                MM.deserialize("<gray>Teammates are ignored by the shockwave.</gray>")
+            ));
+            case HERMES_BOOTS -> {
+                if (meta instanceof LeatherArmorMeta leatherArmorMeta) {
+                    leatherArmorMeta.setColor(HERMES_BOOTS_COLOR);
+                }
+                meta.removeAttributeModifier(Attribute.MOVEMENT_SPEED);
+                meta.addAttributeModifier(
+                    Attribute.MOVEMENT_SPEED,
+                    new AttributeModifier(
+                        keyHermesBootsSpeedModifier,
+                        HERMES_BOOTS_SPEED_SCALAR,
+                        AttributeModifier.Operation.ADD_SCALAR,
+                        EquipmentSlotGroup.FEET
+                    )
+                );
+                meta.lore(List.of(
+                    MM.deserialize("<dark_gray>Legendary Boots</dark_gray>"),
+                    MM.deserialize("<gray><gold>Passive</gold>: <white>Negates all fall damage</white></gray>"),
+                    MM.deserialize("<gray><gold>Passive</gold>: <white>Greatly increased movement speed</white></gray>"),
+                    MM.deserialize("<gray>Only works while worn.</gray>")
+                ));
+            }
             case WITHER_BLADE -> {
                 WitherBladeState state = refreshWitherBladeState(meta);
                 applyWitherBladeState(
@@ -2091,6 +2313,42 @@ public final class LegendaryListener implements Listener {
         if (meta.getEnchantLevel(enchantment) == level) return;
         meta.removeEnchant(enchantment);
         meta.addEnchant(enchantment, level, true);
+    }
+
+    private int countPlayerInventoryMaterial(Player player, Material material) {
+        int total = 0;
+        for (ItemStack item : player.getInventory().getStorageContents()) {
+            if (item == null || item.getType() != material) continue;
+            total += item.getAmount();
+        }
+
+        ItemStack offhand = player.getInventory().getItemInOffHand();
+        if (offhand != null && offhand.getType() == material) {
+            total += offhand.getAmount();
+        }
+        return total;
+    }
+
+    private int countPlayerInventorySkulls(Player player) {
+        int total = 0;
+        for (ItemStack item : player.getInventory().getStorageContents()) {
+            if (item == null || !isSkullMaterial(item.getType())) continue;
+            total += item.getAmount();
+        }
+
+        ItemStack offhand = player.getInventory().getItemInOffHand();
+        if (offhand != null && isSkullMaterial(offhand.getType())) {
+            total += offhand.getAmount();
+        }
+        return total;
+    }
+
+    private boolean isSkullMaterial(Material material) {
+        return switch (material) {
+            case SKELETON_SKULL, WITHER_SKELETON_SKULL, PLAYER_HEAD, ZOMBIE_HEAD,
+                CREEPER_HEAD, DRAGON_HEAD, PIGLIN_HEAD -> true;
+            default -> false;
+        };
     }
 
     private int emeraldLevel(ItemStack blade) {
@@ -2135,6 +2393,10 @@ public final class LegendaryListener implements Listener {
                 e(Material.IRON_BLOCK, 16), e(Material.REDSTONE_BLOCK, 16), e(Material.COPPER_BLOCK, 8), e(Material.NETHERITE_INGOT, 1))),
             new LegendaryRecipe(LegendaryType.WIND_CHARGE_CANNON, ingredients(
                 e(Material.PRISMARINE_SHARD, 32), e(Material.WIND_CHARGE, 32), e(Material.COPPER_BLOCK, 8), e(Material.DISPENSER, 1))),
+            new LegendaryRecipe(LegendaryType.EXECUTIONER_BLADE, ingredients(
+                e(Material.NETHERITE_SWORD, 1), e(Material.BLAZE_ROD, 16), e(Material.ANVIL, 2), e(Material.WIND_CHARGE, 8), e(Material.REDSTONE_BLOCK, 16))),
+            new LegendaryRecipe(LegendaryType.HERMES_BOOTS, ingredients(
+                e(Material.LEATHER_BOOTS, 1), e(Material.RABBIT_FOOT, 16), e(Material.FEATHER, 32), e(Material.GOLD_BLOCK, 8))),
             new LegendaryRecipe(LegendaryType.WITHER_BLADE, ingredients(
                 e(Material.NETHERITE_SWORD, 1), e(Material.WITHER_SKELETON_SKULL, 3), e(Material.NETHER_STAR, 1), e(Material.SOUL_SAND, 32))),
             new LegendaryRecipe(LegendaryType.THORS_HAMMER, ingredients(
@@ -2305,6 +2567,8 @@ public final class LegendaryListener implements Listener {
         WAR_PICK("war_pick", Material.DIAMOND_PICKAXE, "<gold><bold>War Pick</bold></gold>"),
         FARADAYS_MAGNET("faradays_magnet", Material.RECOVERY_COMPASS, "<gold><bold>Faraday's Magnet</bold></gold>"),
         WIND_CHARGE_CANNON("wind_charge_cannon", Material.PRISMARINE_SHARD, "<gold><bold>Wind Charge Cannon</bold></gold>"),
+        EXECUTIONER_BLADE("executioner_blade", Material.NETHERITE_SWORD, "<red><bold>Executioner Blade</bold></red>"),
+        HERMES_BOOTS("hermes_boots", Material.LEATHER_BOOTS, "<gold><bold>Hermes Boots</bold></gold>"),
         WITHER_BLADE("wither_blade", Material.NETHERITE_SWORD, "<dark_gray><bold>Wither Blade</bold></dark_gray>"),
         THORS_HAMMER("thors_hammer", Material.MACE, "<gold><bold>Thor's Hammer</bold></gold>");
 

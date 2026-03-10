@@ -124,3 +124,6 @@ permissions:
   smpcore.legendary.admin:
     description: Use /legendary give
     default: op
+  smpcore.replenish.admin:
+    description: Use /replenishbook
+    default: op

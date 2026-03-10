@@ -23,6 +23,13 @@ dependencies {
 }
 
 tasks {
+    val buildResourcePack by registering(Zip::class) {
+        group = "build"
+        description = "Builds the SMPCore resource pack zip."
+        archiveFileName.set("SMPCore-resource-pack.zip")
+        destinationDirectory.set(layout.buildDirectory.dir("resourcepack"))
+        from("src/main/resourcepack")
+    }
     shadowJar {
         archiveClassifier = ""
         relocate("org.xerial", "me.rique.smpcore.libs.xerial")
@@ -37,6 +44,7 @@ tasks {
     }
     build {
         dependsOn(shadowJar)
+        dependsOn(buildResourcePack)
     }
     jar {
         archiveClassifier = "unshaded"
