@@ -17,6 +17,7 @@ import me.rique.smpcore.config.ConfigManager;
 import me.rique.smpcore.database.DatabaseManager;
 import me.rique.smpcore.home.HomeManager;
 import me.rique.smpcore.item.MaceLimitListener;
+import me.rique.smpcore.item.ReplenishListener;
 import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.player.DragonEggListener;
 import me.rique.smpcore.player.JoinListener;
@@ -51,6 +52,7 @@ public final class SMPCore extends JavaPlugin {
     private BackpackListener backpackListener;
     private DragonEggListener dragonEggListener;
     private LegendaryListener legendaryListener;
+    private ReplenishListener replenishListener;
 
     @Override
     public void onEnable() {
@@ -104,6 +106,8 @@ public final class SMPCore extends JavaPlugin {
         pm.registerEvents(new CraftingRulesListener(this), this);
         pm.registerEvents(new CombatLogListener(this), this);
         pm.registerEvents(new MaceLimitListener(this), this);
+        replenishListener = new ReplenishListener(this);
+        pm.registerEvents(replenishListener, this);
         backpackListener = new BackpackListener(this);
         pm.registerEvents(backpackListener, this);
         pm.registerEvents(new WaystoneListener(this), this);
@@ -152,4 +156,5 @@ public final class SMPCore extends JavaPlugin {
     public WaystoneManager getWaystoneManager() { return waystoneManager; }
     public BackpackListener getBackpackListener() { return backpackListener; }
     public LegendaryListener getLegendaryListener() { return legendaryListener; }
+    public ReplenishListener getReplenishListener() { return replenishListener; }
 }

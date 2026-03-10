@@ -30,6 +30,7 @@ import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.BundleMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
@@ -131,17 +132,53 @@ public final class BackpackListener implements Listener {
         if (!involvesBackpack(event.getCurrentItem(), event.getCursor())) return;
         if (!isBackpackAction(event)) return;
 
+        ItemStack current = event.getCurrentItem();
+        ItemStack cursor = event.getCursor();
+
         if (event.getClickedInventory() == player.getInventory()
-            && event.getCurrentItem() != null
-            && isBackpack(event.getCurrentItem())
+            && isBackpack(current)
             && event.isRightClick()) {
             event.setCancelled(true);
+
+            int recovered = recoverVanillaBundleContents(player, current);
+            event.setCurrentItem(current);
+            if (!isEmpty(cursor)) {
+                player.updateInventory();
+                maybeWarn(
+                    player,
+                    recovered > 0
+                        ? "Backpacks must be opened with an empty cursor. Trapped items were returned."
+                        : "Backpacks must be opened with an empty cursor."
+                );
+                return;
+            }
+
             openBackpack(player, event.getSlot());
+            return;
+        }
+
+        if (isBackpack(cursor)) {
+            event.setCancelled(true);
+            int recovered = recoverVanillaBundleContents(player, cursor);
+            player.setItemOnCursor(cursor);
+            player.updateInventory();
+            maybeWarn(
+                player,
+                recovered > 0
+                    ? "Backpacks cannot be used while held on your cursor. Trapped items were returned."
+                    : "Backpacks cannot be used while held on your cursor."
+            );
             return;
         }
 
         if (event.isRightClick()) {
             event.setCancelled(true);
+            int recovered = recoverVanillaBundleContents(player, current);
+            if (recovered > 0) {
+                event.setCurrentItem(current);
+                player.updateInventory();
+                maybeWarn(player, "Recovered items that were trapped in the backpack.");
+            }
         }
     }
 
@@ -280,6 +317,11 @@ public final class BackpackListener implements Listener {
         ItemStack source = player.getInventory().getItem(sourceSlot);
         if (!isBackpack(source)) return;
 
+        if (recoverVanillaBundleContents(player, source) > 0) {
+            player.getInventory().setItem(sourceSlot, source);
+            maybeWarn(player, "Recovered items that were trapped in the backpack.");
+        }
+
         ItemMeta sourceMeta = source.getItemMeta();
         if (sourceMeta == null) return;
 
@@ -315,6 +357,10 @@ public final class BackpackListener implements Listener {
 
         ItemMeta meta = stack.getItemMeta();
         if (meta == null) return;
+        if (meta instanceof BundleMeta bundleMeta) {
+            bundleMeta.setItems(List.of());
+            meta = bundleMeta;
+        }
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
         pdc.set(backpackFlagKey, PersistentDataType.BYTE, (byte) 1);
         pdc.set(backpackIdKey, PersistentDataType.STRING, session.backpackId());
@@ -392,6 +438,10 @@ public final class BackpackListener implements Listener {
         ItemStack item = new ItemStack(Material.BUNDLE);
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return item;
+        if (meta instanceof BundleMeta bundleMeta) {
+            bundleMeta.setItems(List.of());
+            meta = bundleMeta;
+        }
 
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
         pdc.set(backpackFlagKey, PersistentDataType.BYTE, (byte) 1);
@@ -415,6 +465,32 @@ public final class BackpackListener implements Listener {
         if (now - last < 1000L) return;
         warnCooldown.put(player.getUniqueId(), now);
         player.sendMessage(MessageUtil.warn(message));
+    }
+
+    private int recoverVanillaBundleContents(Player player, ItemStack backpack) {
+        if (!isBackpack(backpack)) return 0;
+
+        ItemMeta meta = backpack.getItemMeta();
+        if (!(meta instanceof BundleMeta bundleMeta) || !bundleMeta.hasItems()) {
+            return 0;
+        }
+
+        List<ItemStack> recovered = bundleMeta.getItems().stream()
+            .filter(item -> item != null && item.getType() != Material.AIR && item.getAmount() > 0)
+            .map(ItemStack::clone)
+            .toList();
+        bundleMeta.setItems(List.of());
+        backpack.setItemMeta(bundleMeta);
+
+        for (ItemStack item : recovered) {
+            Map<Integer, ItemStack> leftovers = player.getInventory().addItem(item);
+            leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
+        }
+        return recovered.size();
+    }
+
+    private static boolean isEmpty(ItemStack item) {
+        return item == null || item.getType() == Material.AIR || item.getAmount() <= 0;
     }
 
     private void dropContents(Player player, ItemStack[] contents) {
