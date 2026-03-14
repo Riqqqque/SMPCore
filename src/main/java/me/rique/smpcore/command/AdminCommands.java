@@ -7,6 +7,7 @@ import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import io.papermc.paper.command.brigadier.argument.resolvers.selector.PlayerSelectorArgumentResolver;
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.ReplenishListener;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -37,6 +38,8 @@ public final class AdminCommands {
         registerInvSee(commands, plugin);
         registerSetSpawn(commands, plugin);
         registerReplenishBook(commands, plugin);
+        registerDelicateBook(commands, plugin);
+        registerTelekinesisBook(commands, plugin);
     }
 
     // ── /fly [player] ────────────────────────────────────────────────────────
@@ -384,6 +387,85 @@ public final class AdminCommands {
         if (!sender.equals(target)) {
             sender.sendMessage(MessageUtil.success(
                 "Gave a <white>Replenish Book</white> to <white>" + target.getName() + "</white>."
+            ));
+        }
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static void registerDelicateBook(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("delicatebook")
+                .requires(src -> src.getSender().hasPermission("smpcore.customenchant.admin"))
+                .executes(ctx -> {
+                    if (!(ctx.getSource().getSender() instanceof Player self)) {
+                        ctx.getSource().getSender().sendMessage(MessageUtil.error("Console must specify a target."));
+                        return 0;
+                    }
+                    return giveManagedEnchantBook(plugin, ctx.getSource().getSender(), self, "Delicate", true);
+                })
+                .then(Commands.argument("target", ArgumentTypes.player())
+                    .executes(ctx -> {
+                        List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                            .resolve(ctx.getSource());
+                        if (targets.isEmpty()) {
+                            ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
+                            return 0;
+                        }
+                        return giveManagedEnchantBook(plugin, ctx.getSource().getSender(), targets.get(0), "Delicate", true);
+                    }))
+                .build(),
+            "Give a Delicate enchant book"
+        );
+    }
+
+    private static void registerTelekinesisBook(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("telekinesisbook")
+                .requires(src -> src.getSender().hasPermission("smpcore.customenchant.admin"))
+                .executes(ctx -> {
+                    if (!(ctx.getSource().getSender() instanceof Player self)) {
+                        ctx.getSource().getSender().sendMessage(MessageUtil.error("Console must specify a target."));
+                        return 0;
+                    }
+                    return giveManagedEnchantBook(plugin, ctx.getSource().getSender(), self, "Telekinesis", false);
+                })
+                .then(Commands.argument("target", ArgumentTypes.player())
+                    .executes(ctx -> {
+                        List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                            .resolve(ctx.getSource());
+                        if (targets.isEmpty()) {
+                            ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
+                            return 0;
+                        }
+                        return giveManagedEnchantBook(plugin, ctx.getSource().getSender(), targets.get(0), "Telekinesis", false);
+                    }))
+                .build(),
+            "Give a Telekinesis enchant book",
+            List.of("telekenesisbook")
+        );
+    }
+
+    private static int giveManagedEnchantBook(
+        SMPCore plugin,
+        org.bukkit.command.CommandSender sender,
+        Player target,
+        String displayName,
+        boolean delicate
+    ) {
+        CustomEnchantListener listener = plugin.getCustomEnchantListener();
+        if (listener == null) {
+            sender.sendMessage(MessageUtil.error("Custom enchant system is not ready yet."));
+            return 0;
+        }
+
+        ItemStack book = delicate ? listener.createDelicateBook() : listener.createTelekinesisBook();
+        var leftovers = target.getInventory().addItem(book);
+        leftovers.values().forEach(left -> target.getWorld().dropItemNaturally(target.getLocation(), left));
+
+        target.sendMessage(MessageUtil.success("You received a <white>" + displayName + " Book</white>."));
+        if (!sender.equals(target)) {
+            sender.sendMessage(MessageUtil.success(
+                "Gave a <white>" + displayName + " Book</white> to <white>" + target.getName() + "</white>."
             ));
         }
         return Command.SINGLE_SUCCESS;

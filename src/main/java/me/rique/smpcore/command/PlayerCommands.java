@@ -3,6 +3,7 @@ package me.rique.smpcore.command;
 import com.mojang.brigadier.Command;
 import io.papermc.paper.command.brigadier.Commands;
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
@@ -23,6 +24,7 @@ public final class PlayerCommands {
 
     public static void register(Commands commands, SMPCore plugin) {
         registerHelp(commands);
+        registerEnchants(commands, plugin);
         registerTop(commands, plugin);
         registerSuicide(commands, plugin);
         registerBack(commands, plugin);
@@ -42,6 +44,27 @@ public final class PlayerCommands {
                 .build(),
             "Show available player commands",
             List.of("smphelp")
+        );
+    }
+
+    private static void registerEnchants(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("enchants")
+                .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.enchants"))
+                .executes(ctx -> {
+                    Player player = (Player) ctx.getSource().getSender();
+                    CustomEnchantListener listener = plugin.getCustomEnchantListener();
+                    if (listener == null) {
+                        player.sendMessage(MessageUtil.error("Custom enchant menu is not ready yet."));
+                        return 0;
+                    }
+
+                    listener.openEnchantMenu(player);
+                    return Command.SINGLE_SUCCESS;
+                })
+                .build(),
+            "Open the custom enchant menu",
+            List.of("enchantments")
         );
     }
 
@@ -150,6 +173,9 @@ public final class PlayerCommands {
         }
         if (player.hasPermission("smpcore.legendary.recipe")) {
             lines.add("<gray><white>/lrecipe</white> (<white>/lrecipes</white>) - Open legendary recipe menu</gray>");
+        }
+        if (player.hasPermission("smpcore.enchants")) {
+            lines.add("<gray><white>/enchants</white> - View custom enchants</gray>");
         }
         if (player.hasPermission("smpcore.spawn")) {
             lines.add("<gray><white>/spawn</white> - Teleport to spawn</gray>");
