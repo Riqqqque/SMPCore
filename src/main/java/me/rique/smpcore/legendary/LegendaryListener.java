@@ -58,8 +58,11 @@ import org.bukkit.event.inventory.PrepareItemCraftEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
+import org.bukkit.event.player.PlayerDropItemEvent;
+import org.bukkit.event.player.PlayerItemHeldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.inventory.CraftingInventory;
 import org.bukkit.inventory.Inventory;
@@ -185,6 +188,7 @@ public final class LegendaryListener implements Listener {
     private final Set<UUID> warPickAoePlayers = ConcurrentHashMap.newKeySet();
     private final Set<UUID> activeMagnetPlayers = ConcurrentHashMap.newKeySet();
     private final Set<UUID> pendingMagnetRefresh = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> pendingWitherBladeLoreRefresh = ConcurrentHashMap.newKeySet();
 
     public LegendaryListener(SMPCore plugin) {
         this.plugin = plugin;
@@ -216,6 +220,7 @@ public final class LegendaryListener implements Listener {
             for (Player online : Bukkit.getOnlinePlayers()) {
                 migratePlayerLegendaryItems(online);
                 refreshMagnetTracking(online);
+                refreshWitherBladeLore(online);
             }
             scheduleLoadedChunkLegendaryMigration();
         });
@@ -226,6 +231,7 @@ public final class LegendaryListener implements Listener {
     public void onJoin(PlayerJoinEvent event) {
         migratePlayerLegendaryItems(event.getPlayer());
         refreshMagnetTracking(event.getPlayer());
+        refreshWitherBladeLore(event.getPlayer());
     }
 
     @EventHandler
@@ -240,6 +246,7 @@ public final class LegendaryListener implements Listener {
         chronoStates.remove(id);
         activeMagnetPlayers.remove(id);
         pendingMagnetRefresh.remove(id);
+        pendingWitherBladeLoreRefresh.remove(id);
 
         Set<UUID> controlled = controlledByOwner.remove(id);
         if (controlled != null) {
@@ -264,16 +271,73 @@ public final class LegendaryListener implements Listener {
     public void onPrepareAnvil(PrepareAnvilEvent event) {
         ItemStack left = event.getInventory().getFirstItem();
         ItemStack right = event.getInventory().getSecondItem();
-        if (typeOf(left) == null && typeOf(right) == null) return;
-        event.setResult(null);
+        LegendaryType leftType = typeOf(left);
+        LegendaryType rightType = typeOf(right);
+        if (leftType == null && rightType == null) return;
+        if (!canUseVanillaLegendaryUtilities(leftType, rightType)) {
+            event.setResult(null);
+            return;
+        }
+
+        ItemStack source = leftType == LegendaryType.EXECUTIONER_BLADE ? left : right;
+        ItemStack result = event.getResult();
+        if (source == null || result == null || result.getType() == Material.AIR) return;
+        event.setResult(preserveLegendaryUtilityResult(source, result, LegendaryType.EXECUTIONER_BLADE));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPrepareGrindstone(PrepareGrindstoneEvent event) {
         ItemStack top = event.getInventory().getUpperItem();
         ItemStack bottom = event.getInventory().getLowerItem();
-        if (typeOf(top) == null && typeOf(bottom) == null) return;
-        event.setResult(null);
+        LegendaryType topType = typeOf(top);
+        LegendaryType bottomType = typeOf(bottom);
+        if (topType == null && bottomType == null) return;
+        if (!canUseVanillaLegendaryUtilities(topType, bottomType)) {
+            event.setResult(null);
+            return;
+        }
+
+        ItemStack source = topType == LegendaryType.EXECUTIONER_BLADE ? top : bottom;
+        ItemStack result = event.getResult();
+        if (source == null || result == null || result.getType() == Material.AIR) return;
+        event.setResult(preserveLegendaryUtilityResult(source, result, LegendaryType.EXECUTIONER_BLADE));
+    }
+
+    private boolean canUseVanillaLegendaryUtilities(LegendaryType first, LegendaryType second) {
+        return isVanillaUtilityAllowed(first) && isVanillaUtilityAllowed(second);
+    }
+
+    private boolean isVanillaUtilityAllowed(LegendaryType type) {
+        return type == null || type == LegendaryType.EXECUTIONER_BLADE;
+    }
+
+    private ItemStack preserveLegendaryUtilityResult(ItemStack source, ItemStack result, LegendaryType type) {
+        ItemStack updated = result.clone();
+        ItemMeta sourceMeta = source.getItemMeta();
+        ItemMeta resultMeta = updated.getItemMeta();
+        if (sourceMeta == null || resultMeta == null) {
+            return updated;
+        }
+
+        PersistentDataContainer sourcePdc = sourceMeta.getPersistentDataContainer();
+        PersistentDataContainer resultPdc = resultMeta.getPersistentDataContainer();
+        String instanceId = sourcePdc.get(keyLegendaryInstance, PersistentDataType.STRING);
+        if (instanceId == null || instanceId.isBlank()) {
+            instanceId = UUID.randomUUID().toString();
+        }
+
+        resultPdc.set(keyLegendary, PersistentDataType.STRING, type.id);
+        resultPdc.set(keyLegendaryVersion, PersistentDataType.INTEGER, LEGENDARY_ITEM_DATA_VERSION);
+        resultPdc.set(keyLegendaryInstance, PersistentDataType.STRING, instanceId);
+        if (!resultMeta.hasDisplayName()) {
+            resultMeta.displayName(MM.deserialize(type.display));
+        }
+        resultMeta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+        resultMeta.setUnbreakable(true);
+        resultMeta.addItemFlags(ItemFlag.HIDE_UNBREAKABLE);
+        applyLegendaryTypeState(resultMeta, type);
+        updated.setItemMeta(resultMeta);
+        return updated;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -306,6 +370,7 @@ public final class LegendaryListener implements Listener {
             event.getWhoClicked().setItemOnCursor(event.getCursor());
         }
         queueMagnetTrackingRefresh(player);
+        queueWitherBladeLoreRefresh(player);
         if (handleLegendaryCraftClick(event, player)) {
             return;
         }
@@ -364,6 +429,7 @@ public final class LegendaryListener implements Listener {
     public void onInventoryDrag(InventoryDragEvent event) {
         if (event.getWhoClicked() instanceof Player player) {
             queueMagnetTrackingRefresh(player);
+            queueWitherBladeLoreRefresh(player);
         }
         Inventory top = event.getView().getTopInventory();
         if (top.getHolder() instanceof RecipeMenuHolder || top.getHolder() instanceof BackpackRecipeHolder) {
@@ -378,7 +444,23 @@ public final class LegendaryListener implements Listener {
         }
         if (event.getEntity() instanceof Player player) {
             queueMagnetTrackingRefresh(player);
+            queueWitherBladeLoreRefresh(player);
         }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onDropItem(PlayerDropItemEvent event) {
+        queueWitherBladeLoreRefresh(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onItemHeld(PlayerItemHeldEvent event) {
+        queueWitherBladeLoreRefresh(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onSwapHands(PlayerSwapHandItemsEvent event) {
+        queueWitherBladeLoreRefresh(event.getPlayer());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -670,7 +752,7 @@ public final class LegendaryListener implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onDamageByEntity(EntityDamageByEntityEvent event) {
         if (event.getDamager() instanceof WitherSkull skull) {
             PersistentDataContainer skullPdc = skull.getPersistentDataContainer();
@@ -687,7 +769,11 @@ public final class LegendaryListener implements Listener {
 
         LegendaryType held = typeOf(attacker.getInventory().getItemInMainHand());
         if (held == LegendaryType.WITHER_BLADE) {
-            event.setDamage(event.getDamage() + witherBladeBonusDamage(attacker));
+            refreshWitherBladeLore(attacker);
+            double bonus = witherBladeBonusDamage(attacker);
+            if (bonus > 0.0) {
+                event.setDamage(event.getDamage() + bonus);
+            }
         } else if (held == LegendaryType.EXECUTIONER_BLADE) {
             event.setDamage(event.getDamage() + executionerBladeBonusDamage(attacker));
         }
@@ -1240,7 +1326,7 @@ public final class LegendaryListener implements Listener {
     }
 
     private void useWitherBlade(Player player, ItemStack blade) {
-        if (!refreshWitherBladeState(blade)) {
+        if (!refreshWitherBladeState(blade, player)) {
             return;
         }
 
@@ -1296,10 +1382,7 @@ public final class LegendaryListener implements Listener {
     }
 
     private double witherBladeBonusDamage(Player player) {
-        return Math.min(
-            WITHER_BLADE_SKULL_DAMAGE_CAP,
-            countPlayerInventoryMaterial(player, Material.WITHER_SKELETON_SKULL)
-        );
+        return witherBladeBonusDamage(witherBladeSkullCount(player));
     }
 
     private double executionerBladeBonusDamage(Player player) {
@@ -1435,6 +1518,38 @@ public final class LegendaryListener implements Listener {
             }
             refreshMagnetTracking(player);
         });
+    }
+
+    private void queueWitherBladeLoreRefresh(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (!pendingWitherBladeLoreRefresh.add(playerId)) return;
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            pendingWitherBladeLoreRefresh.remove(playerId);
+            if (!player.isOnline()) return;
+            refreshWitherBladeLore(player);
+        });
+    }
+
+    private void refreshWitherBladeLore(Player player) {
+        int skullCount = witherBladeSkullCount(player);
+        double bonusDamage = witherBladeBonusDamage(skullCount);
+
+        ItemStack[] contents = player.getInventory().getContents();
+        for (int slot = 0; slot < contents.length; slot++) {
+            ItemStack item = contents[slot];
+            if (typeOf(item) != LegendaryType.WITHER_BLADE) continue;
+
+            WitherBladeState state = witherBladeState(item);
+            applyWitherBladeState(item, state, skullCount, bonusDamage);
+            player.getInventory().setItem(slot, item);
+        }
+
+        ItemStack cursor = player.getItemOnCursor();
+        if (typeOf(cursor) == LegendaryType.WITHER_BLADE) {
+            WitherBladeState state = witherBladeState(cursor);
+            applyWitherBladeState(cursor, state, skullCount, bonusDamage);
+            player.setItemOnCursor(cursor);
+        }
     }
 
     private void refreshMagnetTracking(Player player) {
@@ -1871,6 +1986,14 @@ public final class LegendaryListener implements Listener {
         return true;
     }
 
+    private boolean refreshWitherBladeState(ItemStack blade, Player owner) {
+        ItemMeta meta = blade.getItemMeta();
+        if (meta == null) return false;
+        WitherBladeState state = refreshWitherBladeState(meta);
+        applyWitherBladeState(blade, state, witherBladeSkullCount(owner), witherBladeBonusDamage(owner));
+        return true;
+    }
+
     private WitherBladeState witherBladeState(ItemStack blade) {
         ItemMeta meta = blade.getItemMeta();
         if (meta == null) {
@@ -1970,7 +2093,34 @@ public final class LegendaryListener implements Listener {
         blade.setItemMeta(meta);
     }
 
+    private void applyWitherBladeState(ItemStack blade, WitherBladeState state, int carriedSkulls, double bonusDamage) {
+        ItemMeta meta = blade.getItemMeta();
+        if (meta == null) return;
+        applyWitherBladeState(
+            meta,
+            state.skullCharges(),
+            state.skullRechargeStartedAt(),
+            state.dashCharges(),
+            state.dashRechargeStartedAt(),
+            carriedSkulls,
+            bonusDamage
+        );
+        blade.setItemMeta(meta);
+    }
+
     private void applyWitherBladeState(ItemMeta meta, int skullCharges, long skullRechargeStartedAt, int dashCharges, long dashRechargeStartedAt) {
+        applyWitherBladeState(meta, skullCharges, skullRechargeStartedAt, dashCharges, dashRechargeStartedAt, 0, 0.0);
+    }
+
+    private void applyWitherBladeState(
+        ItemMeta meta,
+        int skullCharges,
+        long skullRechargeStartedAt,
+        int dashCharges,
+        long dashRechargeStartedAt,
+        int carriedSkulls,
+        double bonusDamage
+    ) {
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
         pdc.set(keyWitherBladeSkullCharges, PersistentDataType.INTEGER, skullCharges);
         pdc.set(keyWitherBladeDashCharges, PersistentDataType.INTEGER, dashCharges);
@@ -1984,15 +2134,31 @@ public final class LegendaryListener implements Listener {
         } else {
             pdc.set(keyWitherBladeDashRechargeStarted, PersistentDataType.LONG, dashRechargeStartedAt);
         }
-        meta.lore(buildWitherBladeLore(skullCharges, skullRechargeStartedAt, dashCharges, dashRechargeStartedAt));
+        meta.lore(buildWitherBladeLore(
+            skullCharges,
+            skullRechargeStartedAt,
+            dashCharges,
+            dashRechargeStartedAt,
+            carriedSkulls,
+            bonusDamage
+        ));
     }
 
-    private List<Component> buildWitherBladeLore(int skullCharges, long skullRechargeStartedAt, int dashCharges, long dashRechargeStartedAt) {
+    private List<Component> buildWitherBladeLore(
+        int skullCharges,
+        long skullRechargeStartedAt,
+        int dashCharges,
+        long dashRechargeStartedAt,
+        int carriedSkulls,
+        double bonusDamage
+    ) {
         long skullNext = millisUntilNextCharge(skullCharges, skullRechargeStartedAt, WITHER_BLADE_SKULL_MAX_CHARGES, WITHER_BLADE_SKULL_RECHARGE_MS);
         long dashNext = millisUntilNextCharge(dashCharges, dashRechargeStartedAt, WITHER_BLADE_DASH_MAX_CHARGES, WITHER_BLADE_DASH_RECHARGE_MS);
         List<Component> lore = new ArrayList<>();
         lore.add(MM.deserialize("<dark_gray>Legendary Sword</dark_gray>"));
         lore.add(MM.deserialize("<gray><gold>Passive</gold>: <white>+1 damage per Wither Skull</white> <dark_gray>(cap +3)</dark_gray></gray>"));
+        lore.add(MM.deserialize("<gray>Wither Skulls Carried: <white>" + carriedSkulls + "</white></gray>"));
+        lore.add(MM.deserialize("<gray>Current Bonus Damage: <white>+" + formatDamageNumber(bonusDamage) + "</white></gray>"));
         lore.add(MM.deserialize("<gray><gold>Right-click</gold>: <white>Fire an explosive wither skull</white></gray>"));
         lore.add(MM.deserialize("<gray><gold>Shift + Right-click</gold>: <white>Wither dash</white></gray>"));
         lore.add(MM.deserialize(
@@ -2026,6 +2192,13 @@ public final class LegendaryListener implements Listener {
             return Long.toString(Math.round(seconds));
         }
         return String.format(java.util.Locale.US, "%.1f", seconds);
+    }
+
+    private String formatDamageNumber(double damage) {
+        if (Math.abs(damage - Math.rint(damage)) < 0.0001) {
+            return Long.toString(Math.round(damage));
+        }
+        return String.format(java.util.Locale.US, "%.1f", damage);
     }
 
     private void sendWitherBladeActionBar(Player player, WitherBladeState state) {
@@ -2317,30 +2490,28 @@ public final class LegendaryListener implements Listener {
 
     private int countPlayerInventoryMaterial(Player player, Material material) {
         int total = 0;
-        for (ItemStack item : player.getInventory().getStorageContents()) {
-            if (item == null || item.getType() != material) continue;
+        for (ItemStack item : player.getInventory().getContents()) {
+            if (item == null || item.getType() != material || item.getAmount() <= 0) continue;
             total += item.getAmount();
-        }
-
-        ItemStack offhand = player.getInventory().getItemInOffHand();
-        if (offhand != null && offhand.getType() == material) {
-            total += offhand.getAmount();
         }
         return total;
     }
 
     private int countPlayerInventorySkulls(Player player) {
         int total = 0;
-        for (ItemStack item : player.getInventory().getStorageContents()) {
-            if (item == null || !isSkullMaterial(item.getType())) continue;
+        for (ItemStack item : player.getInventory().getContents()) {
+            if (item == null || !isSkullMaterial(item.getType()) || item.getAmount() <= 0) continue;
             total += item.getAmount();
         }
-
-        ItemStack offhand = player.getInventory().getItemInOffHand();
-        if (offhand != null && isSkullMaterial(offhand.getType())) {
-            total += offhand.getAmount();
-        }
         return total;
+    }
+
+    private int witherBladeSkullCount(Player player) {
+        return countPlayerInventoryMaterial(player, Material.WITHER_SKELETON_SKULL);
+    }
+
+    private double witherBladeBonusDamage(int skullCount) {
+        return Math.min(WITHER_BLADE_SKULL_DAMAGE_CAP, skullCount);
     }
 
     private boolean isSkullMaterial(Material material) {

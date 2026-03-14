@@ -59,6 +59,9 @@ permissions:
   smpcore.backpack.use:
     description: Use backpacks
     default: true
+  smpcore.enchants:
+    description: Use /enchants
+    default: true
 
   # ── Admin ─────────────────────────────────────────────────
   smpcore.gmc:
@@ -126,4 +129,7 @@ permissions:
     default: op
   smpcore.replenish.admin:
     description: Use /replenishbook
+    default: op
+  smpcore.customenchant.admin:
+    description: Use /delicatebook and /telekinesisbook
     default: op
