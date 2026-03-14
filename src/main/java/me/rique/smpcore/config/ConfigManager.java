@@ -45,6 +45,17 @@ public final class ConfigManager {
     public int spawnerStackSpawnCountCap;
     public int spawnerMaxNearbyEntitiesCap;
 
+    // Vein miner
+    public boolean veinMinerEnabled;
+    public boolean veinMinerDefaultEnabled;
+    public boolean veinMinerRequireSneak;
+    public boolean veinMinerSearchDiagonals;
+    public int veinMinerMaxBlocksPerChain;
+    public boolean veinMinerOresEnabled;
+    public boolean veinMinerOresRequirePickaxe;
+    public boolean veinMinerTreesEnabled;
+    public boolean veinMinerTreesRequireAxe;
+
     // ── Dragon egg ────────────────────────────────────────────────────────────
     public int dragonEggSpeedAmplifier;
     public int dragonEggCheckInterval;
@@ -92,6 +103,16 @@ public final class ConfigManager {
         spawnerMinDelayFloor     = Math.max(1, c.getInt("spawner.performance.min-delay-floor", 40));
         spawnerStackSpawnCountCap = Math.max(4, c.getInt("spawner.performance.stack-spawn-count-cap", 32));
         spawnerMaxNearbyEntitiesCap = Math.max(16, c.getInt("spawner.performance.max-nearby-entities-cap", 96));
+
+        veinMinerEnabled = c.getBoolean("vein-miner.enabled", true);
+        veinMinerDefaultEnabled = c.getBoolean("vein-miner.default-player-enabled", true);
+        veinMinerRequireSneak = c.getBoolean("vein-miner.require-sneak", true);
+        veinMinerSearchDiagonals = c.getBoolean("vein-miner.search-diagonals", true);
+        veinMinerMaxBlocksPerChain = Math.max(2, c.getInt("vein-miner.max-blocks-per-chain", 96));
+        veinMinerOresEnabled = c.getBoolean("vein-miner.ores.enabled", true);
+        veinMinerOresRequirePickaxe = c.getBoolean("vein-miner.ores.require-pickaxe", true);
+        veinMinerTreesEnabled = c.getBoolean("vein-miner.trees.enabled", true);
+        veinMinerTreesRequireAxe = c.getBoolean("vein-miner.trees.require-axe", true);
 
         dragonEggSpeedAmplifier  = Math.max(0, c.getInt("dragon-egg.speed-amplifier", 1));
         dragonEggCheckInterval   = Math.max(1, c.getInt("dragon-egg.check-interval", 10));

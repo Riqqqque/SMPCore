@@ -21,6 +21,9 @@ public final class SMPCoreCommand {
                         plugin.getConfigManager().reload();
                         plugin.restartDragonEggListener();
                         plugin.getSpawnerManager().refreshAllFromConfig();
+                        if (plugin.getVeinMinerListener() != null) {
+                            plugin.getVeinMinerListener().reloadConfig();
+                        }
                         ctx.getSource().getSender().sendMessage(
                             MessageUtil.success("Configuration reloaded."));
                         return Command.SINGLE_SUCCESS;
