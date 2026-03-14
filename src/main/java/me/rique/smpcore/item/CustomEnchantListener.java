@@ -23,6 +23,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockDropItemEvent;
 import org.bukkit.event.enchantment.EnchantItemEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
@@ -193,19 +194,22 @@ public final class CustomEnchantListener implements Listener {
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onTelekinesisMine(BlockBreakEvent event) {
+    public void onTelekinesisMine(BlockDropItemEvent event) {
         Player player = event.getPlayer();
         if (player.getGameMode() == GameMode.CREATIVE) return;
-        if (!event.isDropItems()) return;
 
         ItemStack tool = player.getInventory().getItemInMainHand();
         if (!hasTelekinesis(tool)) return;
-        if (event.getBlock().getState() instanceof org.bukkit.inventory.InventoryHolder) return;
 
-        List<ItemStack> drops = new ArrayList<>(event.getBlock().getDrops(tool, player));
+        List<ItemStack> drops = new ArrayList<>();
+        for (Item item : event.getItems()) {
+            ItemStack stack = item.getItemStack();
+            if (stack == null || stack.getType() == Material.AIR || stack.getAmount() <= 0) continue;
+            drops.add(stack.clone());
+        }
         if (drops.isEmpty()) return;
 
-        event.setDropItems(false);
+        event.setCancelled(true);
         giveDrops(player, drops, event.getBlock().getLocation());
     }
 
