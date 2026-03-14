@@ -54,6 +54,86 @@ spawner:
     stack-spawn-count-cap: 32
     max-nearby-entities-cap: 96
 
+vein-miner:
+  enabled: true
+  default-player-enabled: true
+  require-sneak: true
+  search-diagonals: true
+  max-blocks-per-chain: 96
+
+  ores:
+    enabled: true
+    require-pickaxe: true
+    families:
+      coal:
+        - COAL_ORE
+        - DEEPSLATE_COAL_ORE
+      copper:
+        - COPPER_ORE
+        - DEEPSLATE_COPPER_ORE
+      iron:
+        - IRON_ORE
+        - DEEPSLATE_IRON_ORE
+      gold:
+        - GOLD_ORE
+        - DEEPSLATE_GOLD_ORE
+      redstone:
+        - REDSTONE_ORE
+        - DEEPSLATE_REDSTONE_ORE
+      lapis:
+        - LAPIS_ORE
+        - DEEPSLATE_LAPIS_ORE
+      diamond:
+        - DIAMOND_ORE
+        - DEEPSLATE_DIAMOND_ORE
+      emerald:
+        - EMERALD_ORE
+        - DEEPSLATE_EMERALD_ORE
+      nether_gold:
+        - NETHER_GOLD_ORE
+      quartz:
+        - NETHER_QUARTZ_ORE
+      ancient_debris:
+        - ANCIENT_DEBRIS
+
+  trees:
+    enabled: true
+    require-axe: true
+    families:
+      oak:
+        - OAK_LOG
+        - OAK_WOOD
+      spruce:
+        - SPRUCE_LOG
+        - SPRUCE_WOOD
+      birch:
+        - BIRCH_LOG
+        - BIRCH_WOOD
+      jungle:
+        - JUNGLE_LOG
+        - JUNGLE_WOOD
+      acacia:
+        - ACACIA_LOG
+        - ACACIA_WOOD
+      dark_oak:
+        - DARK_OAK_LOG
+        - DARK_OAK_WOOD
+      mangrove:
+        - MANGROVE_LOG
+        - MANGROVE_WOOD
+      cherry:
+        - CHERRY_LOG
+        - CHERRY_WOOD
+      pale_oak:
+        - PALE_OAK_LOG
+        - PALE_OAK_WOOD
+      crimson:
+        - CRIMSON_STEM
+        - CRIMSON_HYPHAE
+      warped:
+        - WARPED_STEM
+        - WARPED_HYPHAE
+
 dragon-egg:
   speed-amplifier: 1
   check-interval: 10

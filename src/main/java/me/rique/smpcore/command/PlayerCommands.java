@@ -4,6 +4,7 @@ import com.mojang.brigadier.Command;
 import io.papermc.paper.command.brigadier.Commands;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.item.CustomEnchantListener;
+import me.rique.smpcore.item.VeinMinerListener;
 import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
@@ -25,6 +26,7 @@ public final class PlayerCommands {
     public static void register(Commands commands, SMPCore plugin) {
         registerHelp(commands);
         registerEnchants(commands, plugin);
+        registerVeinMiner(commands, plugin);
         registerTop(commands, plugin);
         registerSuicide(commands, plugin);
         registerBack(commands, plugin);
@@ -65,6 +67,39 @@ public final class PlayerCommands {
                 .build(),
             "Open the custom enchant menu",
             List.of("enchantments")
+        );
+    }
+
+    private static void registerVeinMiner(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("veinminer")
+                .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.veinminer.use"))
+                .executes(ctx -> {
+                    Player player = (Player) ctx.getSource().getSender();
+                    VeinMinerListener veinMiner = plugin.getVeinMinerListener();
+                    if (veinMiner == null) {
+                        player.sendMessage(MessageUtil.error("Vein miner is not ready yet."));
+                        return 0;
+                    }
+
+                    boolean enabled = veinMiner.toggle(player);
+                    player.sendMessage(MessageUtil.success(
+                        "Vein miner <white>" + (enabled ? "enabled" : "disabled") + "</white>."
+                    ));
+                    if (enabled && plugin.getConfigManager().veinMinerRequireSneak) {
+                        player.sendMessage(MessageUtil.info("Sneak while mining to activate it."));
+                    }
+                    return Command.SINGLE_SUCCESS;
+                })
+                .then(Commands.literal("on")
+                    .executes(ctx -> setVeinMiner(plugin, (Player) ctx.getSource().getSender(), true)))
+                .then(Commands.literal("off")
+                    .executes(ctx -> setVeinMiner(plugin, (Player) ctx.getSource().getSender(), false)))
+                .then(Commands.literal("status")
+                    .executes(ctx -> showVeinMinerStatus(plugin, (Player) ctx.getSource().getSender())))
+                .build(),
+            "Toggle vein miner",
+            List.of("vm")
         );
     }
 
@@ -177,6 +212,9 @@ public final class PlayerCommands {
         if (player.hasPermission("smpcore.enchants")) {
             lines.add("<gray><white>/enchants</white> - View custom enchants</gray>");
         }
+        if (player.hasPermission("smpcore.veinminer.use")) {
+            lines.add("<gray><white>/veinminer</white> - Toggle vein miner</gray>");
+        }
         if (player.hasPermission("smpcore.spawn")) {
             lines.add("<gray><white>/spawn</white> - Teleport to spawn</gray>");
         }
@@ -208,5 +246,39 @@ public final class PlayerCommands {
         for (String line : lines) {
             player.sendMessage(MessageUtil.prefixedRaw(line));
         }
+    }
+
+    private static int setVeinMiner(SMPCore plugin, Player player, boolean enabled) {
+        VeinMinerListener veinMiner = plugin.getVeinMinerListener();
+        if (veinMiner == null) {
+            player.sendMessage(MessageUtil.error("Vein miner is not ready yet."));
+            return 0;
+        }
+
+        veinMiner.setEnabled(player, enabled);
+        player.sendMessage(MessageUtil.success(
+            "Vein miner <white>" + (enabled ? "enabled" : "disabled") + "</white>."
+        ));
+        if (enabled && plugin.getConfigManager().veinMinerRequireSneak) {
+            player.sendMessage(MessageUtil.info("Sneak while mining to activate it."));
+        }
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int showVeinMinerStatus(SMPCore plugin, Player player) {
+        VeinMinerListener veinMiner = plugin.getVeinMinerListener();
+        if (veinMiner == null) {
+            player.sendMessage(MessageUtil.error("Vein miner is not ready yet."));
+            return 0;
+        }
+
+        boolean enabled = veinMiner.isEnabledFor(player);
+        player.sendMessage(MessageUtil.info(
+            "Vein miner: <white>" + (enabled ? "enabled" : "disabled") + "</white>."
+        ));
+        if (enabled && plugin.getConfigManager().veinMinerRequireSneak) {
+            player.sendMessage(MessageUtil.info("Current mode: <white>requires sneaking</white>."));
+        }
+        return Command.SINGLE_SUCCESS;
     }
 }

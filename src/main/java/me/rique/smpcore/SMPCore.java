@@ -19,6 +19,7 @@ import me.rique.smpcore.home.HomeManager;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.MaceLimitListener;
 import me.rique.smpcore.item.ReplenishListener;
+import me.rique.smpcore.item.VeinMinerListener;
 import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.player.DragonEggListener;
 import me.rique.smpcore.player.JoinListener;
@@ -55,6 +56,7 @@ public final class SMPCore extends JavaPlugin {
     private LegendaryListener legendaryListener;
     private ReplenishListener replenishListener;
     private CustomEnchantListener customEnchantListener;
+    private VeinMinerListener veinMinerListener;
 
     @Override
     public void onEnable() {
@@ -96,6 +98,7 @@ public final class SMPCore extends JavaPlugin {
             HandlerList.unregisterAll(dragonEggListener);
             dragonEggListener.cancel();
         }
+        if (veinMinerListener != null) veinMinerListener.shutdown();
         if (backpackListener != null) backpackListener.shutdown();
         if (spawnerManager != null) spawnerManager.shutdown();
         if (databaseManager != null) databaseManager.close();
@@ -108,6 +111,8 @@ public final class SMPCore extends JavaPlugin {
         pm.registerEvents(new CraftingRulesListener(this), this);
         pm.registerEvents(new CombatLogListener(this), this);
         pm.registerEvents(new MaceLimitListener(this), this);
+        veinMinerListener = new VeinMinerListener(this);
+        pm.registerEvents(veinMinerListener, this);
         replenishListener = new ReplenishListener(this);
         pm.registerEvents(replenishListener, this);
         backpackListener = new BackpackListener(this);
@@ -162,4 +167,5 @@ public final class SMPCore extends JavaPlugin {
     public LegendaryListener getLegendaryListener() { return legendaryListener; }
     public ReplenishListener getReplenishListener() { return replenishListener; }
     public CustomEnchantListener getCustomEnchantListener() { return customEnchantListener; }
+    public VeinMinerListener getVeinMinerListener() { return veinMinerListener; }
 }

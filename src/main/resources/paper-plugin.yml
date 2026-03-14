@@ -62,6 +62,9 @@ permissions:
   smpcore.enchants:
     description: Use /enchants
     default: true
+  smpcore.veinminer.use:
+    description: Use /veinminer and native vein mining
+    default: true
 
   # ── Admin ─────────────────────────────────────────────────
   smpcore.gmc:
