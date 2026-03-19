@@ -14,6 +14,7 @@ import org.bukkit.Chunk;
 import org.bukkit.Color;
 import org.bukkit.GameMode;
 import org.bukkit.HeightMap;
+import org.bukkit.Input;
 import org.bukkit.Keyed;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -27,6 +28,7 @@ import org.bukkit.block.Block;
 import org.bukkit.block.BlockState;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.AbstractArrow;
+import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Arrow;
 import org.bukkit.entity.EnderDragon;
 import org.bukkit.entity.EnderDragonPart;
@@ -132,8 +134,11 @@ public final class LegendaryListener implements Listener {
     private static final double EXECUTIONER_BLADE_SHOCKWAVE_HORIZONTAL = 0.65;
     private static final double EXECUTIONER_BLADE_SHOCKWAVE_VERTICAL = 0.80;
     private static final float ENDER_SWORD_DRAGON_YAW_OFFSET = 180.0f;
-    private static final double ENDER_SWORD_DRAGON_RIDER_FORWARD_OFFSET = -0.35;
-    private static final double ENDER_SWORD_DRAGON_RIDER_VERTICAL_OFFSET = -1.10;
+    private static final double ENDER_SWORD_DRAGON_RIDER_FORWARD_OFFSET = -0.10;
+    private static final double ENDER_SWORD_DRAGON_RIDER_VERTICAL_OFFSET = -2.10;
+    private static final double ENDER_SWORD_SEAT_START_Y_OFFSET = 0.35;
+    private static final double ENDER_SWORD_DRAGON_BASE_MOVE_SCALAR = 0.60;
+    private static final double ENDER_SWORD_DRAGON_SPRINT_MULTIPLIER = 1.15;
     private static final double HERMES_BOOTS_SPEED_SCALAR = 0.60;
     private static final Color HERMES_BOOTS_COLOR = Color.fromRGB(245, 201, 66);
     private static final int RECIPE_TRADE_SLOT = 26;
@@ -171,6 +176,7 @@ public final class LegendaryListener implements Listener {
     private final NamespacedKey keyEmeraldBladeItemModel;
     private final NamespacedKey keyEnderbowTag;
     private final NamespacedKey keyEnderSwordDragonOwner;
+    private final NamespacedKey keyEnderSwordSeatOwner;
     private final NamespacedKey keyHarpoonTag;
     private final NamespacedKey keyMagnetActive;
     private final NamespacedKey keyWindCannonCharges;
@@ -207,11 +213,9 @@ public final class LegendaryListener implements Listener {
     private final Set<UUID> pendingMagnetRefresh = ConcurrentHashMap.newKeySet();
     private final Set<UUID> pendingWitherBladeLoreRefresh = ConcurrentHashMap.newKeySet();
     private final Map<UUID, UUID> enderDragonByOwner = new ConcurrentHashMap<>();
+    private final Map<UUID, UUID> enderDragonSeatByOwner = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> enderDragonOwnerByDragon = new ConcurrentHashMap<>();
     private final Set<UUID> activeEnderDragonRiders = ConcurrentHashMap.newKeySet();
-    private final Map<UUID, EnderDragonFlightState> enderDragonFlightStates = new ConcurrentHashMap<>();
-    private final Map<UUID, Long> enderDragonRideActivatedAt = new ConcurrentHashMap<>();
-    private final Map<UUID, Long> enderDragonDismountedAt = new ConcurrentHashMap<>();
     private final Map<UUID, Set<Long>> enderDragonChunkTickets = new ConcurrentHashMap<>();
     private final Map<UUID, String> enderDragonChunkTicketWorlds = new ConcurrentHashMap<>();
 
@@ -227,6 +231,7 @@ public final class LegendaryListener implements Listener {
         this.keyEmeraldBladeItemModel = new NamespacedKey(plugin, "emerald_blade");
         this.keyEnderbowTag = new NamespacedKey(plugin, "enderbow_endermite");
         this.keyEnderSwordDragonOwner = new NamespacedKey(plugin, "ender_sword_dragon_owner");
+        this.keyEnderSwordSeatOwner = new NamespacedKey(plugin, "ender_sword_seat_owner");
         this.keyHarpoonTag = new NamespacedKey(plugin, "harpoon");
         this.keyMagnetActive = new NamespacedKey(plugin, "magnet_active");
         this.keyWindCannonCharges = new NamespacedKey(plugin, "wind_cannon_charges");
@@ -248,6 +253,7 @@ public final class LegendaryListener implements Listener {
         registerRecipeBookRecipes();
         Bukkit.getScheduler().runTask(plugin, () -> {
             cleanupTaggedEnderSwordDragons();
+            cleanupTaggedEnderSwordSeats();
             for (Player online : Bukkit.getOnlinePlayers()) {
                 migratePlayerLegendaryItems(online);
                 refreshMagnetTracking(online);
@@ -282,7 +288,6 @@ public final class LegendaryListener implements Listener {
         activeMagnetPlayers.remove(id);
         pendingMagnetRefresh.remove(id);
         pendingWitherBladeLoreRefresh.remove(id);
-        restoreEnderDragonFlight(id, false);
         clearEnderDragonChunkTickets(id);
         despawnEnderSwordDragon(id, false);
 
@@ -296,11 +301,8 @@ public final class LegendaryListener implements Listener {
         for (UUID ownerId : new HashSet<>(enderDragonByOwner.keySet())) {
             despawnEnderSwordDragon(ownerId, false);
         }
-        for (UUID ownerId : new HashSet<>(enderDragonFlightStates.keySet())) {
-            restoreEnderDragonFlight(ownerId, false);
-            clearEnderDragonChunkTickets(ownerId);
-        }
         cleanupTaggedEnderSwordDragons();
+        cleanupTaggedEnderSwordSeats();
     }
 
     @EventHandler(priority = EventPriority.NORMAL)
@@ -842,10 +844,8 @@ public final class LegendaryListener implements Listener {
             UUID ownerId = enderDragonOwnerByDragon.remove(dragon.getUniqueId());
             if (ownerId != null) {
                 enderDragonByOwner.remove(ownerId, dragon.getUniqueId());
+                removeEnderDragonSeat(ownerId);
                 activeEnderDragonRiders.remove(ownerId);
-                enderDragonRideActivatedAt.remove(ownerId);
-                enderDragonDismountedAt.remove(ownerId);
-                restoreEnderDragonFlight(ownerId, false);
                 clearEnderDragonChunkTickets(ownerId);
                 event.getDrops().clear();
                 event.setDroppedExp(0);
@@ -1296,7 +1296,6 @@ public final class LegendaryListener implements Listener {
         UUID ownerId = player.getUniqueId();
         enderDragonByOwner.put(ownerId, dragon.getUniqueId());
         enderDragonOwnerByDragon.put(dragon.getUniqueId(), ownerId);
-        enderDragonDismountedAt.remove(ownerId);
 
         recallAndMountEnderDragon(player, dragon);
         world.playSound(player.getLocation(), Sound.ENTITY_ENDER_DRAGON_AMBIENT, 1.0f, 1.15f);
@@ -1308,13 +1307,38 @@ public final class LegendaryListener implements Listener {
             cleanupEnderDragon(player.getUniqueId(), dragon.getUniqueId());
             return;
         }
+        ArmorStand seat = ownedEnderDragonSeat(player.getUniqueId());
+        if (seat == null) {
+            seat = spawnEnderDragonSeat(player);
+        }
+        if (seat == null || !seat.isValid()) {
+            player.sendMessage(MessageUtil.error("Failed to create the Ender Dragon seat."));
+            despawnEnderSwordDragon(player.getUniqueId(), false);
+            return;
+        }
+
+        Location seatLocation = dragonSeatLocation(player.getLocation(), player.getLocation().getYaw());
+        seat.teleport(seatLocation);
+        seat.setRotation(player.getLocation().getYaw(), 0.0f);
+        if (player.isInsideVehicle() && player.getVehicle() != seat) {
+            player.leaveVehicle();
+        }
+        if (player.getVehicle() != seat && !seat.addPassenger(player)) {
+            ArmorStand retrySeat = seat;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (retrySeat.isValid() && player.isOnline() && player.getVehicle() != retrySeat) {
+                    retrySeat.addPassenger(player);
+                }
+            });
+        }
+
         dragon.setPhase(EnderDragon.Phase.CIRCLING);
         dragon.setVelocity(new Vector());
-        activateEnderDragonFlight(player);
-        updateEnderDragonChunkTickets(player.getUniqueId(), player.getLocation());
-        syncEnderDragonVisual(player, dragon, true);
+        activeEnderDragonRiders.add(player.getUniqueId());
+        updateEnderDragonChunkTickets(player.getUniqueId(), seatLocation);
+        syncEnderDragonVisual(seatLocation, player.getLocation().getYaw(), dragon, true);
         player.sendActionBar(MM.deserialize(
-            "<dark_purple><bold>Ender Dragon</bold></dark_purple><gray> Fly normally to steer. <white>Jump</white> climbs, <white>sneak</white> descends, and <white>landing</white> dismisses it.</gray>"
+            "<dark_purple><bold>Ender Dragon</bold></dark_purple><gray> Use <white>WASD</white> to steer, <white>look up or down</white> to climb or dive, and <white>sneak</white> to dismount.</gray>"
         ));
     }
 
@@ -1335,98 +1359,68 @@ public final class LegendaryListener implements Listener {
                 despawnEnderSwordDragon(ownerId, false);
                 continue;
             }
+            ArmorStand seat = ownedEnderDragonSeat(ownerId);
+            if (seat == null) {
+                cleanupEnderDragon(ownerId, entry.getValue());
+                continue;
+            }
 
             if (activeEnderDragonRiders.contains(ownerId)) {
-                enderDragonDismountedAt.remove(ownerId);
-                controlEnderDragon(owner, dragon, now);
+                controlEnderDragon(owner, dragon, seat, now);
                 continue;
             }
             despawnEnderSwordDragon(ownerId, false);
         }
     }
 
-    private void controlEnderDragon(Player owner, EnderDragon dragon, long now) {
-        if (!owner.getAllowFlight()) {
-            activateEnderDragonFlight(owner);
-        }
-        updateEnderDragonChunkTickets(owner.getUniqueId(), owner.getLocation());
-        float dragonFlySpeed = enderDragonFlySpeed();
-        if (Math.abs(owner.getFlySpeed() - dragonFlySpeed) > 0.0001f) {
-            owner.setFlySpeed(dragonFlySpeed);
-        }
-        if (!owner.isFlying()) {
-            long activatedAt = enderDragonRideActivatedAt.getOrDefault(owner.getUniqueId(), 0L);
-            if (now - activatedAt < 750L) {
-                owner.setFlying(true);
-                syncEnderDragonVisual(owner, dragon, false);
-                owner.setFallDistance(0.0f);
-                return;
-            }
-            if (isEnderDragonLandingState(owner)) {
-                despawnEnderSwordDragon(owner.getUniqueId(), false);
-                return;
-            }
-            owner.setFlying(true);
+    private void controlEnderDragon(Player owner, EnderDragon dragon, ArmorStand seat, long now) {
+        if (owner.getVehicle() != seat || !seat.getPassengers().contains(owner)) {
+            despawnEnderSwordDragon(owner.getUniqueId(), false);
+            return;
         }
 
-        if (!dragon.getWorld().equals(owner.getWorld())) {
-            dragon.teleport(dragonVisualLocation(dragonSeatLocation(owner.getLocation(), owner.getLocation().getYaw()), owner.getLocation().getYaw()));
+        float yaw = owner.getLocation().getYaw();
+        double yawRadians = Math.toRadians(yaw);
+        Vector flatForward = new Vector(-Math.sin(yawRadians), 0.0, Math.cos(yawRadians)).normalize();
+        Vector lookForward = owner.getLocation().getDirection().normalize();
+        Vector right = new Vector(flatForward.getZ(), 0.0, -flatForward.getX()).normalize();
+        Input input = owner.getCurrentInput();
+
+        Vector movement = new Vector();
+        if (input.isForward()) {
+            movement.add(lookForward);
+        }
+        if (input.isBackward()) {
+            movement.subtract(lookForward);
+        }
+        if (input.isLeft()) {
+            movement.subtract(right);
+        }
+        if (input.isRight()) {
+            movement.add(right);
         }
 
-        syncEnderDragonVisual(owner, dragon, false);
+        double horizontalSpeed = plugin.getConfigManager().enderSwordDragonSpeed;
+        if (input.isSprint()) {
+            horizontalSpeed *= ENDER_SWORD_DRAGON_SPRINT_MULTIPLIER;
+        }
+
+        if (movement.lengthSquared() > 0.0001) {
+            movement.normalize().multiply(horizontalSpeed * ENDER_SWORD_DRAGON_BASE_MOVE_SCALAR);
+        }
+
+        if (input.isJump()) {
+            movement.setY(movement.getY() + plugin.getConfigManager().enderSwordDragonVerticalSpeed * 0.22);
+        }
+
+        Location nextSeat = seat.getLocation().clone().add(movement);
+        nextSeat.setYaw(yaw);
+        nextSeat.setPitch(0.0f);
+        seat.teleport(nextSeat);
+        seat.setRotation(yaw, 0.0f);
+        updateEnderDragonChunkTickets(owner.getUniqueId(), nextSeat);
+        syncEnderDragonVisual(nextSeat, yaw, dragon, false);
         owner.setFallDistance(0.0f);
-    }
-
-    private void activateEnderDragonFlight(Player player) {
-        UUID ownerId = player.getUniqueId();
-        enderDragonFlightStates.computeIfAbsent(
-            ownerId,
-            ignored -> new EnderDragonFlightState(player.getAllowFlight(), player.isFlying(), player.getFlySpeed())
-        );
-        activeEnderDragonRiders.add(ownerId);
-        enderDragonRideActivatedAt.put(ownerId, System.currentTimeMillis());
-        enderDragonDismountedAt.remove(ownerId);
-        player.setAllowFlight(true);
-        player.setFlySpeed(enderDragonFlySpeed());
-        if (!player.isFlying()) {
-            player.setFlying(true);
-        }
-        player.setFallDistance(0.0f);
-    }
-
-    private void restoreEnderDragonFlight(UUID ownerId, boolean protectFromFall) {
-        activeEnderDragonRiders.remove(ownerId);
-        enderDragonRideActivatedAt.remove(ownerId);
-        EnderDragonFlightState state = enderDragonFlightStates.remove(ownerId);
-        Player player = Bukkit.getPlayer(ownerId);
-        if (player == null || !player.isOnline()) {
-            return;
-        }
-
-        if (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR) {
-            return;
-        }
-
-        boolean shouldProtectFromFall = protectFromFall && state != null && !state.allowFlight() && !isEnderDragonLandingState(player);
-        float flySpeed = state == null ? 0.1f : state.flySpeed();
-        player.setFlySpeed(Math.max(0.0f, Math.min(1.0f, flySpeed)));
-
-        if (state == null) {
-            player.setFlying(false);
-            player.setAllowFlight(false);
-        } else {
-            player.setFlying(state.allowFlight() && state.flying());
-            player.setAllowFlight(state.allowFlight());
-        }
-
-        if (shouldProtectFromFall) {
-            player.addPotionEffect(new PotionEffect(PotionEffectType.SLOW_FALLING, 20 * 8, 0, false, false, true));
-        }
-        player.setFallDistance(0.0f);
-    }
-
-    private float enderDragonFlySpeed() {
-        return (float) Math.max(0.05, Math.min(1.0, plugin.getConfigManager().enderSwordDragonSpeed * 0.16));
     }
 
     private EnderDragon ownedEnderDragon(UUID ownerId) {
@@ -1439,12 +1433,44 @@ public final class LegendaryListener implements Listener {
         return null;
     }
 
+    private ArmorStand ownedEnderDragonSeat(UUID ownerId) {
+        UUID seatId = enderDragonSeatByOwner.get(ownerId);
+        if (seatId == null) return null;
+        Entity entity = Bukkit.getEntity(seatId);
+        if (entity instanceof ArmorStand stand && stand.isValid() && !stand.isDead()) {
+            return stand;
+        }
+        return null;
+    }
+
+    private ArmorStand spawnEnderDragonSeat(Player player) {
+        Location seatLocation = dragonSeatLocation(player.getLocation(), player.getLocation().getYaw());
+        ArmorStand seat = player.getWorld().spawn(seatLocation, ArmorStand.class, stand -> {
+            stand.setVisible(false);
+            stand.setInvisible(true);
+            stand.setGravity(false);
+            stand.setCollidable(false);
+            stand.setSilent(true);
+            stand.setPersistent(false);
+            stand.setInvulnerable(true);
+            stand.setBasePlate(false);
+            stand.setArms(false);
+            stand.setCanMove(true);
+            stand.setCanTick(true);
+            stand.getPersistentDataContainer().set(
+                keyEnderSwordSeatOwner,
+                PersistentDataType.STRING,
+                player.getUniqueId().toString()
+            );
+        });
+        enderDragonSeatByOwner.put(player.getUniqueId(), seat.getUniqueId());
+        return seat;
+    }
+
     private void despawnEnderSwordDragon(UUID ownerId, boolean applyKilledCooldown) {
         UUID dragonId = enderDragonByOwner.remove(ownerId);
+        removeEnderDragonSeat(ownerId);
         activeEnderDragonRiders.remove(ownerId);
-        enderDragonRideActivatedAt.remove(ownerId);
-        enderDragonDismountedAt.remove(ownerId);
-        restoreEnderDragonFlight(ownerId, applyKilledCooldown);
         clearEnderDragonChunkTickets(ownerId);
         if (dragonId == null) return;
 
@@ -1457,23 +1483,18 @@ public final class LegendaryListener implements Listener {
 
     private void cleanupEnderDragon(UUID ownerId, UUID dragonId) {
         enderDragonByOwner.remove(ownerId, dragonId);
+        removeEnderDragonSeat(ownerId);
         activeEnderDragonRiders.remove(ownerId);
-        enderDragonRideActivatedAt.remove(ownerId);
         enderDragonOwnerByDragon.remove(dragonId, ownerId);
-        enderDragonDismountedAt.remove(ownerId);
-        restoreEnderDragonFlight(ownerId, false);
         clearEnderDragonChunkTickets(ownerId);
     }
 
-    private void syncEnderDragonVisual(Player owner, EnderDragon dragon, boolean snap) {
+    private void syncEnderDragonVisual(Location seatLocation, float yaw, EnderDragon dragon, boolean snap) {
         if (!dragon.isValid() || dragon.isDead()) {
             return;
         }
 
-        Location dragonLocation = dragonVisualLocation(
-            dragonSeatLocation(owner.getLocation(), owner.getLocation().getYaw()),
-            owner.getLocation().getYaw()
-        );
+        Location dragonLocation = dragonVisualLocation(seatLocation, yaw);
         dragon.setPhase(EnderDragon.Phase.CIRCLING);
         dragon.setRotation(dragonLocation.getYaw(), dragonLocation.getPitch());
         moveEnderDragonVisual(dragon, dragonLocation, snap);
@@ -1499,7 +1520,7 @@ public final class LegendaryListener implements Listener {
     }
 
     private Location dragonSeatLocation(Location base, float yaw) {
-        Location seat = base.clone();
+        Location seat = base.clone().add(0.0, ENDER_SWORD_SEAT_START_Y_OFFSET, 0.0);
         seat.setYaw(yaw);
         seat.setPitch(0.0f);
         return seat;
@@ -1525,6 +1546,17 @@ public final class LegendaryListener implements Listener {
             yaw -= 360.0f;
         }
         return yaw;
+    }
+
+    private void removeEnderDragonSeat(UUID ownerId) {
+        UUID seatId = enderDragonSeatByOwner.remove(ownerId);
+        if (seatId == null) {
+            return;
+        }
+        Entity entity = Bukkit.getEntity(seatId);
+        if (entity != null && entity.isValid()) {
+            entity.remove();
+        }
     }
 
     private void updateEnderDragonChunkTickets(UUID ownerId, Location location) {
@@ -1588,6 +1620,17 @@ public final class LegendaryListener implements Listener {
                     continue;
                 }
                 dragon.remove();
+            }
+        }
+    }
+
+    private void cleanupTaggedEnderSwordSeats() {
+        for (World world : Bukkit.getWorlds()) {
+            for (ArmorStand stand : world.getEntitiesByClass(ArmorStand.class)) {
+                if (!stand.getPersistentDataContainer().has(keyEnderSwordSeatOwner, PersistentDataType.STRING)) {
+                    continue;
+                }
+                stand.remove();
             }
         }
     }
@@ -3864,7 +3907,6 @@ public final class LegendaryListener implements Listener {
 
     private record LegendaryRecipe(LegendaryType type, Map<Material, Integer> ingredients) {}
     private record ChronoState(Location loc, long readyAt) {}
-    private record EnderDragonFlightState(boolean allowFlight, boolean flying, float flySpeed) {}
     private record RechargeState(int charges, long rechargeStartedAt) {}
     private record LifeStealerState(int stacks, long expiresAt, Set<UUID> seenVictims) {
         private static LifeStealerState empty() {
