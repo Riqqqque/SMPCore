@@ -112,7 +112,7 @@ public final class LegendaryListener implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
 
-    private static final int LEGENDARY_ITEM_DATA_VERSION = 9;
+    private static final int LEGENDARY_ITEM_DATA_VERSION = 10;
     private static final int STARTUP_LEGENDARY_MIGRATION_CHUNKS_PER_TICK = 24;
     private static final int LEGENDARY_ITEM_SCAN_MAX_DEPTH = 2;
     private static final int ENDERBOW_TP_COOLDOWN = 30;
@@ -189,6 +189,7 @@ public final class LegendaryListener implements Listener {
     private final NamespacedKey keyMenuLegendary;
     private final NamespacedKey keyEnderBone;
     private final NamespacedKey keyEnderbowForm;
+    private final NamespacedKey keyEnderSwordItemModel;
     private final NamespacedKey keyEmeraldLevel;
     private final NamespacedKey keyEmeraldBladeItemModel;
     private final NamespacedKey keyEnderbowTag;
@@ -244,6 +245,7 @@ public final class LegendaryListener implements Listener {
         this.keyMenuLegendary = new NamespacedKey(plugin, "legendary_menu_id");
         this.keyEnderBone = new NamespacedKey(plugin, "ender_bone");
         this.keyEnderbowForm = new NamespacedKey(plugin, "enderbow_form");
+        this.keyEnderSwordItemModel = new NamespacedKey(plugin, "ender_sword");
         this.keyEmeraldLevel = new NamespacedKey(plugin, "emerald_blade_level");
         this.keyEmeraldBladeItemModel = new NamespacedKey(plugin, "emerald_blade");
         this.keyEnderbowTag = new NamespacedKey(plugin, "enderbow_endermite");
@@ -3544,6 +3546,7 @@ public final class LegendaryListener implements Listener {
         meta.setItemModel(null);
         switch (type) {
             case ENDER_SWORD -> {
+                meta.setItemModel(keyEnderSwordItemModel);
                 setEnchantLevel(meta, enchantSharpness, 5);
                 meta.lore(buildEnderSwordLore(meta));
             }
