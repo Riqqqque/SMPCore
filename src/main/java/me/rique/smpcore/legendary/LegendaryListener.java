@@ -45,9 +45,11 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.entity.EntityChangeBlockEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.entity.EntityShootBowEvent;
 import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
 import org.bukkit.event.entity.ProjectileHitEvent;
@@ -107,7 +109,7 @@ public final class LegendaryListener implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
 
-    private static final int LEGENDARY_ITEM_DATA_VERSION = 7;
+    private static final int LEGENDARY_ITEM_DATA_VERSION = 9;
     private static final int STARTUP_LEGENDARY_MIGRATION_CHUNKS_PER_TICK = 24;
     private static final int LEGENDARY_ITEM_SCAN_MAX_DEPTH = 2;
     private static final int ENDERBOW_TP_COOLDOWN = 30;
@@ -129,6 +131,9 @@ public final class LegendaryListener implements Listener {
     private static final double EXECUTIONER_BLADE_SHOCKWAVE_RADIUS = 6.0;
     private static final double EXECUTIONER_BLADE_SHOCKWAVE_HORIZONTAL = 0.65;
     private static final double EXECUTIONER_BLADE_SHOCKWAVE_VERTICAL = 0.80;
+    private static final float ENDER_SWORD_DRAGON_YAW_OFFSET = 180.0f;
+    private static final double ENDER_SWORD_DRAGON_RIDER_FORWARD_OFFSET = -0.35;
+    private static final double ENDER_SWORD_DRAGON_RIDER_VERTICAL_OFFSET = -1.10;
     private static final double HERMES_BOOTS_SPEED_SCALAR = 0.60;
     private static final Color HERMES_BOOTS_COLOR = Color.fromRGB(245, 201, 66);
     private static final int RECIPE_TRADE_SLOT = 26;
@@ -188,7 +193,6 @@ public final class LegendaryListener implements Listener {
     private final Set<NamespacedKey> recipeBookKeys = new HashSet<>();
 
     private final Map<UUID, Long> enderbowCd = new ConcurrentHashMap<>();
-    private final Map<UUID, Long> enderSwordCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> chronoCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> harpoonCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> hypnosisCd = new ConcurrentHashMap<>();
@@ -378,6 +382,7 @@ public final class LegendaryListener implements Listener {
             resultMeta.displayName(MM.deserialize(type.display));
         }
         resultMeta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+        CustomLoreUtil.applyStyledItemFlags(resultMeta);
         resultMeta.setUnbreakable(true);
         resultMeta.addItemFlags(ItemFlag.HIDE_UNBREAKABLE);
         applyLegendaryTypeState(resultMeta, type);
@@ -393,8 +398,15 @@ public final class LegendaryListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onEnchantItem(EnchantItemEvent event) {
-        if (typeOf(event.getItem()) != LegendaryType.EMERALD_BLADE) return;
-        event.setCancelled(true);
+        LegendaryType type = typeOf(event.getItem());
+        if (type == null) {
+            return;
+        }
+        if (type == LegendaryType.EMERALD_BLADE) {
+            event.setCancelled(true);
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> refreshLegendaryPresentation(event.getItem()));
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -833,19 +845,10 @@ public final class LegendaryListener implements Listener {
                 activeEnderDragonRiders.remove(ownerId);
                 enderDragonRideActivatedAt.remove(ownerId);
                 enderDragonDismountedAt.remove(ownerId);
-                restoreEnderDragonFlight(ownerId, true);
+                restoreEnderDragonFlight(ownerId, false);
                 clearEnderDragonChunkTickets(ownerId);
-                setCooldown(enderSwordCd, ownerId, plugin.getConfigManager().enderSwordKilledCooldownSeconds);
                 event.getDrops().clear();
                 event.setDroppedExp(0);
-                Player owner = Bukkit.getPlayer(ownerId);
-                if (owner != null && owner.isOnline()) {
-                    owner.sendMessage(MessageUtil.warn(
-                        "Your Ender Dragon was killed. Summon cooldown: <white>"
-                            + plugin.getConfigManager().enderSwordKilledCooldownSeconds
-                            + "s</white>."
-                    ));
-                }
                 return;
             }
 
@@ -914,7 +917,6 @@ public final class LegendaryListener implements Listener {
             event.setDamage(event.getDamage() + executionerBladeBonusDamage(attacker));
         } else if (held == LegendaryType.LIFE_STEALER) {
             refreshLifeStealerLore(attacker);
-            healLivingEntity(attacker, LIFE_STEALER_HIT_HEAL);
         }
 
         if (held == LegendaryType.THORS_HAMMER) {
@@ -930,6 +932,48 @@ public final class LegendaryListener implements Listener {
         Vector kb = targetPlayer.getLocation().toVector().subtract(attacker.getLocation().toVector()).normalize().multiply(1.2).setY(0.42);
         targetPlayer.setVelocity(kb);
         damageArmorPiece(targetPlayer);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onLifeStealerConfirmedHit(EntityDamageByEntityEvent event) {
+        if (event.getFinalDamage() <= 0.0) {
+            return;
+        }
+        if (!(event.getDamager() instanceof Player attacker)) {
+            return;
+        }
+        if (typeOf(attacker.getInventory().getItemInMainHand()) != LegendaryType.LIFE_STEALER) {
+            return;
+        }
+
+        healLivingEntity(attacker, LIFE_STEALER_HIT_HEAL);
+        refreshLifeStealerLore(attacker);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onOwnedEnderDragonDamage(EntityDamageEvent event) {
+        if (!isOwnedEnderDragon(event.getEntity())) {
+            return;
+        }
+        event.setCancelled(true);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onOwnedEnderDragonChangeBlock(EntityChangeBlockEvent event) {
+        if (!isOwnedEnderDragon(event.getEntity())) {
+            return;
+        }
+        event.setCancelled(true);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onOwnedEnderDragonExplode(EntityExplodeEvent event) {
+        if (!isOwnedEnderDragon(event.getEntity())) {
+            return;
+        }
+        event.blockList().clear();
+        event.setYield(0.0f);
+        event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
@@ -1130,15 +1174,14 @@ public final class LegendaryListener implements Listener {
     }
 
     private ItemStack createBackpackRecipeDisplayItem() {
-        ItemStack item = new ItemStack(Material.BUNDLE);
+        ItemStack item = new ItemStack(Material.CHEST_MINECART);
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return item;
 
         meta.displayName(MM.deserialize("<gold><bold>Backpack</bold></gold>"));
         meta.lore(List.of(
             MM.deserialize("<dark_gray>Portable Storage</dark_gray>"),
-            MM.deserialize("<gray>Right-click to open.</gray>"),
-            MM.deserialize("<gray>Normal bundles still work normally.</gray>")
+            MM.deserialize("<gray>Right-click to open.</gray>")
         ));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         item.setItemMeta(meta);
@@ -1193,8 +1236,7 @@ public final class LegendaryListener implements Listener {
     }
 
     private void useEnderSword(Player player) {
-        UUID ownerId = player.getUniqueId();
-        EnderDragon dragon = ownedEnderDragon(ownerId);
+        EnderDragon dragon = ownedEnderDragon(player.getUniqueId());
         if (dragon != null) {
             if (plugin.getConfigManager().enderSwordRequireOpenSky && !hasOpenSky(player.getLocation())) {
                 player.sendMessage(MessageUtil.error("You need open sky above you to call your Ender Dragon here."));
@@ -1209,13 +1251,6 @@ public final class LegendaryListener implements Listener {
             return;
         }
 
-        if (onCooldown(enderSwordCd, ownerId)) {
-            player.sendMessage(MessageUtil.warn(
-                "Ender Dragon cooldown: <white>" + secondsLeft(enderSwordCd, ownerId) + "s</white>."
-            ));
-            return;
-        }
-
         summonEnderDragon(player);
     }
 
@@ -1227,15 +1262,15 @@ public final class LegendaryListener implements Listener {
         );
 
         EnderDragon dragon = world.spawn(spawn, EnderDragon.class, entity -> {
-            entity.setAI(false);
-            entity.setAware(false);
+            entity.setAI(true);
+            entity.setAware(true);
             entity.setGravity(false);
-            entity.setNoPhysics(false);
+            entity.setNoPhysics(true);
             entity.setCollidable(false);
             entity.setSilent(true);
             entity.setPersistent(false);
-            entity.setInvulnerable(false);
-            entity.setPhase(EnderDragon.Phase.HOVER);
+            entity.setInvulnerable(true);
+            entity.setPhase(EnderDragon.Phase.CIRCLING);
             entity.getPersistentDataContainer().set(
                 keyEnderSwordDragonOwner,
                 PersistentDataType.STRING,
@@ -1262,15 +1297,10 @@ public final class LegendaryListener implements Listener {
         enderDragonByOwner.put(ownerId, dragon.getUniqueId());
         enderDragonOwnerByDragon.put(dragon.getUniqueId(), ownerId);
         enderDragonDismountedAt.remove(ownerId);
-        setCooldown(enderSwordCd, ownerId, plugin.getConfigManager().enderSwordSummonCooldownSeconds);
 
         recallAndMountEnderDragon(player, dragon);
         world.playSound(player.getLocation(), Sound.ENTITY_ENDER_DRAGON_AMBIENT, 1.0f, 1.15f);
-        player.sendMessage(MessageUtil.success(
-            "Summoned your Ender Dragon. Cooldown: <white>"
-                + plugin.getConfigManager().enderSwordSummonCooldownSeconds
-                + "s</white>."
-        ));
+        player.sendMessage(MessageUtil.success("Entered <white>Dragon Mode</white>."));
     }
 
     private void recallAndMountEnderDragon(Player player, EnderDragon dragon) {
@@ -1278,7 +1308,7 @@ public final class LegendaryListener implements Listener {
             cleanupEnderDragon(player.getUniqueId(), dragon.getUniqueId());
             return;
         }
-        dragon.setPhase(EnderDragon.Phase.HOVER);
+        dragon.setPhase(EnderDragon.Phase.CIRCLING);
         dragon.setVelocity(new Vector());
         activateEnderDragonFlight(player);
         updateEnderDragonChunkTickets(player.getUniqueId(), player.getLocation());
@@ -1311,17 +1341,7 @@ public final class LegendaryListener implements Listener {
                 controlEnderDragon(owner, dragon, now);
                 continue;
             }
-
-            int despawnSeconds = plugin.getConfigManager().enderSwordDismountDespawnSeconds;
-            if (despawnSeconds <= 0) {
-                despawnEnderSwordDragon(ownerId, false);
-                continue;
-            }
-
-            long dismountedAt = enderDragonDismountedAt.computeIfAbsent(ownerId, ignored -> now);
-            if (now - dismountedAt >= despawnSeconds * 1000L) {
-                despawnEnderSwordDragon(ownerId, false);
-            }
+            despawnEnderSwordDragon(ownerId, false);
         }
     }
 
@@ -1343,11 +1363,7 @@ public final class LegendaryListener implements Listener {
                 return;
             }
             if (isEnderDragonLandingState(owner)) {
-                activeEnderDragonRiders.remove(owner.getUniqueId());
-                enderDragonRideActivatedAt.remove(owner.getUniqueId());
-                enderDragonDismountedAt.put(owner.getUniqueId(), now);
-                restoreEnderDragonFlight(owner.getUniqueId(), false);
-                syncEnderDragonVisual(owner, dragon, true);
+                despawnEnderSwordDragon(owner.getUniqueId(), false);
                 return;
             }
             owner.setFlying(true);
@@ -1437,10 +1453,6 @@ public final class LegendaryListener implements Listener {
         if (entity != null && entity.isValid()) {
             entity.remove();
         }
-
-        if (applyKilledCooldown) {
-            setCooldown(enderSwordCd, ownerId, plugin.getConfigManager().enderSwordKilledCooldownSeconds);
-        }
     }
 
     private void cleanupEnderDragon(UUID ownerId, UUID dragonId) {
@@ -1462,45 +1474,20 @@ public final class LegendaryListener implements Listener {
             dragonSeatLocation(owner.getLocation(), owner.getLocation().getYaw()),
             owner.getLocation().getYaw()
         );
-        dragon.setPhase(EnderDragon.Phase.HOVER);
+        dragon.setPhase(EnderDragon.Phase.CIRCLING);
         dragon.setRotation(dragonLocation.getYaw(), dragonLocation.getPitch());
-        moveEnderDragonVisual(owner, dragon, dragonLocation, snap);
+        moveEnderDragonVisual(dragon, dragonLocation, snap);
     }
 
-    private void moveEnderDragonVisual(Player owner, EnderDragon dragon, Location dragonLocation, boolean snap) {
-        if (!dragon.getWorld().equals(dragonLocation.getWorld())) {
-            dragon.teleport(dragonLocation);
-            dragon.setVelocity(new Vector());
+    private void moveEnderDragonVisual(EnderDragon dragon, Location dragonLocation, boolean snap) {
+        boolean changedWorld = !dragon.getWorld().equals(dragonLocation.getWorld());
+        boolean movedEnough = dragon.getLocation().distanceSquared(dragonLocation) > 0.0001;
+        if (!changedWorld && !snap && !movedEnough) {
             return;
         }
 
-        Vector delta = dragonLocation.toVector().subtract(dragon.getLocation().toVector());
-        double distanceSquared = delta.lengthSquared();
-        if (snap || distanceSquared > 196.0) {
-            dragon.teleport(dragonLocation);
-            dragon.setVelocity(new Vector());
-            return;
-        }
-
-        Vector ownerVelocity = owner.getVelocity();
-        double horizontalLimit = Math.max(0.35, plugin.getConfigManager().enderSwordDragonSpeed);
-        double verticalLimit = Math.max(0.25, plugin.getConfigManager().enderSwordDragonVerticalSpeed);
-
-        Vector desiredVelocity = new Vector(
-            clamp(delta.getX() * 0.45 + ownerVelocity.getX(), -horizontalLimit, horizontalLimit),
-            clamp(delta.getY() * 0.55 + ownerVelocity.getY(), -verticalLimit, verticalLimit),
-            clamp(delta.getZ() * 0.45 + ownerVelocity.getZ(), -horizontalLimit, horizontalLimit)
-        );
-
-        if (distanceSquared < 0.04) {
-            desiredVelocity.multiply(0.35);
-        }
-
-        dragon.setVelocity(desiredVelocity);
-    }
-
-    private double clamp(double value, double min, double max) {
-        return Math.max(min, Math.min(max, value));
+        dragon.teleport(dragonLocation);
+        dragon.setVelocity(new Vector());
     }
 
     private boolean isEnderDragonLandingState(Player player) {
@@ -1512,7 +1499,7 @@ public final class LegendaryListener implements Listener {
     }
 
     private Location dragonSeatLocation(Location base, float yaw) {
-        Location seat = base.clone().add(0.0, 2.1, 0.0);
+        Location seat = base.clone();
         seat.setYaw(yaw);
         seat.setPitch(0.0f);
         return seat;
@@ -1522,11 +1509,22 @@ public final class LegendaryListener implements Listener {
         double radians = Math.toRadians(yaw);
         Vector forward = new Vector(-Math.sin(radians), 0.0, Math.cos(radians)).normalize();
         Location dragonLocation = seatLocation.clone()
-            .subtract(forward.multiply(1.1))
-            .add(0.0, -2.0, 0.0);
-        dragonLocation.setYaw(yaw);
+            .add(forward.multiply(ENDER_SWORD_DRAGON_RIDER_FORWARD_OFFSET))
+            .add(0.0, ENDER_SWORD_DRAGON_RIDER_VERTICAL_OFFSET, 0.0);
+        dragonLocation.setYaw(enderDragonVisualYaw(yaw));
         dragonLocation.setPitch(0.0f);
         return dragonLocation;
+    }
+
+    private float enderDragonVisualYaw(float riderYaw) {
+        float yaw = riderYaw + ENDER_SWORD_DRAGON_YAW_OFFSET;
+        while (yaw <= -180.0f) {
+            yaw += 360.0f;
+        }
+        while (yaw > 180.0f) {
+            yaw -= 360.0f;
+        }
+        return yaw;
     }
 
     private void updateEnderDragonChunkTickets(UUID ownerId, Location location) {
@@ -1545,8 +1543,8 @@ public final class LegendaryListener implements Listener {
         int centerChunkX = location.getBlockX() >> 4;
         int centerChunkZ = location.getBlockZ() >> 4;
         Set<Long> desired = new HashSet<>();
-        for (int x = centerChunkX - 2; x <= centerChunkX + 2; x++) {
-            for (int z = centerChunkZ - 2; z <= centerChunkZ + 2; z++) {
+        for (int x = centerChunkX - 3; x <= centerChunkX + 3; x++) {
+            for (int z = centerChunkZ - 3; z <= centerChunkZ + 3; z++) {
                 desired.add(chunkKey(x, z));
             }
         }
@@ -2346,6 +2344,7 @@ public final class LegendaryListener implements Listener {
             LifeStealerState refreshed = state.refreshDuration();
             applyLifeStealerEffects(killer, refreshed);
             applyLifeStealerState(weapon, refreshed);
+            refreshLifeStealerLore(killer);
             return;
         }
 
@@ -2453,7 +2452,7 @@ public final class LegendaryListener implements Listener {
             pdc.set(keyLifeStealerExpiresAt, PersistentDataType.LONG, state.expiresAt());
             pdc.set(keyLifeStealerSeenPlayers, PersistentDataType.STRING, joinLifeStealerVictims(state.seenVictims()));
         }
-        meta.lore(buildLifeStealerLore(state));
+        meta.lore(buildLifeStealerLore(meta, state));
     }
 
     private Set<UUID> parseLifeStealerVictims(String raw) {
@@ -2725,33 +2724,36 @@ public final class LegendaryListener implements Listener {
         ItemMeta meta = bow.getItemMeta();
         if (meta == null) return;
         meta.getPersistentDataContainer().set(keyEnderbowForm, PersistentDataType.BYTE, teleport ? (byte) 1 : (byte) 0);
-        meta.lore(buildEnderbowLore(teleport));
+        meta.lore(buildEnderbowLore(meta, teleport));
         bow.setItemMeta(meta);
     }
 
     private List<Component> buildLegendaryLore(
+        ItemMeta meta,
         Material material,
         String itemKind,
         List<String> topLines,
         CustomLoreUtil.LoreSection... sections
     ) {
-        return CustomLoreUtil.buildStyledLore(material, "LEGENDARY", itemKind, topLines, List.of(sections));
+        return CustomLoreUtil.buildStyledLore(meta, material, "LEGENDARY", itemKind, topLines, List.of(sections));
     }
 
     private List<Component> buildMythicLore(
+        ItemMeta meta,
         Material material,
         String itemKind,
         List<String> topLines,
         CustomLoreUtil.LoreSection... sections
     ) {
-        return CustomLoreUtil.buildStyledLore(material, "MYTHIC", itemKind, topLines, List.of(sections));
+        return CustomLoreUtil.buildStyledLore(meta, material, "MYTHIC", itemKind, topLines, List.of(sections));
     }
 
-    private List<Component> buildEnderbowLore(boolean teleportForm) {
+    private List<Component> buildEnderbowLore(ItemMeta meta, boolean teleportForm) {
         return buildLegendaryLore(
+            meta,
             Material.BOW,
             "BOW",
-            List.of("<white>Power VII</white>", "<gray>Current Form: <yellow>" + (teleportForm ? "Teleport" : "Arrow") + "</yellow></gray>"),
+            List.of("<gray>Current Form: <yellow>" + (teleportForm ? "Teleport" : "Arrow") + "</yellow></gray>"),
             CustomLoreUtil.section(
                 "Item Ability",
                 "Form Shift",
@@ -2762,29 +2764,28 @@ public final class LegendaryListener implements Listener {
         );
     }
 
-    private List<Component> buildEnderSwordLore() {
+    private List<Component> buildEnderSwordLore(ItemMeta meta) {
         return buildLegendaryLore(
+            meta,
             Material.NETHERITE_SWORD,
             "SWORD",
-            List.of("<white>Sharpness V</white>", "<gray>Unbreakable</gray>"),
+            List.of("<gray>Unbreakable</gray>"),
             CustomLoreUtil.section(
                 "Item Ability",
                 "Ender Dragon",
-                "<gray><white>Right-click</white> to summon or remount your Ender Dragon.</gray>",
-                "<gray>The dragon is smaller, rideable, and lasts until dismissed or killed.</gray>",
-                "<gray>Summon cooldown: <white>" + plugin.getConfigManager().enderSwordSummonCooldownSeconds + "s</white></gray>",
-                "<gray>Dragon death cooldown: <white>" + plugin.getConfigManager().enderSwordKilledCooldownSeconds + "s</white></gray>"
+                "<gray><white>Right-click</white> to enter <white>Dragon Mode</white>.</gray>",
+                "<gray>Landing ends the mode and despawns the dragon.</gray>",
+                "<gray>The dragon is visual only and does not damage terrain.</gray>"
             )
         );
     }
 
-    private List<Component> buildEmeraldBladeLore(int level) {
+    private List<Component> buildEmeraldBladeLore(ItemMeta meta, int level) {
         return buildLegendaryLore(
+            meta,
             Material.DIAMOND_SWORD,
             "SWORD",
             List.of(
-                "<white>Sharpness " + level + "</white>",
-                "<white>Unbreaking III</white>",
                 "<gray>Current Bonus: <green>" + level + "</green>/<white>" + EMERALD_BLADE_MAX_LEVEL + "</white> Sharpness</gray>"
             ),
             CustomLoreUtil.section(
@@ -2797,8 +2798,9 @@ public final class LegendaryListener implements Listener {
         );
     }
 
-    private List<Component> buildMagnetLore(boolean active) {
+    private List<Component> buildMagnetLore(ItemMeta meta, boolean active) {
         return buildLegendaryLore(
+            meta,
             Material.RECOVERY_COMPASS,
             "UTILITY",
             List.of("<gray>Current State: " + (active ? "<green>ON</green>" : "<red>OFF</red>") + "</gray>"),
@@ -2812,7 +2814,7 @@ public final class LegendaryListener implements Listener {
         );
     }
 
-    private List<Component> buildWindChargeCannonLore(int charges, long cooldownUntil) {
+    private List<Component> buildWindChargeCannonLore(ItemMeta meta, int charges, long cooldownUntil) {
         long secondsLeft = cooldownSecondsLeft(cooldownUntil);
         List<String> topLines = new ArrayList<>();
         topLines.add("<gray>Current Charges: <white>" + charges + "</white>/<white>" + WIND_CHARGE_CANNON_MAX_CHARGES + "</white></gray>");
@@ -2820,6 +2822,7 @@ public final class LegendaryListener implements Listener {
             topLines.add("<gray>Recharge Remaining: <white>" + secondsLeft + "s</white></gray>");
         }
         return buildLegendaryLore(
+            meta,
             Material.PRISMARINE_SHARD,
             "UTILITY",
             topLines,
@@ -2833,16 +2836,16 @@ public final class LegendaryListener implements Listener {
         );
     }
 
-    private List<Component> buildLifeStealerLore(LifeStealerState state) {
+    private List<Component> buildLifeStealerLore(ItemMeta meta, LifeStealerState state) {
         int stacks = state.stacks();
         int absorptionHearts = stacks * 2;
         List<String> topLines = new ArrayList<>();
-        topLines.add("<white>Sharpness III</white>");
         topLines.add("<gray>Current Bonus:</gray> <red>" + stacks + " Strength</red><gray>,</gray> <aqua>" + stacks + " Speed</aqua><gray>,</gray> <gold>" + absorptionHearts + " Absorption Hearts</gold>");
         if (state.stacks() > 0) {
             topLines.add("<gray>Streak Timer: <white>" + Math.max(1L, (state.expiresAt() - System.currentTimeMillis() + 999L) / 1000L) + "s</white></gray>");
         }
         return buildMythicLore(
+            meta,
             Material.NETHERITE_SWORD,
             "SWORD",
             topLines,
@@ -2872,7 +2875,7 @@ public final class LegendaryListener implements Listener {
         ItemMeta meta = magnet.getItemMeta();
         if (meta == null) return;
         meta.getPersistentDataContainer().set(keyMagnetActive, PersistentDataType.BYTE, active ? (byte) 1 : (byte) 0);
-        meta.lore(buildMagnetLore(active));
+        meta.lore(buildMagnetLore(meta, active));
         magnet.setItemMeta(meta);
     }
 
@@ -2957,7 +2960,7 @@ public final class LegendaryListener implements Listener {
         } else {
             pdc.remove(keyWindCannonCooldownUntil);
         }
-        meta.lore(buildWindChargeCannonLore(normalizedCharges, cooldownUntil));
+        meta.lore(buildWindChargeCannonLore(meta, normalizedCharges, cooldownUntil));
     }
 
     private int clampWindChargeCannonCharges(int charges) {
@@ -3137,6 +3140,7 @@ public final class LegendaryListener implements Listener {
             pdc.set(keyWitherBladeDashRechargeStarted, PersistentDataType.LONG, dashRechargeStartedAt);
         }
         meta.lore(buildWitherBladeLore(
+            meta,
             skullCharges,
             skullRechargeStartedAt,
             dashCharges,
@@ -3147,6 +3151,7 @@ public final class LegendaryListener implements Listener {
     }
 
     private List<Component> buildWitherBladeLore(
+        ItemMeta meta,
         int skullCharges,
         long skullRechargeStartedAt,
         int dashCharges,
@@ -3174,6 +3179,7 @@ public final class LegendaryListener implements Listener {
             topLines.add("<gray>Next Dash Charge: <white>" + formatSeconds(dashNext) + "s</white></gray>");
         }
         return buildLegendaryLore(
+            meta,
             Material.NETHERITE_SWORD,
             "SWORD",
             topLines,
@@ -3363,6 +3369,17 @@ public final class LegendaryListener implements Listener {
         return true;
     }
 
+    private void refreshLegendaryPresentation(ItemStack item) {
+        LegendaryType type = typeOf(item);
+        if (type == null) return;
+
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) return;
+
+        applyLegendaryTypeState(meta, type);
+        item.setItemMeta(meta);
+    }
+
     private void applyLegendaryIdentity(ItemMeta meta, LegendaryType type, String instanceId) {
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
         pdc.set(keyLegendary, PersistentDataType.STRING, type.id);
@@ -3370,6 +3387,7 @@ public final class LegendaryListener implements Listener {
         pdc.set(keyLegendaryInstance, PersistentDataType.STRING, instanceId);
         meta.displayName(MM.deserialize(type.display));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+        CustomLoreUtil.applyStyledItemFlags(meta);
         if (type == LegendaryType.EMERALD_BLADE) {
             meta.setUnbreakable(false);
             meta.removeItemFlags(ItemFlag.HIDE_UNBREAKABLE);
@@ -3385,15 +3403,16 @@ public final class LegendaryListener implements Listener {
         switch (type) {
             case ENDER_SWORD -> {
                 setEnchantLevel(meta, enchantSharpness, 5);
-                meta.lore(buildEnderSwordLore());
+                meta.lore(buildEnderSwordLore(meta));
             }
             case ENDERBOW -> {
                 setEnchantLevel(meta, enchantPower, 7);
                 boolean teleport = pdc.getOrDefault(keyEnderbowForm, PersistentDataType.BYTE, (byte) 0) == (byte) 1;
                 pdc.set(keyEnderbowForm, PersistentDataType.BYTE, teleport ? (byte) 1 : (byte) 0);
-                meta.lore(buildEnderbowLore(teleport));
+                meta.lore(buildEnderbowLore(meta, teleport));
             }
             case CHRONO_SWORD -> meta.lore(buildLegendaryLore(
+                meta,
                 Material.DIAMOND_SWORD,
                 "SWORD",
                 List.of("<gray>Cooldown: <white>45s</white> normal, <white>90s</white> on death rewind</gray>"),
@@ -3405,6 +3424,7 @@ public final class LegendaryListener implements Listener {
                 )
             ));
             case HARPOON_LAUNCHER -> meta.lore(buildLegendaryLore(
+                meta,
                 Material.CROSSBOW,
                 "LAUNCHER",
                 List.of("<gray>Cooldown: <white>22s</white></gray>"),
@@ -3417,6 +3437,7 @@ public final class LegendaryListener implements Listener {
                 )
             ));
             case HYPNOSIS_STAFF -> meta.lore(buildLegendaryLore(
+                meta,
                 Material.BLAZE_ROD,
                 "STAFF",
                 List.of("<gray>Control Limit: <white>10</white> mobs</gray>", "<gray>Cooldown: <white>5s</white></gray>"),
@@ -3436,15 +3457,16 @@ public final class LegendaryListener implements Listener {
                 meta.setItemModel(keyEmeraldBladeItemModel);
                 setEnchantLevel(meta, enchantSharpness, level);
                 setEnchantLevel(meta, enchantUnbreaking, 3);
-                meta.lore(buildEmeraldBladeLore(level));
+                meta.lore(buildEmeraldBladeLore(meta, level));
             }
             case WAR_PICK -> {
                 setEnchantLevel(meta, enchantSharpness, 10);
                 setEnchantLevel(meta, enchantEfficiency, 1);
                 meta.lore(buildLegendaryLore(
+                    meta,
                     Material.DIAMOND_PICKAXE,
                     "PICKAXE",
-                    List.of("<white>Sharpness X</white>", "<white>Efficiency I</white>"),
+                    List.of(),
                     CustomLoreUtil.section(
                         "Item Ability",
                         "War Mining",
@@ -3457,7 +3479,7 @@ public final class LegendaryListener implements Listener {
             case FARADAYS_MAGNET -> {
                 boolean active = pdc.getOrDefault(keyMagnetActive, PersistentDataType.BYTE, (byte) 0) == (byte) 1;
                 pdc.set(keyMagnetActive, PersistentDataType.BYTE, active ? (byte) 1 : (byte) 0);
-                meta.lore(buildMagnetLore(active));
+                meta.lore(buildMagnetLore(meta, active));
             }
             case WIND_CHARGE_CANNON -> {
                 int charges = clampWindChargeCannonCharges(
@@ -3473,6 +3495,7 @@ public final class LegendaryListener implements Listener {
                 writeWindChargeCannonState(meta, charges, cooldownUntil);
             }
             case EXECUTIONER_BLADE -> meta.lore(buildLegendaryLore(
+                meta,
                 Material.NETHERITE_SWORD,
                 "SWORD",
                 List.of("<gray>Current Bonus: <red>+1 damage</red> per skull carried <dark_gray>(cap +6)</dark_gray></gray>"),
@@ -3505,6 +3528,7 @@ public final class LegendaryListener implements Listener {
                     )
                 );
                 meta.lore(buildLegendaryLore(
+                    meta,
                     Material.LEATHER_BOOTS,
                     "BOOTS",
                     List.of("<gray>Only works while worn</gray>"),
@@ -3531,6 +3555,7 @@ public final class LegendaryListener implements Listener {
                 applyLifeStealerState(meta, refreshLifeStealerState(meta));
             }
             case THORS_HAMMER -> meta.lore(buildLegendaryLore(
+                meta,
                 Material.MACE,
                 "MACE",
                 List.of("<gray>Bonus Hit Damage: <white>+" + formatDamageNumber(plugin.getConfigManager().thorsHammerBonusDamage) + "</white></gray>"),
@@ -3599,7 +3624,7 @@ public final class LegendaryListener implements Listener {
         meta.getPersistentDataContainer().set(keyEmeraldLevel, PersistentDataType.INTEGER, normalized);
         meta.removeEnchant(enchantSharpness);
         meta.addEnchant(enchantSharpness, normalized, true);
-        meta.lore(buildEmeraldBladeLore(normalized));
+        meta.lore(buildEmeraldBladeLore(meta, normalized));
         blade.setItemMeta(meta);
     }
 
@@ -3632,7 +3657,7 @@ public final class LegendaryListener implements Listener {
             new LegendaryRecipe(LegendaryType.EXECUTIONER_BLADE, ingredients(
                 e(Material.NETHERITE_SWORD, 1), e(Material.BLAZE_ROD, 12), e(Material.ANVIL, 1), e(Material.WIND_CHARGE, 6), e(Material.REDSTONE_BLOCK, 12))),
             new LegendaryRecipe(LegendaryType.HERMES_BOOTS, ingredients(
-                e(Material.LEATHER_BOOTS, 1), e(Material.RABBIT_FOOT, 12), e(Material.FEATHER, 24), e(Material.GOLD_BLOCK, 6))),
+                e(Material.LEATHER_BOOTS, 1), e(Material.LEATHER, 12), e(Material.FEATHER, 24), e(Material.GOLD_BLOCK, 6))),
             new LegendaryRecipe(LegendaryType.WITHER_BLADE, ingredients(
                 e(Material.NETHERITE_SWORD, 1), e(Material.WITHER_SKELETON_SKULL, 2), e(Material.NETHER_STAR, 1), e(Material.SOUL_SAND, 24))),
             new LegendaryRecipe(LegendaryType.LIFE_STEALER, ingredients(

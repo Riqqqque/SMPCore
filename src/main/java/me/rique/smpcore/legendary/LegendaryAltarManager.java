@@ -52,6 +52,7 @@ public final class LegendaryAltarManager implements Listener {
 
     private volatile DatabaseManager.LegendaryAltarRecord altarRecord = DatabaseManager.LegendaryAltarRecord.empty();
     private volatile boolean loaded;
+    private volatile boolean activationAnnounced;
 
     public LegendaryAltarManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -141,6 +142,7 @@ public final class LegendaryAltarManager implements Listener {
         long lastRollDay = altarRecord.lastRollDay();
         removeStructure();
         altarRecord = new DatabaseManager.LegendaryAltarRecord(null, null, 0, 0, 0, 0L, 0L, 0L, lastRollDay);
+        activationAnnounced = false;
         refreshBossBar();
         persistRecord();
         return AdminActionResult.success("Cleared the altar for " + displayName + ".");
@@ -197,6 +199,7 @@ public final class LegendaryAltarManager implements Listener {
             now + (plugin.getConfigManager().legendaryAltarExpirationHours * 3_600_000L),
             lastRollDay
         );
+        activationAnnounced = activeImmediately;
         ensureStructureState();
         refreshBossBar();
         persistRecord();
@@ -332,6 +335,7 @@ public final class LegendaryAltarManager implements Listener {
 
                 altarRecord = record == null ? DatabaseManager.LegendaryAltarRecord.empty() : record;
                 loaded = true;
+                activationAnnounced = hasActiveAltar() && System.currentTimeMillis() >= altarRecord.activatesAt();
 
                 if (!hasActiveAltar()) {
                     refreshBossBar();
@@ -364,12 +368,7 @@ public final class LegendaryAltarManager implements Listener {
             return;
         }
 
-        boolean justActivated = false;
-        Location center = altarLocation();
-        if (center != null && center.getWorld() != null) {
-            justActivated = now >= altarRecord.activatesAt()
-                && center.getWorld().getBlockAt(center).getType() != Material.BEACON;
-        }
+        boolean justActivated = !activationAnnounced && now >= altarRecord.activatesAt();
 
         ensureStructureState();
         spawnBeaconParticles();
@@ -425,6 +424,7 @@ public final class LegendaryAltarManager implements Listener {
             now + (plugin.getConfigManager().legendaryAltarExpirationHours * 3_600_000L),
             day
         );
+        activationAnnounced = false;
         ensureStructureState();
         refreshBossBar();
         persistRecord();
@@ -440,6 +440,7 @@ public final class LegendaryAltarManager implements Listener {
     }
 
     private void activateAltar() {
+        activationAnnounced = true;
         ensureStructureState();
         String displayName = plugin.getLegendaryListener().displayNameForLegendary(altarRecord.legendaryId());
         Bukkit.broadcast(MessageUtil.prefixedRaw(
@@ -453,6 +454,7 @@ public final class LegendaryAltarManager implements Listener {
 
     private void clearActiveAltar(boolean crafted) {
         if (!hasActiveAltar()) {
+            activationAnnounced = false;
             refreshBossBar();
             return;
         }
@@ -462,6 +464,7 @@ public final class LegendaryAltarManager implements Listener {
 
         long lastRollDay = altarRecord.lastRollDay();
         altarRecord = new DatabaseManager.LegendaryAltarRecord(null, null, 0, 0, 0, 0L, 0L, 0L, lastRollDay);
+        activationAnnounced = false;
         refreshBossBar();
         persistRecord();
 
