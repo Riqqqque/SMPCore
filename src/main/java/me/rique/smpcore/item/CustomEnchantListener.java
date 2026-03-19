@@ -1,6 +1,7 @@
 package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -58,6 +59,7 @@ public final class CustomEnchantListener implements Listener {
     private static final Component ENCHANTS_MENU_TITLE = MM.deserialize("<dark_aqua><bold>Custom Enchants</bold></dark_aqua>");
     private static final String DELICATE_LORE_LINE = "Delicate I";
     private static final String TELEKINESIS_LORE_LINE = "Telekinesis I";
+    private static final long TELEKINESIS_MINING_CONTEXT_TTL_MS = 1000L;
 
     private final SMPCore plugin;
     private final NamespacedKey keyCustomEnchantBook;
@@ -65,6 +67,7 @@ public final class CustomEnchantListener implements Listener {
     private final NamespacedKey keyTelekinesis;
     private final NamespacedKey keyTelekinesisProjectileOwner;
     private final Map<UUID, UUID> telekinesisLootOwners = new ConcurrentHashMap<>();
+    private final Map<BlockKey, TelekinesisMiningContext> telekinesisMiningContexts = new ConcurrentHashMap<>();
 
     public CustomEnchantListener(SMPCore plugin) {
         this.plugin = plugin;
@@ -80,6 +83,14 @@ public final class CustomEnchantListener implements Listener {
 
     public ItemStack createTelekinesisBook() {
         return createBook(CustomEnchantEntry.TELEKINESIS);
+    }
+
+    public boolean hasTelekinesisEnchant(ItemStack item) {
+        return hasTelekinesis(item);
+    }
+
+    public void deliverTelekinesisDrops(Player player, Collection<ItemStack> drops, Location origin) {
+        giveDrops(player, drops, origin);
     }
 
     public void openEnchantMenu(Player player) {
@@ -194,12 +205,23 @@ public final class CustomEnchantListener implements Listener {
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onTelekinesisMine(BlockDropItemEvent event) {
+    public void onTelekinesisBlockBreak(BlockBreakEvent event) {
         Player player = event.getPlayer();
         if (player.getGameMode() == GameMode.CREATIVE) return;
+        if (!hasTelekinesis(player.getInventory().getItemInMainHand())) return;
+        if (event.getBlock().getState() instanceof org.bukkit.inventory.InventoryHolder) return;
 
-        ItemStack tool = player.getInventory().getItemInMainHand();
-        if (!hasTelekinesis(tool)) return;
+        rememberTelekinesisMiningContext(player, event.getBlock().getLocation());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onTelekinesisMine(BlockDropItemEvent event) {
+        Location blockLocation = event.getBlock().getLocation();
+        Player owner = telekinesisMiningOwner(blockLocation);
+        if (owner == null || owner.getGameMode() == GameMode.CREATIVE) {
+            forgetTelekinesisMiningContext(blockLocation);
+            return;
+        }
 
         List<ItemStack> drops = new ArrayList<>();
         for (Item item : event.getItems()) {
@@ -207,10 +229,14 @@ public final class CustomEnchantListener implements Listener {
             if (stack == null || stack.getType() == Material.AIR || stack.getAmount() <= 0) continue;
             drops.add(stack.clone());
         }
-        if (drops.isEmpty()) return;
+        if (drops.isEmpty()) {
+            forgetTelekinesisMiningContext(blockLocation);
+            return;
+        }
 
         event.setCancelled(true);
-        giveDrops(player, drops, event.getBlock().getLocation());
+        giveDrops(owner, drops, blockLocation);
+        forgetTelekinesisMiningContext(blockLocation);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -294,29 +320,48 @@ public final class CustomEnchantListener implements Listener {
     }
 
     private List<Component> buildBookLore(CustomEnchantEntry enchant) {
-        List<Component> lore = new ArrayList<>();
-        lore.add(MM.deserialize("<dark_gray>Custom Enchant Book</dark_gray>"));
-        lore.add(MM.deserialize("<gray>Levels: <white>" + enchant.levels + "</white></gray>"));
-        for (String line : enchant.description) {
-            lore.add(MM.deserialize("<gray>" + line + "</gray>"));
-        }
-        lore.add(MM.deserialize("<gray>Apply in an <white>anvil</white> to a valid item.</gray>"));
-        if (enchant.enchantTableEligible) {
-            lore.add(MM.deserialize("<gray>Also obtainable from an <white>enchant table</white>.</gray>"));
-        }
-        return lore;
+        List<String> topLines = new ArrayList<>();
+        topLines.add("<gray>Levels: <white>" + enchant.levels + "</white></gray>");
+        return CustomLoreUtil.buildStyledLore(
+            Material.ENCHANTED_BOOK,
+            "ENCHANTED",
+            "BOOK",
+            topLines,
+            List.of(CustomLoreUtil.section(
+                "Enchant Effect",
+                PLAIN.serialize(MM.deserialize(enchant.menuDisplay)).trim(),
+                enchantDescriptionLines(enchant)
+            ))
+        );
     }
 
     private List<Component> buildMenuLore(CustomEnchantEntry enchant) {
-        List<Component> lore = new ArrayList<>();
-        lore.add(MM.deserialize("<gray>Levels: <white>" + enchant.levels + "</white></gray>"));
-        if (enchant.enchantTableEligible) {
-            lore.add(MM.deserialize("<gray>Enchant Table: <white>Yes</white></gray>"));
-        }
+        List<String> topLines = new ArrayList<>();
+        topLines.add("<gray>Levels: <white>" + enchant.levels + "</white></gray>");
+        topLines.add("<gray>Enchant Table: <white>" + (enchant.enchantTableEligible ? "Yes" : "No") + "</white></gray>");
+        return CustomLoreUtil.buildStyledLore(
+            enchant.icon,
+            "ENCHANTED",
+            "ICON",
+            topLines,
+            List.of(CustomLoreUtil.section(
+                "Enchant Effect",
+                PLAIN.serialize(MM.deserialize(enchant.menuDisplay)).trim(),
+                enchant.description.stream().map(line -> "<gray>" + line + "</gray>").toArray(String[]::new)
+            ))
+        );
+    }
+
+    private String[] enchantDescriptionLines(CustomEnchantEntry enchant) {
+        List<String> lines = new ArrayList<>();
         for (String line : enchant.description) {
-            lore.add(MM.deserialize("<gray>" + line + "</gray>"));
+            lines.add("<gray>" + line + "</gray>");
         }
-        return lore;
+        lines.add("<gray>Apply in an <white>anvil</white> to a valid item.</gray>");
+        if (enchant.enchantTableEligible) {
+            lines.add("<gray>Also obtainable from an <white>enchant table</white>.</gray>");
+        }
+        return lines.toArray(String[]::new);
     }
 
     private CustomEnchantEntry bookEnchant(ItemStack item) {
@@ -467,6 +512,47 @@ public final class CustomEnchantListener implements Listener {
         } catch (IllegalArgumentException ignored) {
             return null;
         }
+    }
+
+    private void rememberTelekinesisMiningContext(Player player, Location location) {
+        cleanupExpiredTelekinesisMiningContexts();
+        telekinesisMiningContexts.put(
+            blockKey(location),
+            new TelekinesisMiningContext(player.getUniqueId(), System.currentTimeMillis() + TELEKINESIS_MINING_CONTEXT_TTL_MS)
+        );
+    }
+
+    private Player telekinesisMiningOwner(Location location) {
+        cleanupExpiredTelekinesisMiningContexts();
+        TelekinesisMiningContext context = telekinesisMiningContexts.get(blockKey(location));
+        if (context == null) {
+            return null;
+        }
+
+        Player owner = Bukkit.getPlayer(context.playerId());
+        if (owner == null || !owner.isOnline()) {
+            telekinesisMiningContexts.remove(blockKey(location));
+            return null;
+        }
+        return owner;
+    }
+
+    private void forgetTelekinesisMiningContext(Location location) {
+        telekinesisMiningContexts.remove(blockKey(location));
+    }
+
+    private void cleanupExpiredTelekinesisMiningContexts() {
+        long now = System.currentTimeMillis();
+        telekinesisMiningContexts.entrySet().removeIf(entry -> entry.getValue().expiresAt() <= now);
+    }
+
+    private BlockKey blockKey(Location location) {
+        return new BlockKey(
+            location.getWorld().getUID(),
+            location.getBlockX(),
+            location.getBlockY(),
+            location.getBlockZ()
+        );
     }
 
     private boolean harvestStemPreservingPlant(Player player, ItemStack tool, Block source) {
@@ -719,4 +805,8 @@ public final class CustomEnchantListener implements Listener {
             return null;
         }
     }
+
+    private record BlockKey(UUID worldId, int x, int y, int z) {}
+
+    private record TelekinesisMiningContext(UUID playerId, long expiresAt) {}
 }

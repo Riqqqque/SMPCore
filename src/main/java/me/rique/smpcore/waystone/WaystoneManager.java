@@ -105,7 +105,6 @@ public final class WaystoneManager {
 
     public CompletableFuture<List<WaystoneEntry>> knownWaystones(UUID playerId) {
         return ensureKnownLoaded(playerId).thenCompose(known -> {
-            known.removeIf(key -> !waystonesByKey.containsKey(key));
             if (known.isEmpty()) {
                 return CompletableFuture.completedFuture(List.of());
             }
@@ -125,6 +124,7 @@ public final class WaystoneManager {
                 for (WaystoneEntry e : fresh) {
                     waystonesByKey.put(e.key(), e);
                 }
+                syncKnownWaystones(known, fresh);
                 fresh.sort(Comparator.comparing(WaystoneEntry::name, String.CASE_INSENSITIVE_ORDER));
                 return fresh;
             });
@@ -263,10 +263,18 @@ public final class WaystoneManager {
             player.sendMessage(MessageUtil.error("That waystone no longer exists."));
             return;
         }
-        if (!isStructureIntact(current)) {
-            removeWaystone(current);
-            player.sendMessage(MessageUtil.error("That waystone was destroyed."));
-            return;
+        switch (structureStatus(current)) {
+            case BROKEN -> {
+                removeWaystone(current);
+                player.sendMessage(MessageUtil.error("That waystone was destroyed."));
+                return;
+            }
+            case WORLD_UNAVAILABLE -> {
+                player.sendMessage(MessageUtil.error("Waystone world is not loaded."));
+                return;
+            }
+            case INTACT -> {
+            }
         }
 
         canUseWaypoint(player.getUniqueId(), current.world(), current.x(), current.y(), current.z()).thenAccept(allowed ->
@@ -287,11 +295,11 @@ public final class WaystoneManager {
         for (WaystoneEntry entry : waystones) {
             WaystoneEntry current = waystonesByKey.get(entry.key());
             if (current == null) continue;
-            if (!isStructureIntact(current)) {
+            if (structureStatus(current) == StructureStatus.BROKEN) {
                 removeWaystone(current);
-                continue;
+            } else {
+                valid.add(current);
             }
-            valid.add(current);
         }
         valid.sort(Comparator.comparing(WaystoneEntry::name, String.CASE_INSENSITIVE_ORDER));
         return valid;
@@ -330,7 +338,7 @@ public final class WaystoneManager {
                     if (!checked.add(key)) continue;
                     WaystoneEntry entry = waystonesByKey.get(key);
                     if (entry == null) continue;
-                    if (!isStructureIntact(entry)) {
+                    if (structureStatus(entry) == StructureStatus.BROKEN) {
                         removeWaystone(entry);
                     }
                 }
@@ -484,15 +492,26 @@ public final class WaystoneManager {
         return new Location(world, x + 0.5, y, z + 0.5);
     }
 
-    private boolean isStructureIntact(WaystoneEntry entry) {
+    private StructureStatus structureStatus(WaystoneEntry entry) {
         World world = Bukkit.getWorld(entry.world());
-        if (world == null) return false;
+        if (world == null) return StructureStatus.WORLD_UNAVAILABLE;
 
+        return isStructureIntact(world, entry) ? StructureStatus.INTACT : StructureStatus.BROKEN;
+    }
+
+    private boolean isStructureIntact(World world, WaystoneEntry entry) {
         Block middle = world.getBlockAt(entry.x(), entry.y(), entry.z());
         if (middle.getType() != Material.NETHER_BRICK_FENCE) return false;
         if (middle.getRelative(BlockFace.DOWN).getType() != Material.NETHER_BRICK_FENCE) return false;
         if (middle.getRelative(BlockFace.UP).getType() != Material.GLOWSTONE) return false;
         return hasNamedSign(middle);
+    }
+
+    private void syncKnownWaystones(Set<String> known, List<WaystoneEntry> entries) {
+        known.clear();
+        for (WaystoneEntry entry : entries) {
+            known.add(entry.key());
+        }
     }
 
     private static boolean hasNamedSign(Block middle) {
@@ -529,6 +548,12 @@ public final class WaystoneManager {
         public static InteractResult invalid(String message) { return new InteractResult(Type.INVALID, null, message); }
 
         public enum Type { REGISTERED, KNOWN, INVALID }
+    }
+
+    private enum StructureStatus {
+        INTACT,
+        BROKEN,
+        WORLD_UNAVAILABLE
     }
 
     private record WaystoneMenuHolder() implements InventoryHolder {

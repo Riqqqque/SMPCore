@@ -52,16 +52,18 @@ public final class CraftingRulesListener implements Listener {
         ItemStack result = inv.getResult();
         if (result == null || result.getType() != Material.GOLDEN_APPLE) return;
 
-        boolean hasIngot = false;
+        Material surround = plugin.getConfigManager().goldenAppleSurroundMaterial;
+        boolean hasInvalidIngredient = false;
         for (ItemStack item : inv.getMatrix()) {
             if (item == null || item.getType() == Material.AIR) continue;
-            if (item.getType() == Material.GOLD_INGOT) {
-                hasIngot = true;
+            Material type = item.getType();
+            if (type != Material.APPLE && type != surround) {
+                hasInvalidIngredient = true;
                 break;
             }
         }
 
-        if (hasIngot) {
+        if (hasInvalidIngredient) {
             inv.setResult(null);
         }
     }
@@ -99,10 +101,19 @@ public final class CraftingRulesListener implements Listener {
         ItemStack result = new ItemStack(Material.GOLDEN_APPLE, 1);
         ShapedRecipe shaped = new ShapedRecipe(goldenAppleNuggetRecipeKey, result);
         shaped.shape("NNN", "NAN", "NNN");
-        shaped.setIngredient('N', Material.GOLD_NUGGET);
+        shaped.setIngredient('N', plugin.getConfigManager().goldenAppleSurroundMaterial);
         shaped.setIngredient('A', Material.APPLE);
         shaped.setGroup("smpcore_crafting");
         Bukkit.addRecipe(shaped);
+    }
+
+    public void reloadConfig() {
+        registerGoldenAppleRecipe();
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                discoverGoldenAppleRecipe(player);
+            }
+        });
     }
 
     private void discoverGoldenAppleRecipe(Player player) {

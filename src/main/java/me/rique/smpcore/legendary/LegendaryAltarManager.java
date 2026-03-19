@@ -1,0 +1,877 @@
+package me.rique.smpcore.legendary;
+
+import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.database.DatabaseManager;
+import me.rique.smpcore.util.MessageUtil;
+import net.kyori.adventure.text.Component;
+import org.bukkit.Bukkit;
+import org.bukkit.HeightMap;
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
+import org.bukkit.Particle;
+import org.bukkit.Sound;
+import org.bukkit.Tag;
+import org.bukkit.World;
+import org.bukkit.boss.BarColor;
+import org.bukkit.boss.BarStyle;
+import org.bukkit.boss.BossBar;
+import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
+import org.bukkit.block.data.type.Stairs;
+import org.bukkit.entity.Display;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.ItemDisplay;
+import org.bukkit.entity.Player;
+import org.bukkit.entity.TextDisplay;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockExplodeEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityExplodeEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.world.TimeSkipEvent;
+import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.persistence.PersistentDataType;
+import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
+
+public final class LegendaryAltarManager implements Listener {
+
+    private static final String DISPLAY_TYPE_CRAFT_ITEM = "craft_item";
+    private static final String DISPLAY_TYPE_RECIPE_TEXT = "recipe_text";
+
+    private final SMPCore plugin;
+    private final BossBar bossBar;
+    private final NamespacedKey keyAltarDisplayType;
+
+    private volatile DatabaseManager.LegendaryAltarRecord altarRecord = DatabaseManager.LegendaryAltarRecord.empty();
+    private volatile boolean loaded;
+
+    public LegendaryAltarManager(SMPCore plugin) {
+        this.plugin = plugin;
+        this.bossBar = Bukkit.createBossBar("", BarColor.PURPLE, BarStyle.SOLID);
+        this.keyAltarDisplayType = new NamespacedKey(plugin, "legendary_altar_display_type");
+        this.bossBar.setVisible(false);
+        loadState();
+        Bukkit.getScheduler().runTaskTimer(plugin, this::tick, 10L, 10L);
+    }
+
+    public void reloadConfig() {
+        refreshBossBar();
+        ensureStructureState();
+    }
+
+    public void shutdown() {
+        bossBar.removeAll();
+        bossBar.setVisible(false);
+    }
+
+    public void sendRecipeHint(Player player, String requestedLegendaryId) {
+        if (!loaded) {
+            player.sendMessage(MessageUtil.info("Legendary altar data is still loading."));
+            return;
+        }
+
+        String activeLegendaryId = altarRecord.legendaryId();
+        if (activeLegendaryId == null) {
+            player.sendMessage(MessageUtil.info(
+                "There is no active legendary altar right now. Altars have a <white>1/20</white> chance to appear each night."
+            ));
+            return;
+        }
+
+        String requestedName = plugin.getLegendaryListener().displayNameForLegendary(requestedLegendaryId);
+        String activeName = plugin.getLegendaryListener().displayNameForLegendary(activeLegendaryId);
+        String coords = altarCoordsString();
+        if (!activeLegendaryId.equals(requestedLegendaryId)) {
+            player.sendMessage(MessageUtil.info(
+                "The current altar is attuned to <white>" + activeName + "</white> at <white>" + coords + "</white>."
+            ));
+            return;
+        }
+
+        if (!isActivated()) {
+            player.sendMessage(MessageUtil.info(
+                "<white>" + requestedName + "</white> will unlock at <white>" + coords + "</white> in <white>"
+                    + formatRemaining(altarRecord.activatesAt() - System.currentTimeMillis()) + "</white>."
+            ));
+            return;
+        }
+
+        player.sendMessage(MessageUtil.info(
+            "<white>" + requestedName + "</white> can be crafted right now at <white>" + coords + "</white>."
+        ));
+    }
+
+    public AdminActionResult altarStatusSummary() {
+        if (!loaded) {
+            return AdminActionResult.failure("Legendary altar data is still loading.");
+        }
+        if (!hasActiveAltar()) {
+            return AdminActionResult.success("There is no active legendary altar right now.");
+        }
+
+        String displayName = plugin.getLegendaryListener() == null
+            ? altarRecord.legendaryId()
+            : plugin.getLegendaryListener().displayNameForLegendary(altarRecord.legendaryId());
+        String phase = isActivated()
+            ? "active, expires in " + formatRemaining(altarRecord.expiresAt() - System.currentTimeMillis())
+            : "dormant, unlocks in " + formatRemaining(altarRecord.activatesAt() - System.currentTimeMillis());
+        return AdminActionResult.success(displayName + " altar at " + altarCoordsString() + " is " + phase + ".");
+    }
+
+    public AdminActionResult clearForAdmin() {
+        if (!loaded) {
+            return AdminActionResult.failure("Legendary altar data is still loading.");
+        }
+        if (!hasActiveAltar()) {
+            refreshBossBar();
+            return AdminActionResult.failure("There is no active legendary altar to clear.");
+        }
+
+        String displayName = plugin.getLegendaryListener() == null
+            ? altarRecord.legendaryId()
+            : plugin.getLegendaryListener().displayNameForLegendary(altarRecord.legendaryId());
+        long lastRollDay = altarRecord.lastRollDay();
+        removeStructure();
+        altarRecord = new DatabaseManager.LegendaryAltarRecord(null, null, 0, 0, 0, 0L, 0L, 0L, lastRollDay);
+        refreshBossBar();
+        persistRecord();
+        return AdminActionResult.success("Cleared the altar for " + displayName + ".");
+    }
+
+    public AdminActionResult forceSpawnForTesting(String requestedLegendaryId, boolean activeImmediately) {
+        if (!loaded) {
+            return AdminActionResult.failure("Legendary altar data is still loading.");
+        }
+        if (!plugin.getConfigManager().legendaryAltarEnabled) {
+            return AdminActionResult.failure("Legendary altars are disabled in config.");
+        }
+
+        LegendaryListener legendary = plugin.getLegendaryListener();
+        if (legendary == null) {
+            return AdminActionResult.failure("Legendary items are not ready yet.");
+        }
+
+        String legendaryId = requestedLegendaryId == null || requestedLegendaryId.isBlank()
+            ? pickLegendaryId()
+            : legendary.normalizeLegendaryId(requestedLegendaryId);
+        if (legendaryId == null || legendary.createLegendaryById(legendaryId) == null) {
+            return AdminActionResult.failure(
+                "Unknown legendary. Options: " + String.join(", ", legendary.legendaryIds()) + "."
+            );
+        }
+
+        World world = configuredWorld();
+        if (world == null) {
+            return AdminActionResult.failure("Configured altar world is not loaded.");
+        }
+
+        Location location = findSpawnLocation(world);
+        if (location == null) {
+            return AdminActionResult.failure("Could not find a safe altar location in " + world.getName() + ".");
+        }
+
+        removeStructure();
+        long now = System.currentTimeMillis();
+        long currentDay = world.getFullTime() / 24000L;
+        long lastRollDay = Math.max(currentDay, altarRecord.lastRollDay());
+        long activatesAt = activeImmediately
+            ? now
+            : now + (plugin.getConfigManager().legendaryAltarActivationSeconds * 1000L);
+
+        altarRecord = new DatabaseManager.LegendaryAltarRecord(
+            legendaryId,
+            world.getName(),
+            location.getBlockX(),
+            location.getBlockY(),
+            location.getBlockZ(),
+            now,
+            activatesAt,
+            now + (plugin.getConfigManager().legendaryAltarExpirationHours * 3_600_000L),
+            lastRollDay
+        );
+        ensureStructureState();
+        refreshBossBar();
+        persistRecord();
+
+        String displayName = legendary.displayNameForLegendary(legendaryId);
+        String state = activeImmediately
+            ? "Spawned a ready altar for "
+            : "Spawned a dormant altar for ";
+        return AdminActionResult.success(state + displayName + " at " + altarCoordsString() + ".");
+    }
+
+    @EventHandler
+    public void onJoin(PlayerJoinEvent event) {
+        if (hasActiveAltar() && plugin.getConfigManager().legendaryAltarBossBarEnabled) {
+            bossBar.addPlayer(event.getPlayer());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onInteract(PlayerInteractEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND) return;
+        if (event.getClickedBlock() == null) return;
+        if (!isAltarBlock(event.getClickedBlock().getLocation())) return;
+
+        event.setCancelled(true);
+        handleCraftInteract(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onInteractEntity(PlayerInteractEntityEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND) return;
+        if (!isAltarDisplay(event.getRightClicked(), DISPLAY_TYPE_CRAFT_ITEM)) return;
+        Location center = altarLocation();
+        if (center == null
+            || !center.getWorld().equals(event.getRightClicked().getWorld())
+            || event.getRightClicked().getLocation().distanceSquared(center.clone().add(0.5, 3.5, 0.5)) > 16.0) {
+            return;
+        }
+        event.setCancelled(true);
+        handleCraftInteract(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onDisplayDamage(EntityDamageEvent event) {
+        if (!isAltarDisplay(event.getEntity(), DISPLAY_TYPE_CRAFT_ITEM)
+            && !isAltarDisplay(event.getEntity(), DISPLAY_TYPE_RECIPE_TEXT)) {
+            return;
+        }
+        event.setCancelled(true);
+    }
+
+    private void handleCraftInteract(Player player) {
+        if (!loaded) {
+            player.sendMessage(MessageUtil.info("Legendary altar data is still loading."));
+            return;
+        }
+        if (!hasActiveAltar()) {
+            player.sendMessage(MessageUtil.info("This altar has faded."));
+            return;
+        }
+
+        String legendaryId = altarRecord.legendaryId();
+        String displayName = plugin.getLegendaryListener().displayNameForLegendary(legendaryId);
+        if (!isActivated()) {
+            player.sendMessage(MessageUtil.warn(
+                "<white>" + displayName + "</white> unlocks in <white>"
+                    + formatRemaining(altarRecord.activatesAt() - System.currentTimeMillis()) + "</white>."
+            ));
+            return;
+        }
+
+        if (!plugin.getLegendaryListener().canCraftLegendary(player, legendaryId)) {
+            player.sendMessage(MessageUtil.error("You are missing materials for <white>" + displayName + "</white>."));
+            for (String line : plugin.getLegendaryListener().recipeProgressLines(player, legendaryId)) {
+                player.sendMessage(MessageUtil.prefixedRaw(line));
+            }
+            return;
+        }
+
+        if (!plugin.getLegendaryListener().craftLegendaryAtAltar(player, legendaryId)) {
+            player.sendMessage(MessageUtil.error("Legendary crafting failed. Try again."));
+            return;
+        }
+
+        clearActiveAltar(true);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBreak(BlockBreakEvent event) {
+        if (!isAltarBlock(event.getBlock().getLocation())) return;
+        event.setCancelled(true);
+        event.getPlayer().sendMessage(MessageUtil.warn("The legendary altar cannot be broken."));
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onEntityExplode(EntityExplodeEvent event) {
+        event.blockList().removeIf(block -> isAltarBlock(block.getLocation()));
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBlockExplode(BlockExplodeEvent event) {
+        event.blockList().removeIf(block -> isAltarBlock(block.getLocation()));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onTimeSkip(TimeSkipEvent event) {
+        if (!loaded || hasActiveAltar()) return;
+        if (event.getSkipReason() != TimeSkipEvent.SkipReason.NIGHT_SKIP) return;
+
+        World world = configuredWorld();
+        if (world == null || !world.equals(event.getWorld())) return;
+
+        long currentDay = world.getFullTime() / 24000L;
+        if (altarRecord.lastRollDay() >= currentDay) return;
+
+        long before = world.getTime();
+        long crossed = before + event.getSkipAmount();
+        if (before < plugin.getConfigManager().legendaryAltarRollTimeTicks
+            && crossed >= plugin.getConfigManager().legendaryAltarRollTimeTicks) {
+            tryNightlySpawn(true);
+        }
+    }
+
+    private void loadState() {
+        plugin.getDatabase().loadLegendaryAltar().whenComplete((record, throwable) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (throwable != null) {
+                    plugin.getLogger().severe("Failed to load legendary altar data: " + throwable.getMessage());
+                    loaded = true;
+                    return;
+                }
+
+                altarRecord = record == null ? DatabaseManager.LegendaryAltarRecord.empty() : record;
+                loaded = true;
+
+                if (!hasActiveAltar()) {
+                    refreshBossBar();
+                    return;
+                }
+
+                if (System.currentTimeMillis() >= altarRecord.expiresAt()) {
+                    clearActiveAltar(false);
+                    return;
+                }
+
+                ensureStructureState();
+                refreshBossBar();
+            });
+        });
+    }
+
+    private void tick() {
+        if (!loaded) return;
+
+        tryNightlySpawn(false);
+        if (!hasActiveAltar()) {
+            refreshBossBar();
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        if (now >= altarRecord.expiresAt()) {
+            clearActiveAltar(false);
+            return;
+        }
+
+        boolean justActivated = false;
+        Location center = altarLocation();
+        if (center != null && center.getWorld() != null) {
+            justActivated = now >= altarRecord.activatesAt()
+                && center.getWorld().getBlockAt(center).getType() != Material.BEACON;
+        }
+
+        ensureStructureState();
+        spawnBeaconParticles();
+        refreshBossBar();
+
+        if (justActivated) {
+            activateAltar();
+        }
+    }
+
+    private void tryNightlySpawn(boolean allowSkippedNight) {
+        if (!plugin.getConfigManager().legendaryAltarEnabled) return;
+        if (hasActiveAltar()) return;
+
+        World world = configuredWorld();
+        if (world == null) return;
+
+        long day = world.getFullTime() / 24000L;
+        if (altarRecord.lastRollDay() >= day) return;
+
+        long time = world.getTime();
+        if (!allowSkippedNight && time < plugin.getConfigManager().legendaryAltarRollTimeTicks) return;
+        if (!allowSkippedNight && time > 23950L) return;
+        if (plugin.getConfigManager().legendaryAltarRequirePlayerOnline && world.getPlayers().isEmpty()) return;
+
+        DatabaseManager.LegendaryAltarRecord nextRollMarker = new DatabaseManager.LegendaryAltarRecord(
+            null, null, 0, 0, 0, 0L, 0L, 0L, day
+        );
+
+        if (ThreadLocalRandom.current().nextDouble() >= plugin.getConfigManager().legendaryAltarNightlyChance) {
+            altarRecord = nextRollMarker;
+            persistRecord();
+            return;
+        }
+
+        String legendaryId = pickLegendaryId();
+        Location location = findSpawnLocation(world);
+        if (legendaryId == null || location == null) {
+            altarRecord = nextRollMarker;
+            persistRecord();
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        altarRecord = new DatabaseManager.LegendaryAltarRecord(
+            legendaryId,
+            world.getName(),
+            location.getBlockX(),
+            location.getBlockY(),
+            location.getBlockZ(),
+            now,
+            now + (plugin.getConfigManager().legendaryAltarActivationSeconds * 1000L),
+            now + (plugin.getConfigManager().legendaryAltarExpirationHours * 3_600_000L),
+            day
+        );
+        ensureStructureState();
+        refreshBossBar();
+        persistRecord();
+
+        String displayName = plugin.getLegendaryListener().displayNameForLegendary(legendaryId);
+        Bukkit.broadcast(MessageUtil.prefixedRaw(
+            "<gold>A legendary altar is forming.</gold> <white>" + displayName + "</white> will awaken in <white>"
+                + plugin.getConfigManager().legendaryAltarActivationSeconds + "s</white>."
+        ));
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            online.playSound(online.getLocation(), Sound.BLOCK_RESPAWN_ANCHOR_SET_SPAWN, 1.0f, 0.8f);
+        }
+    }
+
+    private void activateAltar() {
+        ensureStructureState();
+        String displayName = plugin.getLegendaryListener().displayNameForLegendary(altarRecord.legendaryId());
+        Bukkit.broadcast(MessageUtil.prefixedRaw(
+            "<green>The legendary altar for <white>" + displayName + "</white> is now active at <white>"
+                + altarCoordsString() + "</white>.</green>"
+        ));
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            online.playSound(online.getLocation(), Sound.BLOCK_BEACON_ACTIVATE, 1.0f, 1.1f);
+        }
+    }
+
+    private void clearActiveAltar(boolean crafted) {
+        if (!hasActiveAltar()) {
+            refreshBossBar();
+            return;
+        }
+
+        String displayName = plugin.getLegendaryListener().displayNameForLegendary(altarRecord.legendaryId());
+        removeStructure();
+
+        long lastRollDay = altarRecord.lastRollDay();
+        altarRecord = new DatabaseManager.LegendaryAltarRecord(null, null, 0, 0, 0, 0L, 0L, 0L, lastRollDay);
+        refreshBossBar();
+        persistRecord();
+
+        Bukkit.broadcast(MessageUtil.prefixedRaw(
+            crafted
+                ? "<gold>The altar for <white>" + displayName + "</white> has been consumed.</gold>"
+                : "<gray>The altar for <white>" + displayName + "</white> faded away.</gray>"
+        ));
+    }
+
+    private void ensureStructureState() {
+        if (!hasActiveAltar()) return;
+        Location center = altarLocation();
+        if (center == null) return;
+        World world = center.getWorld();
+        if (world == null) return;
+
+        int centerX = center.getBlockX();
+        int centerY = center.getBlockY();
+        int centerZ = center.getBlockZ();
+
+        for (int x = -2; x <= 2; x++) {
+            for (int z = -2; z <= 2; z++) {
+                Block block = world.getBlockAt(centerX + x, centerY, centerZ + z);
+                boolean outerRing = Math.abs(x) == 2 || Math.abs(z) == 2;
+                boolean cardinalOuter = (x == 0 && Math.abs(z) == 2) || (z == 0 && Math.abs(x) == 2);
+                if (cardinalOuter) {
+                    setAltarStair(block, facingFor(x, z));
+                } else {
+                    setAltarBlock(block, outerRing ? Material.DEEPSLATE_BRICKS : Material.SMOOTH_QUARTZ);
+                }
+            }
+        }
+
+        clearPedestalAir(world, centerX, centerY + 1, centerZ);
+        setAltarBlock(world.getBlockAt(centerX, centerY + 1, centerZ), Material.DEEPSLATE_BRICKS);
+        setAltarStair(world.getBlockAt(centerX, centerY + 1, centerZ - 1), BlockFace.NORTH);
+        setAltarStair(world.getBlockAt(centerX + 1, centerY + 1, centerZ), BlockFace.EAST);
+        setAltarStair(world.getBlockAt(centerX, centerY + 1, centerZ + 1), BlockFace.SOUTH);
+        setAltarStair(world.getBlockAt(centerX - 1, centerY + 1, centerZ), BlockFace.WEST);
+        clearPedestalAir(world, centerX, centerY + 2, centerZ);
+        setAltarBlock(world.getBlockAt(centerX, centerY + 2, centerZ), Material.DEEPSLATE_TILE_WALL);
+        ensureDisplayEntities(center);
+    }
+
+    private void removeStructure() {
+        Location center = altarLocation();
+        if (center == null) return;
+        World world = center.getWorld();
+        if (world == null) return;
+        int centerX = center.getBlockX();
+        int centerY = center.getBlockY();
+        int centerZ = center.getBlockZ();
+
+        for (int x = -2; x <= 2; x++) {
+            for (int z = -2; z <= 2; z++) {
+                clearAltarBlock(world.getBlockAt(centerX + x, centerY, centerZ + z));
+            }
+        }
+        clearAltarBlock(world.getBlockAt(centerX, centerY + 1, centerZ));
+        clearAltarBlock(world.getBlockAt(centerX, centerY + 1, centerZ - 1));
+        clearAltarBlock(world.getBlockAt(centerX + 1, centerY + 1, centerZ));
+        clearAltarBlock(world.getBlockAt(centerX, centerY + 1, centerZ + 1));
+        clearAltarBlock(world.getBlockAt(centerX - 1, centerY + 1, centerZ));
+        clearAltarBlock(world.getBlockAt(centerX, centerY + 2, centerZ));
+        removeDisplayEntities(center);
+    }
+
+    private void clearPedestalAir(World world, int centerX, int y, int centerZ) {
+        for (int x = -1; x <= 1; x++) {
+            for (int z = -1; z <= 1; z++) {
+                Block block = world.getBlockAt(centerX + x, y, centerZ + z);
+                if (isAltarMaterial(block.getType())) {
+                    block.setType(Material.AIR, false);
+                }
+            }
+        }
+    }
+
+    private void setAltarBlock(Block block, Material material) {
+        if (block.getType() != material) {
+            block.setType(material, false);
+        }
+    }
+
+    private void setAltarStair(Block block, BlockFace facing) {
+        if (block.getType() != Material.DEEPSLATE_TILE_STAIRS) {
+            block.setType(Material.DEEPSLATE_TILE_STAIRS, false);
+        }
+        if (block.getBlockData() instanceof Stairs stairs) {
+            stairs.setFacing(facing);
+            block.setBlockData(stairs, false);
+        }
+    }
+
+    private void clearAltarBlock(Block block) {
+        if (isAltarMaterial(block.getType())) {
+            block.setType(Material.AIR, false);
+        }
+    }
+
+    private BlockFace facingFor(int x, int z) {
+        if (z < 0) return BlockFace.NORTH;
+        if (z > 0) return BlockFace.SOUTH;
+        if (x > 0) return BlockFace.EAST;
+        return BlockFace.WEST;
+    }
+
+    private void ensureDisplayEntities(Location center) {
+        World world = center.getWorld();
+        LegendaryListener legendary = plugin.getLegendaryListener();
+        if (world == null || legendary == null) {
+            return;
+        }
+
+        ItemDisplay itemDisplay = null;
+        TextDisplay textDisplay = null;
+        Location searchCenter = center.clone().add(0.5, 3.5, 0.5);
+        for (Entity entity : world.getNearbyEntities(searchCenter, 2.0, 3.0, 2.0)) {
+            if (itemDisplay == null && isAltarDisplay(entity, DISPLAY_TYPE_CRAFT_ITEM) && entity instanceof ItemDisplay display) {
+                itemDisplay = display;
+            } else if (textDisplay == null && isAltarDisplay(entity, DISPLAY_TYPE_RECIPE_TEXT) && entity instanceof TextDisplay display) {
+                textDisplay = display;
+            }
+        }
+
+        ItemStack displayItem = legendary.createLegendaryById(altarRecord.legendaryId());
+        if (displayItem != null) {
+            displayItem.setAmount(1);
+        }
+        Location itemLocation = center.clone().add(0.5, 3.35, 0.5);
+        if (itemDisplay == null || !itemDisplay.isValid()) {
+            itemDisplay = world.spawn(itemLocation, ItemDisplay.class, display -> {
+                tagDisplay(display, DISPLAY_TYPE_CRAFT_ITEM);
+                display.setGravity(false);
+                display.setPersistent(false);
+                display.setInvulnerable(true);
+                display.setBillboard(Display.Billboard.CENTER);
+                display.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
+            });
+        }
+        itemDisplay.teleport(itemLocation);
+        itemDisplay.setItemStack(displayItem);
+
+        String statusLine = isActivated()
+            ? "Right-click the item to craft"
+            : "Unlocks in " + formatRemaining(altarRecord.activatesAt() - System.currentTimeMillis());
+        StringBuilder text = new StringBuilder();
+        text.append(stripMiniMessage(legendary.displayNameForLegendary(altarRecord.legendaryId())));
+        for (String line : legendary.altarRequirementLines(altarRecord.legendaryId())) {
+            text.append('\n').append(line);
+        }
+        text.append('\n').append(statusLine);
+
+        Location textLocation = center.clone().add(0.5, 4.55, 0.5);
+        if (textDisplay == null || !textDisplay.isValid()) {
+            textDisplay = world.spawn(textLocation, TextDisplay.class, display -> {
+                tagDisplay(display, DISPLAY_TYPE_RECIPE_TEXT);
+                display.setGravity(false);
+                display.setPersistent(false);
+                display.setInvulnerable(true);
+                display.setBillboard(Display.Billboard.CENTER);
+                display.setSeeThrough(true);
+                display.setShadowed(false);
+                display.setLineWidth(220);
+            });
+        }
+        textDisplay.teleport(textLocation);
+        textDisplay.text(Component.text(text.toString()));
+    }
+
+    private void removeDisplayEntities(Location center) {
+        World world = center.getWorld();
+        if (world == null) {
+            return;
+        }
+        Location searchCenter = center.clone().add(0.5, 3.5, 0.5);
+        for (Entity entity : world.getNearbyEntities(searchCenter, 2.0, 3.0, 2.0)) {
+            if (isAltarDisplay(entity, DISPLAY_TYPE_CRAFT_ITEM) || isAltarDisplay(entity, DISPLAY_TYPE_RECIPE_TEXT)) {
+                entity.remove();
+            }
+        }
+    }
+
+    private void tagDisplay(Entity entity, String type) {
+        entity.getPersistentDataContainer().set(keyAltarDisplayType, PersistentDataType.STRING, type);
+    }
+
+    private boolean isAltarDisplay(Entity entity, String type) {
+        String stored = entity.getPersistentDataContainer().get(keyAltarDisplayType, PersistentDataType.STRING);
+        return type.equals(stored);
+    }
+
+    private String stripMiniMessage(String input) {
+        return input.replaceAll("<[^>]+>", "");
+    }
+
+    private void refreshBossBar() {
+        if (!plugin.getConfigManager().legendaryAltarBossBarEnabled || !hasActiveAltar()) {
+            bossBar.removeAll();
+            bossBar.setVisible(false);
+            return;
+        }
+
+        Location location = altarLocation();
+        if (location == null) {
+            bossBar.removeAll();
+            bossBar.setVisible(false);
+            return;
+        }
+
+        String displayName = plugin.getLegendaryListener().displayNameForLegendary(altarRecord.legendaryId());
+        String coords = coordsString(location);
+        long now = System.currentTimeMillis();
+
+        double progress;
+        if (now < altarRecord.activatesAt()) {
+            long remaining = altarRecord.activatesAt() - now;
+            long total = Math.max(1L, altarRecord.activatesAt() - altarRecord.spawnedAt());
+            progress = Math.max(0.0, Math.min(1.0, 1.0 - (remaining / (double) total)));
+            bossBar.setColor(BarColor.PURPLE);
+        } else {
+            long remaining = altarRecord.expiresAt() - now;
+            long total = Math.max(1L, altarRecord.expiresAt() - altarRecord.activatesAt());
+            progress = Math.max(0.0, Math.min(1.0, remaining / (double) total));
+            bossBar.setColor(BarColor.GREEN);
+        }
+
+        bossBar.setTitle(displayName + " altar | " + coords + (now < altarRecord.activatesAt()
+            ? " | unlocks in " + formatRemaining(altarRecord.activatesAt() - now)
+            : " | expires in " + formatRemaining(altarRecord.expiresAt() - now)));
+        bossBar.setProgress(progress);
+        bossBar.setVisible(true);
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            bossBar.addPlayer(online);
+        }
+    }
+
+    private void spawnBeaconParticles() {
+        Location center = altarLocation();
+        if (center == null || center.getWorld() == null) return;
+
+        World world = center.getWorld();
+        double radius = plugin.getConfigManager().legendaryAltarBeaconViewRange;
+        boolean active = isActivated();
+
+        for (Player player : world.getPlayers()) {
+            if (player.getLocation().distanceSquared(center) > radius * radius) continue;
+
+            for (double y = 0.5; y <= 12.5; y += 1.5) {
+                Location point = center.clone().add(0.5, y, 0.5);
+                world.spawnParticle(active ? Particle.END_ROD : Particle.ENCHANT, point, 2, 0.05, 0.25, 0.05, 0.0);
+            }
+
+            if (active) {
+                world.spawnParticle(Particle.SOUL_FIRE_FLAME, center.clone().add(0.5, 1.2, 0.5), 12, 0.45, 0.15, 0.45, 0.01);
+                world.spawnParticle(Particle.PORTAL, center.clone().add(0.5, 1.0, 0.5), 10, 0.40, 0.20, 0.40, 0.02);
+            } else {
+                world.spawnParticle(Particle.WITCH, center.clone().add(0.5, 1.0, 0.5), 8, 0.40, 0.20, 0.40, 0.01);
+            }
+        }
+    }
+
+    private String pickLegendaryId() {
+        LegendaryListener legendary = plugin.getLegendaryListener();
+        if (legendary == null) return null;
+
+        List<String> ids = legendary.legendaryIds();
+        if (ids.isEmpty()) return null;
+        return ids.get(ThreadLocalRandom.current().nextInt(ids.size()));
+    }
+
+    private Location findSpawnLocation(World world) {
+        Location spawn = world.getSpawnLocation();
+        ThreadLocalRandom random = ThreadLocalRandom.current();
+        int minDistance = plugin.getConfigManager().legendaryAltarMinDistanceFromSpawn;
+        int maxDistance = plugin.getConfigManager().legendaryAltarMaxDistanceFromSpawn;
+
+        for (int attempt = 0; attempt < plugin.getConfigManager().legendaryAltarSearchAttempts; attempt++) {
+            double angle = random.nextDouble(Math.PI * 2.0);
+            double distance = random.nextDouble(minDistance, maxDistance + 1.0);
+            int x = spawn.getBlockX() + (int) Math.round(Math.cos(angle) * distance);
+            int z = spawn.getBlockZ() + (int) Math.round(Math.sin(angle) * distance);
+
+            Block ground = world.getHighestBlockAt(x, z, HeightMap.MOTION_BLOCKING_NO_LEAVES);
+            if (!isValidGround(ground)) continue;
+
+            Location center = ground.getLocation().add(0.0, 1.0, 0.0);
+            if (!canPlacePlatform(center)) continue;
+            return center;
+        }
+
+        plugin.getLogger().warning("Failed to find a valid legendary altar location in world " + world.getName() + ".");
+        return null;
+    }
+
+    private boolean isValidGround(Block ground) {
+        Material material = ground.getType();
+        return material.isSolid()
+            && !Tag.LEAVES.isTagged(material)
+            && material != Material.BEDROCK
+            && material != Material.LAVA
+            && material != Material.WATER
+            && material != Material.CACTUS
+            && material != Material.POWDER_SNOW;
+    }
+
+    private boolean canPlacePlatform(Location center) {
+        World world = center.getWorld();
+        if (world == null) return false;
+
+        for (int x = -2; x <= 2; x++) {
+            for (int z = -2; z <= 2; z++) {
+                Block block = world.getBlockAt(center.getBlockX() + x, center.getBlockY(), center.getBlockZ() + z);
+                Block above = block.getRelative(0, 1, 0);
+                Block aboveTwo = block.getRelative(0, 2, 0);
+                if (!block.isPassable() || block.isLiquid()) return false;
+                if (!above.isPassable() || above.isLiquid()) return false;
+                if (!aboveTwo.isPassable() || aboveTwo.isLiquid()) return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean hasActiveAltar() {
+        return altarRecord.hasActiveAltar();
+    }
+
+    private boolean isActivated() {
+        return hasActiveAltar() && System.currentTimeMillis() >= altarRecord.activatesAt();
+    }
+
+    private Location altarLocation() {
+        if (!hasActiveAltar()) return null;
+        World world = Bukkit.getWorld(altarRecord.world());
+        if (world == null) return null;
+        return new Location(world, altarRecord.x(), altarRecord.y(), altarRecord.z());
+    }
+
+    private World configuredWorld() {
+        String worldName = plugin.getConfigManager().legendaryAltarWorld;
+        if (worldName == null || worldName.isBlank()) return null;
+        return Bukkit.getWorld(worldName);
+    }
+
+    private boolean isAltarBlock(Location location) {
+        if (!hasActiveAltar() || location == null || location.getWorld() == null) return false;
+        Location center = altarLocation();
+        if (center == null || !center.getWorld().equals(location.getWorld())) return false;
+
+        int dx = location.getBlockX() - center.getBlockX();
+        int dy = location.getBlockY() - center.getBlockY();
+        int dz = location.getBlockZ() - center.getBlockZ();
+        if (dy == 0) {
+            return Math.abs(dx) <= 2 && Math.abs(dz) <= 2;
+        }
+        if (dy == 1) {
+            return (dx == 0 && dz == 0) || (Math.abs(dx) + Math.abs(dz) == 1);
+        }
+        return dy == 2 && dx == 0 && dz == 0;
+    }
+
+    private boolean isAltarMaterial(Material material) {
+        return material == Material.DEEPSLATE_BRICKS
+            || material == Material.DEEPSLATE_TILE_STAIRS
+            || material == Material.DEEPSLATE_TILE_WALL
+            || material == Material.SMOOTH_QUARTZ;
+    }
+
+    private String coordsString(Location location) {
+        return location.getBlockX() + ", " + location.getBlockY() + ", " + location.getBlockZ();
+    }
+
+    private String altarCoordsString() {
+        Location location = altarLocation();
+        if (location != null) {
+            return coordsString(location);
+        }
+        return altarRecord.x() + ", " + altarRecord.y() + ", " + altarRecord.z();
+    }
+
+    private String formatRemaining(long millis) {
+        long totalSeconds = Math.max(0L, (millis + 999L) / 1000L);
+        long hours = totalSeconds / 3600L;
+        long minutes = (totalSeconds % 3600L) / 60L;
+        long seconds = totalSeconds % 60L;
+
+        if (hours > 0) {
+            return hours + "h " + minutes + "m";
+        }
+        if (minutes > 0) {
+            return minutes + "m " + seconds + "s";
+        }
+        return seconds + "s";
+    }
+
+    private void persistRecord() {
+        plugin.getDatabase().saveLegendaryAltar(altarRecord).exceptionally(throwable -> {
+            plugin.getLogger().severe("Failed to save legendary altar data: " + throwable.getMessage());
+            return null;
+        });
+    }
+
+    public record AdminActionResult(boolean success, String message) {
+        public static AdminActionResult success(String message) {
+            return new AdminActionResult(true, message);
+        }
+
+        public static AdminActionResult failure(String message) {
+            return new AdminActionResult(false, message);
+        }
+    }
+}

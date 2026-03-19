@@ -31,23 +31,38 @@ public final class TeamManager implements Listener {
 
     private static final long INVITE_DURATION_MS = 120_000L;
     private static final String SCOREBOARD_TEAM_PREFIX = "smpct_";
+    private static final String TEAMS_LOADING_MESSAGE = "Teams are still loading. Try again in a moment.";
 
     private final SMPCore plugin;
     private final Map<String, TeamData> teamsByKey = new ConcurrentHashMap<>();
     private final Map<UUID, String> teamByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, InviteData> invitesByTarget = new ConcurrentHashMap<>();
     private final Map<String, String> scoreboardIdByTeamKey = new ConcurrentHashMap<>();
+    private volatile boolean teamsLoaded;
+    private volatile boolean teamsLoading;
 
     public TeamManager(SMPCore plugin) {
         this.plugin = plugin;
     }
 
     public void loadFromDatabase() {
-        List<DatabaseManager.TeamRecord> rows;
-        try {
-            rows = plugin.getDatabase().loadTeams().join();
-        } catch (CompletionException ex) {
-            plugin.getLogger().severe("Failed to load teams: " + ex.getMessage());
+        if (teamsLoading) return;
+
+        teamsLoading = true;
+        teamsLoaded = false;
+        plugin.getDatabase().loadTeams().whenComplete((rows, ex) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> finishTeamLoad(rows, ex));
+        });
+    }
+
+    private void finishTeamLoad(List<DatabaseManager.TeamRecord> rows, Throwable throwable) {
+        teamsLoading = false;
+        if (throwable != null) {
+            Throwable root = throwable instanceof CompletionException && throwable.getCause() != null
+                ? throwable.getCause()
+                : throwable;
+            plugin.getLogger().severe("Failed to load teams: " + root.getMessage());
             return;
         }
 
@@ -65,7 +80,11 @@ public final class TeamManager implements Listener {
             data.members.addAll(row.members());
             if (!data.members.contains(row.ownerUuid())) {
                 data.members.add(row.ownerUuid());
-                plugin.getDatabase().addTeamMember(displayName, row.ownerUuid());
+                plugin.getDatabase().addTeamMember(displayName, row.ownerUuid())
+                    .exceptionally(ex -> {
+                        plugin.getLogger().severe("Failed to repair owner membership for team " + displayName + ": " + ex.getMessage());
+                        return null;
+                    });
             }
 
             teamsByKey.put(key, data);
@@ -78,6 +97,8 @@ public final class TeamManager implements Listener {
         for (Player online : Bukkit.getOnlinePlayers()) {
             applyTeamTag(online);
         }
+
+        teamsLoaded = true;
     }
 
     @EventHandler
@@ -91,6 +112,9 @@ public final class TeamManager implements Listener {
     }
 
     public CompletableFuture<String> createTeam(Player creator, String rawName) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) return CompletableFuture.completedFuture(unavailable);
+
         String displayName = normalizeDisplayName(rawName);
         String validationError = validateTeamName(displayName);
         if (validationError != null) return CompletableFuture.completedFuture(validationError);
@@ -146,6 +170,9 @@ public final class TeamManager implements Listener {
     }
 
     public String invite(Player inviter, Player target) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) return unavailable;
+
         TeamData team = teamOf(inviter.getUniqueId());
         if (team == null) return "You are not in a team.";
         if (!team.owner.equals(inviter.getUniqueId())) {
@@ -166,6 +193,9 @@ public final class TeamManager implements Listener {
     }
 
     public CompletableFuture<String> acceptInvite(Player target) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) return CompletableFuture.completedFuture(unavailable);
+
         UUID targetId = target.getUniqueId();
         if (teamByPlayer.containsKey(targetId)) {
             return CompletableFuture.completedFuture("Leave your current team first.");
@@ -206,6 +236,9 @@ public final class TeamManager implements Listener {
     }
 
     public String denyInvite(Player target) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) return unavailable;
+
         InviteData invite = invitesByTarget.remove(target.getUniqueId());
         if (invite == null) return "You do not have a pending team invite.";
 
@@ -218,6 +251,9 @@ public final class TeamManager implements Listener {
     }
 
     public CompletableFuture<String> leaveTeam(Player player) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) return CompletableFuture.completedFuture(unavailable);
+
         UUID playerId = player.getUniqueId();
         TeamData team = teamOf(playerId);
         if (team == null) return CompletableFuture.completedFuture("You are not in a team.");
@@ -279,6 +315,9 @@ public final class TeamManager implements Listener {
     }
 
     public CompletableFuture<String> disbandTeam(Player owner) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) return CompletableFuture.completedFuture(unavailable);
+
         TeamData team = teamOf(owner.getUniqueId());
         if (team == null) return CompletableFuture.completedFuture("You are not in a team.");
         if (!team.owner.equals(owner.getUniqueId())) {
@@ -320,6 +359,11 @@ public final class TeamManager implements Listener {
     }
 
     public Component infoMessage(UUID playerId) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) {
+            return MessageUtil.info(unavailable);
+        }
+
         TeamData team = teamOf(playerId);
         if (team == null) {
             return MessageUtil.info("You are not in a team.");
@@ -344,10 +388,12 @@ public final class TeamManager implements Listener {
     }
 
     public boolean inTeam(UUID playerId) {
+        if (!teamsLoaded) return false;
         return teamByPlayer.containsKey(playerId);
     }
 
     public boolean sameTeam(UUID firstPlayerId, UUID secondPlayerId) {
+        if (!teamsLoaded) return false;
         if (firstPlayerId == null || secondPlayerId == null) return false;
         if (firstPlayerId.equals(secondPlayerId)) return true;
 
@@ -371,6 +417,11 @@ public final class TeamManager implements Listener {
     private TeamData teamOf(UUID playerId) {
         String teamKey = teamByPlayer.get(playerId);
         return teamKey == null ? null : teamsByKey.get(teamKey);
+    }
+
+    private String teamsUnavailableMessage() {
+        if (teamsLoaded) return null;
+        return teamsLoading ? TEAMS_LOADING_MESSAGE : "Teams are unavailable right now.";
     }
 
     private void applyTeamTag(Player player) {

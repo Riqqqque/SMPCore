@@ -38,6 +38,31 @@ public final class DatabaseManager {
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
 
+    public void init() {
+        plugin.getDataFolder().mkdirs();
+        File dbFile = new File(plugin.getDataFolder(), "data.db");
+
+        HikariConfig cfg = new HikariConfig();
+        cfg.setJdbcUrl("jdbc:sqlite:" + dbFile.getAbsolutePath());
+        cfg.setMaximumPoolSize(4);
+        cfg.setMinimumIdle(1);
+        cfg.setConnectionTimeout(20_000);
+        cfg.setIdleTimeout(300_000);
+        cfg.setMaxLifetime(600_000);
+        cfg.setConnectionInitSql(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; " +
+            "PRAGMA cache_size=2000; PRAGMA temp_store=MEMORY;"
+        );
+
+        dataSource = new HikariDataSource(cfg);
+        try {
+            createTables();
+        } catch (SQLException e) {
+            if (dataSource != null && !dataSource.isClosed()) dataSource.close();
+            throw new RuntimeException("Failed to create database tables", e);
+        }
+    }
+
     public CompletableFuture<Void> initAsync() {
         return CompletableFuture.runAsync(() -> {
             plugin.getDataFolder().mkdirs();
@@ -172,6 +197,20 @@ public final class DatabaseManager {
             ON waystone_known(player_uuid)
             """;
 
+        String legendaryAltar = """
+            CREATE TABLE IF NOT EXISTS legendary_altar (
+                id            INTEGER PRIMARY KEY CHECK (id = 1),
+                legendary_id  TEXT,
+                world         TEXT,
+                x             INTEGER,
+                y             INTEGER,
+                z             INTEGER,
+                spawned_at    INTEGER NOT NULL DEFAULT 0,
+                activates_at  INTEGER NOT NULL DEFAULT 0,
+                expires_at    INTEGER NOT NULL DEFAULT 0,
+                last_roll_day INTEGER NOT NULL DEFAULT -1
+            )""";
+
         try (Connection conn = connection(); Statement stmt = conn.createStatement()) {
             stmt.executeUpdate(spawners);
             stmt.executeUpdate(homes);
@@ -183,6 +222,7 @@ public final class DatabaseManager {
             stmt.executeUpdate(waystoneNames);
             stmt.executeUpdate(waystoneKnown);
             stmt.executeUpdate(waystoneKnownByPlayer);
+            stmt.executeUpdate(legendaryAltar);
         }
     }
 
@@ -636,6 +676,82 @@ public final class DatabaseManager {
 
     // ── Player Queries ────────────────────────────────────────────────────────
 
+    public CompletableFuture<LegendaryAltarRecord> loadLegendaryAltar() {
+        return CompletableFuture.supplyAsync(() -> {
+            String sql = """
+                SELECT legendary_id, world, x, y, z, spawned_at, activates_at, expires_at, last_roll_day
+                FROM legendary_altar
+                WHERE id = 1
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql);
+                 ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return new LegendaryAltarRecord(
+                        rs.getString("legendary_id"),
+                        rs.getString("world"),
+                        rs.getInt("x"),
+                        rs.getInt("y"),
+                        rs.getInt("z"),
+                        rs.getLong("spawned_at"),
+                        rs.getLong("activates_at"),
+                        rs.getLong("expires_at"),
+                        rs.getLong("last_roll_day")
+                    );
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadLegendaryAltar: " + e.getMessage());
+            }
+            return LegendaryAltarRecord.empty();
+        }, executor);
+    }
+
+    public CompletableFuture<Void> saveLegendaryAltar(LegendaryAltarRecord record) {
+        return CompletableFuture.runAsync(() -> {
+            String sql = """
+                INSERT INTO legendary_altar (id, legendary_id, world, x, y, z, spawned_at, activates_at, expires_at, last_roll_day)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    legendary_id = excluded.legendary_id,
+                    world = excluded.world,
+                    x = excluded.x,
+                    y = excluded.y,
+                    z = excluded.z,
+                    spawned_at = excluded.spawned_at,
+                    activates_at = excluded.activates_at,
+                    expires_at = excluded.expires_at,
+                    last_roll_day = excluded.last_roll_day
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                if (record.legendaryId() == null) {
+                    ps.setNull(1, Types.VARCHAR);
+                } else {
+                    ps.setString(1, record.legendaryId());
+                }
+                if (record.world() == null) {
+                    ps.setNull(2, Types.VARCHAR);
+                    ps.setNull(3, Types.INTEGER);
+                    ps.setNull(4, Types.INTEGER);
+                    ps.setNull(5, Types.INTEGER);
+                } else {
+                    ps.setString(2, record.world());
+                    ps.setInt(3, record.x());
+                    ps.setInt(4, record.y());
+                    ps.setInt(5, record.z());
+                }
+                ps.setLong(6, record.spawnedAt());
+                ps.setLong(7, record.activatesAt());
+                ps.setLong(8, record.expiresAt());
+                ps.setLong(9, record.lastRollDay());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("saveLegendaryAltar: " + e.getMessage());
+                throw new RuntimeException("saveLegendaryAltar failed", e);
+            }
+        }, executor);
+    }
+
     /** Upsert a player record; returns the join count AFTER this visit. */
     public CompletableFuture<Integer> upsertPlayer(UUID uuid, String username) {
         return CompletableFuture.supplyAsync(() -> {
@@ -722,4 +838,23 @@ public final class DatabaseManager {
     }
 
     public record TeamRecord(String name, UUID ownerUuid, Set<UUID> members) {}
+    public record LegendaryAltarRecord(
+        String legendaryId,
+        String world,
+        int x,
+        int y,
+        int z,
+        long spawnedAt,
+        long activatesAt,
+        long expiresAt,
+        long lastRollDay
+    ) {
+        public static LegendaryAltarRecord empty() {
+            return new LegendaryAltarRecord(null, null, 0, 0, 0, 0L, 0L, 0L, -1L);
+        }
+
+        public boolean hasActiveAltar() {
+            return legendaryId != null && world != null && !world.isBlank();
+        }
+    }
 }
