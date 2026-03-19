@@ -171,8 +171,8 @@ public final class ReplenishListener implements Listener {
         pdc.set(keyReplenishHoe, PersistentDataType.BYTE, (byte) 1);
 
         List<Component> lore = meta.lore() == null ? new ArrayList<>() : new ArrayList<>(meta.lore());
-        lore.removeIf(line -> REPLENISH_LORE_LINE.equalsIgnoreCase(PLAIN.serialize(line)));
-        lore.add(MM.deserialize("<green>Replenish I</green>"));
+        lore.removeIf(line -> REPLENISH_LORE_LINE.equalsIgnoreCase(PLAIN.serialize(line).trim()));
+        lore.add(0, MM.deserialize("<gray>Replenish I</gray>"));
         meta.lore(lore);
         hoe.setItemMeta(meta);
         return hoe;

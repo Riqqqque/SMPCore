@@ -23,6 +23,7 @@ import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareItemCraftEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.CraftingInventory;
 import org.bukkit.inventory.EquipmentSlot;
@@ -30,7 +31,6 @@ import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.BundleMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
@@ -47,8 +47,8 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Custom backpack system based on bundles.
- * Only PDC-marked backpacks use custom behavior; normal bundles remain vanilla.
+ * Custom backpack system based on a chest minecart item.
+ * Old bundle backpacks are migrated forward when touched.
  */
 public final class BackpackListener implements Listener {
 
@@ -74,8 +74,9 @@ public final class BackpackListener implements Listener {
         this.backpackFlagKey = new NamespacedKey(plugin, "backpack_flag");
         this.backpackIdKey = new NamespacedKey(plugin, "backpack_id");
         this.backpackDataKey = new NamespacedKey(plugin, "backpack_data");
-        this.backpackRecipeKey = new NamespacedKey(plugin, "backpack_bundle_recipe");
+        this.backpackRecipeKey = new NamespacedKey(plugin, "backpack_recipe");
         Bukkit.removeRecipe(backpackRecipeKey);
+        Bukkit.getScheduler().runTask(plugin, () -> Bukkit.getOnlinePlayers().forEach(this::migratePlayerBackpacks));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -113,7 +114,13 @@ public final class BackpackListener implements Listener {
         }
 
         int slot = hand == EquipmentSlot.HAND ? player.getInventory().getHeldItemSlot() : 40;
+        migrateBackpackSlot(player.getInventory(), slot);
         openBackpack(player, slot);
+    }
+
+    @EventHandler
+    public void onJoin(PlayerJoinEvent event) {
+        migratePlayerBackpacks(event.getPlayer());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -129,56 +136,13 @@ public final class BackpackListener implements Listener {
             return;
         }
 
-        if (!involvesBackpack(event.getCurrentItem(), event.getCursor())) return;
-        if (!isBackpackAction(event)) return;
-
         ItemStack current = event.getCurrentItem();
-        ItemStack cursor = event.getCursor();
-
         if (event.getClickedInventory() == player.getInventory()
             && isBackpack(current)
             && event.isRightClick()) {
             event.setCancelled(true);
-
-            int recovered = recoverVanillaBundleContents(player, current);
-            event.setCurrentItem(current);
-            if (!isEmpty(cursor)) {
-                player.updateInventory();
-                maybeWarn(
-                    player,
-                    recovered > 0
-                        ? "Backpacks must be opened with an empty cursor. Trapped items were returned."
-                        : "Backpacks must be opened with an empty cursor."
-                );
-                return;
-            }
-
+            migrateBackpackSlot(player.getInventory(), event.getSlot());
             openBackpack(player, event.getSlot());
-            return;
-        }
-
-        if (isBackpack(cursor)) {
-            event.setCancelled(true);
-            int recovered = recoverVanillaBundleContents(player, cursor);
-            player.setItemOnCursor(cursor);
-            player.updateInventory();
-            maybeWarn(
-                player,
-                recovered > 0
-                    ? "Backpacks cannot be used while held on your cursor. Trapped items were returned."
-                    : "Backpacks cannot be used while held on your cursor."
-            );
-            return;
-        }
-
-        if (event.isRightClick()) {
-            event.setCancelled(true);
-            int recovered = recoverVanillaBundleContents(player, current);
-            if (recovered > 0) {
-                event.setCurrentItem(current);
-                player.updateInventory();
-                maybeWarn(player, "Recovered items that were trapped in the backpack.");
-            }
         }
     }
 
@@ -195,9 +159,9 @@ public final class BackpackListener implements Listener {
 
             int topSize = event.getView().getTopInventory().getSize();
             for (int rawSlot : event.getRawSlots()) {
-                if (rawSlot < topSize && isBundle(event.getOldCursor())) {
+                if (rawSlot < topSize && isBackpack(event.getOldCursor())) {
                     event.setCancelled(true);
-                    maybeWarn(player, "Bundles cannot be stored inside backpacks.");
+                    maybeWarn(player, "Backpacks cannot be stored inside backpacks.");
                     return;
                 }
                 if (rawSlot >= topSize && event.getView().convertSlot(rawSlot) == session.sourceSlot()) {
@@ -205,12 +169,6 @@ public final class BackpackListener implements Listener {
                     return;
                 }
             }
-            return;
-        }
-
-        // Only custom backpacks suppress vanilla drag behavior.
-        if (isBackpack(event.getOldCursor())) {
-            event.setCancelled(true);
         }
     }
 
@@ -269,9 +227,9 @@ public final class BackpackListener implements Listener {
                 event.setCancelled(true);
                 return;
             }
-            if (event.isShiftClick() && isBundle(event.getCurrentItem())) {
+            if (event.isShiftClick() && isBackpack(event.getCurrentItem())) {
                 event.setCancelled(true);
-                maybeWarn(player, "Bundles cannot be stored inside backpacks.");
+                maybeWarn(player, "Backpacks cannot be stored inside backpacks.");
                 return;
             }
             if (event.getClick() == ClickType.NUMBER_KEY && event.getHotbarButton() == session.sourceSlot()) {
@@ -287,40 +245,35 @@ public final class BackpackListener implements Listener {
         }
 
         if (clicked == top) {
-            if (isBundle(event.getCursor())) {
+            if (isBackpack(event.getCursor())) {
                 event.setCancelled(true);
-                maybeWarn(player, "Bundles cannot be stored inside backpacks.");
+                maybeWarn(player, "Backpacks cannot be stored inside backpacks.");
                 return;
             }
             if (event.getClick() == ClickType.NUMBER_KEY) {
                 ItemStack hotbarItem = player.getInventory().getItem(event.getHotbarButton());
-                if (isBundle(hotbarItem)) {
+                if (isBackpack(hotbarItem)) {
                     event.setCancelled(true);
-                    maybeWarn(player, "Bundles cannot be stored inside backpacks.");
+                    maybeWarn(player, "Backpacks cannot be stored inside backpacks.");
                     return;
                 }
             }
-            if (event.getClick() == ClickType.SWAP_OFFHAND && isBundle(player.getInventory().getItemInOffHand())) {
+            if (event.getClick() == ClickType.SWAP_OFFHAND && isBackpack(player.getInventory().getItemInOffHand())) {
                 event.setCancelled(true);
-                maybeWarn(player, "Bundles cannot be stored inside backpacks.");
+                maybeWarn(player, "Backpacks cannot be stored inside backpacks.");
                 return;
             }
-            if (event.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY && isBundle(event.getCurrentItem())) {
+            if (event.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY && isBackpack(event.getCurrentItem())) {
                 event.setCancelled(true);
-                maybeWarn(player, "Bundles cannot be stored inside backpacks.");
+                maybeWarn(player, "Backpacks cannot be stored inside backpacks.");
             }
         }
     }
 
     private void openBackpack(Player player, int sourceSlot) {
         if (openBackpacks.containsKey(player.getUniqueId())) return;
-        ItemStack source = player.getInventory().getItem(sourceSlot);
+        ItemStack source = migrateBackpackSlot(player.getInventory(), sourceSlot);
         if (!isBackpack(source)) return;
-
-        if (recoverVanillaBundleContents(player, source) > 0) {
-            player.getInventory().setItem(sourceSlot, source);
-            maybeWarn(player, "Recovered items that were trapped in the backpack.");
-        }
 
         ItemMeta sourceMeta = source.getItemMeta();
         if (sourceMeta == null) return;
@@ -357,14 +310,11 @@ public final class BackpackListener implements Listener {
 
         ItemMeta meta = stack.getItemMeta();
         if (meta == null) return;
-        if (meta instanceof BundleMeta bundleMeta) {
-            bundleMeta.setItems(List.of());
-            meta = bundleMeta;
-        }
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
         pdc.set(backpackFlagKey, PersistentDataType.BYTE, (byte) 1);
         pdc.set(backpackIdKey, PersistentDataType.STRING, session.backpackId());
         pdc.set(backpackDataKey, PersistentDataType.BYTE_ARRAY, serialize(inventory.getContents()));
+        applyBackpackPresentation(meta);
         stack.setItemMeta(meta);
         player.getInventory().setItem(slot, stack);
     }
@@ -380,21 +330,8 @@ public final class BackpackListener implements Listener {
         return -1;
     }
 
-    private boolean involvesBackpack(ItemStack current, ItemStack cursor) {
-        return isBackpack(current) || isBackpack(cursor);
-    }
-
-    private boolean isBackpackAction(InventoryClickEvent event) {
-        if (!involvesBackpack(event.getCurrentItem(), event.getCursor())) return false;
-        return event.isRightClick();
-    }
-
-    private static boolean isBundle(ItemStack item) {
-        return item != null && item.getType() == Material.BUNDLE;
-    }
-
     private boolean isBackpack(ItemStack item) {
-        if (!isBundle(item)) return false;
+        if (item == null || item.getType() == Material.AIR) return false;
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return false;
         Byte flag = meta.getPersistentDataContainer().get(backpackFlagKey, PersistentDataType.BYTE);
@@ -435,26 +372,15 @@ public final class BackpackListener implements Listener {
     }
 
     private ItemStack createBackpackItem() {
-        ItemStack item = new ItemStack(Material.BUNDLE);
+        ItemStack item = new ItemStack(Material.CHEST_MINECART);
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return item;
-        if (meta instanceof BundleMeta bundleMeta) {
-            bundleMeta.setItems(List.of());
-            meta = bundleMeta;
-        }
 
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
         pdc.set(backpackFlagKey, PersistentDataType.BYTE, (byte) 1);
         pdc.set(backpackIdKey, PersistentDataType.STRING, UUID.randomUUID().toString());
         pdc.set(backpackDataKey, PersistentDataType.BYTE_ARRAY, new byte[0]);
-
-        meta.displayName(MM.deserialize("<gold><bold>Backpack</bold></gold>"));
-        meta.lore(List.of(
-            MM.deserialize("<dark_gray>Portable Storage</dark_gray>"),
-            MM.deserialize("<gray>Right-click to open.</gray>"),
-            MM.deserialize("<gray>Normal bundles still work normally.</gray>")
-        ));
-        meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+        applyBackpackPresentation(meta);
         item.setItemMeta(meta);
         return item;
     }
@@ -465,32 +391,6 @@ public final class BackpackListener implements Listener {
         if (now - last < 1000L) return;
         warnCooldown.put(player.getUniqueId(), now);
         player.sendMessage(MessageUtil.warn(message));
-    }
-
-    private int recoverVanillaBundleContents(Player player, ItemStack backpack) {
-        if (!isBackpack(backpack)) return 0;
-
-        ItemMeta meta = backpack.getItemMeta();
-        if (!(meta instanceof BundleMeta bundleMeta) || !bundleMeta.hasItems()) {
-            return 0;
-        }
-
-        List<ItemStack> recovered = bundleMeta.getItems().stream()
-            .filter(item -> item != null && item.getType() != Material.AIR && item.getAmount() > 0)
-            .map(ItemStack::clone)
-            .toList();
-        bundleMeta.setItems(List.of());
-        backpack.setItemMeta(bundleMeta);
-
-        for (ItemStack item : recovered) {
-            Map<Integer, ItemStack> leftovers = player.getInventory().addItem(item);
-            leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
-        }
-        return recovered.size();
-    }
-
-    private static boolean isEmpty(ItemStack item) {
-        return item == null || item.getType() == Material.AIR || item.getAmount() <= 0;
     }
 
     private void dropContents(Player player, ItemStack[] contents) {
@@ -576,7 +476,7 @@ public final class BackpackListener implements Listener {
 
         ItemStack current = event.getCurrentItem();
         if (!matchesBackpackIngredients(inv.getMatrix())
-            && !(current != null && current.getType() == Material.BUNDLE && isBackpack(current))) {
+            && !(current != null && current.getType() == Material.CHEST_MINECART && isBackpack(current))) {
             return false;
         }
 
@@ -585,6 +485,67 @@ public final class BackpackListener implements Listener {
         player.updateInventory();
         player.sendMessage(MessageUtil.info("Use <white>/lrecipe</white> to trade materials for a backpack."));
         return true;
+    }
+
+    private void applyBackpackPresentation(ItemMeta meta) {
+        meta.displayName(MM.deserialize("<gold><bold>Backpack</bold></gold>"));
+        meta.lore(List.of(
+            MM.deserialize("<dark_gray>Portable Storage</dark_gray>"),
+            MM.deserialize("<gray>Right-click to open.</gray>")
+        ));
+        meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+    }
+
+    private void migratePlayerBackpacks(Player player) {
+        migrateInventoryBackpacks(player.getInventory());
+        migrateInventoryBackpacks(player.getEnderChest());
+    }
+
+    private void migrateInventoryBackpacks(Inventory inventory) {
+        ItemStack[] contents = inventory.getContents();
+        for (int slot = 0; slot < contents.length; slot++) {
+            ItemStack normalized = normalizeBackpackItem(contents[slot]);
+            if (normalized != contents[slot]) {
+                inventory.setItem(slot, normalized);
+            }
+        }
+    }
+
+    private ItemStack migrateBackpackSlot(Inventory inventory, int slot) {
+        ItemStack normalized = normalizeBackpackItem(inventory.getItem(slot));
+        if (normalized != inventory.getItem(slot)) {
+            inventory.setItem(slot, normalized);
+        }
+        return normalized;
+    }
+
+    private ItemStack normalizeBackpackItem(ItemStack item) {
+        if (!isBackpack(item)) return item;
+
+        ItemStack normalized = item;
+        if (item.getType() != Material.CHEST_MINECART) {
+            normalized = new ItemStack(Material.CHEST_MINECART, item.getAmount());
+        }
+
+        ItemMeta sourceMeta = item.getItemMeta();
+        ItemMeta normalizedMeta = normalized.getItemMeta();
+        if (sourceMeta == null || normalizedMeta == null) return item;
+
+        PersistentDataContainer sourcePdc = sourceMeta.getPersistentDataContainer();
+        PersistentDataContainer normalizedPdc = normalizedMeta.getPersistentDataContainer();
+        normalizedPdc.set(backpackFlagKey, PersistentDataType.BYTE, (byte) 1);
+
+        String backpackId = sourcePdc.get(backpackIdKey, PersistentDataType.STRING);
+        if (backpackId == null || backpackId.isBlank()) {
+            backpackId = UUID.randomUUID().toString();
+        }
+        normalizedPdc.set(backpackIdKey, PersistentDataType.STRING, backpackId);
+
+        byte[] data = sourcePdc.get(backpackDataKey, PersistentDataType.BYTE_ARRAY);
+        normalizedPdc.set(backpackDataKey, PersistentDataType.BYTE_ARRAY, data == null ? new byte[0] : data);
+        applyBackpackPresentation(normalizedMeta);
+        normalized.setItemMeta(normalizedMeta);
+        return normalized;
     }
 
     private int countTradeMaterial(Player player, Material material) {

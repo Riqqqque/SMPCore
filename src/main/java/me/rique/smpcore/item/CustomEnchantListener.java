@@ -427,7 +427,7 @@ public final class CustomEnchantListener implements Listener {
 
         List<Component> lore = meta.lore() == null ? new ArrayList<>() : new ArrayList<>(meta.lore());
         lore.removeIf(line -> enchant.loreLine.equalsIgnoreCase(PLAIN.serialize(line).trim()));
-        lore.add(MM.deserialize(enchant.loreFormat));
+        lore.add(0, MM.deserialize("<gray>" + enchant.loreLine + "</gray>"));
         meta.lore(lore);
         item.setItemMeta(meta);
         return item;
@@ -710,7 +710,7 @@ public final class CustomEnchantListener implements Listener {
             "<gold><bold>Delicate</bold></gold>",
             "<gold><bold>Delicate Book</bold></gold>",
             DELICATE_LORE_LINE,
-            "<gold>Delicate I</gold>",
+            "<gray>Delicate I</gray>",
             Material.TORCHFLOWER,
             "I",
             List.of(
@@ -728,7 +728,7 @@ public final class CustomEnchantListener implements Listener {
             "<aqua><bold>Telekinesis</bold></aqua>",
             "<aqua><bold>Telekinesis Book</bold></aqua>",
             TELEKINESIS_LORE_LINE,
-            "<aqua>Telekinesis I</aqua>",
+            "<gray>Telekinesis I</gray>",
             Material.ENDER_PEARL,
             "I",
             List.of(
