@@ -12,6 +12,7 @@ import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.Color;
+import org.bukkit.FluidCollisionMode;
 import org.bukkit.GameMode;
 import org.bukkit.HeightMap;
 import org.bukkit.Input;
@@ -139,6 +140,22 @@ public final class LegendaryListener implements Listener {
     private static final double ENDER_SWORD_SEAT_START_Y_OFFSET = 0.35;
     private static final double ENDER_SWORD_DRAGON_BASE_MOVE_SCALAR = 0.60;
     private static final double ENDER_SWORD_DRAGON_SPRINT_MULTIPLIER = 1.15;
+    private static final double ENDER_SWORD_SEAT_COLLISION_RADIUS = 0.45;
+    private static final double ENDER_SWORD_SEAT_COLLISION_HEAD_HEIGHT = 1.55;
+    private static final double ENDER_SWORD_SEAT_COLLISION_MID_HEIGHT = 0.90;
+    private static final double ENDER_SWORD_SEAT_COLLISION_FOOT_HEIGHT = 0.10;
+    private static final List<Vector> ENDER_SWORD_SEAT_COLLISION_OFFSETS = List.of(
+        new Vector(0.0, 0.0, 0.0),
+        new Vector(ENDER_SWORD_SEAT_COLLISION_RADIUS, 0.0, 0.0),
+        new Vector(-ENDER_SWORD_SEAT_COLLISION_RADIUS, 0.0, 0.0),
+        new Vector(0.0, 0.0, ENDER_SWORD_SEAT_COLLISION_RADIUS),
+        new Vector(0.0, 0.0, -ENDER_SWORD_SEAT_COLLISION_RADIUS)
+    );
+    private static final List<Double> ENDER_SWORD_SEAT_COLLISION_HEIGHTS = List.of(
+        ENDER_SWORD_SEAT_COLLISION_FOOT_HEIGHT,
+        ENDER_SWORD_SEAT_COLLISION_MID_HEIGHT,
+        ENDER_SWORD_SEAT_COLLISION_HEAD_HEIGHT
+    );
     private static final double HERMES_BOOTS_SPEED_SCALAR = 0.60;
     private static final Color HERMES_BOOTS_COLOR = Color.fromRGB(245, 201, 66);
     private static final int RECIPE_TRADE_SLOT = 26;
@@ -1394,10 +1411,10 @@ public final class LegendaryListener implements Listener {
             movement.subtract(lookForward);
         }
         if (input.isLeft()) {
-            movement.subtract(right);
+            movement.add(right);
         }
         if (input.isRight()) {
-            movement.add(right);
+            movement.subtract(right);
         }
 
         double horizontalSpeed = plugin.getConfigManager().enderSwordDragonSpeed;
@@ -1413,7 +1430,7 @@ public final class LegendaryListener implements Listener {
             movement.setY(movement.getY() + plugin.getConfigManager().enderSwordDragonVerticalSpeed * 0.22);
         }
 
-        Location nextSeat = seat.getLocation().clone().add(movement);
+        Location nextSeat = resolveEnderDragonSeatMovement(seat.getLocation(), movement);
         nextSeat.setYaw(yaw);
         nextSeat.setPitch(0.0f);
         seat.teleport(nextSeat);
@@ -1557,6 +1574,88 @@ public final class LegendaryListener implements Listener {
         if (entity != null && entity.isValid()) {
             entity.remove();
         }
+    }
+
+    private Location resolveEnderDragonSeatMovement(Location currentSeat, Vector movement) {
+        if (movement.lengthSquared() <= 0.0001) {
+            return currentSeat.clone();
+        }
+
+        Location fullMove = currentSeat.clone().add(movement);
+        if (canMoveEnderDragonSeat(currentSeat, fullMove)) {
+            return fullMove;
+        }
+
+        Location resolved = currentSeat.clone();
+        if (Math.abs(movement.getY()) > 0.0001) {
+            Location verticalMove = resolved.clone().add(0.0, movement.getY(), 0.0);
+            if (canMoveEnderDragonSeat(resolved, verticalMove)) {
+                resolved = verticalMove;
+            }
+        }
+
+        Vector primaryHorizontal = Math.abs(movement.getX()) >= Math.abs(movement.getZ())
+            ? new Vector(movement.getX(), 0.0, 0.0)
+            : new Vector(0.0, 0.0, movement.getZ());
+        Vector secondaryHorizontal = Math.abs(movement.getX()) >= Math.abs(movement.getZ())
+            ? new Vector(0.0, 0.0, movement.getZ())
+            : new Vector(movement.getX(), 0.0, 0.0);
+
+        if (primaryHorizontal.lengthSquared() > 0.0001) {
+            Location attempt = resolved.clone().add(primaryHorizontal);
+            if (canMoveEnderDragonSeat(resolved, attempt)) {
+                resolved = attempt;
+            }
+        }
+        if (secondaryHorizontal.lengthSquared() > 0.0001) {
+            Location attempt = resolved.clone().add(secondaryHorizontal);
+            if (canMoveEnderDragonSeat(resolved, attempt)) {
+                resolved = attempt;
+            }
+        }
+
+        return resolved;
+    }
+
+    private boolean canMoveEnderDragonSeat(Location from, Location to) {
+        World world = from.getWorld();
+        if (world == null || to.getWorld() == null || !world.equals(to.getWorld())) {
+            return false;
+        }
+        if (!world.isChunkLoaded(to.getBlockX() >> 4, to.getBlockZ() >> 4)) {
+            return false;
+        }
+        return isEnderDragonSeatPathClear(world, from, to) && isEnderDragonSeatSpaceClear(world, to);
+    }
+
+    private boolean isEnderDragonSeatPathClear(World world, Location from, Location to) {
+        Vector path = to.toVector().subtract(from.toVector());
+        double distance = path.length();
+        if (distance <= 0.0001) {
+            return true;
+        }
+        Vector direction = path.clone().normalize();
+        for (Vector offset : ENDER_SWORD_SEAT_COLLISION_OFFSETS) {
+            for (double height : ENDER_SWORD_SEAT_COLLISION_HEIGHTS) {
+                Location sampleStart = from.clone().add(offset).add(0.0, height, 0.0);
+                if (world.rayTraceBlocks(sampleStart, direction, distance, FluidCollisionMode.NEVER, true) != null) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private boolean isEnderDragonSeatSpaceClear(World world, Location location) {
+        for (Vector offset : ENDER_SWORD_SEAT_COLLISION_OFFSETS) {
+            for (double height : ENDER_SWORD_SEAT_COLLISION_HEIGHTS) {
+                Block block = world.getBlockAt(location.clone().add(offset).add(0.0, height, 0.0));
+                if (!block.isPassable()) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private void updateEnderDragonChunkTickets(UUID ownerId, Location location) {
