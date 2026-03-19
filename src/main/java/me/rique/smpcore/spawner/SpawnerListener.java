@@ -295,6 +295,14 @@ public final class SpawnerListener implements Listener {
         Block block = event.getBlock();
         if (block.getType() != Material.SPAWNER) return;
 
+        Player player = event.getPlayer();
+        if (player.getGameMode() != GameMode.CREATIVE) return;
+        if (!player.hasPermission("smpcore.spawner.admin")) {
+            event.setCancelled(true);
+            player.sendMessage(MessageUtil.error("You do not have permission to clone custom spawners."));
+            return;
+        }
+
         SpawnerData data = manager.getData(block.getLocation());
         String entityType = "PIG";
         int stackCount = 1;
@@ -322,7 +330,6 @@ public final class SpawnerListener implements Listener {
         }
 
         ItemStack custom = buildSpawnerItem(entityType, stackCount, sugarCount, redstoneControlled, aiNerfed);
-        Player player = event.getPlayer();
         player.getInventory().setItem(event.getTargetSlot(), custom);
         player.getInventory().setHeldItemSlot(event.getTargetSlot());
         event.setCancelled(true);

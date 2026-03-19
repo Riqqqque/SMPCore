@@ -17,13 +17,15 @@ import me.rique.smpcore.config.ConfigManager;
 import me.rique.smpcore.database.DatabaseManager;
 import me.rique.smpcore.home.HomeManager;
 import me.rique.smpcore.item.CustomEnchantListener;
-import me.rique.smpcore.item.MaceLimitListener;
+import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.ReplenishListener;
 import me.rique.smpcore.item.VeinMinerListener;
+import me.rique.smpcore.legendary.LegendaryAltarManager;
 import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.player.DragonEggListener;
 import me.rique.smpcore.player.JoinListener;
 import me.rique.smpcore.player.PlayerManager;
+import me.rique.smpcore.player.WorldRulesListener;
 import me.rique.smpcore.spawner.SpawnerListener;
 import me.rique.smpcore.spawner.SpawnerManager;
 import me.rique.smpcore.tpa.TPAManager;
@@ -33,8 +35,6 @@ import me.rique.smpcore.waystone.WaystoneManager;
 import org.bukkit.event.HandlerList;
 import org.bukkit.plugin.PluginManager;
 import org.bukkit.plugin.java.JavaPlugin;
-
-import java.util.concurrent.ExecutionException;
 
 /**
  * SMPCore - Paper 1.21.11 core plugin.
@@ -54,9 +54,13 @@ public final class SMPCore extends JavaPlugin {
     private BackpackListener backpackListener;
     private DragonEggListener dragonEggListener;
     private LegendaryListener legendaryListener;
+    private LegendaryAltarManager legendaryAltarManager;
     private ReplenishListener replenishListener;
     private CustomEnchantListener customEnchantListener;
+    private CustomToolListener customToolListener;
     private VeinMinerListener veinMinerListener;
+    private CraftingRulesListener craftingRulesListener;
+    private WorldRulesListener worldRulesListener;
 
     @Override
     public void onEnable() {
@@ -66,10 +70,9 @@ public final class SMPCore extends JavaPlugin {
 
         databaseManager = new DatabaseManager(this);
         try {
-            databaseManager.initAsync().get();
+            databaseManager.init();
         } catch (Exception e) {
-            Throwable root = e instanceof ExecutionException && e.getCause() != null ? e.getCause() : e;
-            getLogger().severe("Failed to initialise database: " + root.getMessage());
+            getLogger().severe("Failed to initialise database: " + e.getMessage());
             getLogger().severe("Disabling SMPCore due to database init failure.");
             getServer().getPluginManager().disablePlugin(this);
             return;
@@ -98,6 +101,8 @@ public final class SMPCore extends JavaPlugin {
             HandlerList.unregisterAll(dragonEggListener);
             dragonEggListener.cancel();
         }
+        if (legendaryListener != null) legendaryListener.shutdown();
+        if (legendaryAltarManager != null) legendaryAltarManager.shutdown();
         if (veinMinerListener != null) veinMinerListener.shutdown();
         if (backpackListener != null) backpackListener.shutdown();
         if (spawnerManager != null) spawnerManager.shutdown();
@@ -108,9 +113,12 @@ public final class SMPCore extends JavaPlugin {
     private void registerListeners() {
         PluginManager pm = getServer().getPluginManager();
         pm.registerEvents(new SpawnerListener(this), this);
-        pm.registerEvents(new CraftingRulesListener(this), this);
+        craftingRulesListener = new CraftingRulesListener(this);
+        pm.registerEvents(craftingRulesListener, this);
         pm.registerEvents(new CombatLogListener(this), this);
-        pm.registerEvents(new MaceLimitListener(this), this);
+        worldRulesListener = new WorldRulesListener(this);
+        pm.registerEvents(worldRulesListener, this);
+        worldRulesListener.applyConfiguredWorldRules();
         veinMinerListener = new VeinMinerListener(this);
         pm.registerEvents(veinMinerListener, this);
         replenishListener = new ReplenishListener(this);
@@ -118,10 +126,14 @@ public final class SMPCore extends JavaPlugin {
         backpackListener = new BackpackListener(this);
         pm.registerEvents(backpackListener, this);
         pm.registerEvents(new WaystoneListener(this), this);
-        legendaryListener = new LegendaryListener(this);
-        pm.registerEvents(legendaryListener, this);
         customEnchantListener = new CustomEnchantListener(this);
         pm.registerEvents(customEnchantListener, this);
+        legendaryListener = new LegendaryListener(this);
+        pm.registerEvents(legendaryListener, this);
+        legendaryAltarManager = new LegendaryAltarManager(this);
+        pm.registerEvents(legendaryAltarManager, this);
+        customToolListener = new CustomToolListener(this);
+        pm.registerEvents(customToolListener, this);
         pm.registerEvents(teamManager, this);
         pm.registerEvents(new JoinListener(this), this);
         restartDragonEggListener();
@@ -165,7 +177,11 @@ public final class SMPCore extends JavaPlugin {
     public WaystoneManager getWaystoneManager() { return waystoneManager; }
     public BackpackListener getBackpackListener() { return backpackListener; }
     public LegendaryListener getLegendaryListener() { return legendaryListener; }
+    public LegendaryAltarManager getLegendaryAltarManager() { return legendaryAltarManager; }
     public ReplenishListener getReplenishListener() { return replenishListener; }
     public CustomEnchantListener getCustomEnchantListener() { return customEnchantListener; }
+    public CustomToolListener getCustomToolListener() { return customToolListener; }
     public VeinMinerListener getVeinMinerListener() { return veinMinerListener; }
+    public CraftingRulesListener getCraftingRulesListener() { return craftingRulesListener; }
+    public WorldRulesListener getWorldRulesListener() { return worldRulesListener; }
 }

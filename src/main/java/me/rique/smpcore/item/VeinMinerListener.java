@@ -97,6 +97,11 @@ public final class VeinMinerListener implements Listener {
         savePlayerSettings();
     }
 
+    public void suppressNextBreak(Location location) {
+        if (location == null || location.getWorld() == null) return;
+        internalBreaks.add(blockKey(location));
+    }
+
     public boolean isEnabledFor(Player player) {
         if (!enabled) return false;
         if (!player.hasPermission("smpcore.veinminer.use")) return false;

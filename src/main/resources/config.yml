@@ -4,7 +4,6 @@
 # ============================================================
 
 messages:
-  # MiniMessage format - https://docs.advntr.dev/minimessage/format.html
   prefix: "<dark_gray>[<gradient:#FF6B6B:#FFE66D>Server</gradient>]</dark_gray> "
   join-first: "<gold><bold>* Welcome to the server, <white>{player}</white>! *</bold></gold> <gray>You are player number <yellow>{count}</yellow> to join!</gray>"
   join-return: "<aqua>> <white>{player}</white> has joined the server.</aqua>"
@@ -26,6 +25,9 @@ homes:
 spawn:
   world: "world"
 
+world-rules:
+  force-hard-difficulty: true
+
 back:
   on-death: true
   on-teleport: true
@@ -37,19 +39,15 @@ spawner:
 
   speed:
     max-sugar: 32
-    # 1.0x to 16.0x scaling based on sugar
     max-multiplier: 16.0
 
   ai-nerf:
     enabled: true
 
   redstone:
-    # true: powered spawner is disabled
-    # false: powered spawner is enabled
     powered-disables: true
 
   performance:
-    # Prevent extreme stacked/sugar spawner throughput from overwhelming the server.
     min-delay-floor: 40
     stack-spawn-count-cap: 32
     max-nearby-entities-cap: 96
@@ -139,4 +137,53 @@ dragon-egg:
   check-interval: 10
 
 crafting:
+  golden-apple-surround-material: IRON_NUGGET
   block-netherite-armor-upgrade: true
+
+legendary-altar:
+  enabled: true
+  world: "world"
+  roll-time-ticks: 13000
+  nightly-chance: 0.05
+  require-player-online: true
+  activation-delay-seconds: 360
+  expiration-hours: 48
+  min-distance-from-spawn: 256
+  max-distance-from-spawn: 2500
+  location-search-attempts: 96
+  beacon-view-range: 96
+  bossbar:
+    enabled: true
+
+ender-sword:
+  ender-bone-drop-count: 8
+  summon-cooldown-seconds: 300
+  killed-cooldown-seconds: 1800
+  require-open-sky: true
+  dragon:
+    scale: 0.45
+    max-health: 80.0
+    horizontal-speed: 1.15
+    vertical-speed: 0.75
+    dismount-despawn-seconds: 10
+
+thors-hammer:
+  bonus-damage: 1.0
+
+custom-tools:
+  amethyst-pickaxe:
+    enabled: true
+    strip-width: 3
+
+  advanced-pickaxe:
+    enabled: true
+    disable-bonus-with-silk-touch: true
+    bonus-chances:
+      coal: 1.0
+      iron: 0.6667
+      redstone: 0.5
+      gold: 0.3333
+      lapis: 0.5
+      copper: 1.0
+      diamond: 0.1
+      emerald: 0.1
