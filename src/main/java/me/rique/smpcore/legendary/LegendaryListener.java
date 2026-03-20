@@ -2,6 +2,7 @@ package me.rique.smpcore.legendary;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.item.CustomToolListener;
+import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
 import io.papermc.paper.registry.RegistryAccess;
@@ -212,6 +213,9 @@ public final class LegendaryListener implements Listener {
     private final Enchantment enchantSharpness;
     private final Enchantment enchantEfficiency;
     private final Enchantment enchantUnbreaking;
+    private final Enchantment enchantDensity;
+    private final Enchantment enchantBreach;
+    private final Enchantment enchantWindBurst;
 
     private final List<LegendaryRecipe> recipes;
     private final Set<NamespacedKey> recipeBookKeys = new HashSet<>();
@@ -268,6 +272,9 @@ public final class LegendaryListener implements Listener {
         this.enchantSharpness = requireEnchantment("sharpness");
         this.enchantEfficiency = requireEnchantment("efficiency");
         this.enchantUnbreaking = requireEnchantment("unbreaking");
+        this.enchantDensity = requireEnchantment("density");
+        this.enchantBreach = requireEnchantment("breach");
+        this.enchantWindBurst = requireEnchantment("wind_burst");
         this.recipes = buildRecipes();
         registerRecipeBookRecipes();
         Bukkit.getScheduler().runTask(plugin, () -> {
@@ -454,6 +461,12 @@ public final class LegendaryListener implements Listener {
         }
 
         Inventory top = event.getView().getTopInventory();
+        if (BedrockCompat.isBedrockPlayer(player)
+            && isReadOnlyLegendaryMenu(top)
+            && isUnsafeReadOnlyMenuAction(event)) {
+            event.setCancelled(true);
+            return;
+        }
         if (event.getClickedInventory() != top) return;
 
         if (top.getHolder() instanceof RecipeMenuHolder holder) {
@@ -573,18 +586,26 @@ public final class LegendaryListener implements Listener {
     }
 
     public void openRecipeMenu(Player player) {
-        Inventory inv = Bukkit.createInventory(new RecipeMenuHolder(null), 45, MM.deserialize(GUI_TITLE_RECIPES));
+        Inventory inv = Bukkit.createInventory(
+            new RecipeMenuHolder(null),
+            45,
+            BedrockCompat.menuTitle(player, MM.deserialize(GUI_TITLE_RECIPES), "Legendary Recipes")
+        );
 
         ItemStack filler = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
         for (int i = 0; i < inv.getSize(); i++) {
             inv.setItem(i, filler);
         }
 
-        int[] slots = {10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24};
+        int[] slots = {
+            10, 11, 12, 13, 14, 15, 16,
+            19, 20, 21, 22, 23, 24, 25,
+            28, 29, 30, 32, 33, 34
+        };
         LegendaryType[] types = LegendaryType.values();
         for (int i = 0; i < types.length && i < slots.length; i++) {
             LegendaryType type = types[i];
-            ItemStack icon = createPreviewItem(type);
+            ItemStack icon = createPreviewItem(player, type);
             tagMenuLegendaryId(icon, type.id);
             inv.setItem(slots[i], icon);
         }
@@ -595,18 +616,18 @@ public final class LegendaryListener implements Listener {
         ItemMeta backpackMeta = backpackIcon.getItemMeta();
         if (backpackMeta != null) {
             List<Component> lore = backpackMeta.lore() == null ? new ArrayList<>() : new ArrayList<>(backpackMeta.lore());
-            lore.add(MM.deserialize("<dark_gray>Click to view recipe</dark_gray>"));
+            lore.add(MM.deserialize("<dark_gray>" + BedrockCompat.menuActionWord(player) + " to view recipe</dark_gray>"));
             backpackMeta.lore(lore);
             backpackIcon.setItemMeta(backpackMeta);
         }
         inv.setItem(backpackSlot, backpackIcon);
 
         if (plugin.getCustomToolListener() != null) {
-            ItemStack advanced = createCustomToolPreview(CustomToolListener.ADVANCED_PICKAXE_ID);
+            ItemStack advanced = createCustomToolPreview(player, CustomToolListener.ADVANCED_PICKAXE_ID);
             tagMenuLegendaryId(advanced, CustomToolListener.ADVANCED_PICKAXE_ID);
             inv.setItem(38, advanced);
 
-            ItemStack amethyst = createCustomToolPreview(CustomToolListener.AMETHYST_PICKAXE_ID);
+            ItemStack amethyst = createCustomToolPreview(player, CustomToolListener.AMETHYST_PICKAXE_ID);
             tagMenuLegendaryId(amethyst, CustomToolListener.AMETHYST_PICKAXE_ID);
             inv.setItem(40, amethyst);
         }
@@ -651,6 +672,7 @@ public final class LegendaryListener implements Listener {
             case "wither", "witherblade", "wither_sword" -> "wither_blade";
             case "lifestealer", "life_stealer", "life", "stealer", "bloodsword" -> "life_stealer";
             case "thor", "hammer", "thors", "mjolnir", "thors_hammer" -> "thors_hammer";
+            case "hardhitter", "hard_hitter", "hard hitter" -> "hard_hitter";
             default -> normalized;
         };
     }
@@ -1032,7 +1054,11 @@ public final class LegendaryListener implements Listener {
         Inventory inv = Bukkit.createInventory(
             new RecipeMenuHolder(type),
             27,
-            MM.deserialize(GUI_TITLE_PREFIX_RECIPE + type.display)
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + type.display),
+                "Recipe: " + PLAIN.serialize(MM.deserialize(type.display)).trim()
+            )
         );
 
         ItemStack filler = createGuiItem(Material.GRAY_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
@@ -1059,7 +1085,11 @@ public final class LegendaryListener implements Listener {
         Inventory inv = Bukkit.createInventory(
             new BackpackRecipeHolder(),
             27,
-            MM.deserialize(GUI_TITLE_PREFIX_RECIPE + "<gold><bold>Backpack</bold></gold>")
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + "<gold><bold>Backpack</bold></gold>"),
+                "Recipe: Backpack"
+            )
         );
 
         ItemStack filler = createGuiItem(Material.GRAY_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
@@ -1107,7 +1137,11 @@ public final class LegendaryListener implements Listener {
         Inventory inv = Bukkit.createInventory(
             new CustomToolRecipeHolder(toolId),
             27,
-            MM.deserialize(GUI_TITLE_PREFIX_RECIPE + "<aqua><bold>" + displayName + "</bold></aqua>")
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + "<aqua><bold>" + displayName + "</bold></aqua>"),
+                "Recipe: " + displayName
+            )
         );
 
         ItemStack filler = createGuiItem(Material.GRAY_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
@@ -1135,19 +1169,19 @@ public final class LegendaryListener implements Listener {
         player.openInventory(inv);
     }
 
-    private ItemStack createPreviewItem(LegendaryType type) {
+    private ItemStack createPreviewItem(Player player, LegendaryType type) {
         ItemStack item = createDisplayLegendaryItem(type, true);
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return item;
 
         List<Component> lore = meta.lore() == null ? new ArrayList<>() : new ArrayList<>(meta.lore());
-        lore.add(MM.deserialize("<dark_gray>Click to view recipe</dark_gray>"));
+        lore.add(MM.deserialize("<dark_gray>" + BedrockCompat.menuActionWord(player) + " to view recipe</dark_gray>"));
         meta.lore(lore);
         item.setItemMeta(meta);
         return item;
     }
 
-    private ItemStack createCustomToolPreview(String toolId) {
+    private ItemStack createCustomToolPreview(Player player, String toolId) {
         if (plugin.getCustomToolListener() == null) {
             return createGuiItem(Material.BARRIER, "<red>Unavailable</red>", List.of());
         }
@@ -1157,7 +1191,7 @@ public final class LegendaryListener implements Listener {
         if (meta == null) return item;
 
         List<Component> lore = meta.lore() == null ? new ArrayList<>() : new ArrayList<>(meta.lore());
-        lore.add(MM.deserialize("<dark_gray>Click to view recipe</dark_gray>"));
+        lore.add(MM.deserialize("<dark_gray>" + BedrockCompat.menuActionWord(player) + " to view recipe</dark_gray>"));
         meta.lore(lore);
         item.setItemMeta(meta);
         return item;
@@ -1215,7 +1249,7 @@ public final class LegendaryListener implements Listener {
         lore.add(canCraft
             ? "<green>You have the required materials.</green>"
             : "<red>You are missing some required materials.</red>");
-        lore.add("<gray>Click for altar status and coordinates.</gray>");
+        lore.add("<gray>" + BedrockCompat.menuActionWord(player) + " for altar status and coordinates.</gray>");
         lore.add("<dark_gray> ");
         lore.addAll(recipeProgressLines(player, type.id));
         return createGuiItem(
@@ -1229,7 +1263,7 @@ public final class LegendaryListener implements Listener {
         List<String> lore = new ArrayList<>();
         lore.add("<gray>Trade the required materials from your inventory.</gray>");
         lore.add(canTrade
-            ? "<green>Click to receive " + displayName + "<green>.</green>"
+            ? "<green>" + BedrockCompat.menuActionWord(player) + " to receive " + displayName + "<green>.</green>"
             : "<red>You do not have all required materials.</red>");
         lore.add("<dark_gray> ");
         for (Map.Entry<Material, Integer> entry : ingredients.entrySet()) {
@@ -3712,6 +3746,23 @@ public final class LegendaryListener implements Listener {
                     "<gray>Does not bypass armor or Totems.</gray>"
                 )
             ));
+            case HARD_HITTER -> {
+                setEnchantLevel(meta, enchantDensity, 5);
+                setEnchantLevel(meta, enchantBreach, 4);
+                setEnchantLevel(meta, enchantWindBurst, 1);
+                meta.lore(buildLegendaryLore(
+                    meta,
+                    Material.MACE,
+                    "MACE",
+                    List.of("<gray>Unbreakable</gray>"),
+                    CustomLoreUtil.section(
+                        "Item Ability",
+                        "Heavy Impact",
+                        "<gray>Comes preloaded with <white>Density V</white>, <white>Breach IV</white>, and <white>Wind Burst I</white>.</gray>",
+                        "<gray>No extra plugin effect is added on top of the mace enchantments.</gray>"
+                    )
+                ));
+            }
         }
     }
 
@@ -3781,7 +3832,7 @@ public final class LegendaryListener implements Listener {
     private List<LegendaryRecipe> buildRecipes() {
         return List.of(
             new LegendaryRecipe(LegendaryType.ENDER_SWORD, ingredients(
-                e(Material.BONE, 8), e(Material.DIAMOND_SWORD, 1))),
+                e(Material.BONE, 8), e(Material.DRAGON_EGG, 1), e(Material.DIAMOND_SWORD, 1))),
             new LegendaryRecipe(LegendaryType.ENDERBOW, ingredients(
                 e(Material.BOW, 1), e(Material.ENDER_EYE, 24), e(Material.ENDER_PEARL, 12), e(Material.DIAMOND, 1))),
             new LegendaryRecipe(LegendaryType.CHRONO_SWORD, ingredients(
@@ -3808,7 +3859,9 @@ public final class LegendaryListener implements Listener {
             new LegendaryRecipe(LegendaryType.LIFE_STEALER, ingredients(
                 e(Material.NETHERITE_SWORD, 1), e(Material.GHAST_TEAR, 12), e(Material.FERMENTED_SPIDER_EYE, 8), e(Material.REDSTONE_BLOCK, 8), e(Material.GOLDEN_APPLE, 4))),
             new LegendaryRecipe(LegendaryType.THORS_HAMMER, ingredients(
-                e(Material.MACE, 1), e(Material.LIGHTNING_ROD, 12), e(Material.NETHERITE_INGOT, 2), e(Material.WIND_CHARGE, 12)))
+                e(Material.MACE, 1), e(Material.LIGHTNING_ROD, 12), e(Material.NETHERITE_INGOT, 2), e(Material.WIND_CHARGE, 12))),
+            new LegendaryRecipe(LegendaryType.HARD_HITTER, ingredients(
+                e(Material.BREEZE_ROD, 1), e(Material.HEAVY_CORE, 1), e(Material.IRON_INGOT, 3), e(Material.DIAMOND, 32)))
         );
     }
 
@@ -3856,6 +3909,26 @@ public final class LegendaryListener implements Listener {
             if (isLegendaryIngredient(item)) return true;
         }
         return false;
+    }
+
+    private boolean isReadOnlyLegendaryMenu(Inventory inventory) {
+        return inventory.getHolder() instanceof RecipeMenuHolder
+            || inventory.getHolder() instanceof BackpackRecipeHolder
+            || inventory.getHolder() instanceof CustomToolRecipeHolder;
+    }
+
+    private boolean isUnsafeReadOnlyMenuAction(InventoryClickEvent event) {
+        if (event.isShiftClick()) {
+            return true;
+        }
+        return switch (event.getClick()) {
+            case NUMBER_KEY, SWAP_OFFHAND, DOUBLE_CLICK, DROP, CONTROL_DROP, CREATIVE, UNKNOWN -> true;
+            default -> switch (event.getAction()) {
+                case MOVE_TO_OTHER_INVENTORY, HOTBAR_SWAP, HOTBAR_MOVE_AND_READD, COLLECT_TO_CURSOR,
+                    CLONE_STACK, DROP_ALL_CURSOR, DROP_ALL_SLOT, DROP_ONE_CURSOR, DROP_ONE_SLOT -> true;
+                default -> false;
+            };
+        };
     }
 
     private boolean isLegendaryIngredient(ItemStack item) {
@@ -3987,7 +4060,8 @@ public final class LegendaryListener implements Listener {
         HERMES_BOOTS("hermes_boots", Material.LEATHER_BOOTS, "<gold><bold>Hermes Boots</bold></gold>"),
         WITHER_BLADE("wither_blade", Material.NETHERITE_SWORD, "<dark_gray><bold>Wither Blade</bold></dark_gray>"),
         LIFE_STEALER("life_stealer", Material.NETHERITE_SWORD, "<light_purple><bold>Life Stealer</bold></light_purple>"),
-        THORS_HAMMER("thors_hammer", Material.MACE, "<gold><bold>Thor's Hammer</bold></gold>");
+        THORS_HAMMER("thors_hammer", Material.MACE, "<gold><bold>Thor's Hammer</bold></gold>"),
+        HARD_HITTER("hard_hitter", Material.MACE, "<gold><bold>Hard Hitter</bold></gold>");
 
         private static final Map<String, LegendaryType> BY_ID = new HashMap<>();
         static {
