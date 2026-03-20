@@ -1,6 +1,7 @@
 package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
@@ -94,7 +95,11 @@ public final class CustomEnchantListener implements Listener {
     }
 
     public void openEnchantMenu(Player player) {
-        Inventory inventory = Bukkit.createInventory(new EnchantMenuHolder(), 9, ENCHANTS_MENU_TITLE);
+        Inventory inventory = Bukkit.createInventory(
+            new EnchantMenuHolder(),
+            9,
+            BedrockCompat.menuTitle(player, ENCHANTS_MENU_TITLE, "Custom Enchants")
+        );
         inventory.setItem(2, createMenuIcon(CustomEnchantEntry.REPLENISH));
         inventory.setItem(4, createMenuIcon(CustomEnchantEntry.DELICATE));
         inventory.setItem(6, createMenuIcon(CustomEnchantEntry.TELEKINESIS));

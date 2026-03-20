@@ -1,6 +1,7 @@
 package me.rique.smpcore.spawner;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -608,7 +609,7 @@ public final class SpawnerListener implements Listener {
         Inventory inv = plugin.getServer().createInventory(
             new SpawnerGuideHolder(),
             27,
-            MM.deserialize("<gold><bold>Spawner Modifiers</bold></gold>")
+            BedrockCompat.menuTitle(player, MM.deserialize("<gold><bold>Spawner Modifiers</bold></gold>"), "Spawner Modifiers")
         );
 
         ItemStack filler = createGuideItem(
