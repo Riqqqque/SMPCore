@@ -1,6 +1,7 @@
 package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
@@ -9,7 +10,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
-import org.bukkit.Tag;
+import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.enchantments.Enchantment;
@@ -28,7 +29,9 @@ import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.event.inventory.PrepareGrindstoneEvent;
 import org.bukkit.event.inventory.PrepareItemCraftEvent;
+import org.bukkit.event.player.PlayerFishEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.AnvilInventory;
 import org.bukkit.inventory.CraftingInventory;
 import org.bukkit.inventory.GrindstoneInventory;
@@ -39,8 +42,8 @@ import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.util.Vector;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashSet;
@@ -55,7 +58,9 @@ public final class CustomToolListener implements Listener {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
     public static final String ADVANCED_PICKAXE_ID = "advanced_pickaxe";
-    public static final String AMETHYST_PICKAXE_ID = "amethyst_pickaxe";
+    public static final String GRAPPLE_HOOK_ID = "grapple_hook";
+    private static final String LEGACY_AMETHYST_PICKAXE_ID = "amethyst_pickaxe";
+    private static final long GRAPPLE_HOOK_COOLDOWN_MS = 750L;
 
     private static final Set<Material> GOLD_ORES = EnumSet.of(Material.GOLD_ORE, Material.DEEPSLATE_GOLD_ORE, Material.NETHER_GOLD_ORE);
     private static final Set<Material> COAL_ORES = EnumSet.of(Material.COAL_ORE, Material.DEEPSLATE_COAL_ORE);
@@ -70,15 +75,17 @@ public final class CustomToolListener implements Listener {
     private final SMPCore plugin;
     private final NamespacedKey keyCustomToolId;
     private final NamespacedKey advancedPickaxeRecipeKey;
-    private final NamespacedKey amethystPickaxeRecipeKey;
-    private final Set<UUID> amethystAoePlayers = ConcurrentHashMap.newKeySet();
+    private final NamespacedKey grappleHookRecipeKey;
+    private final NamespacedKey advancedPickaxeItemModelKey;
     private final Map<BlockKey, AdvancedPickaxeContext> advancedPickaxeContexts = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> grappleHookCooldowns = new ConcurrentHashMap<>();
 
     public CustomToolListener(SMPCore plugin) {
         this.plugin = plugin;
         this.keyCustomToolId = new NamespacedKey(plugin, "custom_tool_id");
         this.advancedPickaxeRecipeKey = new NamespacedKey(plugin, "advanced_pickaxe_recipe");
-        this.amethystPickaxeRecipeKey = new NamespacedKey(plugin, "amethyst_pickaxe_recipe");
+        this.grappleHookRecipeKey = new NamespacedKey(plugin, "grapple_hook_recipe");
+        this.advancedPickaxeItemModelKey = new NamespacedKey(plugin, ADVANCED_PICKAXE_ID);
         registerRecipes();
 
         Bukkit.getScheduler().runTask(plugin, () -> {
@@ -103,14 +110,29 @@ public final class CustomToolListener implements Listener {
         return customToolId(item) != null;
     }
 
+    public boolean refreshCustomToolItem(ItemStack item) {
+        if (stripLegacyAmethystPickaxe(item)) {
+            return true;
+        }
+        if (customToolId(item) == null) {
+            return false;
+        }
+        refreshCustomToolPresentation(item);
+        return true;
+    }
+
     public boolean isCustomToolId(String id) {
-        return ADVANCED_PICKAXE_ID.equals(id) || AMETHYST_PICKAXE_ID.equals(id);
+        return ADVANCED_PICKAXE_ID.equals(id) || GRAPPLE_HOOK_ID.equals(id);
+    }
+
+    public List<String> craftableToolIds() {
+        return List.of(ADVANCED_PICKAXE_ID, GRAPPLE_HOOK_ID);
     }
 
     public String displayNameFor(String toolId) {
         return switch (toolId) {
             case ADVANCED_PICKAXE_ID -> "Advanced Pickaxe";
-            case AMETHYST_PICKAXE_ID -> "Amethyst Shard Pickaxe";
+            case GRAPPLE_HOOK_ID -> "Grapple Hook";
             default -> null;
         };
     }
@@ -122,20 +144,25 @@ public final class CustomToolListener implements Listener {
                 Material.DIAMOND, 2,
                 Material.STICK, 2
             );
-            case AMETHYST_PICKAXE_ID -> Map.of(
-                Material.NETHERITE_PICKAXE, 1,
-                Material.AMETHYST_SHARD, 8
+            case GRAPPLE_HOOK_ID -> Map.of(
+                Material.FISHING_ROD, 1,
+                Material.IRON_INGOT, 1,
+                Material.SLIME_BALL, 1
             );
             default -> Map.of();
         };
     }
 
-    public ItemStack createRecipePreview(String toolId) {
+    public ItemStack createCustomTool(String toolId) {
         return switch (toolId) {
             case ADVANCED_PICKAXE_ID -> createAdvancedPickaxe();
-            case AMETHYST_PICKAXE_ID -> createAmethystPickaxe(new ItemStack(Material.NETHERITE_PICKAXE));
+            case GRAPPLE_HOOK_ID -> createGrappleHook();
             default -> new ItemStack(Material.BARRIER);
         };
+    }
+
+    public ItemStack createRecipePreview(String toolId) {
+        return createCustomTool(toolId);
     }
 
     public ItemStack[] recipeMatrix(String toolId) {
@@ -150,16 +177,10 @@ public final class CustomToolListener implements Listener {
                 matrix[5] = new ItemStack(Material.DIAMOND);
                 matrix[7] = new ItemStack(Material.STICK);
             }
-            case AMETHYST_PICKAXE_ID -> {
-                matrix[0] = new ItemStack(Material.AMETHYST_SHARD);
-                matrix[1] = new ItemStack(Material.AMETHYST_SHARD);
-                matrix[2] = new ItemStack(Material.AMETHYST_SHARD);
-                matrix[3] = new ItemStack(Material.AMETHYST_SHARD);
-                matrix[4] = new ItemStack(Material.NETHERITE_PICKAXE);
-                matrix[5] = new ItemStack(Material.AMETHYST_SHARD);
-                matrix[6] = new ItemStack(Material.AMETHYST_SHARD);
-                matrix[7] = new ItemStack(Material.AMETHYST_SHARD);
-                matrix[8] = new ItemStack(Material.AMETHYST_SHARD);
+            case GRAPPLE_HOOK_ID -> {
+                matrix[1] = new ItemStack(Material.IRON_INGOT);
+                matrix[4] = new ItemStack(Material.FISHING_ROD);
+                matrix[7] = new ItemStack(Material.SLIME_BALL);
             }
             default -> {
                 return matrix;
@@ -181,6 +202,11 @@ public final class CustomToolListener implements Listener {
         refreshPlayerCustomTools(event.getPlayer());
     }
 
+    @EventHandler
+    public void onQuit(PlayerQuitEvent event) {
+        grappleHookCooldowns.remove(event.getPlayer().getUniqueId());
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onEnchantItem(EnchantItemEvent event) {
         if (customToolId(event.getItem()) == null) {
@@ -196,21 +222,7 @@ public final class CustomToolListener implements Listener {
 
         if (advancedPickaxeRecipeKey.equals(keyed.getKey())) {
             event.getInventory().setResult(plugin.getConfigManager().advancedPickaxeEnabled ? createAdvancedPickaxe() : null);
-            return;
         }
-
-        if (!amethystPickaxeRecipeKey.equals(keyed.getKey())) return;
-        if (!plugin.getConfigManager().amethystPickaxeEnabled) {
-            event.getInventory().setResult(null);
-            return;
-        }
-
-        ItemStack base = event.getInventory().getMatrix()[4];
-        if (!isPlainVanillaItem(base, Material.NETHERITE_PICKAXE)) {
-            event.getInventory().setResult(null);
-            return;
-        }
-        event.getInventory().setResult(createAmethystPickaxe(base));
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -220,18 +232,6 @@ public final class CustomToolListener implements Listener {
         if (!(recipe instanceof org.bukkit.Keyed keyed)) return;
 
         if (advancedPickaxeRecipeKey.equals(keyed.getKey()) && !plugin.getConfigManager().advancedPickaxeEnabled) {
-            event.setCancelled(true);
-            return;
-        }
-
-        if (!amethystPickaxeRecipeKey.equals(keyed.getKey())) return;
-        if (!plugin.getConfigManager().amethystPickaxeEnabled) {
-            event.setCancelled(true);
-            return;
-        }
-
-        ItemStack base = crafting.getMatrix()[4];
-        if (!isPlainVanillaItem(base, Material.NETHERITE_PICKAXE)) {
             event.setCancelled(true);
         }
     }
@@ -280,29 +280,6 @@ public final class CustomToolListener implements Listener {
         event.setResult(preserveCustomToolResult(source, result, toolId));
     }
 
-    @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
-    public void onAmethystPickaxeBreak(BlockBreakEvent event) {
-        if (!plugin.getConfigManager().amethystPickaxeEnabled) return;
-
-        Player player = event.getPlayer();
-        ItemStack tool = player.getInventory().getItemInMainHand();
-        if (!AMETHYST_PICKAXE_ID.equals(customToolId(tool))) return;
-        if (!amethystAoePlayers.add(player.getUniqueId())) return;
-
-        try {
-            for (Block target : amethystTargets(player, event.getBlock())) {
-                if (target == null || target.equals(event.getBlock())) continue;
-                if (target.getType().isAir()) continue;
-                if (plugin.getVeinMinerListener() != null) {
-                    plugin.getVeinMinerListener().suppressNextBreak(target.getLocation());
-                }
-                player.breakBlock(target);
-            }
-        } finally {
-            amethystAoePlayers.remove(player.getUniqueId());
-        }
-    }
-
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onAdvancedPickaxeBreak(BlockBreakEvent event) {
         if (!plugin.getConfigManager().advancedPickaxeEnabled) return;
@@ -314,21 +291,21 @@ public final class CustomToolListener implements Listener {
 
         ItemStack tool = player.getInventory().getItemInMainHand();
         if (!ADVANCED_PICKAXE_ID.equals(customToolId(tool))) return;
-
-        Material bonusType = bonusDropMaterial(event.getBlock().getType());
-        if (bonusType == null) return;
+        if (!isAdvancedPickaxeLuckySource(event.getBlock().getType())) return;
         if (plugin.getConfigManager().advancedPickaxeDisableBonusWithSilkTouch
             && tool.getEnchantmentLevel(Enchantment.SILK_TOUCH) > 0) {
             return;
         }
-        if (!rollBonus(event.getBlock().getType())) return;
+        ItemStack bonusDrop = rollAdvancedPickaxeLuckyBonus(event.getBlock().getType());
+        if (bonusDrop == null) return;
 
         rememberAdvancedPickaxeContext(
             event.getBlock().getLocation(),
             new AdvancedPickaxeContext(
                 player.getUniqueId(),
                 hasTelekinesis(tool),
-                new ItemStack(bonusType, 1),
+                hasSmeltingTouch(tool),
+                bonusDrop,
                 System.currentTimeMillis() + ADVANCED_PICKAXE_CONTEXT_TTL_MS
             )
         );
@@ -348,20 +325,65 @@ public final class CustomToolListener implements Listener {
             return;
         }
 
-        ItemStack bonus = context.bonusDrop().clone();
+        List<ItemStack> bonusDrops = List.of(context.bonusDrop().clone());
+        if (context.smeltingTouch() && plugin.getCustomEnchantListener() != null) {
+            bonusDrops = plugin.getCustomEnchantListener().smeltMiningDrops(context.bonusDrop());
+        }
+
         if (context.telekinesis() && plugin.getCustomEnchantListener() != null) {
-            plugin.getCustomEnchantListener().deliverTelekinesisDrops(player, List.of(bonus), event.getBlock().getLocation());
+            plugin.getCustomEnchantListener().deliverTelekinesisDrops(player, bonusDrops, event.getBlock().getLocation());
             return;
         }
 
         World world = event.getBlock().getWorld();
-        Item dropped = world.dropItemNaturally(event.getBlock().getLocation().add(0.5, 0.5, 0.5), bonus);
-        dropped.setPickupDelay(0);
+        for (ItemStack bonus : bonusDrops) {
+            Item dropped = world.dropItemNaturally(event.getBlock().getLocation().add(0.5, 0.5, 0.5), bonus);
+            dropped.setPickupDelay(0);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onGrappleHookUse(PlayerFishEvent event) {
+        Player player = event.getPlayer();
+        if (player.getGameMode() == org.bukkit.GameMode.SPECTATOR) {
+            return;
+        }
+        if (!GRAPPLE_HOOK_ID.equals(customToolId(player.getInventory().getItemInMainHand()))) {
+            return;
+        }
+
+        switch (event.getState()) {
+            case IN_GROUND, REEL_IN, CAUGHT_ENTITY -> {
+            }
+            default -> {
+                return;
+            }
+        }
+
+        long now = System.currentTimeMillis();
+        long readyAt = grappleHookCooldowns.getOrDefault(player.getUniqueId(), 0L);
+        if (readyAt > now) {
+            return;
+        }
+        grappleHookCooldowns.put(player.getUniqueId(), now + GRAPPLE_HOOK_COOLDOWN_MS);
+
+        Location hookLocation = event.getHook().getLocation();
+        Vector pull = hookLocation.toVector().subtract(player.getLocation().toVector());
+        double distance = pull.length();
+        if (distance < 1.25) {
+            return;
+        }
+
+        Vector velocity = pull.normalize().multiply(Math.min(1.85, 0.60 + (distance * 0.08)));
+        velocity.setY(Math.max(0.35, Math.min(1.05, velocity.getY() + 0.35)));
+        player.setFallDistance(0.0f);
+        player.setVelocity(velocity);
+        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_ENDER_PEARL_THROW, 0.7f, 1.25f);
     }
 
     private void registerRecipes() {
         Bukkit.removeRecipe(advancedPickaxeRecipeKey);
-        Bukkit.removeRecipe(amethystPickaxeRecipeKey);
+        Bukkit.removeRecipe(grappleHookRecipeKey);
 
         ShapedRecipe advanced = new ShapedRecipe(advancedPickaxeRecipeKey, createAdvancedPickaxe());
         advanced.shape("III", "DSD", " S ");
@@ -371,22 +393,28 @@ public final class CustomToolListener implements Listener {
         advanced.setGroup("smpcore_custom_tools");
         Bukkit.addRecipe(advanced);
 
-        ShapedRecipe amethyst = new ShapedRecipe(amethystPickaxeRecipeKey, createAmethystPickaxe(new ItemStack(Material.NETHERITE_PICKAXE)));
-        amethyst.shape("AAA", "APA", "AAA");
-        amethyst.setIngredient('A', Material.AMETHYST_SHARD);
-        amethyst.setIngredient('P', Material.NETHERITE_PICKAXE);
-        amethyst.setGroup("smpcore_custom_tools");
-        Bukkit.addRecipe(amethyst);
+        ShapedRecipe grappleHook = new ShapedRecipe(grappleHookRecipeKey, createGrappleHook());
+        grappleHook.shape(" I ", " R ", " S ");
+        grappleHook.setIngredient('I', Material.IRON_INGOT);
+        grappleHook.setIngredient('R', Material.FISHING_ROD);
+        grappleHook.setIngredient('S', Material.SLIME_BALL);
+        grappleHook.setGroup("smpcore_custom_tools");
+        Bukkit.addRecipe(grappleHook);
     }
 
     private void discoverRecipes(Player player) {
         player.discoverRecipe(advancedPickaxeRecipeKey);
-        player.discoverRecipe(amethystPickaxeRecipeKey);
+        player.discoverRecipe(grappleHookRecipeKey);
     }
 
     private boolean hasTelekinesis(ItemStack tool) {
         return plugin.getCustomEnchantListener() != null
             && plugin.getCustomEnchantListener().hasTelekinesisEnchant(tool);
+    }
+
+    private boolean hasSmeltingTouch(ItemStack tool) {
+        return plugin.getCustomEnchantListener() != null
+            && plugin.getCustomEnchantListener().hasSmeltingTouchEnchant(tool);
     }
 
     private ItemStack createAdvancedPickaxe() {
@@ -399,14 +427,12 @@ public final class CustomToolListener implements Listener {
         return item;
     }
 
-    private ItemStack createAmethystPickaxe(ItemStack base) {
-        ItemStack item = base == null || base.getType() == Material.AIR
-            ? new ItemStack(Material.NETHERITE_PICKAXE)
-            : base.clone();
+    private ItemStack createGrappleHook() {
+        ItemStack item = new ItemStack(Material.FISHING_ROD);
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return item;
-        applyCustomToolState(meta, AMETHYST_PICKAXE_ID);
-        applyCustomToolPresentation(meta, AMETHYST_PICKAXE_ID, item.getType());
+        applyCustomToolState(meta, GRAPPLE_HOOK_ID);
+        applyCustomToolPresentation(meta, GRAPPLE_HOOK_ID, item.getType());
         item.setItemMeta(meta);
         return item;
     }
@@ -418,6 +444,11 @@ public final class CustomToolListener implements Listener {
     }
 
     private String customToolId(ItemStack item) {
+        String rawId = rawCustomToolId(item);
+        return isCustomToolId(rawId) ? rawId : null;
+    }
+
+    private String rawCustomToolId(ItemStack item) {
         if (item == null || item.getType() == Material.AIR) return null;
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return null;
@@ -432,12 +463,20 @@ public final class CustomToolListener implements Listener {
         if (sourceMeta == null || resultMeta == null) return updated;
 
         applyCustomToolState(resultMeta, toolId);
+        AwakeningTableListener awakening = plugin.getAwakeningTableListener();
+        if (awakening != null) {
+            awakening.copyAwakeningState(sourceMeta, resultMeta);
+        }
         applyCustomToolPresentation(resultMeta, toolId, updated.getType());
         updated.setItemMeta(resultMeta);
         return updated;
     }
 
     private void refreshCustomToolPresentation(ItemStack item) {
+        if (stripLegacyAmethystPickaxe(item)) {
+            return;
+        }
+
         String toolId = customToolId(item);
         if (toolId == null) {
             return;
@@ -454,6 +493,13 @@ public final class CustomToolListener implements Listener {
         ItemStack[] contents = player.getInventory().getContents();
         for (int slot = 0; slot < contents.length; slot++) {
             ItemStack item = contents[slot];
+            if (item == null || item.getType() == Material.AIR) {
+                continue;
+            }
+            if (stripLegacyAmethystPickaxe(item)) {
+                player.getInventory().setItem(slot, item);
+                continue;
+            }
             if (customToolId(item) == null) {
                 continue;
             }
@@ -463,93 +509,146 @@ public final class CustomToolListener implements Listener {
     }
 
     private void applyCustomToolPresentation(ItemMeta meta, String toolId, Material material) {
+        meta.setItemModel(null);
+        Component baseDisplayName = null;
         switch (toolId) {
             case ADVANCED_PICKAXE_ID -> {
-                meta.displayName(MM.deserialize("<aqua><bold>Advanced Pickaxe</bold></aqua>"));
+                meta.setItemModel(advancedPickaxeItemModelKey);
+                baseDisplayName = MM.deserialize("<aqua><bold>Advanced Pickaxe</bold></aqua>");
+                meta.displayName(baseDisplayName);
                 meta.lore(CustomLoreUtil.buildStyledLore(
                     meta,
                     material,
                     "CUSTOM",
                     "PICKAXE",
-                    List.of("<gray>Bonus ore drops while mining ores.</gray>"),
+                    List.of("<gray>Lucky mining can roll a random bonus ore.</gray>"),
                     List.of(CustomLoreUtil.section(
                         "Item Ability",
                         "Ore Excavation",
-                        "<gray>Coal and copper bonus drops are guaranteed.</gray>",
-                        "<gray>Diamond and emerald bonus drops are <white>10%</white>.</gray>",
-                        "<gray>Iron is <white>66.7%</white>, redstone and lapis <white>50%</white>, gold <white>33.3%</white>.</gray>",
-                        "<gray>Fortune still affects the normal drop.</gray>"
+                        "<gray>Mining an ore has a <white>" + formatPercent(plugin.getConfigManager().advancedPickaxeLuckyDropChance) + "</white> chance to roll a random different ore.</gray>",
+                        "<gray>Coal and copper are the most common lucky rolls.</gray>",
+                        "<gray>Diamond and emerald are the rarest lucky rolls.</gray>",
+                        "<gray>Fortune still affects the normal block drop.</gray>"
                     ))
                 ));
             }
-            case AMETHYST_PICKAXE_ID -> {
-                meta.displayName(MM.deserialize("<light_purple><bold>Amethyst Shard Pickaxe</bold></light_purple>"));
+            case GRAPPLE_HOOK_ID -> {
+                baseDisplayName = MM.deserialize("<gold><bold>Grapple Hook</bold></gold>");
+                meta.displayName(baseDisplayName);
                 meta.lore(CustomLoreUtil.buildStyledLore(
                     meta,
                     material,
                     "CUSTOM",
-                    "PICKAXE",
-                    List.of("<gray>Mines a <white>" + plugin.getConfigManager().amethystPickaxeStripWidth + "x1</white> strip.</gray>"),
+                    "HOOK",
+                    List.of("<gray>A reinforced rod built for quick movement.</gray>"),
                     List.of(CustomLoreUtil.section(
-                        "Item Ability",
-                        "Amethyst Line Break",
-                        "<gray>Breaks a forward-facing strip instead of a single block.</gray>",
-                        "<gray>Keeps normal pickaxe enchants and durability.</gray>"
+                        "Right Click",
+                        "Hook Pull",
+                        "<gray>Cast and reel it in to yank yourself toward the hook.</gray>",
+                        "<gray>Built with simple parts for easy early crafting.</gray>"
                     ))
                 ));
             }
             default -> {
             }
         }
+        if (plugin.getCustomEnchantListener() != null) {
+            plugin.getCustomEnchantListener().applyManagedEnchantLore(meta);
+        }
+        AwakeningTableListener awakening = plugin.getAwakeningTableListener();
+        if (awakening != null && baseDisplayName != null) {
+            awakening.applyManagedItemState(meta, material, baseDisplayName, false);
+        }
     }
 
-    private List<Block> amethystTargets(Player player, Block center) {
-        List<Block> blocks = new ArrayList<>();
-        blocks.add(center);
-
-        int span = Math.max(1, plugin.getConfigManager().amethystPickaxeStripWidth);
-        int radius = span / 2;
-        boolean eastWestFacing = switch (player.getFacing()) {
-            case EAST, WEST -> true;
-            default -> false;
-        };
-
-        for (int offset = -radius; offset <= radius; offset++) {
-            if (offset == 0) continue;
-            blocks.add(eastWestFacing
-                ? center.getRelative(0, 0, offset)
-                : center.getRelative(offset, 0, 0));
+    private boolean stripLegacyAmethystPickaxe(ItemStack item) {
+        if (!LEGACY_AMETHYST_PICKAXE_ID.equals(rawCustomToolId(item))) {
+            return false;
         }
-        return blocks;
+
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        pdc.remove(keyCustomToolId);
+        meta.setItemModel(null);
+        meta.displayName(null);
+        meta.lore(null);
+        meta.removeItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+        item.setItemMeta(meta);
+        return true;
     }
 
-    private Material bonusDropMaterial(Material broken) {
-        if (COAL_ORES.contains(broken)) return Material.COAL;
-        if (IRON_ORES.contains(broken)) return Material.RAW_IRON;
-        if (REDSTONE_ORES.contains(broken)) return Material.REDSTONE;
-        if (LAPIS_ORES.contains(broken)) return Material.LAPIS_LAZULI;
-        if (COPPER_ORES.contains(broken)) return Material.RAW_COPPER;
-        if (DIAMOND_ORES.contains(broken)) return Material.DIAMOND;
-        if (EMERALD_ORES.contains(broken)) return Material.EMERALD;
-        if (GOLD_ORES.contains(broken)) {
-            return broken == Material.NETHER_GOLD_ORE ? Material.GOLD_NUGGET : Material.RAW_GOLD;
+    private boolean isAdvancedPickaxeLuckySource(Material broken) {
+        return bonusFamilyOf(broken) != null
+            || broken == Material.NETHER_QUARTZ_ORE
+            || broken == Material.ANCIENT_DEBRIS;
+    }
+
+    private ItemStack rollAdvancedPickaxeLuckyBonus(Material broken) {
+        if (ThreadLocalRandom.current().nextDouble() >= plugin.getConfigManager().advancedPickaxeLuckyDropChance) {
+            return null;
         }
+
+        AdvancedPickaxeBonusFamily sourceFamily = bonusFamilyOf(broken);
+        double totalWeight = 0.0;
+        for (AdvancedPickaxeBonusFamily family : AdvancedPickaxeBonusFamily.values()) {
+            if (family == sourceFamily) continue;
+            totalWeight += bonusWeight(family);
+        }
+        if (totalWeight <= 0.0) {
+            return null;
+        }
+
+        double roll = ThreadLocalRandom.current().nextDouble(totalWeight);
+        AdvancedPickaxeBonusFamily fallback = null;
+        for (AdvancedPickaxeBonusFamily family : AdvancedPickaxeBonusFamily.values()) {
+            if (family == sourceFamily) continue;
+            double weight = bonusWeight(family);
+            if (weight <= 0.0) continue;
+            fallback = family;
+            roll -= weight;
+            if (roll <= 0.0) {
+                return new ItemStack(family.drop(), 1);
+            }
+        }
+
+        return fallback == null ? null : new ItemStack(fallback.drop(), 1);
+    }
+
+    private AdvancedPickaxeBonusFamily bonusFamilyOf(Material broken) {
+        if (COAL_ORES.contains(broken)) return AdvancedPickaxeBonusFamily.COAL;
+        if (IRON_ORES.contains(broken)) return AdvancedPickaxeBonusFamily.IRON;
+        if (REDSTONE_ORES.contains(broken)) return AdvancedPickaxeBonusFamily.REDSTONE;
+        if (LAPIS_ORES.contains(broken)) return AdvancedPickaxeBonusFamily.LAPIS;
+        if (COPPER_ORES.contains(broken)) return AdvancedPickaxeBonusFamily.COPPER;
+        if (DIAMOND_ORES.contains(broken)) return AdvancedPickaxeBonusFamily.DIAMOND;
+        if (EMERALD_ORES.contains(broken)) return AdvancedPickaxeBonusFamily.EMERALD;
+        if (GOLD_ORES.contains(broken)) return AdvancedPickaxeBonusFamily.GOLD;
         return null;
     }
 
-    private boolean rollBonus(Material broken) {
-        double chance = switch (broken) {
-            case COAL_ORE, DEEPSLATE_COAL_ORE -> plugin.getConfigManager().advancedPickaxeCoalChance;
-            case IRON_ORE, DEEPSLATE_IRON_ORE -> plugin.getConfigManager().advancedPickaxeIronChance;
-            case REDSTONE_ORE, DEEPSLATE_REDSTONE_ORE -> plugin.getConfigManager().advancedPickaxeRedstoneChance;
-            case LAPIS_ORE, DEEPSLATE_LAPIS_ORE -> plugin.getConfigManager().advancedPickaxeLapisChance;
-            case COPPER_ORE, DEEPSLATE_COPPER_ORE -> plugin.getConfigManager().advancedPickaxeCopperChance;
-            case DIAMOND_ORE, DEEPSLATE_DIAMOND_ORE -> plugin.getConfigManager().advancedPickaxeDiamondChance;
-            case EMERALD_ORE, DEEPSLATE_EMERALD_ORE -> plugin.getConfigManager().advancedPickaxeEmeraldChance;
-            case GOLD_ORE, DEEPSLATE_GOLD_ORE, NETHER_GOLD_ORE -> plugin.getConfigManager().advancedPickaxeGoldChance;
-            default -> 0.0;
+    private double bonusWeight(AdvancedPickaxeBonusFamily family) {
+        return switch (family) {
+            case COAL -> plugin.getConfigManager().advancedPickaxeCoalChance;
+            case IRON -> plugin.getConfigManager().advancedPickaxeIronChance;
+            case REDSTONE -> plugin.getConfigManager().advancedPickaxeRedstoneChance;
+            case LAPIS -> plugin.getConfigManager().advancedPickaxeLapisChance;
+            case COPPER -> plugin.getConfigManager().advancedPickaxeCopperChance;
+            case DIAMOND -> plugin.getConfigManager().advancedPickaxeDiamondChance;
+            case EMERALD -> plugin.getConfigManager().advancedPickaxeEmeraldChance;
+            case GOLD -> plugin.getConfigManager().advancedPickaxeGoldChance;
         };
-        return ThreadLocalRandom.current().nextDouble() < chance;
+    }
+
+    private String formatPercent(double chance) {
+        double percent = chance * 100.0;
+        if (Math.abs(percent - Math.rint(percent)) < 0.0001) {
+            return Math.round(percent) + "%";
+        }
+        return String.format(java.util.Locale.US, "%.1f%%", percent);
     }
 
     private void rememberAdvancedPickaxeContext(Location location, AdvancedPickaxeContext context) {
@@ -577,6 +676,26 @@ public final class CustomToolListener implements Listener {
     }
 
     private record BlockKey(UUID worldId, int x, int y, int z) {}
+    private enum AdvancedPickaxeBonusFamily {
+        COAL(Material.COAL),
+        IRON(Material.RAW_IRON),
+        REDSTONE(Material.REDSTONE),
+        LAPIS(Material.LAPIS_LAZULI),
+        COPPER(Material.RAW_COPPER),
+        DIAMOND(Material.DIAMOND),
+        EMERALD(Material.EMERALD),
+        GOLD(Material.RAW_GOLD);
 
-    private record AdvancedPickaxeContext(UUID playerId, boolean telekinesis, ItemStack bonusDrop, long expiresAt) {}
+        private final Material drop;
+
+        AdvancedPickaxeBonusFamily(Material drop) {
+            this.drop = drop;
+        }
+
+        private Material drop() {
+            return drop;
+        }
+    }
+
+    private record AdvancedPickaxeContext(UUID playerId, boolean telekinesis, boolean smeltingTouch, ItemStack bonusDrop, long expiresAt) {}
 }

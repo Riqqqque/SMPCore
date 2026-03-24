@@ -1,10 +1,16 @@
 name: SMPCore
 version: '${version}'
 main: me.rique.smpcore.SMPCore
-description: Core SMP plugin — spawners, TPA, homes, essentials
+description: Core SMP plugin — spawners, homes, essentials
 authors:
   - Rique
 api-version: '1.21.11'
+
+dependencies:
+  server:
+    floodgate:
+      load: BEFORE
+      required: false
 
 permissions:
   # ── Spawner ──────────────────────────────────────────────
@@ -14,14 +20,6 @@ permissions:
   smpcore.spawner.admin:
     description: Admin-level spawner commands
     default: op
-
-  # ── TPA ──────────────────────────────────────────────────
-  smpcore.tpa:
-    description: Use /tpa and /tpahere
-    default: true
-  smpcore.tpa.accept:
-    description: Use /tpaccept, /tpdeny, /tpacancel
-    default: true
 
   # ── Homes ─────────────────────────────────────────────────
   smpcore.home:
@@ -40,7 +38,7 @@ permissions:
     default: true
   smpcore.back:
     description: Use /back
-    default: true
+    default: op
   smpcore.spawn:
     description: Use /spawn
     default: true
@@ -51,7 +49,7 @@ permissions:
     description: Use /lrecipe or /lrecipes
     default: true
   smpcore.team:
-    description: Use /team commands
+    description: Use /team and /tvault commands
     default: true
   smpcore.waystone.use:
     description: Use waystones
@@ -61,6 +59,9 @@ permissions:
     default: true
   smpcore.enchants:
     description: Use /enchants
+    default: true
+  smpcore.awakening.use:
+    description: Use Awakening Tables
     default: true
   smpcore.veinminer.use:
     description: Use /veinminer and native vein mining
@@ -134,5 +135,17 @@ permissions:
     description: Use /replenishbook
     default: op
   smpcore.customenchant.admin:
-    description: Use /delicatebook and /telekinesisbook
+    description: Use /delicatebook, /telekinesisbook, /smeltingtouchbook, /wisebook, and /doublejumpbook
+    default: op
+  smpcore.customitem.admin:
+    description: Use /customitem give
+    default: op
+  smpcore.superpower.admin:
+    description: Use /powerinfo
+    default: true
+  smpcore.superpower.assign:
+    description: Use /setpower
+    default: op
+  smpcore.reward.admin:
+    description: Use /admin reward
     default: op

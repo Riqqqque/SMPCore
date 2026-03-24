@@ -5,18 +5,12 @@
 
 messages:
   prefix: "<dark_gray>[<gradient:#FF6B6B:#FFE66D>Server</gradient>]</dark_gray> "
-  join-first: "<gold><bold>* Welcome to the server, <white>{player}</white>! *</bold></gold> <gray>You are player number <yellow>{count}</yellow> to join!</gray>"
+  join-first: "<gold>Welcome, <white>{player}</white>!</gold>"
   join-return: "<aqua>> <white>{player}</white> has joined the server.</aqua>"
   quit: "<gray>< <white>{player}</white> has left the server.</gray>"
 
-tpa:
-  timeout: 120
-  cooldown: 30
-  teleport-delay: 3
-  move-cancels: true
-
 combat:
-  tag-seconds: 15
+  tag-seconds: 45
 
 homes:
   default-max: 1
@@ -31,6 +25,32 @@ world-rules:
 back:
   on-death: true
   on-teleport: true
+
+death-chest:
+  enabled: true
+  disable-in-player-combat: true
+  lifetime-minutes: 90
+  search-radius: 4
+  vertical-search-radius: 4
+  require-supporting-block: true
+  require-clear-above: true
+  allow-water-placement: false
+  large-chest-enabled: true
+  notify-when-no-space: true
+  drop-overflow-items: true
+  remove-when-empty: true
+  notify-chat: true
+  chest-name: "<gold><bold>{player}'s Death Chest</bold></gold>"
+  chat-message: "<yellow>Your death chest is at <white>{world} {x}, {y}, {z}</white> and expires in <white>{minutes} minutes</white>.</yellow>"
+  no-space-message: "<red>No space was found for a death chest, so your items dropped normally.</red>"
+  note:
+    enabled: true
+    drop-if-inventory-full: true
+    title: "<gold><bold>Death Chest</bold></gold>"
+    lore:
+      - "<gray>World: <white>{world}</white>"
+      - "<gray>Coords: <white>{x}, {y}, {z}</white>"
+      - "<gray>Expires in: <white>{minutes} minutes</white>"
 
 spawner:
   silk-touch-enabled: true
@@ -137,7 +157,7 @@ dragon-egg:
   check-interval: 10
 
 crafting:
-  golden-apple-surround-material: IRON_NUGGET
+  golden-apple-surround-material: GOLD_NUGGET
   block-netherite-armor-upgrade: true
 
 legendary-altar:
@@ -147,7 +167,7 @@ legendary-altar:
   nightly-chance: 0.05
   require-player-online: true
   activation-delay-seconds: 360
-  expiration-hours: 48
+  expiration-hours: 1
   min-distance-from-spawn: 256
   max-distance-from-spawn: 2500
   location-search-attempts: 96
@@ -157,7 +177,7 @@ legendary-altar:
 
 ender-sword:
   ender-bone-drop-count: 8
-  summon-cooldown-seconds: 300
+  summon-cooldown-seconds: 30
   killed-cooldown-seconds: 1800
   require-open-sky: true
   dragon:
@@ -167,18 +187,47 @@ ender-sword:
     vertical-speed: 0.75
     dismount-despawn-seconds: 10
 
+awakening-table:
+  enabled: true
+  loot-chance: 0.05
+  success-chance: 0.05
+  failure-durability-loss-fraction: 0.50
+  destroy-threshold: 0.15
+  weapon-damage-multiplier: 2.0
+  attack-speed-multiplier: 1.5
+  armor-multiplier: 2.0
+  armor-toughness-multiplier: 2.0
+  knockback-resistance-multiplier: 2.0
+  announce-success: true
+  repair-vanilla-on-success: true
+  hologram:
+    enabled: true
+    height: 1.9
+    view-range: 32.0
+
 thors-hammer:
   bonus-damage: 1.0
 
-custom-tools:
-  amethyst-pickaxe:
-    enabled: true
-    strip-width: 3
+custom-enchants:
+  wise:
+    level-bonus:
+      1: 0.15
+      2: 0.30
+      3: 0.40
+    crop-xp: 2
+  double-jump:
+    ancient-city-chest-chance: 0.23
+    vertical-boost: 0.82
+    forward-boost: 0.75
+    saturation-cost: 2.0
+    hunger-cost: 4
 
+custom-tools:
   advanced-pickaxe:
     enabled: true
     disable-bonus-with-silk-touch: true
-    bonus-chances:
+    lucky-drop-chance: 0.25
+    bonus-weights:
       coal: 1.0
       iron: 0.6667
       redstone: 0.5
@@ -187,3 +236,11 @@ custom-tools:
       copper: 1.0
       diamond: 0.1
       emerald: 0.1
+
+talisman-of-sustenance:
+  interval-seconds: 7
+  hunger-gain: 1
+  heal-hearts: 1.0
+
+reward-soul-lantern:
+  cooldown-seconds: 1800

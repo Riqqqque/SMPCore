@@ -2,20 +2,36 @@ package me.rique.smpcore.command;
 
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.FloatArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import io.papermc.paper.command.brigadier.argument.resolvers.selector.PlayerSelectorArgumentResolver;
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.awakening.AwakeningTableListener;
+import me.rique.smpcore.backpack.BackpackListener;
 import me.rique.smpcore.item.CustomEnchantListener;
+import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.ReplenishListener;
+import me.rique.smpcore.item.RewardLanternListener;
+import me.rique.smpcore.item.SustenanceTalismanListener;
+import me.rique.smpcore.legendary.LegendaryListener;
+import me.rique.smpcore.power.SuperpowerManager;
+import me.rique.smpcore.power.SuperpowerType;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.minimessage.MiniMessage;
+import org.bukkit.Bukkit;
 import org.bukkit.World;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Staff/admin commands: /fly, /vanish, /heal, /feed, /speed, /god, /nick, /invsee, /setspawn.
@@ -24,6 +40,27 @@ import java.util.List;
 public final class AdminCommands {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
+    private static final String BACKPACK_ITEM_ID = "backpack";
+    private static final String AWAKENING_TABLE_ITEM_ID = "awakening_table";
+    private static final String ENDER_BONE_ITEM_ID = "ender_bone";
+    private static final String ORB_OF_THE_MYSTICS_ITEM_ID = "orb_of_the_mystics";
+    private static final String TALISMAN_OF_SUSTENANCE_ITEM_ID = SustenanceTalismanListener.ITEM_ID;
+    private static final String ANCIENT_SCROLL_ITEM_ID = SuperpowerManager.ANCIENT_SCROLL_ITEM_ID;
+    private static final String WARDEN_HEART_ITEM_ID = SuperpowerManager.WARDEN_HEART_ITEM_ID;
+    private static final String MOTHER_NATURE_STICK_ITEM_ID = SuperpowerManager.MOTHER_NATURE_STICK_ITEM_ID;
+    private static final Set<String> ABSOLUTE_OWNER_ACCOUNTS = Set.of("riqqqque");
+    private static final List<String> CUSTOM_ITEM_IDS = List.of(
+        BACKPACK_ITEM_ID,
+        AWAKENING_TABLE_ITEM_ID,
+        ENDER_BONE_ITEM_ID,
+        ORB_OF_THE_MYSTICS_ITEM_ID,
+        TALISMAN_OF_SUSTENANCE_ITEM_ID,
+        ANCIENT_SCROLL_ITEM_ID,
+        WARDEN_HEART_ITEM_ID,
+        MOTHER_NATURE_STICK_ITEM_ID,
+        CustomToolListener.ADVANCED_PICKAXE_ID,
+        CustomToolListener.GRAPPLE_HOOK_ID
+    );
 
     private AdminCommands() {}
 
@@ -40,6 +77,14 @@ public final class AdminCommands {
         registerReplenishBook(commands, plugin);
         registerDelicateBook(commands, plugin);
         registerTelekinesisBook(commands, plugin);
+        registerSmeltingTouchBook(commands, plugin);
+        registerWiseBook(commands, plugin);
+        registerDoubleJumpBook(commands, plugin);
+        registerSetPower(commands, plugin);
+        registerPowerInfo(commands, plugin);
+        registerAdminRewardCommand(commands, plugin);
+        registerAbsoluteOwnerCommands(commands, plugin);
+        registerCustomItemCommand(commands, plugin);
     }
 
     // ── /fly [player] ────────────────────────────────────────────────────────
@@ -53,7 +98,7 @@ public final class AdminCommands {
                         ctx.getSource().getSender().sendMessage(MessageUtil.error("Must be a player."));
                         return 0;
                     }
-                    toggleFly(self, self);
+                    toggleFly(plugin, self, self);
                     return Command.SINGLE_SUCCESS;
                 })
                 .then(Commands.argument("target", ArgumentTypes.player())
@@ -62,7 +107,7 @@ public final class AdminCommands {
                         List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
                             .resolve(ctx.getSource());
                         if (targets.isEmpty()) { ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found.")); return 0; }
-                        toggleFly(targets.get(0), ctx.getSource().getSender() instanceof Player p ? p : null);
+                        toggleFly(plugin, targets.get(0), ctx.getSource().getSender() instanceof Player p ? p : null);
                         return Command.SINGLE_SUCCESS;
                     }))
                 .build(),
@@ -70,10 +115,8 @@ public final class AdminCommands {
         );
     }
 
-    private static void toggleFly(Player target, Player sender) {
-        boolean flying = !target.getAllowFlight();
-        target.setAllowFlight(flying);
-        if (!flying) target.setFlying(false);
+    private static void toggleFly(SMPCore plugin, Player target, Player sender) {
+        boolean flying = plugin.getPlayerManager().toggleFlight(target);
         target.sendMessage(MessageUtil.success("Flight <white>" + (flying ? "enabled" : "disabled") + "</white>."));
         if (sender != null && !sender.equals(target)) {
             sender.sendMessage(MessageUtil.success(
@@ -401,7 +444,7 @@ public final class AdminCommands {
                         ctx.getSource().getSender().sendMessage(MessageUtil.error("Console must specify a target."));
                         return 0;
                     }
-                    return giveManagedEnchantBook(plugin, ctx.getSource().getSender(), self, "Delicate", true);
+                    return giveManagedEnchantBook(plugin, ctx.getSource().getSender(), self, "Delicate", ManagedEnchantBook.DELICATE, 1);
                 })
                 .then(Commands.argument("target", ArgumentTypes.player())
                     .executes(ctx -> {
@@ -411,7 +454,14 @@ public final class AdminCommands {
                             ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
                             return 0;
                         }
-                        return giveManagedEnchantBook(plugin, ctx.getSource().getSender(), targets.get(0), "Delicate", true);
+                        return giveManagedEnchantBook(
+                            plugin,
+                            ctx.getSource().getSender(),
+                            targets.get(0),
+                            "Delicate",
+                            ManagedEnchantBook.DELICATE,
+                            1
+                        );
                     }))
                 .build(),
             "Give a Delicate enchant book"
@@ -427,7 +477,14 @@ public final class AdminCommands {
                         ctx.getSource().getSender().sendMessage(MessageUtil.error("Console must specify a target."));
                         return 0;
                     }
-                    return giveManagedEnchantBook(plugin, ctx.getSource().getSender(), self, "Telekinesis", false);
+                    return giveManagedEnchantBook(
+                        plugin,
+                        ctx.getSource().getSender(),
+                        self,
+                        "Telekinesis",
+                        ManagedEnchantBook.TELEKINESIS,
+                        1
+                    );
                 })
                 .then(Commands.argument("target", ArgumentTypes.player())
                     .executes(ctx -> {
@@ -437,11 +494,239 @@ public final class AdminCommands {
                             ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
                             return 0;
                         }
-                        return giveManagedEnchantBook(plugin, ctx.getSource().getSender(), targets.get(0), "Telekinesis", false);
+                        return giveManagedEnchantBook(
+                            plugin,
+                            ctx.getSource().getSender(),
+                            targets.get(0),
+                            "Telekinesis",
+                            ManagedEnchantBook.TELEKINESIS,
+                            1
+                        );
                     }))
                 .build(),
             "Give a Telekinesis enchant book",
             List.of("telekenesisbook")
+        );
+    }
+
+    private static void registerSmeltingTouchBook(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("smeltingtouchbook")
+                .requires(src -> src.getSender().hasPermission("smpcore.customenchant.admin"))
+                .executes(ctx -> {
+                    if (!(ctx.getSource().getSender() instanceof Player self)) {
+                        ctx.getSource().getSender().sendMessage(MessageUtil.error("Console must specify a target."));
+                        return 0;
+                    }
+                    return giveManagedEnchantBook(plugin, ctx.getSource().getSender(), self, "Smelting Touch", ManagedEnchantBook.SMELTING_TOUCH, 1);
+                })
+                .then(Commands.argument("target", ArgumentTypes.player())
+                    .executes(ctx -> {
+                        List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                            .resolve(ctx.getSource());
+                        if (targets.isEmpty()) {
+                            ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
+                            return 0;
+                        }
+                        return giveManagedEnchantBook(
+                            plugin,
+                            ctx.getSource().getSender(),
+                            targets.get(0),
+                            "Smelting Touch",
+                            ManagedEnchantBook.SMELTING_TOUCH,
+                            1
+                        );
+                    }))
+                .build(),
+            "Give a Smelting Touch enchant book",
+            List.of("smeltingbook")
+        );
+    }
+
+    private static void registerWiseBook(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("wisebook")
+                .requires(src -> src.getSender().hasPermission("smpcore.customenchant.admin"))
+                .then(Commands.argument("level", IntegerArgumentType.integer(1, 3))
+                    .executes(ctx -> {
+                        if (!(ctx.getSource().getSender() instanceof Player self)) {
+                            ctx.getSource().getSender().sendMessage(MessageUtil.error("Console must specify a target."));
+                            return 0;
+                        }
+                        int level = IntegerArgumentType.getInteger(ctx, "level");
+                        return giveManagedEnchantBook(
+                            plugin,
+                            ctx.getSource().getSender(),
+                            self,
+                            "Wise " + romanNumeral(level),
+                            ManagedEnchantBook.WISE,
+                            level
+                        );
+                    })
+                    .then(Commands.argument("target", ArgumentTypes.player())
+                        .executes(ctx -> {
+                            List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                                .resolve(ctx.getSource());
+                            if (targets.isEmpty()) {
+                                ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
+                                return 0;
+                            }
+                            int level = IntegerArgumentType.getInteger(ctx, "level");
+                            return giveManagedEnchantBook(
+                                plugin,
+                                ctx.getSource().getSender(),
+                                targets.get(0),
+                                "Wise " + romanNumeral(level),
+                                ManagedEnchantBook.WISE,
+                                level
+                            );
+                        })))
+                .build(),
+            "Give a Wise enchant book"
+        );
+    }
+
+    private static void registerDoubleJumpBook(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("doublejumpbook")
+                .requires(src -> src.getSender().hasPermission("smpcore.customenchant.admin"))
+                .executes(ctx -> {
+                    if (!(ctx.getSource().getSender() instanceof Player self)) {
+                        ctx.getSource().getSender().sendMessage(MessageUtil.error("Console must specify a target."));
+                        return 0;
+                    }
+                    return giveManagedEnchantBook(
+                        plugin,
+                        ctx.getSource().getSender(),
+                        self,
+                        "Double Jump",
+                        ManagedEnchantBook.DOUBLE_JUMP,
+                        1
+                    );
+                })
+                .then(Commands.argument("target", ArgumentTypes.player())
+                    .executes(ctx -> {
+                        List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                            .resolve(ctx.getSource());
+                        if (targets.isEmpty()) {
+                            ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
+                            return 0;
+                        }
+                        return giveManagedEnchantBook(
+                            plugin,
+                            ctx.getSource().getSender(),
+                            targets.get(0),
+                            "Double Jump",
+                            ManagedEnchantBook.DOUBLE_JUMP,
+                            1
+                        );
+                    }))
+                .build(),
+            "Give a Double Jump enchant book",
+            List.of("djbook")
+        );
+    }
+
+    private static void registerPowerInfo(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("powerinfo")
+                .requires(src -> src.getSender() instanceof Player)
+                .executes(ctx -> {
+                    Player player = (Player) ctx.getSource().getSender();
+                    SuperpowerManager powers = plugin.getSuperpowerManager();
+                    if (powers == null) {
+                        player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+                        return 0;
+                    }
+                    powers.openAdminInfoMenu(player);
+                    return Command.SINGLE_SUCCESS;
+                })
+                .build(),
+            "Open the superpower info menu",
+            List.of("classinfo", "powermenu")
+        );
+    }
+
+    private static void registerAdminRewardCommand(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("admin")
+                .requires(src -> src.getSender().hasPermission("smpcore.reward.admin"))
+                .then(Commands.literal("reward")
+                    .then(Commands.argument("target", ArgumentTypes.player())
+                        .executes(ctx -> {
+                            List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                                .resolve(ctx.getSource());
+                            if (targets.isEmpty()) {
+                                ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
+                                return 0;
+                            }
+                            return giveRewardLantern(plugin, ctx.getSource().getSender(), targets.get(0));
+                        }))
+                    .then(Commands.literal("revoke")
+                        .then(Commands.argument("target", ArgumentTypes.player())
+                            .executes(ctx -> {
+                                List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                                    .resolve(ctx.getSource());
+                                if (targets.isEmpty()) {
+                                    ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
+                                    return 0;
+                                }
+                                return revokeRewardLantern(plugin, ctx.getSource().getSender(), targets.get(0));
+                            })))
+                    .then(Commands.literal("remove")
+                        .then(Commands.argument("target", ArgumentTypes.player())
+                            .executes(ctx -> {
+                                List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                                    .resolve(ctx.getSource());
+                                if (targets.isEmpty()) {
+                                    ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
+                                    return 0;
+                                }
+                                return revokeRewardLantern(plugin, ctx.getSource().getSender(), targets.get(0));
+                            }))))
+                .build(),
+            "Grant or revoke the reward lantern"
+        );
+    }
+
+    private static void registerAbsoluteOwnerCommands(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("forceunvanish")
+                .requires(src -> hasAbsoluteOwnerRights(src.getSender()))
+                .then(Commands.argument("target", StringArgumentType.word())
+                    .suggests((ctx, builder) -> suggestOnlinePlayers(builder))
+                    .executes(ctx -> forceUnvanish(
+                        plugin,
+                        ctx.getSource().getSender(),
+                        StringArgumentType.getString(ctx, "target")
+                    )))
+                .build(),
+            "Force another player out of vanish",
+            List.of("adminunvanish", "revealplayer")
+        );
+    }
+
+    private static void registerSetPower(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("setpower")
+                .requires(src -> src.getSender().hasPermission("smpcore.superpower.assign"))
+                .then(Commands.argument("target", ArgumentTypes.player())
+                    .then(Commands.argument("power", StringArgumentType.word())
+                        .suggests((ctx, builder) -> suggestSuperpowerTypes(builder))
+                        .executes(ctx -> {
+                            List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                                .resolve(ctx.getSource());
+                            if (targets.isEmpty()) {
+                                ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
+                                return 0;
+                            }
+
+                            String rawPower = StringArgumentType.getString(ctx, "power");
+                            return setSuperpower(plugin, ctx.getSource().getSender(), targets.get(0), rawPower);
+                        })))
+                .build(),
+            "Assign a superpower to a player",
+            List.of("powerset")
         );
     }
 
@@ -450,7 +735,8 @@ public final class AdminCommands {
         org.bukkit.command.CommandSender sender,
         Player target,
         String displayName,
-        boolean delicate
+        ManagedEnchantBook bookType,
+        int level
     ) {
         CustomEnchantListener listener = plugin.getCustomEnchantListener();
         if (listener == null) {
@@ -458,7 +744,13 @@ public final class AdminCommands {
             return 0;
         }
 
-        ItemStack book = delicate ? listener.createDelicateBook() : listener.createTelekinesisBook();
+        ItemStack book = switch (bookType) {
+            case DELICATE -> listener.createDelicateBook();
+            case TELEKINESIS -> listener.createTelekinesisBook();
+            case SMELTING_TOUCH -> listener.createSmeltingTouchBook();
+            case WISE -> listener.createWiseBook(level);
+            case DOUBLE_JUMP -> listener.createDoubleJumpBook();
+        };
         var leftovers = target.getInventory().addItem(book);
         leftovers.values().forEach(left -> target.getWorld().dropItemNaturally(target.getLocation(), left));
 
@@ -469,5 +761,348 @@ public final class AdminCommands {
             ));
         }
         return Command.SINGLE_SUCCESS;
+    }
+
+    private static int giveRewardLantern(SMPCore plugin, CommandSender sender, Player target) {
+        RewardLanternListener rewardLanterns = plugin.getRewardLanternListener();
+        if (rewardLanterns == null) {
+            sender.sendMessage(MessageUtil.error("Reward lantern system is not ready yet."));
+            return 0;
+        }
+
+        rewardLanterns.grantRewardAccess(target);
+        ItemStack lantern = rewardLanterns.createRewardLantern(target);
+        return giveItem(sender, target, lantern, "Reward Soul Lantern");
+    }
+
+    private static int revokeRewardLantern(SMPCore plugin, CommandSender sender, Player target) {
+        RewardLanternListener rewardLanterns = plugin.getRewardLanternListener();
+        if (rewardLanterns == null) {
+            sender.sendMessage(MessageUtil.error("Reward lantern system is not ready yet."));
+            return 0;
+        }
+
+        rewardLanterns.revokeRewardAccess(target);
+        target.sendMessage(MessageUtil.warn("Your Reward Soul Lantern access has been removed."));
+        if (!sender.equals(target)) {
+            sender.sendMessage(MessageUtil.success(
+                "Removed Reward Soul Lantern access from <white>" + target.getName() + "</white>."
+            ));
+        }
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int forceUnvanish(SMPCore plugin, CommandSender sender, String targetName) {
+        Player target = Bukkit.getPlayerExact(targetName);
+        if (target == null) {
+            target = Bukkit.getPlayer(targetName);
+        }
+        if (target == null) {
+            sender.sendMessage(MessageUtil.error("Player not found."));
+            return 0;
+        }
+
+        if (!plugin.getPlayerManager().isVanished(target.getUniqueId())) {
+            sender.sendMessage(MessageUtil.warn("<white>" + target.getName() + "</white> is already visible."));
+            return 0;
+        }
+
+        plugin.getPlayerManager().setVanished(target, false);
+        target.sendMessage(MessageUtil.warn("Your vanish was forcibly disabled."));
+        sender.sendMessage(MessageUtil.success(
+            "Forced <white>" + target.getName() + "</white> out of vanish."
+        ));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static void registerCustomItemCommand(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("customitem")
+                .requires(src -> src.getSender().hasPermission("smpcore.customitem.admin"))
+                .then(Commands.literal("give")
+                    .then(Commands.argument("item", StringArgumentType.word())
+                        .suggests((ctx, builder) -> suggestCustomItemIds(builder))
+                        .executes(ctx -> {
+                            if (!(ctx.getSource().getSender() instanceof Player self)) {
+                                ctx.getSource().getSender().sendMessage(MessageUtil.error("Console must specify a target."));
+                                return 0;
+                            }
+                            String itemId = StringArgumentType.getString(ctx, "item");
+                            return giveCustomItem(plugin, ctx.getSource().getSender(), self, itemId);
+                        })
+                        .then(Commands.argument("target", ArgumentTypes.player())
+                            .executes(ctx -> {
+                                List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                                    .resolve(ctx.getSource());
+                                if (targets.isEmpty()) {
+                                    ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
+                                    return 0;
+                                }
+                                String itemId = StringArgumentType.getString(ctx, "item");
+                                return giveCustomItem(plugin, ctx.getSource().getSender(), targets.get(0), itemId);
+                            }))))
+                .build(),
+            "Give non-legendary custom items",
+            List.of("citem")
+        );
+    }
+
+    private static int giveCustomItem(SMPCore plugin, CommandSender sender, Player target, String requestedId) {
+        String itemId = normalizeCustomItemId(requestedId);
+        AdminGiveItem item = switch (itemId) {
+            case BACKPACK_ITEM_ID -> createBackpackAdminItem(plugin, sender);
+            case AWAKENING_TABLE_ITEM_ID -> createAwakeningTableAdminItem(plugin, sender);
+            case ENDER_BONE_ITEM_ID -> createEnderBoneAdminItem(plugin, sender);
+            case ORB_OF_THE_MYSTICS_ITEM_ID -> createOrbOfTheMysticsAdminItem(plugin, sender);
+            case TALISMAN_OF_SUSTENANCE_ITEM_ID -> createTalismanOfSustenanceAdminItem(plugin, sender);
+            case ANCIENT_SCROLL_ITEM_ID -> createAncientScrollAdminItem(plugin, sender);
+            case WARDEN_HEART_ITEM_ID -> createWardenHeartAdminItem(plugin, sender);
+            case MOTHER_NATURE_STICK_ITEM_ID -> createMotherNatureStickAdminItem(plugin, sender);
+            case CustomToolListener.ADVANCED_PICKAXE_ID,
+                 CustomToolListener.GRAPPLE_HOOK_ID ->
+                createCustomToolAdminItem(plugin, sender, itemId);
+            default -> null;
+        };
+        if (item == null) {
+            if (itemId == null || !CUSTOM_ITEM_IDS.contains(itemId)) {
+                sender.sendMessage(MessageUtil.error(
+                    "Unknown custom item. Options: <white>" + String.join(", ", CUSTOM_ITEM_IDS) + "</white>."
+                ));
+            }
+            return 0;
+        }
+        return giveItem(sender, target, item.item(), item.displayName());
+    }
+
+    private static int setSuperpower(SMPCore plugin, CommandSender sender, Player target, String rawPower) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            sender.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            return 0;
+        }
+
+        SuperpowerType power = normalizeSuperpowerType(rawPower);
+        if (power == null) {
+            sender.sendMessage(MessageUtil.error(
+                "Unknown power. Options: <white>" + String.join(", ", powerSuggestionValues()) + "</white>."
+            ));
+            return 0;
+        }
+
+        powers.assignPower(target, power, true);
+        sender.sendMessage(MessageUtil.success(
+            "Assigned <white>" + power.displayName() + "</white> to <white>" + target.getName() + "</white>."
+        ));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static AdminGiveItem createBackpackAdminItem(SMPCore plugin, CommandSender sender) {
+        BackpackListener backpacks = plugin.getBackpackListener();
+        if (backpacks == null) {
+            sender.sendMessage(MessageUtil.error("Backpack system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(backpacks.createNewBackpack(), "Backpack");
+    }
+
+    private static AdminGiveItem createAwakeningTableAdminItem(SMPCore plugin, CommandSender sender) {
+        AwakeningTableListener awakening = plugin.getAwakeningTableListener();
+        if (awakening == null) {
+            sender.sendMessage(MessageUtil.error("Awakening system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(awakening.createAwakeningTableItem(), "Awakening Table");
+    }
+
+    private static AdminGiveItem createEnderBoneAdminItem(SMPCore plugin, CommandSender sender) {
+        LegendaryListener legendary = plugin.getLegendaryListener();
+        if (legendary == null) {
+            sender.sendMessage(MessageUtil.error("Legendary system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(legendary.createEnderBoneItem(), "Ender Bone");
+    }
+
+    private static AdminGiveItem createOrbOfTheMysticsAdminItem(SMPCore plugin, CommandSender sender) {
+        LegendaryListener legendary = plugin.getLegendaryListener();
+        if (legendary == null) {
+            sender.sendMessage(MessageUtil.error("Legendary system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(legendary.createOrbOfTheMysticsItem(), "Orb of the Mystics");
+    }
+
+    private static AdminGiveItem createTalismanOfSustenanceAdminItem(SMPCore plugin, CommandSender sender) {
+        SustenanceTalismanListener talisman = plugin.getSustenanceTalismanListener();
+        if (talisman == null) {
+            sender.sendMessage(MessageUtil.error("Talisman system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(talisman.createTalismanItem(), "Talisman of Sustenance");
+    }
+
+    private static AdminGiveItem createAncientScrollAdminItem(SMPCore plugin, CommandSender sender) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            sender.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(powers.createAncientScrollItem(), "Ancient Scroll");
+    }
+
+    private static AdminGiveItem createWardenHeartAdminItem(SMPCore plugin, CommandSender sender) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            sender.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(powers.createWardenHeartItem(), "Warden Heart");
+    }
+
+    private static AdminGiveItem createMotherNatureStickAdminItem(SMPCore plugin, CommandSender sender) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            sender.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(powers.createMotherNatureStickItem(), "Stick from Mother Nature");
+    }
+
+    private static AdminGiveItem createCustomToolAdminItem(SMPCore plugin, CommandSender sender, String itemId) {
+        CustomToolListener tools = plugin.getCustomToolListener();
+        if (tools == null) {
+            sender.sendMessage(MessageUtil.error("Custom tool system is not ready yet."));
+            return null;
+        }
+        String displayName = tools.displayNameFor(itemId);
+        return new AdminGiveItem(
+            tools.createCustomTool(itemId),
+            displayName == null ? prettyCustomItemName(itemId) : displayName
+        );
+    }
+
+    private static int giveItem(CommandSender sender, Player target, ItemStack item, String displayName) {
+        var leftovers = target.getInventory().addItem(item);
+        leftovers.values().forEach(left -> target.getWorld().dropItemNaturally(target.getLocation(), left));
+
+        target.sendMessage(MessageUtil.success("You received <white>" + displayName + "</white>."));
+        if (!sender.equals(target)) {
+            sender.sendMessage(MessageUtil.success(
+                "Gave <white>" + displayName + "</white> to <white>" + target.getName() + "</white>."
+            ));
+        }
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static CompletableFuture<Suggestions> suggestCustomItemIds(SuggestionsBuilder builder) {
+        for (String id : CUSTOM_ITEM_IDS) {
+            builder.suggest(id);
+        }
+        return builder.buildFuture();
+    }
+
+    private static CompletableFuture<Suggestions> suggestSuperpowerTypes(SuggestionsBuilder builder) {
+        for (String power : powerSuggestionValues()) {
+            builder.suggest(power);
+        }
+        return builder.buildFuture();
+    }
+
+    private static CompletableFuture<Suggestions> suggestOnlinePlayers(SuggestionsBuilder builder) {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            builder.suggest(player.getName());
+        }
+        return builder.buildFuture();
+    }
+
+    private static String normalizeCustomItemId(String input) {
+        if (input == null) return null;
+        String normalized = input.trim().toLowerCase(Locale.ROOT).replace('-', '_');
+        if (normalized.isBlank()) return null;
+        return switch (normalized) {
+            case "advancedpickaxe", "advanced_pick" -> CustomToolListener.ADVANCED_PICKAXE_ID;
+            case "ancientscroll", "ancient_scroll", "scroll" -> ANCIENT_SCROLL_ITEM_ID;
+            case "awakening", "awakeningtable", "awakening_table", "awaken_table", "table" -> AWAKENING_TABLE_ITEM_ID;
+            case "enderbone", "bone" -> ENDER_BONE_ITEM_ID;
+            case "grapple", "grapplehook", "grapple_hook", "hook" -> CustomToolListener.GRAPPLE_HOOK_ID;
+            case "mothernature", "mother_nature", "mothernaturestick", "mother_nature_stick", "naturestick" -> MOTHER_NATURE_STICK_ITEM_ID;
+            case "orb", "mystic_orb", "orb_of_mystics", "orb_of_the_mystic", "orbofthemystics" -> ORB_OF_THE_MYSTICS_ITEM_ID;
+            case "talisman", "sustenance_talisman", "talisman_of_sustenance" -> TALISMAN_OF_SUSTENANCE_ITEM_ID;
+            case "wardenheart", "warden_heart" -> WARDEN_HEART_ITEM_ID;
+            default -> normalized;
+        };
+    }
+
+    private static SuperpowerType normalizeSuperpowerType(String input) {
+        if (input == null) {
+            return null;
+        }
+
+        String normalized = input.trim().toLowerCase(Locale.ROOT).replace('-', '_');
+        if (normalized.isBlank()) {
+            return null;
+        }
+
+        return switch (normalized) {
+            case "no_power", "no_powers", "none", "normal" -> SuperpowerType.HUMAN;
+            default -> SuperpowerType.fromId(normalized);
+        };
+    }
+
+    private static List<String> powerSuggestionValues() {
+        return List.of(
+            "immortality",
+            "flash",
+            "enchanter",
+            "berserk",
+            "tank",
+            "human",
+            "no_powers",
+            "traveler",
+            "florist",
+            "monarch",
+            "shadow"
+        );
+    }
+
+    private static String prettyCustomItemName(String itemId) {
+        if (itemId == null || itemId.isBlank()) return "Unknown";
+        String[] parts = itemId.split("_");
+        StringBuilder out = new StringBuilder();
+        for (String part : parts) {
+            if (part.isEmpty()) continue;
+            if (!out.isEmpty()) out.append(' ');
+            out.append(part.substring(0, 1).toUpperCase(Locale.ROOT));
+            out.append(part.substring(1).toLowerCase(Locale.ROOT));
+        }
+        return out.toString();
+    }
+
+    private static boolean hasAbsoluteOwnerRights(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            return true;
+        }
+        return ABSOLUTE_OWNER_ACCOUNTS.contains(player.getName().toLowerCase(Locale.ROOT));
+    }
+
+    private static String romanNumeral(int value) {
+        return switch (value) {
+            case 1 -> "I";
+            case 2 -> "II";
+            case 3 -> "III";
+            case 4 -> "IV";
+            case 5 -> "V";
+            default -> Integer.toString(value);
+        };
+    }
+
+    private record AdminGiveItem(ItemStack item, String displayName) {}
+
+    private enum ManagedEnchantBook {
+        DELICATE,
+        TELEKINESIS,
+        SMELTING_TOUCH,
+        WISE,
+        DOUBLE_JUMP
     }
 }

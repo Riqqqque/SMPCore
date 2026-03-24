@@ -13,7 +13,6 @@ import java.util.UUID;
  */
 public final class BedrockCompat {
 
-    private static volatile boolean lookupAttempted;
     private static volatile Method floodgateGetInstance;
     private static volatile Method floodgateIsPlayer;
 
@@ -51,14 +50,13 @@ public final class BedrockCompat {
     }
 
     private static void ensureLookup() {
-        if (lookupAttempted) {
+        if (floodgateGetInstance != null && floodgateIsPlayer != null) {
             return;
         }
         synchronized (BedrockCompat.class) {
-            if (lookupAttempted) {
+            if (floodgateGetInstance != null && floodgateIsPlayer != null) {
                 return;
             }
-            lookupAttempted = true;
             if (!isFloodgatePresent()) {
                 return;
             }

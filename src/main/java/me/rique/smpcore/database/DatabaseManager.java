@@ -165,6 +165,12 @@ public final class DatabaseManager {
             ON team_members(player_uuid)
             """;
 
+        String teamVaults = """
+            CREATE TABLE IF NOT EXISTS team_vaults (
+                team_name TEXT PRIMARY KEY COLLATE NOCASE,
+                contents  BLOB NOT NULL
+            )""";
+
         String waystones = """
             CREATE TABLE IF NOT EXISTS waystones (
                 world       TEXT    NOT NULL,
@@ -218,6 +224,7 @@ public final class DatabaseManager {
             stmt.executeUpdate(teams);
             stmt.executeUpdate(teamMembers);
             stmt.executeUpdate(teamMembersByPlayer);
+            stmt.executeUpdate(teamVaults);
             stmt.executeUpdate(waystones);
             stmt.executeUpdate(waystoneNames);
             stmt.executeUpdate(waystoneKnown);
@@ -237,6 +244,7 @@ public final class DatabaseManager {
                 while (rs.next()) list.add(spawnerFromRs(rs));
             } catch (SQLException e) {
                 plugin.getLogger().severe("loadAllSpawners: " + e.getMessage());
+                throw new RuntimeException("loadAllSpawners failed", e);
             }
             return list;
         }, executor);
@@ -312,6 +320,7 @@ public final class DatabaseManager {
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe("loadHomes: " + e.getMessage());
+                throw new RuntimeException("loadHomes failed", e);
             }
             return list;
         }, executor);
@@ -383,6 +392,7 @@ public final class DatabaseManager {
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe("loadAllWaystones: " + e.getMessage());
+                throw new RuntimeException("loadAllWaystones failed", e);
             }
             return list;
         }, executor);
@@ -410,6 +420,7 @@ public final class DatabaseManager {
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe("getWaystoneByLocation: " + e.getMessage());
+                throw new RuntimeException("getWaystoneByLocation failed", e);
             }
             return Optional.empty();
         }, executor);
@@ -459,6 +470,7 @@ public final class DatabaseManager {
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe("loadKnownWaystoneKeys: " + e.getMessage());
+                throw new RuntimeException("loadKnownWaystoneKeys failed", e);
             }
             return keys;
         }, executor);
@@ -491,6 +503,7 @@ public final class DatabaseManager {
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe("loadKnownWaystones: " + e.getMessage());
+                throw new RuntimeException("loadKnownWaystones failed", e);
             }
             return list;
         }, executor);
@@ -580,6 +593,7 @@ public final class DatabaseManager {
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe("loadTeams: " + e.getMessage());
+                throw new RuntimeException("loadTeams failed", e);
             }
 
             return new ArrayList<>(byName.values());
@@ -609,9 +623,12 @@ public final class DatabaseManager {
             try (Connection conn = connection()) {
                 conn.setAutoCommit(false);
                 try (PreparedStatement psMembers = conn.prepareStatement("DELETE FROM team_members WHERE team_name=?");
+                     PreparedStatement psVault = conn.prepareStatement("DELETE FROM team_vaults WHERE team_name=?");
                      PreparedStatement psTeam = conn.prepareStatement("DELETE FROM teams WHERE name=?")) {
                     psMembers.setString(1, name);
                     psMembers.executeUpdate();
+                    psVault.setString(1, name);
+                    psVault.executeUpdate();
                     psTeam.setString(1, name);
                     psTeam.executeUpdate();
                     conn.commit();
@@ -676,6 +693,60 @@ public final class DatabaseManager {
 
     // ── Player Queries ────────────────────────────────────────────────────────
 
+    public CompletableFuture<byte[]> loadTeamVault(String teamName) {
+        return CompletableFuture.supplyAsync(() -> {
+            String sql = "SELECT contents FROM team_vaults WHERE team_name=?";
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, teamName);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        return new byte[0];
+                    }
+                    byte[] raw = rs.getBytes("contents");
+                    return raw == null ? new byte[0] : raw;
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadTeamVault: " + e.getMessage());
+                throw new RuntimeException("loadTeamVault failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Void> saveTeamVault(String teamName, byte[] contents) {
+        return CompletableFuture.runAsync(() -> {
+            String sql = """
+                INSERT INTO team_vaults (team_name, contents)
+                VALUES (?, ?)
+                ON CONFLICT(team_name) DO UPDATE SET
+                    contents = excluded.contents
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, teamName);
+                ps.setBytes(2, contents == null ? new byte[0] : contents);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("saveTeamVault: " + e.getMessage());
+                throw new RuntimeException("saveTeamVault failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Void> deleteTeamVault(String teamName) {
+        return CompletableFuture.runAsync(() -> {
+            String sql = "DELETE FROM team_vaults WHERE team_name=?";
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, teamName);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("deleteTeamVault: " + e.getMessage());
+                throw new RuntimeException("deleteTeamVault failed", e);
+            }
+        }, executor);
+    }
+
     public CompletableFuture<LegendaryAltarRecord> loadLegendaryAltar() {
         return CompletableFuture.supplyAsync(() -> {
             String sql = """
@@ -701,6 +772,7 @@ public final class DatabaseManager {
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe("loadLegendaryAltar: " + e.getMessage());
+                throw new RuntimeException("loadLegendaryAltar failed", e);
             }
             return LegendaryAltarRecord.empty();
         }, executor);

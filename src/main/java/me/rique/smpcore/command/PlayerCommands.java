@@ -1,10 +1,13 @@
 package me.rique.smpcore.command;
 
 import com.mojang.brigadier.Command;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import io.papermc.paper.command.brigadier.Commands;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.VeinMinerListener;
+import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
@@ -27,8 +30,12 @@ public final class PlayerCommands {
         registerHelp(commands);
         registerEnchants(commands, plugin);
         registerVeinMiner(commands, plugin);
+        registerTeamVault(commands, plugin);
         registerTop(commands, plugin);
         registerSuicide(commands, plugin);
+        registerShadow(commands, plugin);
+        registerTravel(commands, plugin);
+        registerMonarchSummon(commands, plugin);
         registerBack(commands, plugin);
         registerSpawn(commands, plugin);
     }
@@ -103,6 +110,21 @@ public final class PlayerCommands {
         );
     }
 
+    private static void registerTeamVault(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("tvault")
+                .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.team"))
+                .executes(ctx -> {
+                    Player player = (Player) ctx.getSource().getSender();
+                    plugin.getTeamManager().openTeamVault(player);
+                    return Command.SINGLE_SUCCESS;
+                })
+                .build(),
+            "Open your team vault",
+            List.of("teamvault")
+        );
+    }
+
     // /top — teleport above the highest block at current x,z
     private static void registerTop(Commands commands, SMPCore plugin) {
         commands.register(
@@ -133,11 +155,93 @@ public final class PlayerCommands {
                 .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.suicide"))
                 .executes(ctx -> {
                     Player player = (Player) ctx.getSource().getSender();
+                    SuperpowerManager powers = plugin.getSuperpowerManager();
+                    if (powers != null && powers.hasPower(player, me.rique.smpcore.power.SuperpowerType.IMMORTALITY)) {
+                        player.sendMessage(MessageUtil.warn("Nothing happens."));
+                        return 0;
+                    }
                     player.setHealth(0.0);
                     return Command.SINGLE_SUCCESS;
                 })
                 .build(),
             "Kill yourself"
+        );
+    }
+
+    private static void registerShadow(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("shadow")
+                .requires(src -> src.getSender() instanceof Player)
+                .executes(ctx -> toggleShadow(plugin, (Player) ctx.getSource().getSender()))
+                .then(Commands.literal("toggle")
+                    .executes(ctx -> toggleShadow(plugin, (Player) ctx.getSource().getSender())))
+                .build(),
+            "Toggle the Shadow power"
+        );
+    }
+
+    private static int toggleShadow(SMPCore plugin, Player player) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            return 0;
+        }
+        return powers.handleShadowCommand(player) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static void registerTravel(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("travel")
+                .requires(src -> src.getSender() instanceof Player)
+                .then(Commands.literal("close")
+                    .executes(ctx -> {
+                        Player player = (Player) ctx.getSource().getSender();
+                        SuperpowerManager powers = plugin.getSuperpowerManager();
+                        if (powers == null) {
+                            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+                            return 0;
+                        }
+                        return powers.handleTravelCloseCommand(player) ? Command.SINGLE_SUCCESS : 0;
+                    }))
+                .then(Commands.argument("x", IntegerArgumentType.integer())
+                    .then(Commands.argument("y", IntegerArgumentType.integer())
+                        .then(Commands.argument("z", IntegerArgumentType.integer())
+                            .then(Commands.argument("dimension", StringArgumentType.word())
+                                .executes(ctx -> {
+                                    Player player = (Player) ctx.getSource().getSender();
+                                    SuperpowerManager powers = plugin.getSuperpowerManager();
+                                    if (powers == null) {
+                                        player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+                                        return 0;
+                                    }
+                                    int x = IntegerArgumentType.getInteger(ctx, "x");
+                                    int y = IntegerArgumentType.getInteger(ctx, "y");
+                                    int z = IntegerArgumentType.getInteger(ctx, "z");
+                                    String dimension = StringArgumentType.getString(ctx, "dimension");
+                                    return powers.handleTravelCommand(player, x, y, z, dimension) ? Command.SINGLE_SUCCESS : 0;
+                                })))))
+                .build(),
+            "Open a Traveler portal"
+        );
+    }
+
+    private static void registerMonarchSummon(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("msummon")
+                .requires(src -> src.getSender() instanceof Player)
+                .then(Commands.argument("amount", IntegerArgumentType.integer(1, 15))
+                    .executes(ctx -> {
+                        Player player = (Player) ctx.getSource().getSender();
+                        SuperpowerManager powers = plugin.getSuperpowerManager();
+                        if (powers == null) {
+                            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+                            return 0;
+                        }
+                        int amount = IntegerArgumentType.getInteger(ctx, "amount");
+                        return powers.handleMonarchSummonCommand(player, amount) ? Command.SINGLE_SUCCESS : 0;
+                    }))
+                .build(),
+            "Summon stored Monarch mobs"
         );
     }
 
@@ -191,8 +295,7 @@ public final class PlayerCommands {
                     return Command.SINGLE_SUCCESS;
                 })
                 .build(),
-            "Teleport to the server spawn",
-            List.of("hub")
+            "Teleport to the server spawn"
         );
     }
 
@@ -229,9 +332,7 @@ public final class PlayerCommands {
         }
         if (player.hasPermission("smpcore.team")) {
             lines.add("<gray><white>/team</white> - Team management commands</gray>");
-        }
-        if (player.hasPermission("smpcore.tpa")) {
-            lines.add("<gray><white>/tpa</white>, <white>/tpahere</white>, <white>/tpaccept</white>, <white>/tpdeny</white>, <white>/tpacancel</white></gray>");
+            lines.add("<gray><white>/tvault</white> - Open your team vault</gray>");
         }
         if (player.hasPermission("smpcore.waystone.use")) {
             lines.add("<gray>Right-click a known waystone sign to open your teleport menu</gray>");
