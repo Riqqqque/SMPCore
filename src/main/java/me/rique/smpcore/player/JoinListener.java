@@ -68,7 +68,6 @@ public final class JoinListener implements Listener {
         event.quitMessage(MessageUtil.prefixedRaw(resolved));
 
         plugin.getPlayerManager().onDisconnect(player);
-        plugin.getTpaManager().onDisconnect(player.getUniqueId());
         plugin.getHomeManager().unload(player.getUniqueId());
         plugin.getWaystoneManager().unloadPlayer(player.getUniqueId());
     }

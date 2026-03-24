@@ -40,6 +40,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -65,6 +66,7 @@ public final class BackpackListener implements Listener {
     private final NamespacedKey backpackIdKey;
     private final NamespacedKey backpackDataKey;
     private final NamespacedKey backpackRecipeKey;
+    private final NamespacedKey backpackItemModelKey;
 
     private final Map<UUID, OpenBackpackSession> openBackpacks = new ConcurrentHashMap<>();
     private final Map<UUID, Long> warnCooldown = new ConcurrentHashMap<>();
@@ -75,6 +77,7 @@ public final class BackpackListener implements Listener {
         this.backpackIdKey = new NamespacedKey(plugin, "backpack_id");
         this.backpackDataKey = new NamespacedKey(plugin, "backpack_data");
         this.backpackRecipeKey = new NamespacedKey(plugin, "backpack_recipe");
+        this.backpackItemModelKey = new NamespacedKey(plugin, "backpack");
         Bukkit.removeRecipe(backpackRecipeKey);
         Bukkit.getScheduler().runTask(plugin, () -> Bukkit.getOnlinePlayers().forEach(this::migratePlayerBackpacks));
     }
@@ -114,7 +117,7 @@ public final class BackpackListener implements Listener {
         }
 
         int slot = hand == EquipmentSlot.HAND ? player.getInventory().getHeldItemSlot() : 40;
-        migrateBackpackSlot(player.getInventory(), slot);
+        migrateBackpackSlot(player, player.getInventory(), slot);
         openBackpack(player, slot);
     }
 
@@ -141,7 +144,7 @@ public final class BackpackListener implements Listener {
             && isBackpack(current)
             && event.isRightClick()) {
             event.setCancelled(true);
-            migrateBackpackSlot(player.getInventory(), event.getSlot());
+            migrateBackpackSlot(player, player.getInventory(), event.getSlot());
             openBackpack(player, event.getSlot());
         }
     }
@@ -272,7 +275,7 @@ public final class BackpackListener implements Listener {
 
     private void openBackpack(Player player, int sourceSlot) {
         if (openBackpacks.containsKey(player.getUniqueId())) return;
-        ItemStack source = migrateBackpackSlot(player.getInventory(), sourceSlot);
+        ItemStack source = migrateBackpackSlot(player, player.getInventory(), sourceSlot);
         if (!isBackpack(source)) return;
 
         ItemMeta sourceMeta = source.getItemMeta();
@@ -357,10 +360,14 @@ public final class BackpackListener implements Listener {
             return false;
         }
 
-        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(createBackpackItem());
+        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(createNewBackpack());
         leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
         player.sendMessage(MessageUtil.success("Traded materials for a <white>Backpack</white>."));
         return true;
+    }
+
+    public ItemStack createNewBackpack() {
+        return createBackpackItem();
     }
 
     private boolean hasBackpackId(ItemStack item, String expectedId) {
@@ -488,6 +495,7 @@ public final class BackpackListener implements Listener {
     }
 
     private void applyBackpackPresentation(ItemMeta meta) {
+        meta.setItemModel(backpackItemModelKey);
         meta.displayName(MM.deserialize("<gold><bold>Backpack</bold></gold>"));
         meta.lore(List.of(
             MM.deserialize("<dark_gray>Portable Storage</dark_gray>"),
@@ -497,55 +505,128 @@ public final class BackpackListener implements Listener {
     }
 
     private void migratePlayerBackpacks(Player player) {
-        migrateInventoryBackpacks(player.getInventory());
-        migrateInventoryBackpacks(player.getEnderChest());
+        BackpackMigrationResult migration = new BackpackMigrationResult();
+        migrateInventoryBackpacks(player, player.getInventory(), migration);
+        migrateInventoryBackpacks(player, player.getEnderChest(), migration);
+        notifyBackpackMigration(player, migration);
     }
 
-    private void migrateInventoryBackpacks(Inventory inventory) {
+    private void migrateInventoryBackpacks(Player player, Inventory inventory, BackpackMigrationResult migration) {
         ItemStack[] contents = inventory.getContents();
         for (int slot = 0; slot < contents.length; slot++) {
-            ItemStack normalized = normalizeBackpackItem(contents[slot]);
-            if (normalized != contents[slot]) {
-                inventory.setItem(slot, normalized);
+            if (isBackpack(contents[slot])) {
+                migrateBackpackSlot(player, inventory, slot, migration);
             }
         }
     }
 
-    private ItemStack migrateBackpackSlot(Inventory inventory, int slot) {
-        ItemStack normalized = normalizeBackpackItem(inventory.getItem(slot));
-        if (normalized != inventory.getItem(slot)) {
-            inventory.setItem(slot, normalized);
-        }
-        return normalized;
+    private ItemStack migrateBackpackSlot(Player player, Inventory inventory, int slot) {
+        BackpackMigrationResult migration = new BackpackMigrationResult();
+        migrateBackpackSlot(player, inventory, slot, migration);
+        notifyBackpackMigration(player, migration);
+        return inventory.getItem(slot);
     }
 
-    private ItemStack normalizeBackpackItem(ItemStack item) {
-        if (!isBackpack(item)) return item;
+    private void migrateBackpackSlot(Player player, Inventory inventory, int slot, BackpackMigrationResult migration) {
+        ItemStack item = inventory.getItem(slot);
+        if (!isBackpack(item)) return;
 
-        ItemStack normalized = item;
-        if (item.getType() != Material.CHEST_MINECART) {
-            normalized = new ItemStack(Material.CHEST_MINECART, item.getAmount());
+        List<ItemStack> normalized = expandBackpackItems(item, migration);
+        if (normalized.isEmpty()) {
+            inventory.setItem(slot, null);
+            return;
+        }
+
+        inventory.setItem(slot, normalized.get(0));
+        for (int i = 1; i < normalized.size(); i++) {
+            placeMigratedBackpack(player, inventory, normalized.get(i), migration);
+        }
+    }
+
+    private List<ItemStack> expandBackpackItems(ItemStack item, BackpackMigrationResult migration) {
+        if (!isBackpack(item)) {
+            return List.of();
         }
 
         ItemMeta sourceMeta = item.getItemMeta();
-        ItemMeta normalizedMeta = normalized.getItemMeta();
-        if (sourceMeta == null || normalizedMeta == null) return item;
+        if (sourceMeta == null) {
+            return List.of(item);
+        }
 
         PersistentDataContainer sourcePdc = sourceMeta.getPersistentDataContainer();
-        PersistentDataContainer normalizedPdc = normalizedMeta.getPersistentDataContainer();
-        normalizedPdc.set(backpackFlagKey, PersistentDataType.BYTE, (byte) 1);
+        byte[] storedData = sourcePdc.get(backpackDataKey, PersistentDataType.BYTE_ARRAY);
+        byte[] primaryData = storedData == null ? new byte[0] : storedData.clone();
+        int amount = Math.max(1, item.getAmount());
+        boolean stackedStoredBackpacks = amount > 1 && primaryData.length > 0;
+        if (stackedStoredBackpacks) {
+            migration.clearedDuplicateStorage = true;
+        }
 
         String backpackId = sourcePdc.get(backpackIdKey, PersistentDataType.STRING);
         if (backpackId == null || backpackId.isBlank()) {
             backpackId = UUID.randomUUID().toString();
         }
-        normalizedPdc.set(backpackIdKey, PersistentDataType.STRING, backpackId);
 
-        byte[] data = sourcePdc.get(backpackDataKey, PersistentDataType.BYTE_ARRAY);
-        normalizedPdc.set(backpackDataKey, PersistentDataType.BYTE_ARRAY, data == null ? new byte[0] : data);
-        applyBackpackPresentation(normalizedMeta);
-        normalized.setItemMeta(normalizedMeta);
+        List<ItemStack> normalized = new ArrayList<>(amount);
+        normalized.add(createNormalizedBackpack(backpackId, primaryData));
+        for (int i = 1; i < amount; i++) {
+            byte[] extraData = stackedStoredBackpacks ? new byte[0] : primaryData;
+            normalized.add(createNormalizedBackpack(UUID.randomUUID().toString(), extraData));
+        }
         return normalized;
+    }
+
+    private ItemStack createNormalizedBackpack(String backpackId, byte[] data) {
+        ItemStack normalized = new ItemStack(Material.CHEST_MINECART);
+        ItemMeta meta = normalized.getItemMeta();
+        if (meta == null) {
+            return normalized;
+        }
+
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        pdc.set(backpackFlagKey, PersistentDataType.BYTE, (byte) 1);
+        pdc.set(backpackIdKey, PersistentDataType.STRING, backpackId);
+        pdc.set(backpackDataKey, PersistentDataType.BYTE_ARRAY, data == null ? new byte[0] : data.clone());
+        applyBackpackPresentation(meta);
+        normalized.setItemMeta(meta);
+        return normalized;
+    }
+
+    private void placeMigratedBackpack(Player player, Inventory inventory, ItemStack backpack, BackpackMigrationResult migration) {
+        int emptySlot = inventory.firstEmpty();
+        if (emptySlot >= 0) {
+            inventory.setItem(emptySlot, backpack);
+            return;
+        }
+
+        if (inventory != player.getInventory()) {
+            Map<Integer, ItemStack> leftovers = player.getInventory().addItem(backpack);
+            if (leftovers.isEmpty()) {
+                return;
+            }
+            backpack = leftovers.values().iterator().next();
+        }
+
+        player.getWorld().dropItemNaturally(player.getLocation(), backpack);
+        migration.droppedOverflow = true;
+    }
+
+    private void notifyBackpackMigration(Player player, BackpackMigrationResult migration) {
+        if (migration.clearedDuplicateStorage) {
+            player.sendMessage(MessageUtil.warn(
+                "Stacked backpacks were split into separate items. Only one kept stored contents to prevent duplicated storage."
+            ));
+        }
+        if (migration.droppedOverflow) {
+            player.sendMessage(MessageUtil.warn(
+                "Some backpacks were dropped at your feet because there was not enough room to split the stack safely."
+            ));
+        }
+    }
+
+    private static final class BackpackMigrationResult {
+        private boolean clearedDuplicateStorage;
+        private boolean droppedOverflow;
     }
 
     private int countTradeMaterial(Player player, Material material) {

@@ -74,7 +74,8 @@ public final class HomeCommands {
             player.getLocation(),
             () -> player.sendMessage(MessageUtil.success(setSuccessMessage(name))),
             () -> player.sendMessage(MessageUtil.error(
-                "Home limit reached (<white>" + plugin.getHomeManager().maxHomes(player) + "</white>)."))
+                "Home limit reached (<white>" + plugin.getHomeManager().maxHomes(player) + "</white>).")),
+            () -> player.sendMessage(MessageUtil.error("Could not save home right now."))
         );
     }
 
@@ -90,7 +91,8 @@ public final class HomeCommands {
                             player,
                             name,
                             () -> player.sendMessage(MessageUtil.success(deleteSuccessMessage(name))),
-                            () -> player.sendMessage(MessageUtil.error(notFoundMessage(name)))
+                            () -> player.sendMessage(MessageUtil.error(notFoundMessage(name))),
+                            () -> player.sendMessage(MessageUtil.error("Could not delete home right now."))
                         );
                         return Command.SINGLE_SUCCESS;
                     }))

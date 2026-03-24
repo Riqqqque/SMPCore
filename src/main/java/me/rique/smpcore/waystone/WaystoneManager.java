@@ -277,16 +277,25 @@ public final class WaystoneManager {
             }
         }
 
-        canUseWaypoint(player.getUniqueId(), current.world(), current.x(), current.y(), current.z()).thenAccept(allowed ->
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                if (!player.isOnline()) return;
-                if (!allowed) {
-                    player.sendMessage(MessageUtil.error("You have not unlocked that waystone."));
-                    return;
-                }
-                teleport(player, current, topOfGlowstone);
-            })
-        );
+        canUseWaypoint(player.getUniqueId(), current.world(), current.x(), current.y(), current.z())
+            .thenAccept(allowed ->
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (!player.isOnline()) return;
+                    if (!allowed) {
+                        player.sendMessage(MessageUtil.error("You have not unlocked that waystone."));
+                        return;
+                    }
+                    teleport(player, current, topOfGlowstone);
+                })
+            )
+            .exceptionally(ex -> {
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (player.isOnline()) {
+                        player.sendMessage(MessageUtil.error("Waystones are unavailable right now. Try again in a moment."));
+                    }
+                });
+                return null;
+            });
     }
 
     private List<WaystoneEntry> filterValidWaystones(List<WaystoneEntry> waystones) {
@@ -501,8 +510,8 @@ public final class WaystoneManager {
 
     private boolean isStructureIntact(World world, WaystoneEntry entry) {
         Block middle = world.getBlockAt(entry.x(), entry.y(), entry.z());
-        if (middle.getType() != Material.NETHER_BRICK_FENCE) return false;
-        if (middle.getRelative(BlockFace.DOWN).getType() != Material.NETHER_BRICK_FENCE) return false;
+        if (middle.getType() != Material.STONE_BRICK_WALL) return false;
+        if (middle.getRelative(BlockFace.DOWN).getType() != Material.LODESTONE) return false;
         if (middle.getRelative(BlockFace.UP).getType() != Material.GLOWSTONE) return false;
         return hasNamedSign(middle);
     }

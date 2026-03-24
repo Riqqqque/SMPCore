@@ -211,6 +211,69 @@ public final class LegendaryAltarManager implements Listener {
         return AdminActionResult.success(state + displayName + " at " + altarCoordsString() + ".");
     }
 
+    public AdminActionResult summonFromMysticOrb(Player player) {
+        if (!loaded) {
+            return AdminActionResult.failure("Legendary altar data is still loading.");
+        }
+        if (!plugin.getConfigManager().legendaryAltarEnabled) {
+            return AdminActionResult.failure("Legendary altars are disabled right now.");
+        }
+        if (hasActiveAltar()) {
+            return AdminActionResult.failure("There is already an active altar: " + altarStatusSummary().message());
+        }
+
+        LegendaryListener legendary = plugin.getLegendaryListener();
+        if (legendary == null) {
+            return AdminActionResult.failure("Legendary items are not ready yet.");
+        }
+
+        World world = configuredWorld();
+        if (world == null) {
+            return AdminActionResult.failure("Configured altar world is not loaded.");
+        }
+
+        String legendaryId = pickLegendaryId();
+        if (legendaryId == null) {
+            return AdminActionResult.failure("No craftable legendary altar rewards are available.");
+        }
+
+        Location location = findSpawnLocation(world);
+        if (location == null) {
+            return AdminActionResult.failure("Could not find a safe altar location in " + world.getName() + ".");
+        }
+
+        long now = System.currentTimeMillis();
+        long currentDay = world.getFullTime() / 24000L;
+        long activatesAt = now + (plugin.getConfigManager().legendaryAltarActivationSeconds * 1000L);
+        altarRecord = new DatabaseManager.LegendaryAltarRecord(
+            legendaryId,
+            world.getName(),
+            location.getBlockX(),
+            location.getBlockY(),
+            location.getBlockZ(),
+            now,
+            activatesAt,
+            now + (plugin.getConfigManager().legendaryAltarExpirationHours * 3_600_000L),
+            Math.max(currentDay, altarRecord.lastRollDay())
+        );
+        activationAnnounced = false;
+        ensureStructureState();
+        refreshBossBar();
+        persistRecord();
+
+        String displayName = legendary.displayNameForLegendary(legendaryId);
+        Bukkit.broadcast(MessageUtil.prefixedRaw(
+            "<light_purple><white>" + player.getName() + "</white> used an Orb of the Mystics.</light_purple> "
+                + "<gold>A legendary altar is forming.</gold> <white>" + displayName + "</white> will awaken in <white>"
+                + plugin.getConfigManager().legendaryAltarActivationSeconds + "s</white>."
+        ));
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            online.playSound(online.getLocation(), Sound.BLOCK_RESPAWN_ANCHOR_SET_SPAWN, 1.0f, 0.8f);
+        }
+
+        return AdminActionResult.success("Summoned a dormant altar for " + displayName + " at " + altarCoordsString() + ".");
+    }
+
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         if (hasActiveAltar() && plugin.getConfigManager().legendaryAltarBossBarEnabled) {
@@ -732,7 +795,7 @@ public final class LegendaryAltarManager implements Listener {
         LegendaryListener legendary = plugin.getLegendaryListener();
         if (legendary == null) return null;
 
-        List<String> ids = legendary.legendaryIds();
+        List<String> ids = legendary.craftableLegendaryIds();
         if (ids.isEmpty()) return null;
         return ids.get(ThreadLocalRandom.current().nextInt(ids.size()));
     }

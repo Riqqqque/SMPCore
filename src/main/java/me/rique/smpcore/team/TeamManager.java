@@ -9,11 +9,20 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.scoreboard.Team;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -30,6 +39,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class TeamManager implements Listener {
 
     private static final long INVITE_DURATION_MS = 120_000L;
+    private static final int TEAM_VAULT_SIZE = 54;
     private static final String SCOREBOARD_TEAM_PREFIX = "smpct_";
     private static final String TEAMS_LOADING_MESSAGE = "Teams are still loading. Try again in a moment.";
 
@@ -38,11 +48,25 @@ public final class TeamManager implements Listener {
     private final Map<UUID, String> teamByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, InviteData> invitesByTarget = new ConcurrentHashMap<>();
     private final Map<String, String> scoreboardIdByTeamKey = new ConcurrentHashMap<>();
+    private final Map<String, TeamVaultSession> teamVaultsByKey = new ConcurrentHashMap<>();
+    private final Map<String, CompletableFuture<TeamVaultSession>> vaultLoadingByTeamKey = new ConcurrentHashMap<>();
     private volatile boolean teamsLoaded;
     private volatile boolean teamsLoading;
 
     public TeamManager(SMPCore plugin) {
         this.plugin = plugin;
+    }
+
+    public void loadFromDatabaseBlocking() {
+        if (teamsLoading) return;
+
+        teamsLoading = true;
+        teamsLoaded = false;
+        try {
+            finishTeamLoad(plugin.getDatabase().loadTeams().join(), null);
+        } catch (CompletionException ex) {
+            finishTeamLoad(List.of(), ex);
+        }
     }
 
     public void loadFromDatabase() {
@@ -109,6 +133,38 @@ public final class TeamManager implements Listener {
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         invitesByTarget.remove(event.getPlayer().getUniqueId());
+    }
+
+    @EventHandler
+    public void onInventoryClose(InventoryCloseEvent event) {
+        if (!(event.getView().getTopInventory().getHolder() instanceof TeamVaultHolder holder)) return;
+
+        TeamVaultSession session = teamVaultsByKey.get(holder.teamKey());
+        if (session == null || session.inventory() != event.getInventory()) return;
+
+        saveTeamVault(session).exceptionally(ex -> {
+            plugin.getLogger().severe("Failed to save team vault for " + session.displayName() + ": " + ex.getMessage());
+            return null;
+        });
+    }
+
+    public void shutdown() {
+        List<CompletableFuture<Void>> saves = new ArrayList<>();
+        for (TeamVaultSession session : teamVaultsByKey.values()) {
+            saves.add(saveTeamVault(session).exceptionally(ex -> {
+                plugin.getLogger().severe("Failed to save team vault for " + session.displayName() + ": " + ex.getMessage());
+                return null;
+            }));
+        }
+
+        try {
+            CompletableFuture.allOf(saves.toArray(CompletableFuture[]::new)).join();
+        } catch (CompletionException ex) {
+            plugin.getLogger().severe("Failed to flush team vaults during shutdown: " + ex.getMessage());
+        }
+
+        vaultLoadingByTeamKey.clear();
+        teamVaultsByKey.clear();
     }
 
     public CompletableFuture<String> createTeam(Player creator, String rawName) {
@@ -282,6 +338,7 @@ public final class TeamManager implements Listener {
                     applyTeamTag(player);
 
                     if (current.members.isEmpty()) {
+                        discardTeamVault(current.key);
                         teamsByKey.remove(current.key);
                         unregisterScoreboardTeam(current.key);
                         plugin.getDatabase().deleteTeam(current.displayName)
@@ -292,6 +349,8 @@ public final class TeamManager implements Listener {
                         invitesByTarget.entrySet().removeIf(entry -> entry.getValue().teamKey().equals(current.key));
                         return null;
                     }
+
+                    closeVaultIfViewing(player, current.key);
 
                     if (current.owner.equals(playerId)) {
                         UUID newOwner = current.members.stream().findFirst().orElse(null);
@@ -337,6 +396,7 @@ public final class TeamManager implements Listener {
                 if (error != null) return CompletableFuture.completedFuture(error);
 
                 return runOnMainThread(() -> {
+                    discardTeamVault(teamKey);
                     TeamData current = teamsByKey.remove(teamKey);
                     if (current == null) return null;
 
@@ -387,15 +447,51 @@ public final class TeamManager implements Listener {
         );
     }
 
+    public void openTeamVault(Player player) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) {
+            player.sendMessage(MessageUtil.error(unavailable));
+            return;
+        }
+
+        TeamData team = teamOf(player.getUniqueId());
+        if (team == null) {
+            player.sendMessage(MessageUtil.error("You are not in a team."));
+            return;
+        }
+
+        loadTeamVault(team).thenAccept(session ->
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) return;
+
+                TeamData current = teamOf(player.getUniqueId());
+                if (current == null || !current.key.equals(team.key)) {
+                    player.sendMessage(MessageUtil.error("You are not in that team anymore."));
+                    return;
+                }
+
+                player.openInventory(session.inventory());
+            })
+        ).exceptionally(ex -> {
+            plugin.getLogger().severe("Failed to open team vault for " + team.displayName + ": " + ex.getMessage());
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (player.isOnline()) {
+                    player.sendMessage(MessageUtil.error("Team vault is unavailable right now."));
+                }
+            });
+            return null;
+        });
+    }
+
     public boolean inTeam(UUID playerId) {
         if (!teamsLoaded) return false;
         return teamByPlayer.containsKey(playerId);
     }
 
     public boolean sameTeam(UUID firstPlayerId, UUID secondPlayerId) {
-        if (!teamsLoaded) return false;
         if (firstPlayerId == null || secondPlayerId == null) return false;
         if (firstPlayerId.equals(secondPlayerId)) return true;
+        if (!teamsLoaded) return false;
 
         String firstTeam = teamByPlayer.get(firstPlayerId);
         if (firstTeam == null) return false;
@@ -410,13 +506,84 @@ public final class TeamManager implements Listener {
             "<gray><white>/team accept</white> / <white>/team deny</white> - Handle invites</gray>",
             "<gray><white>/team leave</white> - Leave your team</gray>",
             "<gray><white>/team disband</white> - Disband your team (owner)</gray>",
-            "<gray><white>/team info</white> - View your team info</gray>"
+            "<gray><white>/team info</white> - View your team info</gray>",
+            "<gray><white>/tvault</white> (<white>/teamvault</white>) - Open your team storage</gray>"
         );
     }
 
     private TeamData teamOf(UUID playerId) {
         String teamKey = teamByPlayer.get(playerId);
         return teamKey == null ? null : teamsByKey.get(teamKey);
+    }
+
+    private CompletableFuture<TeamVaultSession> loadTeamVault(TeamData team) {
+        TeamVaultSession cached = teamVaultsByKey.get(team.key);
+        if (cached != null) {
+            return CompletableFuture.completedFuture(cached);
+        }
+
+        CompletableFuture<TeamVaultSession> inFlight = vaultLoadingByTeamKey.get(team.key);
+        if (inFlight != null) {
+            return inFlight;
+        }
+
+        CompletableFuture<TeamVaultSession> future = new CompletableFuture<>();
+        CompletableFuture<TeamVaultSession> existing = vaultLoadingByTeamKey.putIfAbsent(team.key, future);
+        if (existing != null) {
+            return existing;
+        }
+
+        plugin.getDatabase().loadTeamVault(team.displayName).whenComplete((raw, ex) -> {
+            if (!plugin.isEnabled()) {
+                vaultLoadingByTeamKey.remove(team.key, future);
+                future.completeExceptionally(new IllegalStateException("Plugin is disabled."));
+                return;
+            }
+
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                try {
+                    if (ex != null) {
+                        future.completeExceptionally(ex);
+                        return;
+                    }
+
+                    TeamData current = teamsByKey.get(team.key);
+                    if (current == null) {
+                        future.completeExceptionally(new IllegalStateException("Team no longer exists."));
+                        return;
+                    }
+
+                    TeamVaultSession loaded = teamVaultsByKey.computeIfAbsent(current.key, ignored ->
+                        new TeamVaultSession(
+                            current.key,
+                            current.displayName,
+                            createTeamVaultInventory(current.key, current.displayName, raw)
+                        )
+                    );
+                    future.complete(loaded);
+                } catch (Throwable t) {
+                    future.completeExceptionally(t);
+                } finally {
+                    vaultLoadingByTeamKey.remove(team.key, future);
+                }
+            });
+        });
+
+        return future;
+    }
+
+    private Inventory createTeamVaultInventory(String teamKey, String displayName, byte[] rawData) {
+        Inventory inventory = Bukkit.createInventory(
+            new TeamVaultHolder(teamKey),
+            TEAM_VAULT_SIZE,
+            Component.text(displayName + " Vault")
+        );
+        inventory.setContents(deserialize(rawData, TEAM_VAULT_SIZE));
+        return inventory;
+    }
+
+    private CompletableFuture<Void> saveTeamVault(TeamVaultSession session) {
+        return plugin.getDatabase().saveTeamVault(session.displayName(), serialize(session.inventory().getContents()));
     }
 
     private String teamsUnavailableMessage() {
@@ -465,6 +632,22 @@ public final class TeamManager implements Listener {
         Team team = board.getTeam(scoreboardId);
         if (team != null) {
             team.unregister();
+        }
+    }
+
+    private void closeVaultIfViewing(Player player, String teamKey) {
+        if (!(player.getOpenInventory().getTopInventory().getHolder() instanceof TeamVaultHolder holder)) return;
+        if (!holder.teamKey().equals(teamKey)) return;
+        player.closeInventory();
+    }
+
+    private void discardTeamVault(String teamKey) {
+        vaultLoadingByTeamKey.remove(teamKey);
+        TeamVaultSession session = teamVaultsByKey.remove(teamKey);
+        if (session == null) return;
+
+        for (var viewer : List.copyOf(session.inventory().getViewers())) {
+            viewer.closeInventory();
         }
     }
 
@@ -536,6 +719,58 @@ public final class TeamManager implements Listener {
         return future;
     }
 
+    private byte[] serialize(ItemStack[] contents) {
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
+             DataOutputStream out = new DataOutputStream(baos)) {
+            out.writeInt(contents.length);
+            for (ItemStack item : contents) {
+                if (item == null || item.getType().isAir() || item.getAmount() <= 0) {
+                    out.writeInt(0);
+                    continue;
+                }
+                byte[] raw = item.serializeAsBytes();
+                out.writeInt(raw.length);
+                out.write(raw);
+            }
+            out.flush();
+            return baos.toByteArray();
+        } catch (IOException ex) {
+            plugin.getLogger().severe("Failed to serialize team vault data: " + ex.getMessage());
+            return new byte[0];
+        }
+    }
+
+    private ItemStack[] deserialize(byte[] data, int size) {
+        ItemStack[] out = new ItemStack[size];
+        if (data == null || data.length == 0) return out;
+
+        try (ByteArrayInputStream bais = new ByteArrayInputStream(data);
+             DataInputStream in = new DataInputStream(bais)) {
+            int stored = in.readInt();
+            for (int i = 0; i < stored; i++) {
+                int length = in.readInt();
+                if (length < 0) {
+                    throw new IOException("Negative team vault item length");
+                }
+                if (length == 0) {
+                    continue;
+                }
+
+                byte[] raw = in.readNBytes(length);
+                if (raw.length != length) {
+                    throw new IOException("Unexpected end of team vault data");
+                }
+
+                if (i < size) {
+                    out[i] = ItemStack.deserializeBytes(raw);
+                }
+            }
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Team vault data was invalid and has been reset: " + ex.getMessage());
+        }
+        return out;
+    }
+
     private static final class TeamData {
         private final String key;
         private final String displayName;
@@ -550,4 +785,12 @@ public final class TeamManager implements Listener {
     }
 
     private record InviteData(String teamKey, UUID inviter, long expiresAt) {}
+    private record TeamVaultSession(String teamKey, String displayName, Inventory inventory) {}
+
+    private record TeamVaultHolder(String teamKey) implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
 }

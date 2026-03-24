@@ -48,20 +48,37 @@ public final class WaystoneListener implements Listener {
         String name = extractName(sign);
         event.setCancelled(true);
 
-        plugin.getWaystoneManager().onSignInteract(player, middle, name).thenAccept(result ->
-            org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
-                if (!player.isOnline()) return;
-                switch (result.type()) {
-                    case INVALID -> player.sendMessage(MessageUtil.error(result.error()));
-                    case REGISTERED -> player.sendMessage(MessageUtil.success(
-                        "Waystone <white>" + result.waystone().name() + "</white> registered."
-                    ));
-                    case KNOWN -> plugin.getWaystoneManager().knownWaystones(player.getUniqueId())
-                        .thenAccept(list -> org.bukkit.Bukkit.getScheduler().runTask(plugin,
-                            () -> plugin.getWaystoneManager().openWaystoneMenu(player, list)));
-                }
-            })
-        );
+        plugin.getWaystoneManager().onSignInteract(player, middle, name)
+            .thenAccept(result ->
+                org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (!player.isOnline()) return;
+                    switch (result.type()) {
+                        case INVALID -> player.sendMessage(MessageUtil.error(result.error()));
+                        case REGISTERED -> player.sendMessage(MessageUtil.success(
+                            "Waystone <white>" + result.waystone().name() + "</white> registered."
+                        ));
+                        case KNOWN -> plugin.getWaystoneManager().knownWaystones(player.getUniqueId())
+                            .thenAccept(list -> org.bukkit.Bukkit.getScheduler().runTask(plugin,
+                                () -> plugin.getWaystoneManager().openWaystoneMenu(player, list)))
+                            .exceptionally(ex -> {
+                                org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
+                                    if (player.isOnline()) {
+                                        player.sendMessage(MessageUtil.error("Waystones are unavailable right now. Try again in a moment."));
+                                    }
+                                });
+                                return null;
+                            });
+                    }
+                })
+            )
+            .exceptionally(ex -> {
+                org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (player.isOnline()) {
+                        player.sendMessage(MessageUtil.error("Waystones are unavailable right now. Try again in a moment."));
+                    }
+                });
+                return null;
+            });
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -128,24 +145,29 @@ public final class WaystoneListener implements Listener {
         };
 
         for (Block block : candidates) {
-            if (block.getType() != Material.NETHER_BRICK_FENCE) continue;
-
-            Block below = block.getRelative(0, -1, 0);
-            Block above = block.getRelative(0, 1, 0);
-            Block above2 = block.getRelative(0, 2, 0);
-
-            if (below.getType() == Material.NETHER_BRICK_FENCE && above.getType() == Material.GLOWSTONE) {
-                return block.getLocation();
+            if (block.getType() == Material.STONE_BRICK_WALL) {
+                Block below = block.getRelative(0, -1, 0);
+                Block above = block.getRelative(0, 1, 0);
+                if (below.getType() == Material.LODESTONE && above.getType() == Material.GLOWSTONE) {
+                    return block.getLocation();
+                }
+                continue;
             }
-            if (above.getType() == Material.NETHER_BRICK_FENCE && above2.getType() == Material.GLOWSTONE) {
-                return above.getLocation();
+
+            if (block.getType() == Material.LODESTONE) {
+                Block above = block.getRelative(0, 1, 0);
+                Block above2 = block.getRelative(0, 2, 0);
+                if (above.getType() == Material.STONE_BRICK_WALL && above2.getType() == Material.GLOWSTONE) {
+                    return above.getLocation();
+                }
             }
         }
         return null;
     }
 
     private static boolean canAffectWaystone(Material type) {
-        return type == Material.NETHER_BRICK_FENCE
+        return type == Material.LODESTONE
+            || type == Material.STONE_BRICK_WALL
             || type == Material.GLOWSTONE
             || type.name().endsWith("_SIGN");
     }

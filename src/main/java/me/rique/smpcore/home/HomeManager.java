@@ -32,12 +32,16 @@ public final class HomeManager {
     }
 
     public void setHome(Player player, String name, Location loc) {
-        setHome(player, name, loc, () -> {}, () -> {});
+        setHome(player, name, loc, () -> {}, () -> {}, () -> {});
     }
 
     public void setHome(Player player, String name, Location loc, Runnable onSuccess, Runnable onLimitReached) {
+        setHome(player, name, loc, onSuccess, onLimitReached, () -> {});
+    }
+
+    public void setHome(Player player, String name, Location loc, Runnable onSuccess, Runnable onLimitReached, Runnable onFailure) {
         UUID uuid = player.getUniqueId();
-        ensureLoaded(uuid, () -> {
+        ensureLoaded(player, () -> {
             Map<String, HomeEntry> homes = cache.get(uuid);
             String normalized = name.toLowerCase(Locale.ROOT);
             boolean exists = homes.containsKey(normalized);
@@ -54,20 +58,58 @@ public final class HomeManager {
                 loc.getX(), loc.getY(), loc.getZ(),
                 loc.getYaw(), loc.getPitch()
             );
-            homes.put(entry.name(), entry);
-            plugin.getDatabase().saveHome(uuid, entry);
-            onSuccess.run();
+            long token = sessionToken(uuid);
+            HomeEntry previous = homes.put(entry.name(), entry);
+            plugin.getDatabase().saveHome(uuid, entry).whenComplete((ignored, ex) ->
+                runForActiveCache(uuid, token, currentHomes -> {
+                    HomeEntry current = currentHomes.get(entry.name());
+                    if (ex == null) {
+                        if (entry.equals(current)) {
+                            onSuccess.run();
+                        }
+                        return;
+                    }
+
+                    if (!entry.equals(current)) return;
+
+                    if (previous == null) {
+                        currentHomes.remove(entry.name());
+                    } else {
+                        currentHomes.put(entry.name(), previous);
+                    }
+                    onFailure.run();
+                })
+            );
         });
     }
 
     public void deleteHome(Player player, String name, Runnable onSuccess, Runnable onNotFound) {
+        deleteHome(player, name, onSuccess, onNotFound, () -> {});
+    }
+
+    public void deleteHome(Player player, String name, Runnable onSuccess, Runnable onNotFound, Runnable onFailure) {
         UUID uuid = player.getUniqueId();
-        ensureLoaded(uuid, () -> {
+        ensureLoaded(player, () -> {
             Map<String, HomeEntry> homes = cache.get(uuid);
             String normalized = name.toLowerCase(Locale.ROOT);
-            if (homes.remove(normalized) != null) {
-                plugin.getDatabase().deleteHome(uuid, normalized);
-                onSuccess.run();
+            HomeEntry removed = homes.remove(normalized);
+            if (removed != null) {
+                long token = sessionToken(uuid);
+                plugin.getDatabase().deleteHome(uuid, normalized).whenComplete((ignored, ex) ->
+                    runForActiveCache(uuid, token, currentHomes -> {
+                        if (ex == null) {
+                            if (!currentHomes.containsKey(normalized)) {
+                                onSuccess.run();
+                            }
+                            return;
+                        }
+
+                        if (currentHomes.containsKey(normalized)) return;
+
+                        currentHomes.put(normalized, removed);
+                        onFailure.run();
+                    })
+                );
             } else {
                 onNotFound.run();
             }
@@ -76,7 +118,7 @@ public final class HomeManager {
 
     public void teleportHome(Player player, String name) {
         UUID uuid = player.getUniqueId();
-        ensureLoaded(uuid, () -> {
+        ensureLoaded(player, () -> {
             String normalized = name.toLowerCase(Locale.ROOT);
             Map<String, HomeEntry> homes = cache.get(uuid);
             HomeEntry entry = homes.get(normalized);
@@ -107,7 +149,7 @@ public final class HomeManager {
 
     public void listHomes(Player player) {
         UUID uuid = player.getUniqueId();
-        ensureLoaded(uuid, () -> {
+        ensureLoaded(player, () -> {
             Map<String, HomeEntry> homes = cache.get(uuid);
             if (homes.isEmpty()) {
                 player.sendMessage(MessageUtil.info("You have no homes set."));
@@ -143,13 +185,22 @@ public final class HomeManager {
         sessionTokens.remove(uuid);
     }
 
-    private void ensureLoaded(UUID uuid, Runnable action) {
+    private void ensureLoaded(Player player, Runnable action) {
+        UUID uuid = player.getUniqueId();
         long token = sessionToken(uuid);
         if (cache.containsKey(uuid)) {
             runForActiveSession(uuid, token, action);
             return;
         }
-        loadHomesIntoCache(uuid).thenRun(() -> {
+        loadHomesIntoCache(uuid).whenComplete((ignored, ex) -> {
+            if (ex != null) {
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (sameSession(uuid, token) && player.isOnline()) {
+                        player.sendMessage(MessageUtil.error("Your homes could not be loaded right now. Try again in a moment."));
+                    }
+                });
+                return;
+            }
             if (!sameSession(uuid, token) || !cache.containsKey(uuid)) return;
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (sameSession(uuid, token) && cache.containsKey(uuid)) {
@@ -171,10 +222,6 @@ public final class HomeManager {
         if (previous != null) return previous;
 
         plugin.getDatabase().loadHomes(uuid)
-            .exceptionally(ex -> {
-                plugin.getLogger().severe("Failed to load homes for " + uuid + ": " + ex.getMessage());
-                return List.of();
-            })
             .thenApply(list -> {
                 Map<String, HomeEntry> loaded = new LinkedHashMap<>();
                 for (HomeEntry entry : list) {
@@ -224,6 +271,16 @@ public final class HomeManager {
             if (sameSession(uuid, token)) {
                 action.run();
             }
+        });
+    }
+
+    private void runForActiveCache(UUID uuid, long token, java.util.function.Consumer<Map<String, HomeEntry>> action) {
+        if (!plugin.isEnabled()) return;
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!sameSession(uuid, token)) return;
+            Map<String, HomeEntry> homes = cache.get(uuid);
+            if (homes == null) return;
+            action.accept(homes);
         });
     }
 

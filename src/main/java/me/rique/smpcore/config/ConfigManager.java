@@ -4,6 +4,7 @@ import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Material;
 
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -11,16 +12,17 @@ import java.util.Locale;
  */
 public final class ConfigManager {
 
+    private static final String DEFAULT_JOIN_FIRST_MESSAGE = "<gold>Welcome, <white>{player}</white>!</gold>";
+    private static final String LEGACY_JOIN_FIRST_MESSAGE =
+        "<gold><bold>* Welcome to the server, <white>{player}</white>! *</bold></gold> "
+            + "<gray>You are player number <yellow>{count}</yellow> to join!</gray>";
+
     private final SMPCore plugin;
 
     public String joinFirst;
     public String joinReturn;
     public String quit;
 
-    public int tpaTimeout;
-    public int tpaCooldown;
-    public int tpaTeleportDelay;
-    public boolean tpaMoveCancel;
     public int combatTagSeconds;
 
     public int homeDefaultMax;
@@ -31,6 +33,27 @@ public final class ConfigManager {
 
     public boolean backOnDeath;
     public boolean backOnTeleport;
+
+    public boolean deathChestEnabled;
+    public boolean deathChestDisableInPlayerCombat;
+    public int deathChestLifetimeMinutes;
+    public int deathChestSearchRadius;
+    public int deathChestVerticalSearchRadius;
+    public boolean deathChestRequireSupportingBlock;
+    public boolean deathChestRequireClearAbove;
+    public boolean deathChestAllowWaterPlacement;
+    public boolean deathChestLargeChestEnabled;
+    public boolean deathChestNotifyWhenNoSpace;
+    public boolean deathChestDropOverflowItems;
+    public boolean deathChestRemoveWhenEmpty;
+    public boolean deathChestNotifyChat;
+    public boolean deathChestNoteEnabled;
+    public boolean deathChestNoteDropIfInventoryFull;
+    public String deathChestChestName;
+    public String deathChestChatMessage;
+    public String deathChestNoSpaceMessage;
+    public String deathChestNoteTitle;
+    public List<String> deathChestNoteLore;
 
     public boolean spawnerSilkTouchEnabled;
     public int spawnerMaxStack;
@@ -81,13 +104,37 @@ public final class ConfigManager {
     public int enderSwordDismountDespawnSeconds;
     public boolean enderSwordRequireOpenSky;
 
+    public boolean awakeningTableEnabled;
+    public double awakeningTableLootChance;
+    public double awakeningTableSuccessChance;
+    public double awakeningTableFailureDurabilityLossFraction;
+    public double awakeningTableDestroyThreshold;
+    public double awakeningTableWeaponDamageMultiplier;
+    public double awakeningTableAttackSpeedMultiplier;
+    public double awakeningTableArmorMultiplier;
+    public double awakeningTableArmorToughnessMultiplier;
+    public double awakeningTableKnockbackResistanceMultiplier;
+    public boolean awakeningTableAnnounceSuccess;
+    public boolean awakeningTableRepairVanillaOnSuccess;
+    public boolean awakeningTableHologramEnabled;
+    public double awakeningTableHologramHeight;
+    public double awakeningTableHologramViewRange;
+
     public double thorsHammerBonusDamage;
 
-    public boolean amethystPickaxeEnabled;
-    public int amethystPickaxeStripWidth;
+    public double wiseLevelOneBonus;
+    public double wiseLevelTwoBonus;
+    public double wiseLevelThreeBonus;
+    public int wiseCropXp;
+    public double doubleJumpAncientCityChestChance;
+    public double doubleJumpVerticalBoost;
+    public double doubleJumpForwardBoost;
+    public double doubleJumpSaturationCost;
+    public int doubleJumpHungerCost;
 
     public boolean advancedPickaxeEnabled;
     public boolean advancedPickaxeDisableBonusWithSilkTouch;
+    public double advancedPickaxeLuckyDropChance;
     public double advancedPickaxeCoalChance;
     public double advancedPickaxeIronChance;
     public double advancedPickaxeRedstoneChance;
@@ -96,6 +143,11 @@ public final class ConfigManager {
     public double advancedPickaxeCopperChance;
     public double advancedPickaxeDiamondChance;
     public double advancedPickaxeEmeraldChance;
+
+    public int sustenanceTalismanIntervalSeconds;
+    public int sustenanceTalismanHungerGain;
+    public double sustenanceTalismanHealHearts;
+    public int rewardLanternCooldownSeconds;
 
     public ConfigManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -108,15 +160,18 @@ public final class ConfigManager {
 
         MessageUtil.setPrefix(c.getString("messages.prefix", MessageUtil.defaultPrefix()));
 
-        joinFirst = c.getString("messages.join-first", "<gold>Welcome, <white>{player}</white>!</gold>");
+        joinFirst = c.getString("messages.join-first", DEFAULT_JOIN_FIRST_MESSAGE);
+        if (joinFirst == null || joinFirst.isBlank()) {
+            joinFirst = DEFAULT_JOIN_FIRST_MESSAGE;
+        } else if (LEGACY_JOIN_FIRST_MESSAGE.equals(joinFirst)) {
+            joinFirst = DEFAULT_JOIN_FIRST_MESSAGE;
+            c.set("messages.join-first", joinFirst);
+            plugin.saveConfig();
+        }
         joinReturn = c.getString("messages.join-return", "<aqua>{player} joined.</aqua>");
         quit = c.getString("messages.quit", "<gray>{player} left.</gray>");
 
-        tpaTimeout = Math.max(1, c.getInt("tpa.timeout", 120));
-        tpaCooldown = Math.max(0, c.getInt("tpa.cooldown", 30));
-        tpaTeleportDelay = Math.max(0, c.getInt("tpa.teleport-delay", 3));
-        tpaMoveCancel = c.getBoolean("tpa.move-cancels", true);
-        combatTagSeconds = Math.max(1, c.getInt("combat.tag-seconds", 15));
+        combatTagSeconds = clamp(c.getInt("combat.tag-seconds", 45), 45, 60);
 
         homeDefaultMax = Math.max(1, c.getInt("homes.default-max", 1));
         homeMultipleMax = Math.max(homeDefaultMax, c.getInt("homes.multiple-max", 5));
@@ -129,6 +184,40 @@ public final class ConfigManager {
 
         backOnDeath = c.getBoolean("back.on-death", true);
         backOnTeleport = c.getBoolean("back.on-teleport", true);
+
+        deathChestEnabled = c.getBoolean("death-chest.enabled", true);
+        deathChestDisableInPlayerCombat = c.getBoolean("death-chest.disable-in-player-combat", true);
+        deathChestLifetimeMinutes = clamp(c.getInt("death-chest.lifetime-minutes", 90), 1, 24 * 60);
+        deathChestSearchRadius = clamp(c.getInt("death-chest.search-radius", 4), 0, 16);
+        deathChestVerticalSearchRadius = clamp(c.getInt("death-chest.vertical-search-radius", 4), 0, 16);
+        deathChestRequireSupportingBlock = c.getBoolean("death-chest.require-supporting-block", true);
+        deathChestRequireClearAbove = c.getBoolean("death-chest.require-clear-above", true);
+        deathChestAllowWaterPlacement = c.getBoolean("death-chest.allow-water-placement", false);
+        deathChestLargeChestEnabled = c.getBoolean("death-chest.large-chest-enabled", true);
+        deathChestNotifyWhenNoSpace = c.getBoolean("death-chest.notify-when-no-space", true);
+        deathChestDropOverflowItems = c.getBoolean("death-chest.drop-overflow-items", true);
+        deathChestRemoveWhenEmpty = c.getBoolean("death-chest.remove-when-empty", true);
+        deathChestNotifyChat = c.getBoolean("death-chest.notify-chat", true);
+        deathChestNoteEnabled = c.getBoolean("death-chest.note.enabled", true);
+        deathChestNoteDropIfInventoryFull = c.getBoolean("death-chest.note.drop-if-inventory-full", true);
+        deathChestChestName = c.getString("death-chest.chest-name", "<gold><bold>{player}'s Death Chest</bold></gold>");
+        deathChestChatMessage = c.getString(
+            "death-chest.chat-message",
+            "<yellow>Your death chest is at <white>{world} {x}, {y}, {z}</white> and expires in <white>{minutes} minutes</white>.</yellow>"
+        );
+        deathChestNoSpaceMessage = c.getString(
+            "death-chest.no-space-message",
+            "<red>No space was found for a death chest, so your items dropped normally.</red>"
+        );
+        deathChestNoteTitle = c.getString("death-chest.note.title", "<gold><bold>Death Chest</bold></gold>");
+        deathChestNoteLore = c.getStringList("death-chest.note.lore");
+        if (deathChestNoteLore.isEmpty()) {
+            deathChestNoteLore = List.of(
+                "<gray>World: <white>{world}</white>",
+                "<gray>Coords: <white>{x}, {y}, {z}</white>",
+                "<gray>Expires in: <white>{minutes} minutes</white>"
+            );
+        }
 
         spawnerSilkTouchEnabled = c.getBoolean("spawner.silk-touch-enabled", true);
         spawnerMaxStack = Math.max(1, c.getInt("spawner.max-stack", 64));
@@ -165,7 +254,7 @@ public final class ConfigManager {
         legendaryAltarNightlyChance = clamp(c.getDouble("legendary-altar.nightly-chance", 0.05), 0.0, 1.0);
         legendaryAltarRequirePlayerOnline = c.getBoolean("legendary-altar.require-player-online", true);
         legendaryAltarActivationSeconds = Math.max(10, c.getInt("legendary-altar.activation-delay-seconds", 360));
-        legendaryAltarExpirationHours = Math.max(1, c.getInt("legendary-altar.expiration-hours", 48));
+        legendaryAltarExpirationHours = Math.max(1, c.getInt("legendary-altar.expiration-hours", 1));
         legendaryAltarMinDistanceFromSpawn = Math.max(0, c.getInt("legendary-altar.min-distance-from-spawn", 256));
         legendaryAltarMaxDistanceFromSpawn = Math.max(legendaryAltarMinDistanceFromSpawn + 16, c.getInt("legendary-altar.max-distance-from-spawn", 2500));
         legendaryAltarSearchAttempts = Math.max(10, c.getInt("legendary-altar.location-search-attempts", 96));
@@ -173,7 +262,7 @@ public final class ConfigManager {
         legendaryAltarBossBarEnabled = c.getBoolean("legendary-altar.bossbar.enabled", true);
 
         enderBoneDropCount = Math.max(1, c.getInt("ender-sword.ender-bone-drop-count", 8));
-        enderSwordSummonCooldownSeconds = Math.max(1, c.getInt("ender-sword.summon-cooldown-seconds", 300));
+        enderSwordSummonCooldownSeconds = Math.max(1, c.getInt("ender-sword.summon-cooldown-seconds", 30));
         enderSwordKilledCooldownSeconds = Math.max(
             enderSwordSummonCooldownSeconds,
             c.getInt("ender-sword.killed-cooldown-seconds", 1800)
@@ -185,24 +274,66 @@ public final class ConfigManager {
         enderSwordDismountDespawnSeconds = Math.max(0, c.getInt("ender-sword.dragon.dismount-despawn-seconds", 10));
         enderSwordRequireOpenSky = c.getBoolean("ender-sword.require-open-sky", true);
 
+        awakeningTableEnabled = c.getBoolean("awakening-table.enabled", true);
+        awakeningTableLootChance = clamp(c.getDouble("awakening-table.loot-chance", 0.05), 0.0, 1.0);
+        awakeningTableSuccessChance = clamp(c.getDouble("awakening-table.success-chance", 0.05), 0.0, 1.0);
+        awakeningTableFailureDurabilityLossFraction = clamp(
+            c.getDouble("awakening-table.failure-durability-loss-fraction", 0.50),
+            0.01,
+            1.0
+        );
+        awakeningTableDestroyThreshold = clamp(c.getDouble("awakening-table.destroy-threshold", 0.15), 0.0, 1.0);
+        awakeningTableWeaponDamageMultiplier = clamp(c.getDouble("awakening-table.weapon-damage-multiplier", 2.0), 0.0, 10.0);
+        awakeningTableAttackSpeedMultiplier = clamp(c.getDouble("awakening-table.attack-speed-multiplier", 1.5), 0.1, 10.0);
+        awakeningTableArmorMultiplier = clamp(c.getDouble("awakening-table.armor-multiplier", 2.0), 0.0, 10.0);
+        awakeningTableArmorToughnessMultiplier = clamp(c.getDouble("awakening-table.armor-toughness-multiplier", 2.0), 0.0, 10.0);
+        awakeningTableKnockbackResistanceMultiplier = clamp(
+            c.getDouble("awakening-table.knockback-resistance-multiplier", 2.0),
+            0.0,
+            10.0
+        );
+        awakeningTableAnnounceSuccess = c.getBoolean("awakening-table.announce-success", true);
+        awakeningTableRepairVanillaOnSuccess = c.getBoolean("awakening-table.repair-vanilla-on-success", true);
+        awakeningTableHologramEnabled = c.getBoolean("awakening-table.hologram.enabled", true);
+        awakeningTableHologramHeight = clamp(c.getDouble("awakening-table.hologram.height", 1.9), 0.5, 6.0);
+        awakeningTableHologramViewRange = clamp(c.getDouble("awakening-table.hologram.view-range", 32.0), 1.0, 96.0);
+
         thorsHammerBonusDamage = clamp(c.getDouble("thors-hammer.bonus-damage", 1.0), 0.0, 1.0);
 
-        amethystPickaxeEnabled = c.getBoolean("custom-tools.amethyst-pickaxe.enabled", true);
-        amethystPickaxeStripWidth = clamp(c.getInt("custom-tools.amethyst-pickaxe.strip-width", 3), 1, 5);
+        wiseLevelOneBonus = clamp(c.getDouble("custom-enchants.wise.level-bonus.1", 0.15), 0.0, 10.0);
+        wiseLevelTwoBonus = clamp(c.getDouble("custom-enchants.wise.level-bonus.2", 0.30), 0.0, 10.0);
+        wiseLevelThreeBonus = clamp(c.getDouble("custom-enchants.wise.level-bonus.3", 0.40), 0.0, 10.0);
+        wiseCropXp = Math.max(0, c.getInt("custom-enchants.wise.crop-xp", 2));
+        doubleJumpAncientCityChestChance = clamp(c.getDouble("custom-enchants.double-jump.ancient-city-chest-chance", 0.23), 0.0, 1.0);
+        doubleJumpVerticalBoost = clamp(c.getDouble("custom-enchants.double-jump.vertical-boost", 0.82), 0.1, 3.0);
+        doubleJumpForwardBoost = clamp(c.getDouble("custom-enchants.double-jump.forward-boost", 0.75), 0.0, 3.0);
+        doubleJumpSaturationCost = clamp(c.getDouble("custom-enchants.double-jump.saturation-cost", 2.0), 0.0, 20.0);
+        doubleJumpHungerCost = clamp(c.getInt("custom-enchants.double-jump.hunger-cost", 4), 0, 20);
 
         advancedPickaxeEnabled = c.getBoolean("custom-tools.advanced-pickaxe.enabled", true);
         advancedPickaxeDisableBonusWithSilkTouch = c.getBoolean(
             "custom-tools.advanced-pickaxe.disable-bonus-with-silk-touch",
             true
         );
-        advancedPickaxeCoalChance = clamp(c.getDouble("custom-tools.advanced-pickaxe.bonus-chances.coal", 1.0), 0.0, 1.0);
-        advancedPickaxeIronChance = clamp(c.getDouble("custom-tools.advanced-pickaxe.bonus-chances.iron", 2.0 / 3.0), 0.0, 1.0);
-        advancedPickaxeRedstoneChance = clamp(c.getDouble("custom-tools.advanced-pickaxe.bonus-chances.redstone", 0.5), 0.0, 1.0);
-        advancedPickaxeGoldChance = clamp(c.getDouble("custom-tools.advanced-pickaxe.bonus-chances.gold", 1.0 / 3.0), 0.0, 1.0);
-        advancedPickaxeLapisChance = clamp(c.getDouble("custom-tools.advanced-pickaxe.bonus-chances.lapis", 0.5), 0.0, 1.0);
-        advancedPickaxeCopperChance = clamp(c.getDouble("custom-tools.advanced-pickaxe.bonus-chances.copper", 1.0), 0.0, 1.0);
-        advancedPickaxeDiamondChance = clamp(c.getDouble("custom-tools.advanced-pickaxe.bonus-chances.diamond", 0.1), 0.0, 1.0);
-        advancedPickaxeEmeraldChance = clamp(c.getDouble("custom-tools.advanced-pickaxe.bonus-chances.emerald", 0.1), 0.0, 1.0);
+        advancedPickaxeLuckyDropChance = clamp(
+            c.getDouble("custom-tools.advanced-pickaxe.lucky-drop-chance", 0.25),
+            0.0,
+            1.0
+        );
+        advancedPickaxeCoalChance = advancedPickaxeWeight(c, "coal", 1.0);
+        advancedPickaxeIronChance = advancedPickaxeWeight(c, "iron", 2.0 / 3.0);
+        advancedPickaxeRedstoneChance = advancedPickaxeWeight(c, "redstone", 0.5);
+        advancedPickaxeGoldChance = advancedPickaxeWeight(c, "gold", 1.0 / 3.0);
+        advancedPickaxeLapisChance = advancedPickaxeWeight(c, "lapis", 0.5);
+        advancedPickaxeCopperChance = advancedPickaxeWeight(c, "copper", 1.0);
+        advancedPickaxeDiamondChance = advancedPickaxeWeight(c, "diamond", 0.1);
+        advancedPickaxeEmeraldChance = advancedPickaxeWeight(c, "emerald", 0.1);
+
+        sustenanceTalismanIntervalSeconds = Math.max(1, c.getInt("talisman-of-sustenance.interval-seconds", 7));
+        sustenanceTalismanHungerGain = clamp(c.getInt("talisman-of-sustenance.hunger-gain", 1), 0, 20);
+        sustenanceTalismanHealHearts = clamp(c.getDouble("talisman-of-sustenance.heal-hearts", 1.0), 0.0, 20.0);
+
+        rewardLanternCooldownSeconds = Math.max(1, c.getInt("reward-soul-lantern.cooldown-seconds", 1800));
     }
 
     public void setBlockNetheriteArmorUpgrade(boolean value) {
@@ -232,5 +363,13 @@ public final class ConfigManager {
 
     private double clamp(double value, double min, double max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    private double advancedPickaxeWeight(org.bukkit.configuration.file.FileConfiguration config, String id, double fallback) {
+        String weightPath = "custom-tools.advanced-pickaxe.bonus-weights." + id;
+        if (config.contains(weightPath)) {
+            return clamp(config.getDouble(weightPath, fallback), 0.0, 1.0);
+        }
+        return clamp(config.getDouble("custom-tools.advanced-pickaxe.bonus-chances." + id, fallback), 0.0, 1.0);
     }
 }

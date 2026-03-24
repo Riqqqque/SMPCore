@@ -1,5 +1,6 @@
 package me.rique.smpcore.combat;
 
+import com.destroystokyo.paper.event.player.PlayerElytraBoostEvent;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
@@ -7,6 +8,7 @@ import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.Firework;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
 import org.bukkit.entity.Tameable;
@@ -14,7 +16,9 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityToggleGlideEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.ItemStack;
@@ -33,6 +37,7 @@ public final class CombatLogListener implements Listener {
     private final SMPCore plugin;
     private final Map<UUID, CombatTag> combatTags = new ConcurrentHashMap<>();
     private final Map<UUID, Long> notifyCooldown = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> restrictionNotifyCooldown = new ConcurrentHashMap<>();
 
     public CombatLogListener(SMPCore plugin) {
         this.plugin = plugin;
@@ -51,8 +56,48 @@ public final class CombatLogListener implements Listener {
         combatTags.put(attacker.getUniqueId(), new CombatTag(victim.getUniqueId(), expiresAt));
         combatTags.put(victim.getUniqueId(), new CombatTag(attacker.getUniqueId(), expiresAt));
 
+        stopGlidingIfTagged(attacker);
+        stopGlidingIfTagged(victim);
         maybeNotify(attacker);
         maybeNotify(victim);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onGlideToggle(EntityToggleGlideEvent event) {
+        if (!(event.getEntity() instanceof Player player)) return;
+        if (!event.isGliding()) return;
+        if (activeTag(player.getUniqueId()) == null) return;
+
+        event.setCancelled(true);
+        maybeNotifyRestriction(player, "You can't use an elytra while in combat.");
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onElytraBoost(PlayerElytraBoostEvent event) {
+        Player player = event.getPlayer();
+        if (activeTag(player.getUniqueId()) == null) return;
+
+        event.setShouldConsume(false);
+        event.setCancelled(true);
+
+        Firework firework = event.getFirework();
+        if (firework.isValid()) {
+            firework.remove();
+        }
+
+        maybeNotifyRestriction(player, "You can't use fireworks while in combat.");
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onFireworkUse(PlayerInteractEvent event) {
+        if (!event.getAction().isRightClick()) return;
+        if (event.getMaterial() != Material.FIREWORK_ROCKET) return;
+
+        Player player = event.getPlayer();
+        if (activeTag(player.getUniqueId()) == null) return;
+
+        event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
+        maybeNotifyRestriction(player, "You can't use fireworks while in combat.");
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -65,13 +110,15 @@ public final class CombatLogListener implements Listener {
         punishCombatLog(quitter, tag.opponentUuid());
         combatTags.remove(quitter.getUniqueId());
         notifyCooldown.remove(quitter.getUniqueId());
+        restrictionNotifyCooldown.remove(quitter.getUniqueId());
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.MONITOR)
     public void onDeath(PlayerDeathEvent event) {
         UUID id = event.getPlayer().getUniqueId();
         combatTags.remove(id);
         notifyCooldown.remove(id);
+        restrictionNotifyCooldown.remove(id);
     }
 
     @EventHandler
@@ -79,6 +126,7 @@ public final class CombatLogListener implements Listener {
         UUID id = event.getPlayer().getUniqueId();
         combatTags.remove(id);
         notifyCooldown.remove(id);
+        restrictionNotifyCooldown.remove(id);
     }
 
     private void punishCombatLog(Player quitter, UUID opponentUuid) {
@@ -110,14 +158,17 @@ public final class CombatLogListener implements Listener {
 
     private void dropAllItems(Player player, Location dropAt) {
         PlayerInventory inv = player.getInventory();
-        dropContents(dropAt, inv.getStorageContents());
-        dropContents(dropAt, inv.getArmorContents());
-        dropContents(dropAt, inv.getExtraContents());
-        dropItem(dropAt, inv.getItemInOffHand());
+        ItemStack[] storage = inv.getStorageContents();
+        ItemStack[] armor = inv.getArmorContents();
+        ItemStack[] extra = inv.getExtraContents();
 
-        inv.clear();
-        inv.setArmorContents(new ItemStack[4]);
-        inv.setItemInOffHand(new ItemStack(Material.AIR));
+        dropContents(dropAt, inv.getStorageContents());
+        dropContents(dropAt, armor);
+        dropContents(dropAt, extra);
+
+        inv.setStorageContents(new ItemStack[storage.length]);
+        inv.setArmorContents(new ItemStack[armor.length]);
+        inv.setExtraContents(new ItemStack[extra.length]);
     }
 
     private static void dropContents(Location dropAt, ItemStack[] items) {
@@ -151,6 +202,22 @@ public final class CombatLogListener implements Listener {
         player.sendActionBar(MessageUtil.parse("<red>In combat: logging out will kill you.</red>"));
     }
 
+    private void maybeNotifyRestriction(Player player, String message) {
+        long now = System.currentTimeMillis();
+        long last = restrictionNotifyCooldown.getOrDefault(player.getUniqueId(), 0L);
+        if (now - last < 1500L) return;
+        restrictionNotifyCooldown.put(player.getUniqueId(), now);
+        player.sendActionBar(MessageUtil.parse("<red>" + message + "</red>"));
+    }
+
+    private void stopGlidingIfTagged(Player player) {
+        if (!player.isGliding()) return;
+        if (activeTag(player.getUniqueId()) == null) return;
+
+        player.setGliding(false);
+        maybeNotifyRestriction(player, "You can't use an elytra while in combat.");
+    }
+
     private static boolean isCombatTaggable(Player player) {
         if (player == null || !player.isOnline() || player.isDead()) return false;
         GameMode mode = player.getGameMode();
@@ -166,6 +233,14 @@ public final class CombatLogListener implements Listener {
             return player;
         }
         return null;
+    }
+
+    public boolean isInPlayerCombat(Player player) {
+        return player != null && isInPlayerCombat(player.getUniqueId());
+    }
+
+    public boolean isInPlayerCombat(UUID playerId) {
+        return activeTag(playerId) != null;
     }
 
     private record CombatTag(UUID opponentUuid, long expiresAt) {}
