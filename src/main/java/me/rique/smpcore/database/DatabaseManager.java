@@ -217,6 +217,13 @@ public final class DatabaseManager {
                 last_roll_day INTEGER NOT NULL DEFAULT -1
             )""";
 
+        String legendaryClaimed = """
+            CREATE TABLE IF NOT EXISTS legendary_claimed (
+                legendary_id TEXT PRIMARY KEY COLLATE NOCASE,
+                claimed_at   INTEGER NOT NULL,
+                claimed_by   TEXT
+            )""";
+
         try (Connection conn = connection(); Statement stmt = conn.createStatement()) {
             stmt.executeUpdate(spawners);
             stmt.executeUpdate(homes);
@@ -230,6 +237,7 @@ public final class DatabaseManager {
             stmt.executeUpdate(waystoneKnown);
             stmt.executeUpdate(waystoneKnownByPlayer);
             stmt.executeUpdate(legendaryAltar);
+            stmt.executeUpdate(legendaryClaimed);
         }
     }
 
@@ -775,6 +783,49 @@ public final class DatabaseManager {
                 throw new RuntimeException("loadLegendaryAltar failed", e);
             }
             return LegendaryAltarRecord.empty();
+        }, executor);
+    }
+
+    public CompletableFuture<Set<String>> loadClaimedLegendaryIds() {
+        return CompletableFuture.supplyAsync(() -> {
+            Set<String> ids = new LinkedHashSet<>();
+            String sql = "SELECT legendary_id FROM legendary_claimed";
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql);
+                 ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String legendaryId = rs.getString("legendary_id");
+                    if (legendaryId != null && !legendaryId.isBlank()) {
+                        ids.add(legendaryId.trim().toLowerCase(Locale.ROOT));
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadClaimedLegendaryIds: " + e.getMessage());
+                throw new RuntimeException("loadClaimedLegendaryIds failed", e);
+            }
+            return ids;
+        }, executor);
+    }
+
+    public CompletableFuture<Void> markLegendaryClaimed(String legendaryId, UUID claimedBy) {
+        return CompletableFuture.runAsync(() -> {
+            if (legendaryId == null || legendaryId.isBlank()) {
+                return;
+            }
+            String sql = """
+                INSERT OR IGNORE INTO legendary_claimed (legendary_id, claimed_at, claimed_by)
+                VALUES (?, ?, ?)
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, legendaryId.trim().toLowerCase(Locale.ROOT));
+                ps.setLong(2, System.currentTimeMillis());
+                ps.setString(3, claimedBy == null ? null : claimedBy.toString());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("markLegendaryClaimed: " + e.getMessage());
+                throw new RuntimeException("markLegendaryClaimed failed", e);
+            }
         }, executor);
     }
 

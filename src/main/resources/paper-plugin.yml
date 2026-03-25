@@ -41,7 +41,7 @@ permissions:
     default: op
   smpcore.spawn:
     description: Use /spawn
-    default: true
+    default: op
   smpcore.help:
     description: Use /help
     default: true
