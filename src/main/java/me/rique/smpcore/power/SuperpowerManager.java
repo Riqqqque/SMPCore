@@ -1515,34 +1515,50 @@ public final class SuperpowerManager implements Listener {
         if (world == null || !from.getChunk().isLoaded()) {
             return;
         }
+        World targetWorld = to.getWorld();
+        Location safe = targetWorld == null ? null : findSafeTravelLocation(to);
         Collection<Entity> nearby = world.getNearbyEntities(from, 1.35, 2.25, 1.35);
         for (Entity entity : nearby) {
-            if (!(entity instanceof Player player) || player.isDead() || player.getGameMode() == GameMode.SPECTATOR) {
-                continue;
-            }
-            long recentUntil = recentPortalTravel.getOrDefault(player.getUniqueId(), 0L);
+            long recentUntil = recentPortalTravel.getOrDefault(entity.getUniqueId(), 0L);
             if (recentUntil > System.currentTimeMillis()) {
                 continue;
             }
 
-            World targetWorld = to.getWorld();
-            if (targetWorld == null || !hasVisitedEnvironment(player, targetWorld.getEnvironment())) {
-                player.sendMessage(MessageUtil.warn("This portal rejects you."));
-                recentPortalTravel.put(player.getUniqueId(), System.currentTimeMillis() + 1000L);
+            if (entity instanceof Player player) {
+                if (player.isDead() || player.getGameMode() == GameMode.SPECTATOR) {
+                    continue;
+                }
+                if (targetWorld == null || !hasVisitedEnvironment(player, targetWorld.getEnvironment())) {
+                    player.sendMessage(MessageUtil.warn("This portal rejects you."));
+                    recentPortalTravel.put(player.getUniqueId(), System.currentTimeMillis() + 1000L);
+                    continue;
+                }
+                if (safe == null) {
+                    player.sendMessage(MessageUtil.error("The other side of the portal is unstable."));
+                    recentPortalTravel.put(player.getUniqueId(), System.currentTimeMillis() + 1000L);
+                    continue;
+                }
+
+                plugin.getPlayerManager().saveBackLocation(player);
+                recentPortalTravel.put(player.getUniqueId(), System.currentTimeMillis() + PORTAL_RECENT_TRAVEL_MS);
+                player.teleportAsync(safe.clone());
+                player.setFallDistance(0.0f);
+                player.getWorld().playSound(player.getLocation(), Sound.BLOCK_PORTAL_TRAVEL, 0.8f, 1.2f);
                 continue;
             }
 
-            Location safe = findSafeTravelLocation(to);
+            if (!(entity instanceof LivingEntity living) || living.isDead() || !living.isValid()) {
+                continue;
+            }
             if (safe == null) {
-                player.sendMessage(MessageUtil.error("The other side of the portal is unstable."));
-                recentPortalTravel.put(player.getUniqueId(), System.currentTimeMillis() + 1000L);
+                recentPortalTravel.put(living.getUniqueId(), System.currentTimeMillis() + 1000L);
                 continue;
             }
-
-            plugin.getPlayerManager().saveBackLocation(player);
-            recentPortalTravel.put(player.getUniqueId(), System.currentTimeMillis() + PORTAL_RECENT_TRAVEL_MS);
-            player.teleportAsync(safe);
-            player.getWorld().playSound(player.getLocation(), Sound.BLOCK_PORTAL_TRAVEL, 0.8f, 1.2f);
+            recentPortalTravel.put(living.getUniqueId(), System.currentTimeMillis() + PORTAL_RECENT_TRAVEL_MS);
+            living.setFallDistance(0.0f);
+            if (living.teleport(safe.clone())) {
+                living.setFallDistance(0.0f);
+            }
         }
     }
 
@@ -2168,6 +2184,7 @@ public final class SuperpowerManager implements Listener {
             case TRAVELER -> {
                 lore.add(MM.deserialize("<gray>Permanent <white>Speed II</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Creates paired portals to chosen coordinates.</gray>"));
+                lore.add(MM.deserialize("<gray>Players and mobs can pass through them.</gray>"));
                 lore.add(MM.deserialize("<gray>Works across the Overworld, Nether, and End.</gray>"));
                 lore.add(MM.deserialize("<gray>Portals fade after <white>" + TRAVEL_PORTAL_DURATION_SECONDS + "s</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Command: <white>/travel [x] [y] [z] [dimension]</white></gray>"));

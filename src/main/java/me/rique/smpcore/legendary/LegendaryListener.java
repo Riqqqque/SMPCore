@@ -127,6 +127,7 @@ public final class LegendaryListener implements Listener {
     private static final double ORB_OF_THE_MYSTICS_DROP_CHANCE = 0.10;
     private static final int STARTUP_LEGENDARY_MIGRATION_CHUNKS_PER_TICK = 24;
     private static final int LEGENDARY_ITEM_SCAN_MAX_DEPTH = 2;
+    private static final long LEGENDARY_DUPLICATE_AUDIT_INTERVAL_TICKS = 20L * 15L;
     private static final int ENDERBOW_TP_COOLDOWN = 30;
     private static final int CHRONO_READY_SECONDS = 7;
     private static final int CHRONO_COOLDOWN = 45;
@@ -292,6 +293,7 @@ public final class LegendaryListener implements Listener {
     private final Set<UUID> activeEnderDragonRiders = ConcurrentHashMap.newKeySet();
     private final Map<UUID, Set<Long>> enderDragonChunkTickets = new ConcurrentHashMap<>();
     private final Map<UUID, String> enderDragonChunkTicketWorlds = new ConcurrentHashMap<>();
+    private boolean legendaryDuplicateAuditQueued;
 
     public LegendaryListener(SMPCore plugin) {
         this.plugin = plugin;
@@ -359,12 +361,14 @@ public final class LegendaryListener implements Listener {
                 refreshLifeStealerLore(online);
             }
             scheduleLoadedChunkLegendaryMigration();
+            auditLegendaryClaimsAndDuplicates();
         });
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickMagnets, 20L, 20L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickPercyTridentEffects, 20L, 20L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickLifeStealerLore, 20L, 20L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickEnderSwordDragons, 1L, 1L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::cleanupExpiredLegendaryCooldowns, 20L * 60L, 20L * 60L);
+        Bukkit.getScheduler().runTaskTimer(plugin, this::auditLegendaryClaimsAndDuplicates, LEGENDARY_DUPLICATE_AUDIT_INTERVAL_TICKS, LEGENDARY_DUPLICATE_AUDIT_INTERVAL_TICKS);
     }
 
     @EventHandler
@@ -374,6 +378,7 @@ public final class LegendaryListener implements Listener {
         refreshMagnetTracking(event.getPlayer());
         refreshWitherBladeLore(event.getPlayer());
         refreshLifeStealerLore(event.getPlayer());
+        scheduleLegendaryDuplicateAudit();
     }
 
     @EventHandler
@@ -1606,9 +1611,22 @@ public final class LegendaryListener implements Listener {
 
     private ItemStack createTradeButton(Player player, LegendaryType type) {
         Map<Material, Integer> ingredients = ingredientsFor(type);
+        boolean claimed = plugin.getLegendaryAltarManager() != null
+            && plugin.getLegendaryAltarManager().isLegendaryClaimed(type.id);
         boolean canCraft = canCraftLegendary(player, type.id);
         List<String> lore = new ArrayList<>();
         lore.add("<gray>Legendaries can only be crafted at the active altar.</gray>");
+        if (claimed) {
+            lore.add("<red>This legendary has already been claimed on the server.</red>");
+            lore.add("<gray>It can no longer appear from the altar.</gray>");
+            lore.add("<dark_gray> ");
+            lore.addAll(recipeProgressLines(player, type.id));
+            return createGuiItem(
+                Material.BARRIER,
+                "<red><bold>Already Claimed</bold></red>",
+                lore
+            );
+        }
         lore.add(canCraft
             ? "<green>You have the required materials.</green>"
             : "<red>You are missing some required materials.</red>");
@@ -3495,6 +3513,7 @@ public final class LegendaryListener implements Listener {
         announceLegendaryCraft(player, type);
         String sourceText = "trade".equals(source) ? "Traded materials for " : "Crafted ";
         player.sendMessage(MessageUtil.success(sourceText + type.display + "<green>.</green>"));
+        scheduleLegendaryDuplicateAudit();
         return true;
     }
 
@@ -4542,6 +4561,125 @@ public final class LegendaryListener implements Listener {
         return String.format(java.util.Locale.US, "%.1f", damage);
     }
 
+    private void scheduleLegendaryDuplicateAudit() {
+        if (legendaryDuplicateAuditQueued) {
+            return;
+        }
+        legendaryDuplicateAuditQueued = true;
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            legendaryDuplicateAuditQueued = false;
+            auditLegendaryClaimsAndDuplicates();
+        });
+    }
+
+    private void auditLegendaryClaimsAndDuplicates() {
+        LegendaryAltarManager altarManager = plugin.getLegendaryAltarManager();
+        if (altarManager == null) {
+            return;
+        }
+
+        Map<String, List<LegendaryCopy>> copiesByLegendaryId = new LinkedHashMap<>();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            collectLegendaryCopies(player, player.getInventory(), copiesByLegendaryId);
+            collectLegendaryCopies(player, player.getEnderChest(), copiesByLegendaryId);
+        }
+
+        for (Map.Entry<String, List<LegendaryCopy>> entry : copiesByLegendaryId.entrySet()) {
+            String legendaryId = entry.getKey();
+            List<LegendaryCopy> copies = entry.getValue();
+            if (copies.isEmpty()) {
+                continue;
+            }
+
+            altarManager.recordClaimedLegendary(legendaryId, null, false);
+            int totalCopies = 0;
+            for (LegendaryCopy copy : copies) {
+                totalCopies += Math.max(1, copy.amount());
+            }
+            if (totalCopies <= 1) {
+                continue;
+            }
+
+            refundAndRemoveDuplicateLegendaries(legendaryId, copies);
+        }
+    }
+
+    private void collectLegendaryCopies(Player player, Inventory inventory, Map<String, List<LegendaryCopy>> copiesByLegendaryId) {
+        if (player == null || inventory == null) {
+            return;
+        }
+
+        ItemStack[] contents = inventory.getContents();
+        for (int slot = 0; slot < contents.length; slot++) {
+            ItemStack item = contents[slot];
+            LegendaryType type = typeOf(item);
+            if (type == null) {
+                continue;
+            }
+            copiesByLegendaryId.computeIfAbsent(type.id, ignored -> new ArrayList<>())
+                .add(new LegendaryCopy(player, inventory, slot, type, Math.max(1, item.getAmount())));
+        }
+    }
+
+    private void refundAndRemoveDuplicateLegendaries(String legendaryId, List<LegendaryCopy> copies) {
+        Map<UUID, Map<LegendaryType, Integer>> refundsByPlayer = new LinkedHashMap<>();
+        Map<UUID, Player> playersById = new HashMap<>();
+
+        for (LegendaryCopy copy : copies) {
+            copy.inventory().setItem(copy.slot(), null);
+            refundsByPlayer
+                .computeIfAbsent(copy.player().getUniqueId(), ignored -> new LinkedHashMap<>())
+                .merge(copy.type(), Math.max(1, copy.amount()), Integer::sum);
+            playersById.put(copy.player().getUniqueId(), copy.player());
+        }
+
+        for (Map.Entry<UUID, Map<LegendaryType, Integer>> entry : refundsByPlayer.entrySet()) {
+            Player player = playersById.get(entry.getKey());
+            if (player == null || !player.isOnline()) {
+                continue;
+            }
+
+            for (Map.Entry<LegendaryType, Integer> refund : entry.getValue().entrySet()) {
+                refundLegendaryMaterials(player, refund.getKey(), refund.getValue());
+            }
+            player.updateInventory();
+        }
+
+        plugin.getLogger().warning("Removed duplicate legendary copies for " + legendaryId + " and refunded recipe materials.");
+    }
+
+    private void refundLegendaryMaterials(Player player, LegendaryType type, int copiesRemoved) {
+        if (copiesRemoved <= 0) {
+            return;
+        }
+
+        Map<Material, Integer> ingredients = ingredientsFor(type);
+        if (ingredients.isEmpty()) {
+            player.sendMessage(MessageUtil.error(
+                "Duplicate " + type.display + "<red> was removed, but no refund recipe exists.</red>"
+            ));
+            return;
+        }
+
+        List<ItemStack> refundStacks = new ArrayList<>();
+        for (Map.Entry<Material, Integer> ingredient : ingredients.entrySet()) {
+            int remaining = ingredient.getValue() * copiesRemoved;
+            int maxStack = Math.max(1, ingredient.getKey().getMaxStackSize());
+            while (remaining > 0) {
+                int amount = Math.min(remaining, maxStack);
+                refundStacks.add(new ItemStack(ingredient.getKey(), amount));
+                remaining -= amount;
+            }
+        }
+
+        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(refundStacks.toArray(new ItemStack[0]));
+        leftovers.values().forEach(item -> player.getWorld().dropItemNaturally(player.getLocation(), item));
+        player.sendMessage(MessageUtil.warn(
+            "Duplicate " + type.display + "<yellow> was removed. Refunded materials for <white>"
+                + copiesRemoved + "</white> copy/copies.</yellow>"
+        ));
+    }
+
     private void sendWitherBladeActionBar(Player player, WitherBladeState state) {
         player.sendActionBar(MM.deserialize(
             "<dark_gray><bold>Wither Blade</bold></dark_gray><gray> skulls: <white>"
@@ -5344,6 +5482,8 @@ public final class LegendaryListener implements Listener {
     }
 
     private record FrostScytheFreezeState(long expiresAt, int previousFreezeTicks, boolean previousFreezeLocked) {}
+
+    private record LegendaryCopy(Player player, Inventory inventory, int slot, LegendaryType type, int amount) {}
 
     private record LegendaryRecipe(LegendaryType type, Map<Material, Integer> ingredients) {}
     private record ChronoState(Location loc, long readyAt) {}

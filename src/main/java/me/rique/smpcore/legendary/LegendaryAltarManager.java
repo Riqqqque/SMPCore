@@ -38,7 +38,13 @@ import org.bukkit.event.world.TimeSkipEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 public final class LegendaryAltarManager implements Listener {
@@ -49,10 +55,12 @@ public final class LegendaryAltarManager implements Listener {
     private final SMPCore plugin;
     private final BossBar bossBar;
     private final NamespacedKey keyAltarDisplayType;
+    private final Set<String> claimedLegendaryIds = ConcurrentHashMap.newKeySet();
 
     private volatile DatabaseManager.LegendaryAltarRecord altarRecord = DatabaseManager.LegendaryAltarRecord.empty();
     private volatile boolean loaded;
     private volatile boolean activationAnnounced;
+    private volatile boolean claimedLegendaryIdsReady;
 
     public LegendaryAltarManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -73,9 +81,44 @@ public final class LegendaryAltarManager implements Listener {
         bossBar.setVisible(false);
     }
 
+    public boolean isLegendaryClaimed(String legendaryId) {
+        String normalized = normalizeLegendaryId(legendaryId);
+        return normalized != null && claimedLegendaryIds.contains(normalized);
+    }
+
+    public void recordClaimedLegendary(String legendaryId, java.util.UUID claimedBy, boolean craftedCurrentAltar) {
+        String normalized = normalizeLegendaryId(legendaryId);
+        if (normalized == null) {
+            return;
+        }
+
+        if (claimedLegendaryIds.add(normalized)) {
+            plugin.getDatabase().markLegendaryClaimed(normalized, claimedBy).exceptionally(throwable -> {
+                plugin.getLogger().severe("Failed to persist claimed legendary " + normalized + ": " + throwable.getMessage());
+                return null;
+            });
+        }
+
+        if (hasActiveAltar() && normalized.equals(normalizeLegendaryId(altarRecord.legendaryId()))) {
+            clearActiveAltar(craftedCurrentAltar);
+        }
+    }
+
     public void sendRecipeHint(Player player, String requestedLegendaryId) {
         if (!loaded) {
             player.sendMessage(MessageUtil.info("Legendary altar data is still loading."));
+            return;
+        }
+
+        String normalizedRequestedId = normalizeLegendaryId(requestedLegendaryId);
+        if (normalizedRequestedId != null && isLegendaryClaimed(normalizedRequestedId)) {
+            String requestedName = plugin.getLegendaryListener().displayNameForLegendary(normalizedRequestedId);
+            player.sendMessage(MessageUtil.info(
+                "<white>" + requestedName + "</white> has already been claimed and will not appear again."
+            ));
+            if (hasActiveAltar() && normalizedRequestedId.equals(normalizeLegendaryId(altarRecord.legendaryId()))) {
+                clearActiveAltar(false);
+            }
             return;
         }
 
@@ -334,6 +377,14 @@ public final class LegendaryAltarManager implements Listener {
             return;
         }
 
+        if (isLegendaryClaimed(legendaryId)) {
+            player.sendMessage(MessageUtil.warn(
+                "<white>" + displayName + "</white> has already been claimed and cannot be crafted again."
+            ));
+            recordClaimedLegendary(legendaryId, null, false);
+            return;
+        }
+
         if (!plugin.getLegendaryListener().canCraftLegendary(player, legendaryId)) {
             player.sendMessage(MessageUtil.error("You are missing materials for <white>" + displayName + "</white>."));
             for (String line : plugin.getLegendaryListener().recipeProgressLines(player, legendaryId)) {
@@ -347,7 +398,7 @@ public final class LegendaryAltarManager implements Listener {
             return;
         }
 
-        clearActiveAltar(true);
+        recordClaimedLegendary(legendaryId, player.getUniqueId(), true);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -387,13 +438,31 @@ public final class LegendaryAltarManager implements Listener {
     }
 
     private void loadState() {
-        plugin.getDatabase().loadLegendaryAltar().whenComplete((record, throwable) -> {
+        CompletableFuture<DatabaseManager.LegendaryAltarRecord> altarFuture = plugin.getDatabase().loadLegendaryAltar();
+        CompletableFuture<Set<String>> claimedFuture = plugin.getDatabase().loadClaimedLegendaryIds();
+        CompletableFuture.allOf(altarFuture, claimedFuture).whenComplete((ignored, throwable) -> {
             if (!plugin.isEnabled()) return;
             Bukkit.getScheduler().runTask(plugin, () -> {
-                if (throwable != null) {
-                    plugin.getLogger().severe("Failed to load legendary altar data: " + throwable.getMessage());
-                    loaded = true;
-                    return;
+                DatabaseManager.LegendaryAltarRecord record = DatabaseManager.LegendaryAltarRecord.empty();
+                try {
+                    record = altarFuture.join();
+                } catch (CompletionException ex) {
+                    plugin.getLogger().severe("Failed to load legendary altar data: " + ex.getCause().getMessage());
+                }
+
+                claimedLegendaryIds.clear();
+                claimedLegendaryIdsReady = false;
+                try {
+                    Set<String> claimed = claimedFuture.join();
+                    for (String claimedId : claimed) {
+                        String normalized = normalizeLegendaryId(claimedId);
+                        if (normalized != null) {
+                            claimedLegendaryIds.add(normalized);
+                        }
+                    }
+                    claimedLegendaryIdsReady = true;
+                } catch (CompletionException ex) {
+                    plugin.getLogger().severe("Failed to load claimed legendary data: " + ex.getCause().getMessage());
                 }
 
                 altarRecord = record == null ? DatabaseManager.LegendaryAltarRecord.empty() : record;
@@ -406,6 +475,11 @@ public final class LegendaryAltarManager implements Listener {
                 }
 
                 if (System.currentTimeMillis() >= altarRecord.expiresAt()) {
+                    clearActiveAltar(false);
+                    return;
+                }
+
+                if (isLegendaryClaimed(altarRecord.legendaryId())) {
                     clearActiveAltar(false);
                     return;
                 }
@@ -794,10 +868,27 @@ public final class LegendaryAltarManager implements Listener {
     private String pickLegendaryId() {
         LegendaryListener legendary = plugin.getLegendaryListener();
         if (legendary == null) return null;
+        if (!claimedLegendaryIdsReady) return null;
 
         List<String> ids = legendary.craftableLegendaryIds();
+        ids.removeIf(this::isLegendaryClaimed);
         if (ids.isEmpty()) return null;
         return ids.get(ThreadLocalRandom.current().nextInt(ids.size()));
+    }
+
+    private String normalizeLegendaryId(String legendaryId) {
+        if (legendaryId == null) {
+            return null;
+        }
+        LegendaryListener legendary = plugin.getLegendaryListener();
+        if (legendary != null) {
+            String normalized = legendary.normalizeLegendaryId(legendaryId);
+            if (normalized != null && !normalized.isBlank()) {
+                return normalized;
+            }
+        }
+        String normalized = legendaryId.trim().toLowerCase(Locale.ROOT);
+        return normalized.isBlank() ? null : normalized;
     }
 
     private Location findSpawnLocation(World world) {
