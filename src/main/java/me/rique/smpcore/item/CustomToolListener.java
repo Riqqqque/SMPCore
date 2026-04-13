@@ -31,7 +31,6 @@ import org.bukkit.event.inventory.PrepareGrindstoneEvent;
 import org.bukkit.event.inventory.PrepareItemCraftEvent;
 import org.bukkit.event.player.PlayerFishEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
-import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.AnvilInventory;
 import org.bukkit.inventory.CraftingInventory;
 import org.bukkit.inventory.GrindstoneInventory;
@@ -60,7 +59,6 @@ public final class CustomToolListener implements Listener {
     public static final String ADVANCED_PICKAXE_ID = "advanced_pickaxe";
     public static final String GRAPPLE_HOOK_ID = "grapple_hook";
     private static final String LEGACY_AMETHYST_PICKAXE_ID = "amethyst_pickaxe";
-    private static final long GRAPPLE_HOOK_COOLDOWN_MS = 750L;
 
     private static final Set<Material> GOLD_ORES = EnumSet.of(Material.GOLD_ORE, Material.DEEPSLATE_GOLD_ORE, Material.NETHER_GOLD_ORE);
     private static final Set<Material> COAL_ORES = EnumSet.of(Material.COAL_ORE, Material.DEEPSLATE_COAL_ORE);
@@ -76,7 +74,6 @@ public final class CustomToolListener implements Listener {
     private final NamespacedKey keyCustomToolId;
     private final NamespacedKey advancedPickaxeRecipeKey;
     private final NamespacedKey grappleHookRecipeKey;
-    private final NamespacedKey advancedPickaxeItemModelKey;
     private final Map<BlockKey, AdvancedPickaxeContext> advancedPickaxeContexts = new ConcurrentHashMap<>();
     private final Map<UUID, Long> grappleHookCooldowns = new ConcurrentHashMap<>();
 
@@ -85,7 +82,6 @@ public final class CustomToolListener implements Listener {
         this.keyCustomToolId = new NamespacedKey(plugin, "custom_tool_id");
         this.advancedPickaxeRecipeKey = new NamespacedKey(plugin, "advanced_pickaxe_recipe");
         this.grappleHookRecipeKey = new NamespacedKey(plugin, "grapple_hook_recipe");
-        this.advancedPickaxeItemModelKey = new NamespacedKey(plugin, ADVANCED_PICKAXE_ID);
         registerRecipes();
 
         Bukkit.getScheduler().runTask(plugin, () -> {
@@ -131,8 +127,8 @@ public final class CustomToolListener implements Listener {
 
     public String displayNameFor(String toolId) {
         return switch (toolId) {
-            case ADVANCED_PICKAXE_ID -> "Advanced Pickaxe";
-            case GRAPPLE_HOOK_ID -> "Grapple Hook";
+            case ADVANCED_PICKAXE_ID -> "Prospector's Pick";
+            case GRAPPLE_HOOK_ID -> "Skyhook";
             default -> null;
         };
     }
@@ -202,11 +198,6 @@ public final class CustomToolListener implements Listener {
         refreshPlayerCustomTools(event.getPlayer());
     }
 
-    @EventHandler
-    public void onQuit(PlayerQuitEvent event) {
-        grappleHookCooldowns.remove(event.getPlayer().getUniqueId());
-    }
-
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onEnchantItem(EnchantItemEvent event) {
         if (customToolId(event.getItem()) == null) {
@@ -221,7 +212,17 @@ public final class CustomToolListener implements Listener {
         if (!(recipe instanceof org.bukkit.Keyed keyed)) return;
 
         if (advancedPickaxeRecipeKey.equals(keyed.getKey())) {
-            event.getInventory().setResult(plugin.getConfigManager().advancedPickaxeEnabled ? createAdvancedPickaxe() : null);
+            Player viewer = event.getViewers().stream()
+                .filter(Player.class::isInstance)
+                .map(Player.class::cast)
+                .findFirst()
+                .orElse(null);
+            boolean enchanterCraft = viewer != null
+                && plugin.getSuperpowerManager() != null
+                && plugin.getSuperpowerManager().hasPower(viewer, me.rique.smpcore.power.SuperpowerType.ENCHANTER);
+            event.getInventory().setResult(
+                plugin.getConfigManager().advancedPickaxeEnabled ? createAdvancedPickaxe(enchanterCraft) : null
+            );
         }
     }
 
@@ -296,7 +297,7 @@ public final class CustomToolListener implements Listener {
             && tool.getEnchantmentLevel(Enchantment.SILK_TOUCH) > 0) {
             return;
         }
-        ItemStack bonusDrop = rollAdvancedPickaxeLuckyBonus(event.getBlock().getType());
+        ItemStack bonusDrop = rollAdvancedPickaxeLuckyBonus(event.getBlock().getType(), player);
         if (bonusDrop == null) return;
 
         rememberAdvancedPickaxeContext(
@@ -363,9 +364,20 @@ public final class CustomToolListener implements Listener {
         long now = System.currentTimeMillis();
         long readyAt = grappleHookCooldowns.getOrDefault(player.getUniqueId(), 0L);
         if (readyAt > now) {
+            long remainingMillis = readyAt - now;
+            long remainingSeconds = Math.max(1L, (remainingMillis + 999L) / 1000L);
+            player.sendMessage(MessageUtil.warn(
+                "Skyhook cooldown: <white>" + remainingSeconds + "s</white>."
+            ));
             return;
         }
-        grappleHookCooldowns.put(player.getUniqueId(), now + GRAPPLE_HOOK_COOLDOWN_MS);
+
+        long cooldownMillis = Math.max(0L, plugin.getConfigManager().grappleHookCooldownSeconds * 1000L);
+        if (cooldownMillis > 0L) {
+            grappleHookCooldowns.put(player.getUniqueId(), now + cooldownMillis);
+        } else {
+            grappleHookCooldowns.remove(player.getUniqueId());
+        }
 
         Location hookLocation = event.getHook().getLocation();
         Vector pull = hookLocation.toVector().subtract(player.getLocation().toVector());
@@ -418,10 +430,17 @@ public final class CustomToolListener implements Listener {
     }
 
     private ItemStack createAdvancedPickaxe() {
+        return createAdvancedPickaxe(false);
+    }
+
+    private ItemStack createAdvancedPickaxe(boolean enchanterCrafted) {
         ItemStack item = new ItemStack(Material.DIAMOND_PICKAXE);
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return item;
         applyCustomToolState(meta, ADVANCED_PICKAXE_ID);
+        if (enchanterCrafted) {
+            meta.addEnchant(Enchantment.FORTUNE, 3, true);
+        }
         applyCustomToolPresentation(meta, ADVANCED_PICKAXE_ID, item.getType());
         item.setItemMeta(meta);
         return item;
@@ -513,38 +532,39 @@ public final class CustomToolListener implements Listener {
         Component baseDisplayName = null;
         switch (toolId) {
             case ADVANCED_PICKAXE_ID -> {
-                meta.setItemModel(advancedPickaxeItemModelKey);
-                baseDisplayName = MM.deserialize("<aqua><bold>Advanced Pickaxe</bold></aqua>");
+                baseDisplayName = MM.deserialize("<aqua><bold>Prospector's Pick</bold></aqua>");
                 meta.displayName(baseDisplayName);
                 meta.lore(CustomLoreUtil.buildStyledLore(
                     meta,
                     material,
                     "CUSTOM",
                     "PICKAXE",
-                    List.of("<gray>Lucky mining can roll a random bonus ore.</gray>"),
+                    List.of("<gray>A tuned pick that coaxes richer veins from stone.</gray>"),
                     List.of(CustomLoreUtil.section(
                         "Item Ability",
-                        "Ore Excavation",
+                        "Lucky Vein",
                         "<gray>Mining an ore has a <white>" + formatPercent(plugin.getConfigManager().advancedPickaxeLuckyDropChance) + "</white> chance to roll a random different ore.</gray>",
-                        "<gray>Coal and copper are the most common lucky rolls.</gray>",
-                        "<gray>Diamond and emerald are the rarest lucky rolls.</gray>",
-                        "<gray>Fortune still affects the normal block drop.</gray>"
+                        "<gray>Coal and copper are guaranteed-weight rolls. Iron, redstone, and lapis are common.</gray>",
+                        "<gray>Gold is rarer. Diamond and emerald are the rarest lucky rolls.</gray>",
+                        "<gray>Lucky ore drops come in stacks of <white>1 to 3</white>.</gray>",
+                        "<gray>Arcanists craft this with <white>Fortune III</white>.</gray>"
                     ))
                 ));
             }
             case GRAPPLE_HOOK_ID -> {
-                baseDisplayName = MM.deserialize("<gold><bold>Grapple Hook</bold></gold>");
+                baseDisplayName = MM.deserialize("<gold><bold>Skyhook</bold></gold>");
                 meta.displayName(baseDisplayName);
                 meta.lore(CustomLoreUtil.buildStyledLore(
                     meta,
                     material,
                     "CUSTOM",
                     "HOOK",
-                    List.of("<gray>A reinforced rod built for quick movement.</gray>"),
+                    List.of("<gray>A reinforced line launcher built for sharp movement.</gray>"),
                     List.of(CustomLoreUtil.section(
                         "Right Click",
-                        "Hook Pull",
+                        "Sky Pull",
                         "<gray>Cast and reel it in to yank yourself toward the hook.</gray>",
+                        "<gray>Cooldown: <white>" + plugin.getConfigManager().grappleHookCooldownSeconds + "s</white>.</gray>",
                         "<gray>Built with simple parts for easy early crafting.</gray>"
                     ))
                 ));
@@ -587,7 +607,7 @@ public final class CustomToolListener implements Listener {
             || broken == Material.ANCIENT_DEBRIS;
     }
 
-    private ItemStack rollAdvancedPickaxeLuckyBonus(Material broken) {
+    private ItemStack rollAdvancedPickaxeLuckyBonus(Material broken, Player player) {
         if (ThreadLocalRandom.current().nextDouble() >= plugin.getConfigManager().advancedPickaxeLuckyDropChance) {
             return null;
         }
@@ -596,7 +616,7 @@ public final class CustomToolListener implements Listener {
         double totalWeight = 0.0;
         for (AdvancedPickaxeBonusFamily family : AdvancedPickaxeBonusFamily.values()) {
             if (family == sourceFamily) continue;
-            totalWeight += bonusWeight(family);
+            totalWeight += bonusWeight(family, player);
         }
         if (totalWeight <= 0.0) {
             return null;
@@ -606,16 +626,16 @@ public final class CustomToolListener implements Listener {
         AdvancedPickaxeBonusFamily fallback = null;
         for (AdvancedPickaxeBonusFamily family : AdvancedPickaxeBonusFamily.values()) {
             if (family == sourceFamily) continue;
-            double weight = bonusWeight(family);
+            double weight = bonusWeight(family, player);
             if (weight <= 0.0) continue;
             fallback = family;
             roll -= weight;
             if (roll <= 0.0) {
-                return new ItemStack(family.drop(), 1);
+                return new ItemStack(family.drop(), ThreadLocalRandom.current().nextInt(1, 4));
             }
         }
 
-        return fallback == null ? null : new ItemStack(fallback.drop(), 1);
+        return fallback == null ? null : new ItemStack(fallback.drop(), ThreadLocalRandom.current().nextInt(1, 4));
     }
 
     private AdvancedPickaxeBonusFamily bonusFamilyOf(Material broken) {
@@ -630,14 +650,17 @@ public final class CustomToolListener implements Listener {
         return null;
     }
 
-    private double bonusWeight(AdvancedPickaxeBonusFamily family) {
+    private double bonusWeight(AdvancedPickaxeBonusFamily family, Player player) {
+        boolean enchanter = player != null
+            && plugin.getSuperpowerManager() != null
+            && plugin.getSuperpowerManager().hasPower(player, me.rique.smpcore.power.SuperpowerType.ENCHANTER);
         return switch (family) {
             case COAL -> plugin.getConfigManager().advancedPickaxeCoalChance;
             case IRON -> plugin.getConfigManager().advancedPickaxeIronChance;
             case REDSTONE -> plugin.getConfigManager().advancedPickaxeRedstoneChance;
             case LAPIS -> plugin.getConfigManager().advancedPickaxeLapisChance;
             case COPPER -> plugin.getConfigManager().advancedPickaxeCopperChance;
-            case DIAMOND -> plugin.getConfigManager().advancedPickaxeDiamondChance;
+            case DIAMOND -> enchanter ? (1.0 / 3.0) : plugin.getConfigManager().advancedPickaxeDiamondChance;
             case EMERALD -> plugin.getConfigManager().advancedPickaxeEmeraldChance;
             case GOLD -> plugin.getConfigManager().advancedPickaxeGoldChance;
         };

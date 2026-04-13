@@ -1,5 +1,7 @@
 package me.rique.smpcore.power;
 
+import io.papermc.paper.registry.RegistryAccess;
+import io.papermc.paper.registry.RegistryKey;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.item.CustomEnchantListener;
@@ -22,6 +24,7 @@ import org.bukkit.block.BlockFace;
 import org.bukkit.block.data.Ageable;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeModifier;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Item;
@@ -34,14 +37,24 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
+import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockDropItemEvent;
+import org.bukkit.event.block.BlockFadeEvent;
+import org.bukkit.event.block.BlockFromToEvent;
 import org.bukkit.event.block.BlockGrowEvent;
+import org.bukkit.event.block.BlockPhysicsEvent;
+import org.bukkit.event.block.BlockPistonExtendEvent;
+import org.bukkit.event.block.BlockPistonRetractEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.block.BlockRedstoneEvent;
+import org.bukkit.event.block.BlockSpreadEvent;
 import org.bukkit.event.enchantment.EnchantItemEvent;
 import org.bukkit.event.enchantment.PrepareItemEnchantEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
+import org.bukkit.event.entity.ProjectileLaunchEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -55,11 +68,15 @@ import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerExpChangeEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerItemDamageEvent;
 import org.bukkit.event.player.PlayerItemHeldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
+import org.bukkit.event.player.PlayerToggleFlightEvent;
 import org.bukkit.event.player.PlayerToggleSneakEvent;
+import org.bukkit.inventory.AnvilInventory;
 import org.bukkit.inventory.CraftingInventory;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.EquipmentSlotGroup;
@@ -71,6 +88,7 @@ import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.EnchantmentStorageMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.potion.PotionEffect;
@@ -82,6 +100,7 @@ import org.bukkit.util.Vector;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -97,12 +116,13 @@ public final class SuperpowerManager implements Listener {
     public static final String ANCIENT_SCROLL_ITEM_ID = "ancient_scroll";
     public static final String WARDEN_HEART_ITEM_ID = "warden_heart";
     public static final String MOTHER_NATURE_STICK_ITEM_ID = "mother_nature_stick";
+    public static final String THE_WORLD_CLOCK_ITEM_ID = "the_world_clock";
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final Component POWERS_MENU_TITLE =
         MM.deserialize("<gradient:#ff9a3d:#d61c4e><bold>Superpower Info</bold></gradient>");
 
-    private static final int MENU_SIZE = 27;
+    private static final int MENU_SIZE = 45;
     private static final int SHADOW_DURATION_SECONDS = 15 * 60;
     private static final int SHADOW_COOLDOWN_SECONDS = 5 * 60;
     private static final int SHADOW_HIT_COOLDOWN_SECONDS = 7 * 60;
@@ -119,7 +139,27 @@ public final class SuperpowerManager implements Listener {
     private static final double IMMORTALITY_SURVIVAL_HEALTH = 1.0;
     private static final double BERSERK_LOW_HEALTH_THRESHOLD = 6.0;
     private static final int ENCHANTER_VIRTUAL_LAPIS_AMOUNT = 64;
+    private static final double ENCHANTER_ESSENCE_EXTRACTION_CHANCE = 0.10;
+    private static final double ENCHANTER_ARCANE_PRESERVATION_CHANCE = 0.25;
+    private static final double ENCHANTER_LUCK_BONUS = 2.0;
     private static final double TANK_CROUCH_KNOCKBACK_RESISTANCE = 1.0;
+    private static final double MINER_EXTRA_ORE_CHANCE = 0.15;
+    private static final double MINER_HEALTH_BONUS = 2.0;
+    private static final double GIANT_SCALE_MULTIPLIER = 1.2;
+    private static final double GIANT_HEALTH_BONUS = 6.0;
+    private static final double GIANT_KNOCKBACK_RESISTANCE = 0.20;
+    private static final double SUPERMAN_HEALTH_BONUS = 20.0;
+    private static final int SUPERMAN_FLIGHT_SECONDS = 30;
+    private static final int SUPERMAN_FLIGHT_COOLDOWN_SECONDS = 5 * 60;
+    private static final long SUPERMAN_BOOST_COOLDOWN_MS = 800L;
+    private static final int XRAY_DURATION_SECONDS = 30;
+    private static final int XRAY_COOLDOWN_SECONDS = 6 * 60;
+    private static final int XRAY_ENTITY_RADIUS = 24;
+    private static final int XRAY_ORE_RADIUS = 12;
+    private static final int XRAY_ORE_VERTICAL_RADIUS = 8;
+    private static final int TIME_STOP_RADIUS = 10;
+    private static final int TIME_STOP_DURATION_SECONDS = 5;
+    private static final int TIME_STOP_COOLDOWN_SECONDS = 5 * 60;
     private static final long PORTAL_RECENT_TRAVEL_MS = 2500L;
     private static final long FLORIST_CROUCH_GROWTH_COOLDOWN_MS = 150L;
     private static final long FLORIST_STICK_RIGHT_CLICK_COOLDOWN_MS = 1250L;
@@ -164,6 +204,28 @@ public final class SuperpowerManager implements Listener {
         EntityType.SKELETON_HORSE
     );
 
+    private static final Set<Material> MINER_ORE_BLOCKS = EnumSet.of(
+        Material.COAL_ORE,
+        Material.DEEPSLATE_COAL_ORE,
+        Material.IRON_ORE,
+        Material.DEEPSLATE_IRON_ORE,
+        Material.COPPER_ORE,
+        Material.DEEPSLATE_COPPER_ORE,
+        Material.GOLD_ORE,
+        Material.DEEPSLATE_GOLD_ORE,
+        Material.REDSTONE_ORE,
+        Material.DEEPSLATE_REDSTONE_ORE,
+        Material.EMERALD_ORE,
+        Material.DEEPSLATE_EMERALD_ORE,
+        Material.LAPIS_ORE,
+        Material.DEEPSLATE_LAPIS_ORE,
+        Material.DIAMOND_ORE,
+        Material.DEEPSLATE_DIAMOND_ORE,
+        Material.NETHER_QUARTZ_ORE,
+        Material.NETHER_GOLD_ORE,
+        Material.ANCIENT_DEBRIS
+    );
+
     private final SMPCore plugin;
     private final NamespacedKey keyPowerType;
     private final NamespacedKey keyVisitedOverworld;
@@ -174,13 +236,28 @@ public final class SuperpowerManager implements Listener {
     private final NamespacedKey keyAncientScroll;
     private final NamespacedKey keyWardenHeart;
     private final NamespacedKey keyMotherNatureStick;
+    private final NamespacedKey keyTheWorldClock;
     private final NamespacedKey keyEnchanterLapis;
     private final NamespacedKey keyTankImmovableModifier;
+    private final NamespacedKey keyEnchanterLuckModifier;
+    private final NamespacedKey keyEnchanterMoveModifier;
+    private final NamespacedKey keyEnchanterAttackModifier;
+    private final NamespacedKey keyMinerHealthModifier;
+    private final NamespacedKey keyGiantHealthModifier;
+    private final NamespacedKey keyGiantScaleModifier;
+    private final NamespacedKey keyGiantKnockbackModifier;
+    private final NamespacedKey keySupermanHealthModifier;
+    private final NamespacedKey keySupermanFlightActiveUntil;
+    private final NamespacedKey keySupermanFlightCooldownUntil;
+    private final NamespacedKey keyXrayActiveUntil;
+    private final NamespacedKey keyXrayCooldownUntil;
+    private final NamespacedKey keyTimeStopCooldownUntil;
     private final NamespacedKey keyShadowCooldownUntil;
     private final NamespacedKey keyShadowActiveUntil;
     private final NamespacedKey keyMonarchSummonOwner;
     private final NamespacedKey keyMonarchSummonTag;
     private final Map<UUID, Integer> pendingFloristStickReturns = new ConcurrentHashMap<>();
+    private final Map<UUID, Integer> pendingTheWorldClockReturns = new ConcurrentHashMap<>();
     private final Map<UUID, PortalPair> activeTravelerPortals = new ConcurrentHashMap<>();
     private final Map<UUID, Long> recentPortalTravel = new ConcurrentHashMap<>();
     private final Map<UUID, Set<UUID>> monarchSummonsByOwner = new ConcurrentHashMap<>();
@@ -188,8 +265,14 @@ public final class SuperpowerManager implements Listener {
     private final Map<UUID, Long> floristCrouchGrowthCooldowns = new ConcurrentHashMap<>();
     private final Map<UUID, Long> floristLeftClickCooldowns = new ConcurrentHashMap<>();
     private final Map<UUID, Long> floristRightClickCooldowns = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> supermanBoostCooldowns = new ConcurrentHashMap<>();
+    private final Map<UUID, TimeStopState> activeTimeStops = new ConcurrentHashMap<>();
+    private final Map<UUID, FrozenMobState> frozenMobs = new ConcurrentHashMap<>();
+    private final Map<UUID, FrozenProjectileState> frozenProjectiles = new ConcurrentHashMap<>();
+    private final Set<UUID> timeStoppedPlayers = ConcurrentHashMap.newKeySet();
     private BukkitTask passiveTask;
     private BukkitTask portalTask;
+    private BukkitTask timeStopTask;
 
     public SuperpowerManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -202,8 +285,22 @@ public final class SuperpowerManager implements Listener {
         this.keyAncientScroll = new NamespacedKey(plugin, ANCIENT_SCROLL_ITEM_ID);
         this.keyWardenHeart = new NamespacedKey(plugin, WARDEN_HEART_ITEM_ID);
         this.keyMotherNatureStick = new NamespacedKey(plugin, MOTHER_NATURE_STICK_ITEM_ID);
+        this.keyTheWorldClock = new NamespacedKey(plugin, THE_WORLD_CLOCK_ITEM_ID);
         this.keyEnchanterLapis = new NamespacedKey(plugin, "superpower_enchanter_lapis");
         this.keyTankImmovableModifier = new NamespacedKey(plugin, "superpower_tank_immovable");
+        this.keyEnchanterLuckModifier = new NamespacedKey(plugin, "superpower_enchanter_luck");
+        this.keyEnchanterMoveModifier = new NamespacedKey(plugin, "superpower_enchanter_move");
+        this.keyEnchanterAttackModifier = new NamespacedKey(plugin, "superpower_enchanter_attack");
+        this.keyMinerHealthModifier = new NamespacedKey(plugin, "superpower_miner_health");
+        this.keyGiantHealthModifier = new NamespacedKey(plugin, "superpower_giant_health");
+        this.keyGiantScaleModifier = new NamespacedKey(plugin, "superpower_giant_scale");
+        this.keyGiantKnockbackModifier = new NamespacedKey(plugin, "superpower_giant_knockback");
+        this.keySupermanHealthModifier = new NamespacedKey(plugin, "superpower_superman_health");
+        this.keySupermanFlightActiveUntil = new NamespacedKey(plugin, "superpower_superman_flight_until");
+        this.keySupermanFlightCooldownUntil = new NamespacedKey(plugin, "superpower_superman_flight_cooldown_until");
+        this.keyXrayActiveUntil = new NamespacedKey(plugin, "superpower_xray_active_until");
+        this.keyXrayCooldownUntil = new NamespacedKey(plugin, "superpower_xray_cooldown_until");
+        this.keyTimeStopCooldownUntil = new NamespacedKey(plugin, "superpower_time_stop_cooldown_until");
         this.keyShadowCooldownUntil = new NamespacedKey(plugin, "superpower_shadow_cooldown_until");
         this.keyShadowActiveUntil = new NamespacedKey(plugin, "superpower_shadow_active_until");
         this.keyMonarchSummonOwner = new NamespacedKey(plugin, "superpower_monarch_owner");
@@ -213,6 +310,7 @@ public final class SuperpowerManager implements Listener {
     public void start() {
         passiveTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickPlayers, 20L, 20L);
         portalTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickPortals, 5L, 5L);
+        timeStopTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickTimeStops, 1L, 1L);
         Bukkit.getScheduler().runTask(plugin, () -> Bukkit.getOnlinePlayers().forEach(this::initializePlayerState));
     }
 
@@ -222,6 +320,8 @@ public final class SuperpowerManager implements Listener {
                 restoreShadowAppearance(player);
             }
             syncTankImmovableState(player, false);
+            clearPowerAttributeModifiers(player);
+            syncSupermanFlightState(player, false);
             clearVirtualEnchanterLapis(player);
         }
         if (passiveTask != null) {
@@ -232,17 +332,24 @@ public final class SuperpowerManager implements Listener {
             portalTask.cancel();
             portalTask = null;
         }
+        if (timeStopTask != null) {
+            timeStopTask.cancel();
+            timeStopTask = null;
+        }
         for (UUID ownerId : new HashSet<>(activeTravelerPortals.keySet())) {
             closeTravelerPortal(ownerId, false);
         }
         for (UUID ownerId : new HashSet<>(monarchSummonsByOwner.keySet())) {
             despawnMonarchSummons(ownerId);
         }
+        clearAllTimeStops();
         pendingFloristStickReturns.clear();
+        pendingTheWorldClockReturns.clear();
         recentPortalTravel.clear();
         floristCrouchGrowthCooldowns.clear();
         floristLeftClickCooldowns.clear();
         floristRightClickCooldowns.clear();
+        supermanBoostCooldowns.clear();
     }
 
     public ItemStack createAncientScrollItem() {
@@ -281,6 +388,18 @@ public final class SuperpowerManager implements Listener {
         return item;
     }
 
+    public ItemStack createTheWorldClockItem() {
+        ItemStack item = new ItemStack(Material.CLOCK);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        applyTheWorldClockState(meta);
+        applyTheWorldClockPresentation(meta);
+        item.setItemMeta(meta);
+        return item;
+    }
+
     public List<ItemStack> ancientScrollRecipeDisplayItems() {
         return List.of(
             new ItemStack(Material.TOTEM_OF_UNDYING),
@@ -301,6 +420,10 @@ public final class SuperpowerManager implements Listener {
         return hasTaggedItem(item, keyMotherNatureStick, MOTHER_NATURE_STICK_ITEM_ID);
     }
 
+    public boolean isTheWorldClock(ItemStack item) {
+        return hasTaggedItem(item, keyTheWorldClock, THE_WORLD_CLOCK_ITEM_ID);
+    }
+
     public void openAdminInfoMenu(Player player) {
         Inventory inventory = Bukkit.createInventory(
             new PowerInfoHolder(),
@@ -317,6 +440,17 @@ public final class SuperpowerManager implements Listener {
 
     public boolean hasPower(Player player, SuperpowerType type) {
         return type != null && type == powerOf(player);
+    }
+
+    public boolean shouldRetainFlightAccess(Player player) {
+        if (player == null || !hasPower(player, SuperpowerType.SUPERMAN)) {
+            return false;
+        }
+        if (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        return supermanFlightActiveUntil(player) > now || supermanFlightCooldownUntil(player) <= now;
     }
 
     public boolean assignPower(Player player, SuperpowerType power, boolean notifyPlayer) {
@@ -356,6 +490,36 @@ public final class SuperpowerManager implements Listener {
         applyShadowEffects(player);
         player.sendMessage(MessageUtil.success("You fade into the shadows."));
         player.getWorld().playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_AMBIENT, 0.8f, 1.2f);
+        return true;
+    }
+
+    public boolean handleXrayCommand(Player player) {
+        if (!hasPower(player, SuperpowerType.XRAY_VISION)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+
+        long now = System.currentTimeMillis();
+        if (xrayActiveUntil(player) > now) {
+            player.sendMessage(MessageUtil.warn(
+                "Oracle Eye is already active for <white>" + secondsLeft(xrayActiveUntil(player), now) + "s</white>."
+            ));
+            return false;
+        }
+
+        long cooldownUntil = xrayCooldownUntil(player);
+        if (cooldownUntil > now) {
+            player.sendMessage(MessageUtil.warn(
+                "Oracle Eye cooldown: <white>" + secondsLeft(cooldownUntil, now) + "s</white>."
+            ));
+            return false;
+        }
+
+        setXrayActiveUntil(player, now + (XRAY_DURATION_SECONDS * 1000L));
+        setXrayCooldownUntil(player, now + (XRAY_COOLDOWN_SECONDS * 1000L));
+        player.sendMessage(MessageUtil.success("Oracle Eye tears through the walls around you."));
+        player.getWorld().playSound(player.getLocation(), Sound.BLOCK_BEACON_ACTIVATE, 0.7f, 1.8f);
+        renderXrayHighlights(player);
         return true;
     }
 
@@ -510,13 +674,31 @@ public final class SuperpowerManager implements Listener {
                 pendingFloristStickReturns.merge(player.getUniqueId(), kept, Integer::sum);
             }
         }
+        if (hasPower(player, SuperpowerType.THE_WORLD)) {
+            int kept = 0;
+            List<ItemStack> drops = event.getDrops();
+            for (int i = drops.size() - 1; i >= 0; i--) {
+                ItemStack drop = drops.get(i);
+                if (!isTheWorldClock(drop)) {
+                    continue;
+                }
+                kept += Math.max(1, drop.getAmount());
+                drops.remove(i);
+            }
+            if (kept > 0) {
+                pendingTheWorldClockReturns.merge(player.getUniqueId(), kept, Integer::sum);
+            }
+        }
         if (isShadowActive(player)) {
             deactivateShadow(player, false, false);
         }
+        stopSupermanFlight(player, false);
         syncTankImmovableState(player, false);
+        clearPowerAttributeModifiers(player);
         clearVirtualEnchanterLapis(player);
         closeTravelerPortal(player.getUniqueId(), false);
         despawnMonarchSummons(player.getUniqueId());
+        clearTimeStopForOwner(player.getUniqueId());
     }
 
     @EventHandler
@@ -524,15 +706,17 @@ public final class SuperpowerManager implements Listener {
         Player player = event.getPlayer();
         Integer pendingValue = pendingFloristStickReturns.remove(player.getUniqueId());
         int pending = pendingValue == null ? 0 : pendingValue;
-        if (pending <= 0) {
-            return;
-        }
+        Integer pendingClockValue = pendingTheWorldClockReturns.remove(player.getUniqueId());
+        int pendingClocks = pendingClockValue == null ? 0 : pendingClockValue;
         Bukkit.getScheduler().runTask(plugin, () -> {
             if (!player.isOnline()) {
                 return;
             }
             for (int i = 0; i < pending; i++) {
                 giveMotherNatureStick(player, true);
+            }
+            for (int i = 0; i < pendingClocks; i++) {
+                giveTheWorldClock(player, true);
             }
         });
     }
@@ -542,13 +726,18 @@ public final class SuperpowerManager implements Listener {
         Player player = event.getPlayer();
         UUID playerId = player.getUniqueId();
         syncTankImmovableState(player, false);
+        clearPowerAttributeModifiers(player);
+        stopSupermanFlight(player, false);
         clearVirtualEnchanterLapis(player);
         closeTravelerPortal(playerId, false);
         despawnMonarchSummons(playerId);
+        clearTimeStopForOwner(playerId);
+        timeStoppedPlayers.remove(playerId);
         recentPortalTravel.remove(playerId);
         floristCrouchGrowthCooldowns.remove(playerId);
         floristLeftClickCooldowns.remove(playerId);
         floristRightClickCooldowns.remove(playerId);
+        supermanBoostCooldowns.remove(playerId);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -560,6 +749,64 @@ public final class SuperpowerManager implements Listener {
         if (amount > 0) {
             event.setAmount(amount * 5);
         }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onEnchanterItemDamage(PlayerItemDamageEvent event) {
+        if (!hasPower(event.getPlayer(), SuperpowerType.ENCHANTER)) {
+            return;
+        }
+        if (ThreadLocalRandom.current().nextDouble() < ENCHANTER_ARCANE_PRESERVATION_CHANCE) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onSupermanFlightToggle(PlayerToggleFlightEvent event) {
+        Player player = event.getPlayer();
+        if (!hasPower(player, SuperpowerType.SUPERMAN)
+            || player.getGameMode() == GameMode.CREATIVE
+            || player.getGameMode() == GameMode.SPECTATOR) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        if (supermanFlightActiveUntil(player) > now) {
+            return;
+        }
+
+        event.setCancelled(true);
+        long cooldownUntil = supermanFlightCooldownUntil(player);
+        if (cooldownUntil > now) {
+            player.sendMessage(MessageUtil.warn(
+                "Skybound flight cooldown: <white>" + secondsLeft(cooldownUntil, now) + "s</white>."
+            ));
+            syncSupermanFlightState(player, true);
+            return;
+        }
+
+        startSupermanFlight(player);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onFrozenPlayerMove(PlayerMoveEvent event) {
+        Player player = event.getPlayer();
+        if (!timeStoppedPlayers.contains(player.getUniqueId())) {
+            return;
+        }
+        Location from = event.getFrom();
+        Location to = event.getTo();
+        if (to == null) {
+            return;
+        }
+        if (from.getX() == to.getX() && from.getY() == to.getY() && from.getZ() == to.getZ()) {
+            return;
+        }
+
+        Location locked = from.clone();
+        locked.setYaw(to.getYaw());
+        locked.setPitch(to.getPitch());
+        event.setTo(locked);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -656,6 +903,12 @@ public final class SuperpowerManager implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onEntityDamageByEntity(EntityDamageByEntityEvent event) {
+        Player attackingPlayer = resolvePlayerDamager(event.getDamager());
+        if (attackingPlayer != null && timeStoppedPlayers.contains(attackingPlayer.getUniqueId())) {
+            event.setCancelled(true);
+            return;
+        }
+
         if (event.getDamager() instanceof Player attacker) {
             if (hasPower(attacker, SuperpowerType.MONARCH) && event.getEntity() instanceof LivingEntity victim) {
                 directMonarchSummons(attacker, victim);
@@ -683,6 +936,13 @@ public final class SuperpowerManager implements Listener {
 
         if (entity.getType() == EntityType.WARDEN && killer != null) {
             event.getDrops().add(createWardenHeartItem());
+        }
+
+        if (killer != null
+            && hasPower(killer, SuperpowerType.ENCHANTER)
+            && entity.getType() != EntityType.PLAYER
+            && ThreadLocalRandom.current().nextDouble() < ENCHANTER_ESSENCE_EXTRACTION_CHANCE) {
+            event.getDrops().add(createEnchanterEssenceDrop());
         }
 
         if (killer != null && hasPower(killer, SuperpowerType.MONARCH) && isMonarchStorable(entity)) {
@@ -726,6 +986,10 @@ public final class SuperpowerManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBlockGrow(BlockGrowEvent event) {
+        if (isInsideActiveTimeStop(event.getBlock().getLocation())) {
+            event.setCancelled(true);
+            return;
+        }
         if (!(event.getNewState().getBlockData() instanceof Ageable ageable)) {
             return;
         }
@@ -747,6 +1011,9 @@ public final class SuperpowerManager implements Listener {
         Player player = event.getPlayer();
         if (hasPower(player, SuperpowerType.TANK)) {
             syncTankImmovableState(player, event.isSneaking());
+        }
+        if (hasPower(player, SuperpowerType.SUPERMAN) && event.isSneaking()) {
+            trySupermanBoost(player);
         }
         if (!hasPower(player, SuperpowerType.FLORIST)) {
             return;
@@ -792,6 +1059,159 @@ public final class SuperpowerManager implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onMinerDrops(BlockDropItemEvent event) {
+        Player player = event.getPlayer();
+        if (player == null || player.getGameMode() == GameMode.CREATIVE || !hasPower(player, SuperpowerType.MINER)) {
+            return;
+        }
+        if (!MINER_ORE_BLOCKS.contains(event.getBlockState().getType())) {
+            return;
+        }
+        if (ThreadLocalRandom.current().nextDouble() >= MINER_EXTRA_ORE_CHANCE) {
+            return;
+        }
+
+        List<ItemStack> extraDrops = new ArrayList<>();
+        for (Item item : event.getItems()) {
+            ItemStack stack = item.getItemStack();
+            if (stack == null || stack.getType() == Material.AIR || stack.getAmount() <= 0) {
+                continue;
+            }
+            extraDrops.add(stack.clone());
+        }
+        if (extraDrops.isEmpty()) {
+            return;
+        }
+
+        CustomEnchantListener enchants = plugin.getCustomEnchantListener();
+        ItemStack tool = player.getInventory().getItemInMainHand();
+        if (enchants != null && enchants.hasTelekinesisEnchant(tool)) {
+            enchants.deliverTelekinesisDrops(player, extraDrops, event.getBlock().getLocation());
+            return;
+        }
+
+        Location dropLocation = event.getBlock().getLocation().add(0.5, 0.5, 0.5);
+        for (ItemStack stack : extraDrops) {
+            Item dropped = event.getBlock().getWorld().dropItemNaturally(dropLocation, stack);
+            dropped.setPickupDelay(0);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onTimeStoppedBreak(BlockBreakEvent event) {
+        if (timeStoppedPlayers.contains(event.getPlayer().getUniqueId())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onTimeStoppedPlace(BlockPlaceEvent event) {
+        if (timeStoppedPlayers.contains(event.getPlayer().getUniqueId())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onTimeStoppedProjectileLaunch(ProjectileLaunchEvent event) {
+        if (!(event.getEntity().getShooter() instanceof Player player)) {
+            return;
+        }
+        if (timeStoppedPlayers.contains(player.getUniqueId())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onFrozenPlayerInteract(PlayerInteractEvent event) {
+        if (!timeStoppedPlayers.contains(event.getPlayer().getUniqueId())) {
+            return;
+        }
+        event.setCancelled(true);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onFrozenPlayerDrop(PlayerDropItemEvent event) {
+        if (timeStoppedPlayers.contains(event.getPlayer().getUniqueId())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onDropMotherNatureStick(PlayerDropItemEvent event) {
+        if (!isMotherNatureStick(event.getItemDrop().getItemStack())) {
+            return;
+        }
+        if (!hasPower(event.getPlayer(), SuperpowerType.FLORIST)) {
+            return;
+        }
+
+        event.setCancelled(true);
+        event.getPlayer().sendMessage(MessageUtil.warn("The Stick from Mother Nature refuses to leave you."));
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onDropTheWorldClock(PlayerDropItemEvent event) {
+        if (!isTheWorldClock(event.getItemDrop().getItemStack())) {
+            return;
+        }
+        if (!hasPower(event.getPlayer(), SuperpowerType.THE_WORLD)) {
+            return;
+        }
+
+        event.setCancelled(true);
+        event.getPlayer().sendMessage(MessageUtil.warn("The World Clock refuses to leave its master."));
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onTimeStopBlockPhysics(BlockPhysicsEvent event) {
+        if (isInsideActiveTimeStop(event.getBlock().getLocation())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onTimeStopFluid(BlockFromToEvent event) {
+        if (isInsideActiveTimeStop(event.getBlock().getLocation()) || isInsideActiveTimeStop(event.getToBlock().getLocation())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onTimeStopBlockFade(BlockFadeEvent event) {
+        if (isInsideActiveTimeStop(event.getBlock().getLocation())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onTimeStopBlockSpread(BlockSpreadEvent event) {
+        if (isInsideActiveTimeStop(event.getBlock().getLocation()) || isInsideActiveTimeStop(event.getSource().getLocation())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onTimeStopRedstone(BlockRedstoneEvent event) {
+        if (isInsideActiveTimeStop(event.getBlock().getLocation())) {
+            event.setNewCurrent(event.getOldCurrent());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onTimeStopPistonExtend(BlockPistonExtendEvent event) {
+        if (isInsideActiveTimeStop(event.getBlock().getLocation()) || event.getBlocks().stream().anyMatch(block -> isInsideActiveTimeStop(block.getLocation()))) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onTimeStopPistonRetract(BlockPistonRetractEvent event) {
+        if (isInsideActiveTimeStop(event.getBlock().getLocation()) || event.getBlocks().stream().anyMatch(block -> isInsideActiveTimeStop(block.getLocation()))) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPowerInteract(PlayerInteractEvent event) {
         if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND) {
             return;
@@ -808,6 +1228,11 @@ public final class SuperpowerManager implements Listener {
         if (isAncientScroll(item) && (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK)) {
             event.setCancelled(true);
             useAncientScroll(player);
+            return;
+        }
+        if (isTheWorldClock(item) && (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK)) {
+            event.setCancelled(true);
+            useTheWorldClock(player);
             return;
         }
         if (!isMotherNatureStick(item) || !hasPower(player, SuperpowerType.FLORIST)) {
@@ -872,19 +1297,6 @@ public final class SuperpowerManager implements Listener {
                 hideShadowEquipment(player);
             }
         });
-    }
-
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
-    public void onDropMotherNatureStick(PlayerDropItemEvent event) {
-        if (!isMotherNatureStick(event.getItemDrop().getItemStack())) {
-            return;
-        }
-        if (!hasPower(event.getPlayer(), SuperpowerType.FLORIST)) {
-            return;
-        }
-
-        event.setCancelled(true);
-        event.getPlayer().sendMessage(MessageUtil.warn("The Stick from Mother Nature refuses to leave you."));
     }
 
     @EventHandler(priority = EventPriority.HIGH)
@@ -996,6 +1408,9 @@ public final class SuperpowerManager implements Listener {
         if (power == SuperpowerType.FLORIST && !hasMotherNatureStick(player)) {
             giveMotherNatureStick(player, false);
         }
+        if (power == SuperpowerType.THE_WORLD && !hasTheWorldClock(player)) {
+            giveTheWorldClock(player, false);
+        }
         if (power == SuperpowerType.SHADOW && isShadowActive(player)) {
             applyShadowEffects(player);
         }
@@ -1014,6 +1429,12 @@ public final class SuperpowerManager implements Listener {
             if (isShadowActive(player) && shadowActiveUntil(player) <= now) {
                 deactivateShadow(player, false, false);
             }
+            if (xrayActiveUntil(player) <= now) {
+                setXrayActiveUntil(player, 0L);
+            }
+            if (supermanFlightActiveUntil(player) > 0L && supermanFlightActiveUntil(player) <= now) {
+                stopSupermanFlight(player, true);
+            }
             applyPassiveEffects(player);
         }
         cleanupRecentPortalTravel(now);
@@ -1022,13 +1443,17 @@ public final class SuperpowerManager implements Listener {
     private void applyPassiveEffects(Player player) {
         if (player.isDead() || player.getGameMode() == GameMode.SPECTATOR) {
             syncTankImmovableState(player, false);
+            clearPowerAttributeModifiers(player);
             return;
         }
 
         SuperpowerType power = powerOf(player);
         if (power == null) {
+            clearPowerAttributeModifiers(player);
             return;
         }
+
+        clearPowerAttributeModifiers(player);
 
         switch (power) {
             case FLASH -> {
@@ -1039,6 +1464,8 @@ public final class SuperpowerManager implements Listener {
                 if (player.getOpenInventory().getTopInventory() instanceof EnchantingInventory enchanting) {
                     refreshEnchanterLapis(player, enchanting);
                 }
+                syncEnchanterAttunement(player);
+                syncPlayerAttributeModifier(player, Attribute.LUCK, keyEnchanterLuckModifier, ENCHANTER_LUCK_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
             }
             case BERSERK -> {
                 applyPotion(player, PotionEffectType.STRENGTH, 80, 1);
@@ -1070,8 +1497,38 @@ public final class SuperpowerManager implements Listener {
                     applyShadowEffects(player);
                 }
             }
+            case THE_WORLD -> {
+                if (!hasTheWorldClock(player)) {
+                    giveTheWorldClock(player, false);
+                }
+            }
+            case XRAY_VISION -> {
+                if (xrayActiveUntil(player) > System.currentTimeMillis()) {
+                    renderXrayHighlights(player);
+                }
+            }
+            case MINER -> {
+                applyPotion(player, PotionEffectType.HASTE, 80, 2);
+                syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyMinerHealthModifier, MINER_HEALTH_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
+            }
+            case GIANT -> {
+                syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyGiantHealthModifier, GIANT_HEALTH_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
+                syncPlayerAttributeModifier(player, Attribute.SCALE, keyGiantScaleModifier, GIANT_SCALE_MULTIPLIER - 1.0, AttributeModifier.Operation.ADD_SCALAR, true);
+                syncPlayerAttributeModifier(player, Attribute.KNOCKBACK_RESISTANCE, keyGiantKnockbackModifier, GIANT_KNOCKBACK_RESISTANCE, AttributeModifier.Operation.ADD_NUMBER, true);
+            }
+            case SUPERMAN -> {
+                applyPotion(player, PotionEffectType.STRENGTH, 80, 1);
+                applyPotion(player, PotionEffectType.SPEED, 80, 0);
+                syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySupermanHealthModifier, SUPERMAN_HEALTH_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
+                syncSupermanFlightState(player, true);
+            }
             default -> {
             }
+        }
+
+        var maxHealth = player.getAttribute(Attribute.MAX_HEALTH);
+        if (maxHealth != null && player.getHealth() > maxHealth.getValue()) {
+            player.setHealth(maxHealth.getValue());
         }
     }
 
@@ -1108,6 +1565,9 @@ public final class SuperpowerManager implements Listener {
         if (power == SuperpowerType.FLORIST && !hasMotherNatureStick(player)) {
             giveMotherNatureStick(player, false);
         }
+        if (power == SuperpowerType.THE_WORLD && !hasTheWorldClock(player)) {
+            giveTheWorldClock(player, false);
+        }
         applyPassiveEffects(player);
         player.updateInventory();
         if (notifyScrollResult || power.hasCommandHint()) {
@@ -1118,8 +1578,11 @@ public final class SuperpowerManager implements Listener {
     private void prepareForPowerAssignment(Player player, SuperpowerType nextPower) {
         UUID playerId = player.getUniqueId();
         pendingFloristStickReturns.remove(playerId);
+        pendingTheWorldClockReturns.remove(playerId);
         closeTravelerPortal(playerId, false);
         despawnMonarchSummons(playerId);
+        clearTimeStopForOwner(playerId);
+        stopSupermanFlight(player, false);
 
         if (isShadowActive(player)) {
             removeLikelyPowerPotion(player, PotionEffectType.INVISIBILITY, 0);
@@ -1133,17 +1596,27 @@ public final class SuperpowerManager implements Listener {
         if (nextPower != SuperpowerType.FLORIST) {
             removeMotherNatureSticks(player);
         }
+        if (nextPower != SuperpowerType.THE_WORLD) {
+            removeTheWorldClocks(player);
+        }
         syncTankImmovableState(player, false);
+        clearPowerAttributeModifiers(player);
         clearVirtualEnchanterLapis(player);
     }
 
     private void clearPowerCooldownState(Player player) {
         PersistentDataContainer pdc = player.getPersistentDataContainer();
+        pdc.remove(keyXrayActiveUntil);
+        pdc.remove(keyXrayCooldownUntil);
+        pdc.remove(keyTimeStopCooldownUntil);
         pdc.remove(keyShadowCooldownUntil);
         pdc.remove(keyShadowActiveUntil);
+        pdc.remove(keySupermanFlightActiveUntil);
+        pdc.remove(keySupermanFlightCooldownUntil);
     }
 
     private void clearLikelyPassivePowerEffects(Player player) {
+        removeLikelyPowerPotion(player, PotionEffectType.SPEED, 0);
         removeLikelyPowerPotion(player, PotionEffectType.SPEED, 1);
         removeLikelyPowerPotion(player, PotionEffectType.SPEED, 2);
         removeLikelyPowerPotion(player, PotionEffectType.HASTE, 2);
@@ -1389,25 +1862,14 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void useAncientScroll(Player player) {
-        ItemStack held = player.getInventory().getItemInMainHand();
-        boolean awakened = isAncientScroll(held) && isAwakenedAncientScroll(held);
         SuperpowerType currentPower = powerOf(player);
 
-        if (!awakened && currentPower != SuperpowerType.HUMAN) {
-            player.sendMessage(MessageUtil.warn("The Ancient Scroll can only awaken a dormant soul."));
-            return;
-        }
-
         consumeHeldItem(player);
-        SuperpowerType rerolled = awakened
-            ? randomDifferentPower(currentPower, true)
-            : randomPower(true);
+        SuperpowerType rerolled = currentPower == null
+            ? randomPower(false)
+            : randomDifferentPower(currentPower, false);
         assignPower(player, rerolled, true, true);
-        if (awakened) {
-            player.sendMessage(MessageUtil.success("The awakened Ancient Scroll twists your power into a new fate."));
-        } else {
-            player.sendMessage(MessageUtil.success("The Ancient Scroll rewrites your fate."));
-        }
+        player.sendMessage(MessageUtil.success("The Ancient Scroll rewrites your fate."));
     }
 
     private void useMotherNatureStickAttack(Player player) {
@@ -1871,6 +2333,472 @@ public final class SuperpowerManager implements Listener {
         return plugin.getTeamManager() != null && plugin.getTeamManager().sameTeam(ownerId, targetId);
     }
 
+    private Player resolvePlayerDamager(Entity damager) {
+        LivingEntity attacker = actualLivingDamager(damager);
+        return attacker instanceof Player player ? player : null;
+    }
+
+    private void syncEnchanterAttunement(Player player) {
+        int enchantLevels = totalEnchantLevels(player.getInventory().getItemInMainHand());
+        double scalar = enchantLevels * 0.01;
+        syncPlayerAttributeModifier(
+            player,
+            Attribute.MOVEMENT_SPEED,
+            keyEnchanterMoveModifier,
+            scalar,
+            AttributeModifier.Operation.ADD_SCALAR,
+            scalar > 0.0
+        );
+        syncPlayerAttributeModifier(
+            player,
+            Attribute.ATTACK_SPEED,
+            keyEnchanterAttackModifier,
+            scalar,
+            AttributeModifier.Operation.ADD_SCALAR,
+            scalar > 0.0
+        );
+    }
+
+    private int totalEnchantLevels(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) {
+            return 0;
+        }
+        int total = 0;
+        for (int level : item.getEnchantments().values()) {
+            total += Math.max(0, level);
+        }
+        if (item.getItemMeta() instanceof EnchantmentStorageMeta storageMeta) {
+            for (int level : storageMeta.getStoredEnchants().values()) {
+                total += Math.max(0, level);
+            }
+        }
+        return total;
+    }
+
+    private void syncPlayerAttributeModifier(
+        Player player,
+        Attribute attribute,
+        NamespacedKey key,
+        double amount,
+        AttributeModifier.Operation operation,
+        boolean enabled
+    ) {
+        if (player == null || attribute == null || key == null) {
+            return;
+        }
+
+        var instance = player.getAttribute(attribute);
+        if (instance == null) {
+            return;
+        }
+
+        instance.removeModifier(key);
+        if (!enabled || Math.abs(amount) <= 1.0E-9) {
+            return;
+        }
+        instance.addTransientModifier(new AttributeModifier(key, amount, operation));
+    }
+
+    private void clearPowerAttributeModifiers(Player player) {
+        syncPlayerAttributeModifier(player, Attribute.LUCK, keyEnchanterLuckModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        syncPlayerAttributeModifier(player, Attribute.MOVEMENT_SPEED, keyEnchanterMoveModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR, false);
+        syncPlayerAttributeModifier(player, Attribute.ATTACK_SPEED, keyEnchanterAttackModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR, false);
+        syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyMinerHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyGiantHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        syncPlayerAttributeModifier(player, Attribute.SCALE, keyGiantScaleModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR, false);
+        syncPlayerAttributeModifier(player, Attribute.KNOCKBACK_RESISTANCE, keyGiantKnockbackModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySupermanHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+    }
+
+    private long xrayActiveUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keyXrayActiveUntil, PersistentDataType.LONG, 0L);
+    }
+
+    private long xrayCooldownUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keyXrayCooldownUntil, PersistentDataType.LONG, 0L);
+    }
+
+    private void setXrayActiveUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keyXrayActiveUntil);
+            return;
+        }
+        pdc.set(keyXrayActiveUntil, PersistentDataType.LONG, value);
+    }
+
+    private void setXrayCooldownUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keyXrayCooldownUntil);
+            return;
+        }
+        pdc.set(keyXrayCooldownUntil, PersistentDataType.LONG, value);
+    }
+
+    private long supermanFlightActiveUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keySupermanFlightActiveUntil, PersistentDataType.LONG, 0L);
+    }
+
+    private long supermanFlightCooldownUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keySupermanFlightCooldownUntil, PersistentDataType.LONG, 0L);
+    }
+
+    private void setSupermanFlightActiveUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keySupermanFlightActiveUntil);
+            return;
+        }
+        pdc.set(keySupermanFlightActiveUntil, PersistentDataType.LONG, value);
+    }
+
+    private void setSupermanFlightCooldownUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keySupermanFlightCooldownUntil);
+            return;
+        }
+        pdc.set(keySupermanFlightCooldownUntil, PersistentDataType.LONG, value);
+    }
+
+    private long timeStopCooldownUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keyTimeStopCooldownUntil, PersistentDataType.LONG, 0L);
+    }
+
+    private void setTimeStopCooldownUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keyTimeStopCooldownUntil);
+            return;
+        }
+        pdc.set(keyTimeStopCooldownUntil, PersistentDataType.LONG, value);
+    }
+
+    private void syncSupermanFlightState(Player player, boolean supermanAvailable) {
+        if (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        boolean active = supermanFlightActiveUntil(player) > now;
+        boolean offCooldown = supermanFlightCooldownUntil(player) <= now;
+        boolean shouldAllow = plugin.getPlayerManager().hasFlightEnabled(player.getUniqueId())
+            || (supermanAvailable && (active || offCooldown))
+            || (plugin.getCustomEnchantListener() != null && plugin.getCustomEnchantListener().shouldRetainFlightAccess(player));
+
+        if (player.getAllowFlight() != shouldAllow) {
+            player.setAllowFlight(shouldAllow);
+        }
+        if (!shouldAllow && player.isFlying()) {
+            player.setFlying(false);
+        }
+    }
+
+    private void startSupermanFlight(Player player) {
+        long now = System.currentTimeMillis();
+        setSupermanFlightActiveUntil(player, now + (SUPERMAN_FLIGHT_SECONDS * 1000L));
+        syncSupermanFlightState(player, true);
+        player.setFlying(true);
+        player.sendMessage(MessageUtil.success("Skybound flight surges through you for <white>30 seconds</white>."));
+        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_PHANTOM_FLAP, 0.8f, 1.45f);
+    }
+
+    private void stopSupermanFlight(Player player, boolean expired) {
+        long activeUntil = supermanFlightActiveUntil(player);
+        if (activeUntil <= 0L && !expired) {
+            syncSupermanFlightState(player, hasPower(player, SuperpowerType.SUPERMAN));
+            return;
+        }
+
+        setSupermanFlightActiveUntil(player, 0L);
+        if (expired) {
+            setSupermanFlightCooldownUntil(player, System.currentTimeMillis() + (SUPERMAN_FLIGHT_COOLDOWN_SECONDS * 1000L));
+        }
+        if (player.isFlying() && !plugin.getPlayerManager().hasFlightEnabled(player.getUniqueId())) {
+            player.setFlying(false);
+        }
+        syncSupermanFlightState(player, hasPower(player, SuperpowerType.SUPERMAN));
+        if (expired && player.isOnline()) {
+            player.sendMessage(MessageUtil.warn("Skybound flight faded. Cooldown: <white>5 minutes</white>."));
+        }
+    }
+
+    private void trySupermanBoost(Player player) {
+        long now = System.currentTimeMillis();
+        if (supermanFlightActiveUntil(player) <= now || !player.isFlying()) {
+            return;
+        }
+
+        long readyAt = supermanBoostCooldowns.getOrDefault(player.getUniqueId(), 0L);
+        if (readyAt > now) {
+            return;
+        }
+
+        Vector boost = player.getLocation().getDirection().normalize().multiply(1.25).add(new Vector(0.0, 0.22, 0.0));
+        player.setVelocity(boost);
+        supermanBoostCooldowns.put(player.getUniqueId(), now + SUPERMAN_BOOST_COOLDOWN_MS);
+        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_LAUNCH, 0.45f, 1.7f);
+    }
+
+    private void renderXrayHighlights(Player player) {
+        if (!player.isOnline() || player.isDead() || xrayActiveUntil(player) <= System.currentTimeMillis()) {
+            return;
+        }
+
+        Location origin = player.getLocation();
+        World world = player.getWorld();
+        for (Entity entity : world.getNearbyEntities(origin, XRAY_ENTITY_RADIUS, XRAY_ENTITY_RADIUS, XRAY_ENTITY_RADIUS)) {
+            if (!(entity instanceof LivingEntity living) || living.equals(player) || living.isDead() || !living.isValid()) {
+                continue;
+            }
+            org.bukkit.Color color = living instanceof Player ? org.bukkit.Color.fromRGB(255, 80, 80) : org.bukkit.Color.fromRGB(84, 214, 255);
+            spawnXrayEntityOutline(player, living, color);
+        }
+
+        int baseX = origin.getBlockX();
+        int baseY = origin.getBlockY();
+        int baseZ = origin.getBlockZ();
+        int minY = Math.max(world.getMinHeight(), baseY - XRAY_ORE_VERTICAL_RADIUS);
+        int maxY = Math.min(world.getMaxHeight() - 1, baseY + XRAY_ORE_VERTICAL_RADIUS);
+        for (int x = baseX - XRAY_ORE_RADIUS; x <= baseX + XRAY_ORE_RADIUS; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = baseZ - XRAY_ORE_RADIUS; z <= baseZ + XRAY_ORE_RADIUS; z++) {
+                    Block block = world.getBlockAt(x, y, z);
+                    if (!MINER_ORE_BLOCKS.contains(block.getType())) {
+                        continue;
+                    }
+                    spawnXrayOreMarker(player, block);
+                }
+            }
+        }
+    }
+
+    private void spawnXrayEntityOutline(Player viewer, LivingEntity target, org.bukkit.Color color) {
+        double height = Math.max(0.8, target.getHeight());
+        double step = Math.max(0.4, height / 3.0);
+        Particle.DustOptions dust = new Particle.DustOptions(color, 1.1f);
+        for (double y = 0.15; y <= height; y += step) {
+            Location point = target.getLocation().clone().add(0.0, y, 0.0);
+            viewer.spawnParticle(Particle.DUST, point, 8, target.getWidth() * 0.45, 0.08, target.getWidth() * 0.45, 0.0, dust);
+        }
+    }
+
+    private void spawnXrayOreMarker(Player viewer, Block block) {
+        Location center = block.getLocation().add(0.5, 0.5, 0.5);
+        Particle.DustOptions dust = new Particle.DustOptions(oreHighlightColor(block.getType()), 0.9f);
+        viewer.spawnParticle(Particle.DUST, center, 6, 0.18, 0.18, 0.18, 0.0, dust);
+    }
+
+    private org.bukkit.Color oreHighlightColor(Material material) {
+        return switch (material) {
+            case DIAMOND_ORE, DEEPSLATE_DIAMOND_ORE -> org.bukkit.Color.AQUA;
+            case EMERALD_ORE, DEEPSLATE_EMERALD_ORE -> org.bukkit.Color.LIME;
+            case REDSTONE_ORE, DEEPSLATE_REDSTONE_ORE -> org.bukkit.Color.RED;
+            case GOLD_ORE, DEEPSLATE_GOLD_ORE, NETHER_GOLD_ORE -> org.bukkit.Color.YELLOW;
+            case LAPIS_ORE, DEEPSLATE_LAPIS_ORE -> org.bukkit.Color.BLUE;
+            case IRON_ORE, DEEPSLATE_IRON_ORE -> org.bukkit.Color.fromRGB(216, 170, 120);
+            case COPPER_ORE, DEEPSLATE_COPPER_ORE -> org.bukkit.Color.fromRGB(214, 122, 74);
+            case ANCIENT_DEBRIS -> org.bukkit.Color.fromRGB(91, 62, 54);
+            case NETHER_QUARTZ_ORE -> org.bukkit.Color.WHITE;
+            default -> org.bukkit.Color.fromRGB(90, 90, 90);
+        };
+    }
+
+    private void useTheWorldClock(Player player) {
+        if (!hasPower(player, SuperpowerType.THE_WORLD)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return;
+        }
+
+        UUID playerId = player.getUniqueId();
+        if (activeTimeStops.containsKey(playerId)) {
+            player.sendMessage(MessageUtil.warn("Time is already frozen around you."));
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        long cooldownUntil = timeStopCooldownUntil(player);
+        if (cooldownUntil > now) {
+            player.sendMessage(MessageUtil.warn(
+                "Time Stop cooldown: <white>" + secondsLeft(cooldownUntil, now) + "s</white>."
+            ));
+            return;
+        }
+
+        TimeStopState state = new TimeStopState(
+            playerId,
+            player.getLocation().clone(),
+            now + (TIME_STOP_DURATION_SECONDS * 1000L)
+        );
+        activeTimeStops.put(playerId, state);
+        setTimeStopCooldownUntil(player, now + (TIME_STOP_COOLDOWN_SECONDS * 1000L));
+        player.getWorld().playSound(player.getLocation(), Sound.BLOCK_RESPAWN_ANCHOR_DEPLETE, 1.1f, 0.55f);
+        player.sendMessage(MessageUtil.success("The World stands still for <white>5 seconds</white>."));
+    }
+
+    private void tickTimeStops() {
+        reconcileTimeStopState(true);
+    }
+
+    private void reconcileTimeStopState(boolean render) {
+        long now = System.currentTimeMillis();
+        Set<UUID> currentFrozenPlayers = new HashSet<>();
+        Set<UUID> currentFrozenMobs = new HashSet<>();
+        Set<UUID> currentFrozenProjectiles = new HashSet<>();
+
+        for (Map.Entry<UUID, TimeStopState> entry : new HashMap<>(activeTimeStops).entrySet()) {
+            TimeStopState state = entry.getValue();
+            Location center = state.center();
+            World world = center.getWorld();
+            if (world == null) {
+                activeTimeStops.remove(entry.getKey());
+                continue;
+            }
+            if (state.expiresAt() <= now) {
+                activeTimeStops.remove(entry.getKey());
+                Player owner = Bukkit.getPlayer(entry.getKey());
+                if (owner != null && owner.isOnline()) {
+                    owner.sendMessage(MessageUtil.info("Time begins to move again."));
+                    owner.getWorld().playSound(owner.getLocation(), Sound.BLOCK_RESPAWN_ANCHOR_CHARGE, 0.9f, 1.35f);
+                }
+                continue;
+            }
+
+            if (render) {
+                renderTimeStopState(state);
+            }
+
+            for (Entity entity : world.getNearbyEntities(center, TIME_STOP_RADIUS, TIME_STOP_RADIUS, TIME_STOP_RADIUS)) {
+                if (entity.getUniqueId().equals(state.ownerId())) {
+                    continue;
+                }
+                if (!isInsideTimeStop(state, entity.getLocation())) {
+                    continue;
+                }
+
+                if (entity instanceof Player frozenPlayer) {
+                    currentFrozenPlayers.add(frozenPlayer.getUniqueId());
+                    frozenPlayer.setVelocity(new Vector());
+                    applyPotion(frozenPlayer, PotionEffectType.SLOWNESS, 5, 10);
+                    applyPotion(frozenPlayer, PotionEffectType.MINING_FATIGUE, 5, 4);
+                    continue;
+                }
+
+                if (entity instanceof Mob mob) {
+                    currentFrozenMobs.add(mob.getUniqueId());
+                    frozenMobs.computeIfAbsent(mob.getUniqueId(), ignored -> new FrozenMobState(mob.hasAI(), mob.hasGravity()));
+                    mob.setAI(false);
+                    mob.setGravity(false);
+                    mob.setVelocity(new Vector());
+                    mob.setTarget(null);
+                    continue;
+                }
+
+                if (entity instanceof Projectile projectile && shouldFreezeProjectile(projectile, state.ownerId())) {
+                    currentFrozenProjectiles.add(projectile.getUniqueId());
+                    frozenProjectiles.computeIfAbsent(
+                        projectile.getUniqueId(),
+                        ignored -> new FrozenProjectileState(projectile.getLocation().clone(), projectile.getVelocity().clone(), projectile.hasGravity())
+                    );
+                    FrozenProjectileState projectileState = frozenProjectiles.get(projectile.getUniqueId());
+                    projectile.setGravity(false);
+                    projectile.teleport(projectileState.location());
+                    projectile.setVelocity(new Vector());
+                }
+            }
+        }
+
+        timeStoppedPlayers.clear();
+        timeStoppedPlayers.addAll(currentFrozenPlayers);
+        restoreExpiredFrozenMobs(currentFrozenMobs);
+        restoreExpiredFrozenProjectiles(currentFrozenProjectiles);
+    }
+
+    private void renderTimeStopState(TimeStopState state) {
+        Location center = state.center().clone().add(0.0, 1.0, 0.0);
+        World world = center.getWorld();
+        if (world == null) {
+            return;
+        }
+
+        world.spawnParticle(Particle.PORTAL, center, 20, 0.4, 0.7, 0.4, 0.0);
+        for (int i = 0; i < 18; i++) {
+            double angle = (Math.PI * 2.0 * i) / 18.0;
+            double x = Math.cos(angle) * TIME_STOP_RADIUS;
+            double z = Math.sin(angle) * TIME_STOP_RADIUS;
+            Location ring = center.clone().add(x, 0.0, z);
+            world.spawnParticle(Particle.DUST, ring, 1, 0.02, 0.12, 0.02, 0.0, new Particle.DustOptions(org.bukkit.Color.fromRGB(255, 212, 74), 1.1f));
+        }
+    }
+
+    private boolean isInsideActiveTimeStop(Location location) {
+        for (TimeStopState state : activeTimeStops.values()) {
+            if (isInsideTimeStop(state, location)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isInsideTimeStop(TimeStopState state, Location location) {
+        if (state == null || location == null || state.center().getWorld() == null || location.getWorld() == null) {
+            return false;
+        }
+        if (!state.center().getWorld().equals(location.getWorld())) {
+            return false;
+        }
+        return state.center().distanceSquared(location) <= (TIME_STOP_RADIUS * TIME_STOP_RADIUS);
+    }
+
+    private boolean shouldFreezeProjectile(Projectile projectile, UUID ownerId) {
+        if (projectile.getShooter() instanceof Entity shooter && shooter.getUniqueId().equals(ownerId)) {
+            return false;
+        }
+        return projectile.isValid() && !projectile.isDead();
+    }
+
+    private void restoreExpiredFrozenMobs(Set<UUID> currentFrozenMobs) {
+        for (Map.Entry<UUID, FrozenMobState> entry : new HashMap<>(frozenMobs).entrySet()) {
+            if (currentFrozenMobs.contains(entry.getKey())) {
+                continue;
+            }
+            Entity entity = Bukkit.getEntity(entry.getKey());
+            if (entity instanceof Mob mob && mob.isValid()) {
+                mob.setAI(entry.getValue().hadAi());
+                mob.setGravity(entry.getValue().hadGravity());
+            }
+            frozenMobs.remove(entry.getKey());
+        }
+    }
+
+    private void restoreExpiredFrozenProjectiles(Set<UUID> currentFrozenProjectiles) {
+        for (Map.Entry<UUID, FrozenProjectileState> entry : new HashMap<>(frozenProjectiles).entrySet()) {
+            if (currentFrozenProjectiles.contains(entry.getKey())) {
+                continue;
+            }
+            Entity entity = Bukkit.getEntity(entry.getKey());
+            if (entity instanceof Projectile projectile && projectile.isValid()) {
+                projectile.setGravity(entry.getValue().hadGravity());
+                projectile.setVelocity(entry.getValue().velocity());
+            }
+            frozenProjectiles.remove(entry.getKey());
+        }
+    }
+
+    private void clearTimeStopForOwner(UUID ownerId) {
+        if (activeTimeStops.remove(ownerId) != null) {
+            reconcileTimeStopState(false);
+        }
+    }
+
+    private void clearAllTimeStops() {
+        activeTimeStops.clear();
+        timeStoppedPlayers.clear();
+        restoreExpiredFrozenMobs(Set.of());
+        restoreExpiredFrozenProjectiles(Set.of());
+    }
+
     private String prettyEntityType(EntityType type) {
         String[] parts = type.name().toLowerCase(Locale.ROOT).split("_");
         StringBuilder out = new StringBuilder();
@@ -1935,6 +2863,15 @@ public final class SuperpowerManager implements Listener {
         return isMotherNatureStick(player.getItemOnCursor());
     }
 
+    private boolean hasTheWorldClock(Player player) {
+        for (ItemStack item : player.getInventory().getContents()) {
+            if (isTheWorldClock(item)) {
+                return true;
+            }
+        }
+        return isTheWorldClock(player.getItemOnCursor());
+    }
+
     private void giveMotherNatureStick(Player player, boolean restored) {
         ItemStack stick = createMotherNatureStickItem();
         Map<Integer, ItemStack> leftovers = player.getInventory().addItem(stick);
@@ -1957,6 +2894,28 @@ public final class SuperpowerManager implements Listener {
         }
     }
 
+    private void giveTheWorldClock(Player player, boolean restored) {
+        ItemStack clock = createTheWorldClockItem();
+        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(clock);
+        leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
+        if (restored) {
+            player.sendMessage(MessageUtil.info("The World Clock returned to you."));
+        }
+    }
+
+    private void removeTheWorldClocks(Player player) {
+        for (int slot = 0; slot < player.getInventory().getSize(); slot++) {
+            ItemStack item = player.getInventory().getItem(slot);
+            if (isTheWorldClock(item)) {
+                player.getInventory().setItem(slot, null);
+            }
+        }
+
+        if (isTheWorldClock(player.getItemOnCursor())) {
+            player.setItemOnCursor(null);
+        }
+    }
+
     private void refreshPowerItems(Player player) {
         AwakeningTableListener awakening = plugin.getAwakeningTableListener();
         ItemStack[] contents = player.getInventory().getContents();
@@ -1965,11 +2924,11 @@ public final class SuperpowerManager implements Listener {
             if (isAncientScroll(item)) {
                 ItemMeta meta = item.getItemMeta();
                 if (meta != null) {
+                    if (awakening != null) {
+                        awakening.clearAwakeningState(meta);
+                    }
                     applyAncientScrollState(meta);
                     applyAncientScrollPresentation(meta);
-                    if (awakening != null) {
-                        awakening.applyManagedItemState(meta, item.getType(), Component.text("Ancient Scroll"), false);
-                    }
                     item.setItemMeta(meta);
                     player.getInventory().setItem(slot, item);
                 }
@@ -1990,6 +2949,16 @@ public final class SuperpowerManager implements Listener {
                 if (meta != null) {
                     applyMotherNatureStickState(meta);
                     applyMotherNatureStickPresentation(meta);
+                    item.setItemMeta(meta);
+                    player.getInventory().setItem(slot, item);
+                }
+                continue;
+            }
+            if (isTheWorldClock(item)) {
+                ItemMeta meta = item.getItemMeta();
+                if (meta != null) {
+                    applyTheWorldClockState(meta);
+                    applyTheWorldClockPresentation(meta);
                     item.setItemMeta(meta);
                     player.getInventory().setItem(slot, item);
                 }
@@ -2122,7 +3091,7 @@ public final class SuperpowerManager implements Listener {
             inventory.setItem(slot, fillerPane());
         }
         SuperpowerType[] types = SuperpowerType.values();
-        int[] slots = {10, 11, 12, 13, 14, 15, 16, 19, 21, 23};
+        int[] slots = {11, 12, 13, 14, 15, 20, 21, 22, 23, 24, 29, 30, 31, 32, 33};
         for (int i = 0; i < types.length && i < slots.length; i++) {
             inventory.setItem(slots[i], createPowerInfoIcon(types[i]));
         }
@@ -2166,6 +3135,10 @@ public final class SuperpowerManager implements Listener {
             case ENCHANTER -> {
                 lore.add(MM.deserialize("<gray>All XP gains are multiplied by <white>5x</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Enchanting no longer needs <white>lapis</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Mob kills can drop <white>essence loot</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Enchanted gear has a <white>25%</white> chance to ignore durability loss.</gray>"));
+                lore.add(MM.deserialize("<gray>Held enchant levels grant speed and attack speed.</gray>"));
+                lore.add(MM.deserialize("<gray>Also grants <white>+2 Luck</white>.</gray>"));
             }
             case BERSERK -> {
                 lore.add(MM.deserialize("<gray>Permanent <white>Strength II</white>.</gray>"));
@@ -2178,8 +3151,7 @@ public final class SuperpowerManager implements Listener {
             }
             case HUMAN -> {
                 lore.add(MM.deserialize("<gray>No passive power.</gray>"));
-                lore.add(MM.deserialize("<gray>An <white>Ancient Scroll</white> can reroll this fate.</gray>"));
-                lore.add(MM.deserialize("<gray>An <white>awakened</white> scroll can rewrite any current power.</gray>"));
+                lore.add(MM.deserialize("<gray>An <white>Ancient Scroll</white> can reroll any current fate.</gray>"));
             }
             case TRAVELER -> {
                 lore.add(MM.deserialize("<gray>Permanent <white>Speed II</white>.</gray>"));
@@ -2208,6 +3180,35 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Hit cooldown: <white>7 minutes</white>. Normal cooldown: <white>5 minutes</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Command: <white>/shadow toggle</white></gray>"));
             }
+            case THE_WORLD -> {
+                lore.add(MM.deserialize("<gray>Receives a bound <white>World Clock</white>.</gray>"));
+                lore.add(MM.deserialize("<gray><white>Right-click</white> to stop time in a <white>10 block</white> radius.</gray>"));
+                lore.add(MM.deserialize("<gray>Freezes mobs, players, projectiles, redstone, and block updates for <white>5s</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>The user can still move, fight, and interact during the stop.</gray>"));
+                lore.add(MM.deserialize("<gray>Cooldown: <white>5 minutes</white>.</gray>"));
+            }
+            case XRAY_VISION -> {
+                lore.add(MM.deserialize("<gray>Highlights ores, players, and mobs through walls for <white>30s</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Cooldown: <white>6 minutes</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Command: <white>/xray</white></gray>"));
+            }
+            case MINER -> {
+                lore.add(MM.deserialize("<gray>Permanent <white>Haste III</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Grants <white>+2 health</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Mining ores has a <white>15%</white> chance to duplicate the drop.</gray>"));
+            }
+            case GIANT -> {
+                lore.add(MM.deserialize("<gray>Scaled to <white>1.2x</white> normal size.</gray>"));
+                lore.add(MM.deserialize("<gray>Grants <white>+3 hearts</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Reduces all incoming knockback by <white>20%</white>.</gray>"));
+            }
+            case SUPERMAN -> {
+                lore.add(MM.deserialize("<gray>Permanent <white>Strength II</white> and <white>Speed I</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Grants <white>an extra row of hearts</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Double-tap jump to fly for <white>30s</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Sneak while flying to burst forward.</gray>"));
+                lore.add(MM.deserialize("<gray>Cooldown: <white>5 minutes</white>.</gray>"));
+            }
         }
         return lore;
     }
@@ -2219,25 +3220,18 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void applyAncientScrollPresentation(ItemMeta meta) {
-        boolean awakened = isAwakenedAncientScroll(meta);
         meta.displayName(MM.deserialize("<gold><bold>Ancient Scroll</bold></gold>"));
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.PAPER,
             "CUSTOM",
             "SCROLL",
-            List.of(awakened
-                ? "<gray>Right-click to twist your current power into a random new one.</gray>"
-                : "<gray>Right-click to reroll a dormant fate.</gray>"),
+            List.of("<gray>Right-click to reroll your current superpower.</gray>"),
             List.of(CustomLoreUtil.section(
                 "Use",
-                awakened ? "Power Rewrite" : "Fate Rewrite",
-                awakened
-                    ? "<gray>Works even if you already have a power.</gray>"
-                    : "<gray>Only works for a <white>Human</white> with no power.</gray>",
-                awakened
-                    ? "<gray>Consumes the scroll and rerolls you into a random new power.</gray>"
-                    : "<gray>Consumes the scroll and rerolls into a real power.</gray>"
+                "Fate Rewrite",
+                "<gray>Works even if you already have a power.</gray>",
+                "<gray>Consumes the scroll and rerolls you into a random new fate.</gray>"
             ))
         ));
     }
@@ -2293,6 +3287,57 @@ public final class SuperpowerManager implements Listener {
                 )
             )
         ));
+    }
+
+    private void applyTheWorldClockState(ItemMeta meta) {
+        meta.getPersistentDataContainer().set(keyTheWorldClock, PersistentDataType.STRING, THE_WORLD_CLOCK_ITEM_ID);
+        meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+        CustomLoreUtil.applyStyledItemFlags(meta);
+    }
+
+    private void applyTheWorldClockPresentation(ItemMeta meta) {
+        meta.displayName(MM.deserialize("<gold><bold>World Clock</bold></gold>"));
+        meta.lore(CustomLoreUtil.buildStyledLore(
+            meta,
+            Material.CLOCK,
+            "BOUND",
+            "CLOCK",
+            List.of("<gray>Bound to the one who halts the world.</gray>"),
+            List.of(CustomLoreUtil.section(
+                "Right Click",
+                "Time Stop",
+                "<gray>Freezes mobs, players, projectiles, redstone, and block updates</gray>",
+                "<gray>inside a <white>" + TIME_STOP_RADIUS + " block</white> radius for <white>" + TIME_STOP_DURATION_SECONDS + "s</white>.</gray>",
+                "<gray>Cooldown: <white>" + (TIME_STOP_COOLDOWN_SECONDS / 60) + " minutes</white>.</gray>"
+            ))
+        ));
+    }
+
+    private ItemStack createEnchanterEssenceDrop() {
+        if (ThreadLocalRandom.current().nextBoolean()) {
+            return new ItemStack(Material.EXPERIENCE_BOTTLE);
+        }
+
+        ItemStack book = new ItemStack(Material.ENCHANTED_BOOK);
+        if (!(book.getItemMeta() instanceof EnchantmentStorageMeta meta)) {
+            return new ItemStack(Material.EXPERIENCE_BOTTLE);
+        }
+
+        List<Enchantment> enchants = new ArrayList<>();
+        for (Enchantment enchantment : RegistryAccess.registryAccess().getRegistry(RegistryKey.ENCHANTMENT)) {
+            if (enchantment != null) {
+                enchants.add(enchantment);
+            }
+        }
+        if (enchants.isEmpty()) {
+            return new ItemStack(Material.EXPERIENCE_BOTTLE);
+        }
+
+        Enchantment chosen = enchants.get(ThreadLocalRandom.current().nextInt(enchants.size()));
+        int level = Math.max(1, ThreadLocalRandom.current().nextInt(chosen.getMaxLevel()) + 1);
+        meta.addStoredEnchant(chosen, level, true);
+        book.setItemMeta(meta);
+        return book;
     }
 
     private String formatPercent(double chance) {
@@ -2438,6 +3483,9 @@ public final class SuperpowerManager implements Listener {
         return awakening != null && awakening.isAwakened(meta);
     }
 
+    private record TimeStopState(UUID ownerId, Location center, long expiresAt) {}
+    private record FrozenMobState(boolean hadAi, boolean hadGravity) {}
+    private record FrozenProjectileState(Location location, Vector velocity, boolean hadGravity) {}
     private record PowerInfoHolder() implements InventoryHolder {
         @Override
         public Inventory getInventory() {

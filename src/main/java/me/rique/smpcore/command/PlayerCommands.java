@@ -34,6 +34,7 @@ public final class PlayerCommands {
         registerTop(commands, plugin);
         registerSuicide(commands, plugin);
         registerShadow(commands, plugin);
+        registerXray(commands, plugin);
         registerTravel(commands, plugin);
         registerMonarchSummon(commands, plugin);
         registerBack(commands, plugin);
@@ -187,6 +188,24 @@ public final class PlayerCommands {
             return 0;
         }
         return powers.handleShadowCommand(player) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static void registerXray(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("xray")
+                .requires(src -> src.getSender() instanceof Player)
+                .executes(ctx -> {
+                    Player player = (Player) ctx.getSource().getSender();
+                    SuperpowerManager powers = plugin.getSuperpowerManager();
+                    if (powers == null) {
+                        player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+                        return 0;
+                    }
+                    return powers.handleXrayCommand(player) ? Command.SINGLE_SUCCESS : 0;
+                })
+                .build(),
+            "Trigger Oracle Eye"
+        );
     }
 
     private static void registerTravel(Commands commands, SMPCore plugin) {

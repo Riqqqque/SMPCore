@@ -459,7 +459,7 @@ public final class CustomEnchantListener implements Listener {
 
         event.setCancelled(true);
         player.setFlying(false);
-        if (!plugin.getPlayerManager().hasFlightEnabled(player.getUniqueId())) {
+        if (!shouldKeepExternalFlight(player)) {
             player.setAllowFlight(false);
         }
         doubleJumpFlightPlayers.remove(player.getUniqueId());
@@ -795,7 +795,7 @@ public final class CustomEnchantListener implements Listener {
         }
 
         if (grantedFlight && !player.isFlying()) {
-            if (!plugin.getPlayerManager().hasFlightEnabled(playerId)) {
+            if (!shouldKeepExternalFlight(player)) {
                 player.setAllowFlight(false);
             }
             doubleJumpFlightPlayers.remove(playerId);
@@ -818,18 +818,26 @@ public final class CustomEnchantListener implements Listener {
         return hasDoubleJump(player.getInventory().getBoots());
     }
 
+    public boolean shouldRetainFlightAccess(Player player) {
+        if (player == null || !player.isOnline() || player.isDead()) {
+            return false;
+        }
+        if (doubleJumpFlightPlayers.contains(player.getUniqueId())) {
+            return true;
+        }
+        return isOnGround(player) && canUseDoubleJump(player);
+    }
+
+    private boolean shouldKeepExternalFlight(Player player) {
+        return plugin.getPlayerManager().hasFlightEnabled(player.getUniqueId())
+            || (plugin.getSuperpowerManager() != null && plugin.getSuperpowerManager().shouldRetainFlightAccess(player));
+    }
+
     private boolean isOnGround(Player player) {
         return ((Entity) player).isOnGround();
     }
 
     private boolean consumeDoubleJumpCost(Player player) {
-        float saturation = player.getSaturation();
-        if (saturation > 0.0f) {
-            float nextSaturation = (float) Math.max(0.0, saturation - plugin.getConfigManager().doubleJumpSaturationCost);
-            player.setSaturation(nextSaturation);
-            return true;
-        }
-
         int hungerCost = plugin.getConfigManager().doubleJumpHungerCost;
         if (hungerCost <= 0) {
             return true;
@@ -866,7 +874,7 @@ public final class CustomEnchantListener implements Listener {
         if (!doubleJumpFlightPlayers.remove(player.getUniqueId())) {
             return;
         }
-        if (!player.isFlying() && !plugin.getPlayerManager().hasFlightEnabled(player.getUniqueId())) {
+        if (!player.isFlying() && !shouldKeepExternalFlight(player)) {
             player.setAllowFlight(false);
         }
     }
@@ -1376,8 +1384,7 @@ public final class CustomEnchantListener implements Listener {
                 return List.of(
                     "Boots enchant.",
                     "Jump again in midair to launch yourself forward.",
-                    "Uses " + formatNumber(config.doubleJumpSaturationCost) + " saturation when you have any.",
-                    "Otherwise it costs " + formatFoodCost(config.doubleJumpHungerCost) + ".",
+                    "Each jump costs " + formatFoodCost(config.doubleJumpHungerCost) + ".",
                     "Found in Ancient City chests at " + formatConfigPercent(config.doubleJumpAncientCityChestChance) + "."
                 );
             }

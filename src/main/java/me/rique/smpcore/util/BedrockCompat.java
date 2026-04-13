@@ -36,7 +36,9 @@ public final class BedrockCompat {
             }
             Object result = isPlayer.invoke(api, player.getUniqueId());
             return result instanceof Boolean bool && bool;
-        } catch (ReflectiveOperationException ignored) {
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+            floodgateGetInstance = null;
+            floodgateIsPlayer = null;
             return false;
         }
     }
@@ -64,7 +66,7 @@ public final class BedrockCompat {
                 Class<?> apiClass = Class.forName("org.geysermc.floodgate.api.FloodgateApi");
                 floodgateGetInstance = apiClass.getMethod("getInstance");
                 floodgateIsPlayer = apiClass.getMethod("isFloodgatePlayer", UUID.class);
-            } catch (ReflectiveOperationException ignored) {
+            } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
                 floodgateGetInstance = null;
                 floodgateIsPlayer = null;
             }

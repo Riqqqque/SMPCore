@@ -5,16 +5,21 @@ import org.bukkit.Material;
 import java.util.Locale;
 
 public enum SuperpowerType {
-    IMMORTALITY("Immortality", 0.0001, Material.TOTEM_OF_UNDYING, null),
-    FLASH("Flash", 0.10, Material.SUGAR, null),
-    ENCHANTER("Enchanter", 0.05, Material.EXPERIENCE_BOTTLE, null),
-    BERSERK("Berserk", 0.10, Material.NETHERITE_SWORD, null),
-    TANK("Tank", 0.15, Material.SHIELD, null),
-    HUMAN("Human", 0.2499, Material.PAPER, null),
-    TRAVELER("Traveler", 0.025, Material.ENDER_PEARL, "Use /travel [x] [y] [z] [dimension] or /travel close"),
-    FLORIST("Florist", 0.20, Material.OAK_SAPLING, null),
-    MONARCH("Monarch", 0.05, Material.ZOMBIE_HEAD, "Use /msummon [amount]"),
-    SHADOW("Shadow", 0.075, Material.BLACK_DYE, "Use /shadow toggle");
+    IMMORTALITY("Deathless", 0.0001, Material.TOTEM_OF_UNDYING, null),
+    FLASH("Stormrunner", 0.08, Material.SUGAR, null),
+    ENCHANTER("Arcanist", 0.045, Material.EXPERIENCE_BOTTLE, null),
+    BERSERK("Warborn", 0.08, Material.NETHERITE_SWORD, null),
+    TANK("Juggernaut", 0.11, Material.SHIELD, null),
+    HUMAN("Mortal", 0.1399, Material.PAPER, null),
+    TRAVELER("Wayfarer", 0.025, Material.ENDER_PEARL, "Use /travel [x] [y] [z] [dimension] or /travel close"),
+    FLORIST("Verdant", 0.12, Material.OAK_SAPLING, null),
+    MONARCH("Sovereign", 0.045, Material.ZOMBIE_HEAD, "Use /msummon [amount]"),
+    SHADOW("Nightshade", 0.06, Material.BLACK_DYE, "Use /shadow toggle"),
+    THE_WORLD("The World", 0.05, Material.CLOCK, null),
+    XRAY_VISION("Oracle Eye", 0.035, Material.SPYGLASS, "Use /xray"),
+    MINER("Prospector", 0.08, Material.DIAMOND_PICKAXE, null),
+    GIANT("Titan", 0.10, Material.ANVIL, null),
+    SUPERMAN("Skybound", 0.03, Material.FEATHER, null);
 
     private final String displayName;
     private final double chance;

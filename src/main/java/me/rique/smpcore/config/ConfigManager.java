@@ -103,6 +103,7 @@ public final class ConfigManager {
     public double enderSwordDragonVerticalSpeed;
     public int enderSwordDismountDespawnSeconds;
     public boolean enderSwordRequireOpenSky;
+    public int frostScytheAbilityCooldownSeconds;
 
     public boolean awakeningTableEnabled;
     public double awakeningTableLootChance;
@@ -129,7 +130,6 @@ public final class ConfigManager {
     public double doubleJumpAncientCityChestChance;
     public double doubleJumpVerticalBoost;
     public double doubleJumpForwardBoost;
-    public double doubleJumpSaturationCost;
     public int doubleJumpHungerCost;
 
     public boolean advancedPickaxeEnabled;
@@ -143,6 +143,7 @@ public final class ConfigManager {
     public double advancedPickaxeCopperChance;
     public double advancedPickaxeDiamondChance;
     public double advancedPickaxeEmeraldChance;
+    public int grappleHookCooldownSeconds;
 
     public int sustenanceTalismanIntervalSeconds;
     public int sustenanceTalismanHungerGain;
@@ -272,6 +273,7 @@ public final class ConfigManager {
         enderSwordDragonSpeed = clamp(c.getDouble("ender-sword.dragon.horizontal-speed", 1.15), 0.2, 3.0);
         enderSwordDragonVerticalSpeed = clamp(c.getDouble("ender-sword.dragon.vertical-speed", 0.75), 0.1, 2.0);
         enderSwordDismountDespawnSeconds = Math.max(0, c.getInt("ender-sword.dragon.dismount-despawn-seconds", 10));
+        frostScytheAbilityCooldownSeconds = Math.max(0, c.getInt("frost-scythe.ability-cooldown-seconds", 15));
         enderSwordRequireOpenSky = c.getBoolean("ender-sword.require-open-sky", true);
 
         awakeningTableEnabled = c.getBoolean("awakening-table.enabled", true);
@@ -307,7 +309,6 @@ public final class ConfigManager {
         doubleJumpAncientCityChestChance = clamp(c.getDouble("custom-enchants.double-jump.ancient-city-chest-chance", 0.23), 0.0, 1.0);
         doubleJumpVerticalBoost = clamp(c.getDouble("custom-enchants.double-jump.vertical-boost", 0.82), 0.1, 3.0);
         doubleJumpForwardBoost = clamp(c.getDouble("custom-enchants.double-jump.forward-boost", 0.75), 0.0, 3.0);
-        doubleJumpSaturationCost = clamp(c.getDouble("custom-enchants.double-jump.saturation-cost", 2.0), 0.0, 20.0);
         doubleJumpHungerCost = clamp(c.getInt("custom-enchants.double-jump.hunger-cost", 4), 0, 20);
 
         advancedPickaxeEnabled = c.getBoolean("custom-tools.advanced-pickaxe.enabled", true);
@@ -321,13 +322,14 @@ public final class ConfigManager {
             1.0
         );
         advancedPickaxeCoalChance = advancedPickaxeWeight(c, "coal", 1.0);
-        advancedPickaxeIronChance = advancedPickaxeWeight(c, "iron", 2.0 / 3.0);
+        advancedPickaxeIronChance = advancedPickaxeWeight(c, "iron", 0.5);
         advancedPickaxeRedstoneChance = advancedPickaxeWeight(c, "redstone", 0.5);
         advancedPickaxeGoldChance = advancedPickaxeWeight(c, "gold", 1.0 / 3.0);
         advancedPickaxeLapisChance = advancedPickaxeWeight(c, "lapis", 0.5);
         advancedPickaxeCopperChance = advancedPickaxeWeight(c, "copper", 1.0);
-        advancedPickaxeDiamondChance = advancedPickaxeWeight(c, "diamond", 0.1);
-        advancedPickaxeEmeraldChance = advancedPickaxeWeight(c, "emerald", 0.1);
+        advancedPickaxeDiamondChance = advancedPickaxeWeight(c, "diamond", 0.25);
+        advancedPickaxeEmeraldChance = advancedPickaxeWeight(c, "emerald", 0.25);
+        grappleHookCooldownSeconds = Math.max(0, c.getInt("custom-tools.grapple-hook.cooldown-seconds", 3));
 
         sustenanceTalismanIntervalSeconds = Math.max(1, c.getInt("talisman-of-sustenance.interval-seconds", 7));
         sustenanceTalismanHungerGain = clamp(c.getInt("talisman-of-sustenance.hunger-gain", 1), 0, 20);

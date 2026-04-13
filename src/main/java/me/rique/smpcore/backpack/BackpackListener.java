@@ -66,8 +66,6 @@ public final class BackpackListener implements Listener {
     private final NamespacedKey backpackIdKey;
     private final NamespacedKey backpackDataKey;
     private final NamespacedKey backpackRecipeKey;
-    private final NamespacedKey backpackItemModelKey;
-
     private final Map<UUID, OpenBackpackSession> openBackpacks = new ConcurrentHashMap<>();
     private final Map<UUID, Long> warnCooldown = new ConcurrentHashMap<>();
 
@@ -77,7 +75,6 @@ public final class BackpackListener implements Listener {
         this.backpackIdKey = new NamespacedKey(plugin, "backpack_id");
         this.backpackDataKey = new NamespacedKey(plugin, "backpack_data");
         this.backpackRecipeKey = new NamespacedKey(plugin, "backpack_recipe");
-        this.backpackItemModelKey = new NamespacedKey(plugin, "backpack");
         Bukkit.removeRecipe(backpackRecipeKey);
         Bukkit.getScheduler().runTask(plugin, () -> Bukkit.getOnlinePlayers().forEach(this::migratePlayerBackpacks));
     }
@@ -495,7 +492,7 @@ public final class BackpackListener implements Listener {
     }
 
     private void applyBackpackPresentation(ItemMeta meta) {
-        meta.setItemModel(backpackItemModelKey);
+        meta.setItemModel(null);
         meta.displayName(MM.deserialize("<gold><bold>Backpack</bold></gold>"));
         meta.lore(List.of(
             MM.deserialize("<dark_gray>Portable Storage</dark_gray>"),

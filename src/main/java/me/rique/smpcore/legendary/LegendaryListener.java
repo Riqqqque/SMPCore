@@ -95,13 +95,14 @@ import org.bukkit.inventory.EquipmentSlotGroup;
 import org.bukkit.inventory.meta.BlockStateMeta;
 import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.inventory.meta.LeatherArmorMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.util.RayTraceResult;
+import org.bukkit.util.BoundingBox;
 import org.bukkit.util.Vector;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
+import org.bukkit.potion.PotionEffectTypeCategory;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -123,12 +124,13 @@ public final class LegendaryListener implements Listener {
     private static final String BACKPACK_RECIPE_ID = "backpack";
     private static final int[] CUSTOM_RECIPE_MENU_SLOTS = {31, 36, 37, 38, 39, 40, 41, 42, 43, 44};
 
-    private static final int LEGENDARY_ITEM_DATA_VERSION = 16;
+    private static final int LEGENDARY_ITEM_DATA_VERSION = 17;
     private static final double ORB_OF_THE_MYSTICS_DROP_CHANCE = 0.10;
     private static final int STARTUP_LEGENDARY_MIGRATION_CHUNKS_PER_TICK = 24;
     private static final int LEGENDARY_ITEM_SCAN_MAX_DEPTH = 2;
     private static final long LEGENDARY_DUPLICATE_AUDIT_INTERVAL_TICKS = 20L * 15L;
     private static final int ENDERBOW_TP_COOLDOWN = 30;
+    private static final double ENDER_SWORD_MELEE_DAMAGE = 10.0;
     private static final int CHRONO_READY_SECONDS = 7;
     private static final int CHRONO_COOLDOWN = 45;
     private static final int CHRONO_COOLDOWN_DEATH = 90;
@@ -136,12 +138,55 @@ public final class LegendaryListener implements Listener {
     private static final int HYPNOSIS_COOLDOWN = 5;
     private static final int HYPNOSIS_MAX = 10;
     private static final int EMERALD_BLADE_MAX_LEVEL = 20;
+    private static final double WARDEN_BLADE_MELEE_DAMAGE = 8.0;
+    private static final int WARDEN_BLADE_PROTECTION_SECONDS = 3 * 60;
+    private static final int WARDEN_BLADE_PROTECTION_COOLDOWN = 420;
+    private static final int WARDEN_BLADE_SOUND_WAVE_COOLDOWN = 40;
+    private static final double WARDEN_BLADE_SOUND_WAVE_DAMAGE = 9.0;
+    private static final double WARDEN_BLADE_SOUND_WAVE_RANGE = 18.0;
+    private static final double WARDEN_BLADE_SOUND_WAVE_HITBOX = 0.65;
     private static final double FROST_SCYTHE_MELEE_DAMAGE = 5.0;
     private static final int FROST_SCYTHE_NAUSEA_TICKS = 2 * 20;
     private static final int FROST_SCYTHE_FREEZE_TICKS = 2 * 20;
     private static final double FROST_SCYTHE_FREEZE_RADIUS = 6.0;
     private static final double FROST_SCYTHE_SWEEP_RANGE = 5.5;
     private static final double FROST_SCYTHE_SWEEP_DOT = 0.15;
+    private static final double RHITTA_MELEE_DAMAGE = 7.0;
+    private static final int RHITTA_SUNS_BLESSING_SECONDS = 300;
+    private static final int RHITTA_SUNS_BLESSING_COOLDOWN = 420;
+    private static final int RHITTA_CRUEL_SUN_COOLDOWN = 320;
+    private static final int RHITTA_CRUEL_SUN_FIRE_SECONDS = 5;
+    private static final double RHITTA_CRUEL_SUN_RADIUS = 6.0;
+    private static final double RHITTA_CRUEL_SUN_TICK_DAMAGE = 1.0;
+    private static final double MIDAS_SWORD_MELEE_DAMAGE = 8.0;
+    private static final int MIDAS_SWORD_BASE_SHARPNESS = 3;
+    private static final int MIDAS_SWORD_MAX_SHARPNESS = 15;
+    private static final double MIDAS_SWORD_HEALTH_BONUS = 10.0;
+    private static final double REAPER_SCYTHE_MELEE_DAMAGE = 10.0;
+    private static final int REAPER_SCYTHE_DRAIN_COOLDOWN = 45;
+    private static final double REAPER_SCYTHE_DRAIN_FRACTION = 0.25;
+    private static final double SHADOW_BLADE_DAMAGE = 10.5;
+    private static final double SHADOW_BLADE_MONARCH_DAMAGE = 12.5;
+    private static final int SHADOW_BLADE_DURATION_SECONDS = 10;
+    private static final int SHADOW_BLADE_SHADOW_DURATION_SECONDS = 30;
+    private static final int SHADOW_BLADE_COOLDOWN = 30;
+    private static final int HEADHUNTER_RAGE_MAX = 5;
+    private static final int HEADHUNTER_BUFF_SECONDS = 15;
+    private static final int HEADHUNTER_COOLDOWN = 120;
+    private static final int GOD_CHESTPLATE_COOLDOWN = 240;
+    private static final double GOD_CHESTPLATE_HEALTH_BONUS = 10.0;
+    private static final int STRENGTH_SWORD_STAGE_TWO_KILLS = 3;
+    private static final int STRENGTH_SWORD_STAGE_THREE_KILLS = 5;
+    private static final int STRENGTH_SWORD_BEAM_COOLDOWN = 45;
+    private static final int STRENGTH_SWORD_DOMAIN_COOLDOWN = 180;
+    private static final int STRENGTH_SWORD_DOMAIN_SECONDS = 10;
+    private static final double STRENGTH_SWORD_DOMAIN_RADIUS = 10.0;
+    private static final double STRENGTH_SWORD_DOMAIN_HEALTH_BONUS = 10.0;
+    private static final double STRENGTH_SWORD_DOMAIN_ATTACK_SPEED_SCALAR = 0.15;
+    private static final double FARADAY_PLAYER_SCAN_RANGE = 5000.0;
+    private static final int FARADAY_SCAN_MAX_USES = 15;
+    private static final int LIFE_STEALER_MAX_STACKS = 3;
+    private static final int LIFE_STEALER_MAX_SHARPNESS = 6;
     private static final int PERCY_TRIDENT_WATER_BREATHING_TICKS = 60;
     private static final int BLINK_DAGGER_RANGE_BLOCKS = 12;
     private static final int BLINK_DAGGER_COOLDOWN = 12;
@@ -216,25 +261,15 @@ public final class LegendaryListener implements Listener {
     private final NamespacedKey keyLegendaryInstance;
     private final NamespacedKey keyMenuLegendary;
     private final NamespacedKey keyEnderBone;
-    private final NamespacedKey keyEnderBoneItemModel;
     private final NamespacedKey keyOrbOfTheMystics;
-    private final NamespacedKey keyOrbOfTheMysticsItemModel;
     private final NamespacedKey keyOrbOfTheMysticsInstance;
+    private final NamespacedKey keyFaradayUses;
+    private final NamespacedKey keyMidasSharpness;
     private final NamespacedKey keyPercyTridentMode;
     private final NamespacedKey keyWarPickMode;
     private final NamespacedKey keyEnderbowForm;
-    private final NamespacedKey keyEnderSwordItemModel;
-    private final NamespacedKey keyHypnosisStaffItemModel;
-    private final NamespacedKey keyExecutionerBladeItemModel;
     private final NamespacedKey keyEmeraldLevel;
-    private final NamespacedKey keyEmeraldBladeItemModel;
-    private final NamespacedKey keyBlinkDaggerItemModel;
-    private final NamespacedKey keyFrostScytheItemModel;
-    private final NamespacedKey keyTridentOfPercyItemModel;
-    private final NamespacedKey keyFaradaysMagnetItemModel;
-    private final NamespacedKey keyLifeStealerItemModel;
-    private final NamespacedKey keyWitherBladeItemModel;
-    private final NamespacedKey keyWarPickItemModel;
+    private final NamespacedKey faradaysMagnetRecipeKey;
     private final NamespacedKey keyEnderbowTag;
     private final NamespacedKey keyEnderSwordDragonOwner;
     private final NamespacedKey keyEnderSwordSeatOwner;
@@ -251,11 +286,22 @@ public final class LegendaryListener implements Listener {
     private final NamespacedKey keyLifeStealerStacks;
     private final NamespacedKey keyLifeStealerExpiresAt;
     private final NamespacedKey keyLifeStealerSeenPlayers;
+    private final NamespacedKey keyLifeStealerSharpness;
+    private final NamespacedKey keyStrengthSwordVictims;
+    private final NamespacedKey keyMidasHealthModifier;
+    private final NamespacedKey keyShadowBladeAttackSpeedModifier;
+    private final NamespacedKey keyGodChestplateHealthModifier;
+    private final NamespacedKey keyGodChestplateKnockbackModifier;
+    private final NamespacedKey keyStrengthDomainHealthModifier;
+    private final NamespacedKey keyStrengthDomainAttackSpeedModifier;
     private final Enchantment enchantPower;
     private final Enchantment enchantSharpness;
+    private final Enchantment enchantProtection;
     private final Enchantment enchantEfficiency;
     private final Enchantment enchantFortune;
     private final Enchantment enchantUnbreaking;
+    private final Enchantment enchantFireAspect;
+    private final Enchantment enchantLooting;
     private final Enchantment enchantLoyalty;
     private final Enchantment enchantChanneling;
     private final Enchantment enchantImpaling;
@@ -263,6 +309,7 @@ public final class LegendaryListener implements Listener {
     private final Enchantment enchantDensity;
     private final Enchantment enchantBreach;
     private final Enchantment enchantWindBurst;
+    private final Enchantment enchantMending;
 
     private final List<LegendaryRecipe> recipes;
     private final Set<NamespacedKey> recipeBookKeys = new HashSet<>();
@@ -272,14 +319,31 @@ public final class LegendaryListener implements Listener {
     private final Map<UUID, Long> chronoCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> harpoonCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> hypnosisCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> wardenBladeProtectionCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> wardenBladeSoundWaveCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> frostScytheCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> blinkDaggerCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> blinkDaggerBackstabCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> executionerStrengthCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> executionerShockwaveCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> rhittaBlessingCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> rhittaCruelSunCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> reaperScytheCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> shadowBladeCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> headhunterBuffCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> godChestplateCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> strengthSwordBeamCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> strengthSwordDomainCd = new ConcurrentHashMap<>();
 
     private final Map<UUID, ChronoState> chronoStates = new ConcurrentHashMap<>();
     private final Map<UUID, FrostScytheFreezeState> frostScytheFrozen = new ConcurrentHashMap<>();
+    private final Map<UUID, RhittaBurnState> rhittaBurns = new ConcurrentHashMap<>();
     private final Map<UUID, Long> blinkDaggerStunnedUntil = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> shadowBladeActiveUntil = new ConcurrentHashMap<>();
+    private final Map<UUID, Integer> headhunterRage = new ConcurrentHashMap<>();
+    private final Map<UUID, StrengthDomainState> activeStrengthDomains = new ConcurrentHashMap<>();
+    private final Map<UUID, Double> lifeStealerGrantedAbsorption = new ConcurrentHashMap<>();
+    private final Map<UUID, Integer> lifeStealerGrantedAmplifier = new ConcurrentHashMap<>();
     private final Map<UUID, Set<UUID>> controlledByOwner = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> ownerByMob = new ConcurrentHashMap<>();
     private final Set<UUID> frostScytheSweepPlayers = ConcurrentHashMap.newKeySet();
@@ -302,25 +366,15 @@ public final class LegendaryListener implements Listener {
         this.keyLegendaryInstance = new NamespacedKey(plugin, "legendary_instance");
         this.keyMenuLegendary = new NamespacedKey(plugin, "legendary_menu_id");
         this.keyEnderBone = new NamespacedKey(plugin, "ender_bone");
-        this.keyEnderBoneItemModel = new NamespacedKey(plugin, "ender_bone");
         this.keyOrbOfTheMystics = new NamespacedKey(plugin, "orb_of_the_mystics");
-        this.keyOrbOfTheMysticsItemModel = new NamespacedKey(plugin, "orb_of_the_mystics");
         this.keyOrbOfTheMysticsInstance = new NamespacedKey(plugin, "orb_of_the_mystics_instance");
+        this.keyFaradayUses = new NamespacedKey(plugin, "faraday_uses");
+        this.keyMidasSharpness = new NamespacedKey(plugin, "midas_sharpness");
         this.keyPercyTridentMode = new NamespacedKey(plugin, "trident_of_percy_mode");
         this.keyWarPickMode = new NamespacedKey(plugin, "war_pick_mode");
         this.keyEnderbowForm = new NamespacedKey(plugin, "enderbow_form");
-        this.keyEnderSwordItemModel = new NamespacedKey(plugin, "ender_sword");
-        this.keyHypnosisStaffItemModel = new NamespacedKey(plugin, "hypnosis_staff");
-        this.keyExecutionerBladeItemModel = new NamespacedKey(plugin, "executioner_blade");
         this.keyEmeraldLevel = new NamespacedKey(plugin, "emerald_blade_level");
-        this.keyEmeraldBladeItemModel = new NamespacedKey(plugin, "emerald_blade");
-        this.keyBlinkDaggerItemModel = new NamespacedKey(plugin, "blink_dagger");
-        this.keyFrostScytheItemModel = new NamespacedKey(plugin, "frost_scythe");
-        this.keyTridentOfPercyItemModel = new NamespacedKey(plugin, "trident_of_percy");
-        this.keyFaradaysMagnetItemModel = new NamespacedKey(plugin, "faradays_magnet");
-        this.keyLifeStealerItemModel = new NamespacedKey(plugin, "life_stealer");
-        this.keyWitherBladeItemModel = new NamespacedKey(plugin, "wither_blade");
-        this.keyWarPickItemModel = new NamespacedKey(plugin, "war_pick");
+        this.faradaysMagnetRecipeKey = new NamespacedKey(plugin, "faradays_magnet_recipe");
         this.keyEnderbowTag = new NamespacedKey(plugin, "enderbow_endermite");
         this.keyEnderSwordDragonOwner = new NamespacedKey(plugin, "ender_sword_dragon_owner");
         this.keyEnderSwordSeatOwner = new NamespacedKey(plugin, "ender_sword_seat_owner");
@@ -337,11 +391,22 @@ public final class LegendaryListener implements Listener {
         this.keyLifeStealerStacks = new NamespacedKey(plugin, "life_stealer_stacks");
         this.keyLifeStealerExpiresAt = new NamespacedKey(plugin, "life_stealer_expires_at");
         this.keyLifeStealerSeenPlayers = new NamespacedKey(plugin, "life_stealer_seen_players");
+        this.keyLifeStealerSharpness = new NamespacedKey(plugin, "life_stealer_sharpness");
+        this.keyStrengthSwordVictims = new NamespacedKey(plugin, "strength_sword_victims");
+        this.keyMidasHealthModifier = new NamespacedKey(plugin, "midas_sword_health");
+        this.keyShadowBladeAttackSpeedModifier = new NamespacedKey(plugin, "shadow_blade_attack_speed");
+        this.keyGodChestplateHealthModifier = new NamespacedKey(plugin, "god_chestplate_health");
+        this.keyGodChestplateKnockbackModifier = new NamespacedKey(plugin, "god_chestplate_knockback");
+        this.keyStrengthDomainHealthModifier = new NamespacedKey(plugin, "strength_domain_health");
+        this.keyStrengthDomainAttackSpeedModifier = new NamespacedKey(plugin, "strength_domain_attack_speed");
         this.enchantPower = requireEnchantment("power");
         this.enchantSharpness = requireEnchantment("sharpness");
+        this.enchantProtection = requireEnchantment("protection");
         this.enchantEfficiency = requireEnchantment("efficiency");
         this.enchantFortune = requireEnchantment("fortune");
         this.enchantUnbreaking = requireEnchantment("unbreaking");
+        this.enchantFireAspect = requireEnchantment("fire_aspect");
+        this.enchantLooting = requireEnchantment("looting");
         this.enchantLoyalty = requireEnchantment("loyalty");
         this.enchantChanneling = requireEnchantment("channeling");
         this.enchantImpaling = requireEnchantment("impaling");
@@ -349,13 +414,16 @@ public final class LegendaryListener implements Listener {
         this.enchantDensity = requireEnchantment("density");
         this.enchantBreach = requireEnchantment("breach");
         this.enchantWindBurst = requireEnchantment("wind_burst");
+        this.enchantMending = requireEnchantment("mending");
         this.recipes = buildRecipes();
         registerRecipeBookRecipes();
+        registerNormalCraftingRecipes();
         Bukkit.getScheduler().runTask(plugin, () -> {
             cleanupTaggedEnderSwordDragons();
             cleanupTaggedEnderSwordSeats();
             for (Player online : Bukkit.getOnlinePlayers()) {
                 migratePlayerLegendaryItems(online);
+                discoverNormalCraftingRecipes(online);
                 refreshMagnetTracking(online);
                 refreshWitherBladeLore(online);
                 refreshLifeStealerLore(online);
@@ -366,6 +434,7 @@ public final class LegendaryListener implements Listener {
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickMagnets, 20L, 20L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickPercyTridentEffects, 20L, 20L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickLifeStealerLore, 20L, 20L);
+        Bukkit.getScheduler().runTaskTimer(plugin, this::tickLegendaryStates, 10L, 10L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickEnderSwordDragons, 1L, 1L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::cleanupExpiredLegendaryCooldowns, 20L * 60L, 20L * 60L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::auditLegendaryClaimsAndDuplicates, LEGENDARY_DUPLICATE_AUDIT_INTERVAL_TICKS, LEGENDARY_DUPLICATE_AUDIT_INTERVAL_TICKS);
@@ -375,9 +444,11 @@ public final class LegendaryListener implements Listener {
     public void onJoin(PlayerJoinEvent event) {
         cleanupExpiredLegendaryCooldowns();
         migratePlayerLegendaryItems(event.getPlayer());
+        discoverNormalCraftingRecipes(event.getPlayer());
         refreshMagnetTracking(event.getPlayer());
         refreshWitherBladeLore(event.getPlayer());
         refreshLifeStealerLore(event.getPlayer());
+        syncLegendaryOwnership(event.getPlayer());
         scheduleLegendaryDuplicateAudit();
     }
 
@@ -389,9 +460,15 @@ public final class LegendaryListener implements Listener {
         activeMagnetPlayers.remove(id);
         pendingMagnetRefresh.remove(id);
         pendingWitherBladeLoreRefresh.remove(id);
+        shadowBladeActiveUntil.remove(id);
+        headhunterRage.remove(id);
+        activeStrengthDomains.remove(id);
+        lifeStealerGrantedAbsorption.remove(id);
+        clearPlayerLegendaryAttributeModifiers(event.getPlayer());
         clearEnderDragonChunkTickets(id);
         despawnEnderSwordDragon(id, false);
         cleanupExpiredLegendaryCooldowns();
+        syncLegendaryOwnership(event.getPlayer());
 
         Set<UUID> controlled = controlledByOwner.remove(id);
         if (controlled != null) {
@@ -420,12 +497,17 @@ public final class LegendaryListener implements Listener {
     @EventHandler(priority = EventPriority.NORMAL)
     public void onPrepareCraft(PrepareItemCraftEvent event) {
         CraftingInventory inv = event.getInventory();
+        Recipe eventRecipe = event.getRecipe();
+        if (eventRecipe instanceof Keyed keyed && faradaysMagnetRecipeKey.equals(keyed.getKey())) {
+            inv.setResult(containsLegendaryIngredient(inv.getMatrix()) ? null : createFaradaysMagnetItem());
+            return;
+        }
         LegendaryRecipe recipe = findRecipe(inv.getMatrix());
         if (recipe != null) {
             inv.setResult(null);
             return;
         }
-        if (isLegendaryRecipe(event.getRecipe())) {
+        if (isLegendaryRecipe(eventRecipe)) {
             inv.setResult(null);
         }
     }
@@ -446,6 +528,14 @@ public final class LegendaryListener implements Listener {
         ItemStack source = sourceType == leftType ? left : right;
         ItemStack result = event.getResult();
         if (source == null || result == null || result.getType() == Material.AIR) return;
+        if (sourceType == LegendaryType.GOD_CHESTPLATE && !result.getEnchantments().isEmpty()) {
+            event.setResult(null);
+            return;
+        }
+        if (sourceType == LegendaryType.STRENGTH_SWORD && result.getEnchantmentLevel(enchantMending) > 0) {
+            event.setResult(null);
+            return;
+        }
         event.setResult(preserveLegendaryUtilityResult(source, result, sourceType));
     }
 
@@ -456,16 +546,7 @@ public final class LegendaryListener implements Listener {
         LegendaryType topType = typeOf(top);
         LegendaryType bottomType = typeOf(bottom);
         if (topType == null && bottomType == null) return;
-        if (!canUseVanillaLegendaryUtilities(topType, bottomType)) {
-            event.setResult(null);
-            return;
-        }
-
-        LegendaryType sourceType = utilitySourceType(topType, bottomType);
-        ItemStack source = sourceType == topType ? top : bottom;
-        ItemStack result = event.getResult();
-        if (source == null || result == null || result.getType() == Material.AIR) return;
-        event.setResult(preserveLegendaryUtilityResult(source, result, sourceType));
+        event.setResult(null);
     }
 
     private boolean canUseVanillaLegendaryUtilities(LegendaryType first, LegendaryType second) {
@@ -520,7 +601,8 @@ public final class LegendaryListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPrepareItemEnchant(PrepareItemEnchantEvent event) {
-        if (typeOf(event.getItem()) != LegendaryType.EMERALD_BLADE) return;
+        LegendaryType type = typeOf(event.getItem());
+        if (type != LegendaryType.EMERALD_BLADE && type != LegendaryType.GOD_CHESTPLATE) return;
         event.setCancelled(true);
     }
 
@@ -530,7 +612,7 @@ public final class LegendaryListener implements Listener {
         if (type == null) {
             return;
         }
-        if (type == LegendaryType.EMERALD_BLADE) {
+        if (type == LegendaryType.EMERALD_BLADE || type == LegendaryType.GOD_CHESTPLATE) {
             event.setCancelled(true);
             return;
         }
@@ -586,12 +668,24 @@ public final class LegendaryListener implements Listener {
                     openAncientScrollRecipeDetails(player);
                     return;
                 }
+                if (MythicForgeListener.MYTHIC_FORGE_ITEM_ID.equals(recipeId)) {
+                    openMythicForgeRecipeDetails(player);
+                    return;
+                }
+                if (MythicForgeListener.ASCENDANT_CORE_ITEM_ID.equals(recipeId)) {
+                    openAscendantCoreRecipeDetails(player);
+                    return;
+                }
                 if (SustenanceTalismanListener.ITEM_ID.equals(recipeId)) {
                     openSustenanceTalismanRecipeDetails(player);
                     return;
                 }
                 if (plugin.getCustomToolListener() != null && plugin.getCustomToolListener().isCustomToolId(recipeId)) {
                     openCustomToolRecipeDetails(player, recipeId);
+                    return;
+                }
+                if (LegendaryType.FARADAYS_MAGNET.id.equals(recipeId)) {
+                    openFaradaysMagnetRecipeDetails(player);
                     return;
                 }
 
@@ -630,6 +724,20 @@ public final class LegendaryListener implements Listener {
             return;
         }
 
+        if (top.getHolder() instanceof AscendantCoreRecipeHolder) {
+            event.setCancelled(true);
+            if (event.getSlot() == RECIPE_TRADE_SLOT) {
+                player.sendMessage(MessageUtil.info(
+                    "Craft <white>Ascendant Core</white> in a normal crafting table, then spend it in the Mythic Forge."
+                ));
+                return;
+            }
+            if (event.getSlot() == 18) {
+                openRecipeMenu(player);
+            }
+            return;
+        }
+
         if (top.getHolder() instanceof CustomToolRecipeHolder holder) {
             event.setCancelled(true);
             if (event.getSlot() == RECIPE_TRADE_SLOT) {
@@ -638,6 +746,34 @@ public final class LegendaryListener implements Listener {
                     : plugin.getCustomToolListener().displayNameFor(holder.toolId());
                 player.sendMessage(MessageUtil.info(
                     "Craft <white>" + displayName + "</white> in a normal crafting table."
+                ));
+                return;
+            }
+            if (event.getSlot() == 18) {
+                openRecipeMenu(player);
+            }
+            return;
+        }
+
+        if (top.getHolder() instanceof MythicForgeRecipeHolder) {
+            event.setCancelled(true);
+            if (event.getSlot() == RECIPE_TRADE_SLOT) {
+                player.sendMessage(MessageUtil.info(
+                    "Craft <white>Mythic Forge</white> in a normal crafting table, place it, then combine <white>2 compatible legendaries</white> with an <white>Ascendant Core</white>."
+                ));
+                return;
+            }
+            if (event.getSlot() == 45) {
+                openRecipeMenu(player);
+            }
+            return;
+        }
+
+        if (top.getHolder() instanceof FaradaysMagnetRecipeHolder) {
+            event.setCancelled(true);
+            if (event.getSlot() == RECIPE_TRADE_SLOT) {
+                player.sendMessage(MessageUtil.info(
+                    "Craft <white>Faraday's Magnet</white> in a normal crafting table."
                 ));
                 return;
             }
@@ -687,7 +823,8 @@ public final class LegendaryListener implements Listener {
             || top.getHolder() instanceof AncientScrollRecipeHolder
             || top.getHolder() instanceof BackpackRecipeHolder
             || top.getHolder() instanceof TalismanRecipeHolder
-            || top.getHolder() instanceof CustomToolRecipeHolder) {
+            || top.getHolder() instanceof CustomToolRecipeHolder
+            || top.getHolder() instanceof FaradaysMagnetRecipeHolder) {
             event.setCancelled(true);
         }
     }
@@ -800,29 +937,90 @@ public final class LegendaryListener implements Listener {
         return PLAIN.serialize(MM.deserialize(type.display)).trim();
     }
 
+    public String legendaryId(ItemStack item) {
+        LegendaryType type = typeOf(item);
+        return type == null ? null : type.id;
+    }
+
+    public int maxServerCopiesForLegendary(String id) {
+        LegendaryType type = LegendaryType.fromId(normalizeLegendaryId(id));
+        return maxServerCopiesForLegendary(type);
+    }
+
+    public boolean isMythicForgeSourceLegendary(String id) {
+        LegendaryType type = LegendaryType.fromId(normalizeLegendaryId(id));
+        return isMythicForgeSourceLegendary(type);
+    }
+
+    public boolean isMythicForgeOutputLegendary(String id) {
+        LegendaryType type = LegendaryType.fromId(normalizeLegendaryId(id));
+        return isMythicForgeOutputLegendary(type);
+    }
+
+    public String legendaryInstanceId(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) {
+            return null;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return null;
+        }
+        return meta.getPersistentDataContainer().get(keyLegendaryInstance, PersistentDataType.STRING);
+    }
+
+    public void registerLegendaryInstance(Player owner, ItemStack item, boolean craftedCurrentAltar) {
+        if (owner == null || item == null) {
+            return;
+        }
+        LegendaryType type = typeOf(item);
+        if (type == null || !isExclusiveLegendaryType(type)) {
+            return;
+        }
+        String instanceId = legendaryInstanceId(item);
+        if (instanceId == null || instanceId.isBlank()) {
+            return;
+        }
+        LegendaryAltarManager altarManager = plugin.getLegendaryAltarManager();
+        if (altarManager != null) {
+            altarManager.registerLegendaryInstance(type.id, instanceId, owner.getUniqueId(), craftedCurrentAltar);
+        }
+    }
+
+    public void resyncLegendaryOwnership(Player player) {
+        syncLegendaryOwnership(player);
+    }
+
     public String normalizeLegendaryId(String input) {
         if (input == null) return null;
         String normalized = input.trim().toLowerCase();
         if (normalized.isEmpty()) return null;
         return switch (normalized) {
-            case "ender_bow" -> "enderbow";
-            case "ender", "enderblade", "ender_sword", "dragonblade", "dragon_sword" -> "ender_sword";
-            case "chrono", "chronosword", "chrono_blade" -> "chrono_sword";
-            case "harpoon", "launcher" -> "harpoon_launcher";
-            case "hypnosis", "staff" -> "hypnosis_staff";
-            case "emerald", "blade" -> "emerald_blade";
+            case "ender_bow", "riftbow" -> "enderbow";
+            case "ender", "enderblade", "ender_sword", "dragonblade", "dragon_sword", "riftreaver" -> "ender_sword";
+            case "chrono", "chronosword", "chrono_blade", "hourglassblade", "hourglass_blade" -> "chrono_sword";
+            case "harpoon", "launcher", "leviathan", "leviathan_launcher", "leviathanlauncher" -> "harpoon_launcher";
+            case "hypnosis", "staff", "siren", "sirenscane", "sirens_cane" -> "hypnosis_staff";
+            case "emerald", "blade", "verdantfang", "verdant_fang" -> "emerald_blade";
             case "blink", "blinkdagger", "blink_dagger", "blink-dagger", "dagger" -> "blink_dagger";
+            case "warden", "wardenblade", "warden_blade", "warden-blade", "sculk_blade" -> "warden_blade";
             case "scythe", "frost", "frostscythe", "frost_scythe" -> "frost_scythe";
+            case "rhitta", "divineaxe", "divine_axe", "divine_axe_rhitta", "divine-axe-rhitta", "rhitta_axe" -> "divine_axe_rhitta";
             case "percy", "tridentofpercy", "trident_of_percy", "trident-of-percy", "percys_trident", "percy_trident" -> "trident_of_percy";
-            case "warpick", "pick" -> "war_pick";
+            case "warpick", "pick", "siegebreaker", "siegebreaker_pick" -> "war_pick";
             case "magnet", "faraday", "faradays_magnet", "faradays" -> "faradays_magnet";
-            case "wind", "windcannon", "cannon", "wind_charge_cannon" -> "wind_charge_cannon";
+            case "wind", "windcannon", "cannon", "wind_charge_cannon", "tempestcannon", "tempest_cannon" -> "wind_charge_cannon";
             case "executioner", "executionerblade", "executioner_sword", "exec" -> "executioner_blade";
             case "hermes", "hermesboots", "hermes_boots", "boots" -> "hermes_boots";
             case "wither", "witherblade", "wither_sword" -> "wither_blade";
             case "lifestealer", "life_stealer", "life", "stealer", "bloodsword" -> "life_stealer";
+            case "midas", "midassword", "midas_sword", "goldsword", "gildedsovereign", "gilded_sovereign" -> "midas_sword";
+            case "reaper", "reaperscythe", "reaper_scythe", "reapers_scythe", "soulrender" -> "reapers_scythe";
+            case "shadowblade", "shadow_blade", "shadow-blade", "nightfall" -> "shadow_blade";
+            case "headhunter", "headhunter_chestpiece", "headhunters_chestpiece", "rage_chestplate", "headhuntersharness", "headhunters_harness" -> "headhunters_chestpiece";
+            case "god", "godchestplate", "god_chestplate", "divine_chestplate", "aegis", "aegis_of_the_undying", "aegisoftheundying" -> "god_chestplate";
+            case "strength", "strengthsword", "strength_sword", "domain_blade", "crimsondominion", "crimson_dominion" -> "strength_sword";
             case "thor", "hammer", "thors", "mjolnir", "thors_hammer" -> "thors_hammer";
-            case "hardhitter", "hard_hitter", "hard hitter" -> "hard_hitter";
+            case "hardhitter", "hard_hitter", "hard hitter", "titanbreaker" -> "hard_hitter";
             default -> normalized;
         };
     }
@@ -839,6 +1037,10 @@ public final class LegendaryListener implements Listener {
 
     public ItemStack createOrbOfTheMysticsItem() {
         return createOrbOfTheMystics();
+    }
+
+    public ItemStack createFaradaysMagnetItem() {
+        return createItem(LegendaryType.FARADAYS_MAGNET);
     }
 
     @EventHandler(priority = EventPriority.HIGH)
@@ -870,7 +1072,7 @@ public final class LegendaryListener implements Listener {
                 boolean tp = !isEnderbowTpForm(hand);
                 setEnderbowForm(hand, tp);
                 player.getInventory().setItemInMainHand(hand);
-                player.sendMessage(MessageUtil.info("Enderbow form: <white>" + (tp ? "Teleport" : "Arrow") + "</white>."));
+                player.sendMessage(MessageUtil.info("Riftbow form: <white>" + (tp ? "Teleport" : "Arrow") + "</white>."));
             }
             case CHRONO_SWORD -> {
                 if (!right) return;
@@ -897,16 +1099,45 @@ public final class LegendaryListener implements Listener {
                 event.setCancelled(true);
                 useBlinkDagger(player);
             }
+            case WARDEN_BLADE -> {
+                if (!right) return;
+                event.setCancelled(true);
+                useWardenBlade(player);
+            }
             case FARADAYS_MAGNET -> {
                 if (!right) return;
                 event.setCancelled(true);
-                toggleMagnet(player, hand);
+                if (player.isSneaking()) {
+                    toggleMagnet(player, hand);
+                } else {
+                    useFaradaysMagnet(player, hand);
+                }
                 player.getInventory().setItemInMainHand(hand);
             }
             case FROST_SCYTHE -> {
                 if (!right) return;
                 event.setCancelled(true);
                 useFrostScythe(player);
+            }
+            case DIVINE_AXE_RHITTA -> {
+                if (!right) return;
+                event.setCancelled(true);
+                useDivineAxeRhitta(player);
+            }
+            case SHADOW_BLADE -> {
+                if (!right) return;
+                event.setCancelled(true);
+                useShadowBlade(player);
+            }
+            case STRENGTH_SWORD -> {
+                if (left && player.isSneaking()) {
+                    event.setCancelled(true);
+                    useStrengthSwordBeam(player);
+                    return;
+                }
+                if (!right) return;
+                event.setCancelled(true);
+                useStrengthSwordDomain(player);
             }
             case TRIDENT_OF_PERCY -> {
                 if (!right || !player.isSneaking()) return;
@@ -978,14 +1209,34 @@ public final class LegendaryListener implements Listener {
                 event.setCancelled(true);
                 useBlinkDagger(player);
             }
+            case WARDEN_BLADE -> {
+                event.setCancelled(true);
+                useWardenBlade(player);
+            }
             case FARADAYS_MAGNET -> {
                 event.setCancelled(true);
-                toggleMagnet(player, hand);
+                if (player.isSneaking()) {
+                    toggleMagnet(player, hand);
+                } else {
+                    useFaradaysMagnet(player, hand);
+                }
                 player.getInventory().setItemInMainHand(hand);
             }
             case FROST_SCYTHE -> {
                 event.setCancelled(true);
                 useFrostScythe(player);
+            }
+            case DIVINE_AXE_RHITTA -> {
+                event.setCancelled(true);
+                useDivineAxeRhitta(player);
+            }
+            case SHADOW_BLADE -> {
+                event.setCancelled(true);
+                useShadowBlade(player);
+            }
+            case STRENGTH_SWORD -> {
+                event.setCancelled(true);
+                useStrengthSwordDomain(player);
             }
             case TRIDENT_OF_PERCY -> {
                 if (!player.isSneaking()) return;
@@ -1075,17 +1326,24 @@ public final class LegendaryListener implements Listener {
     public void onLethalDamage(EntityDamageEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
         ChronoState state = chronoStates.get(player.getUniqueId());
-        if (state == null) return;
-        if (player.getHealth() - event.getFinalDamage() > 0.0) return;
-
-        event.setCancelled(true);
-        activateChrono(player, true);
+        if (state != null && player.getHealth() - event.getFinalDamage() <= 0.0) {
+            event.setCancelled(true);
+            activateChrono(player, true);
+            return;
+        }
+        tryGodChestplateRescue(player, event);
     }
 
     @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
     public void onDeath(EntityDeathEvent event) {
+        rhittaBurns.remove(event.getEntity().getUniqueId());
         if (event.getEntity() instanceof Player player) {
             blinkDaggerStunnedUntil.remove(player.getUniqueId());
+            shadowBladeActiveUntil.remove(player.getUniqueId());
+            headhunterRage.remove(player.getUniqueId());
+            activeStrengthDomains.remove(player.getUniqueId());
+            clearPlayerLegendaryAttributeModifiers(player);
+            clearLifeStealerEffects(player);
         }
         if (event.getEntity() instanceof EnderDragon dragon) {
             UUID ownerId = enderDragonOwnerByDragon.remove(dragon.getUniqueId());
@@ -1118,9 +1376,23 @@ public final class LegendaryListener implements Listener {
             event.getDrops().add(createOrbOfTheMystics());
         }
         if (killer == null) return;
+        if ((event.getEntity().getType() == org.bukkit.entity.EntityType.PIGLIN
+            || event.getEntity().getType() == org.bukkit.entity.EntityType.PIGLIN_BRUTE)
+            && ThreadLocalRandom.current().nextDouble() <= 0.10) {
+            event.getDrops().add(new ItemStack(Material.PIGLIN_HEAD));
+        }
         LegendaryType killerWeapon = typeOf(killer.getInventory().getItemInMainHand());
+        if (killerWeapon == LegendaryType.MIDAS_SWORD) {
+            event.getDrops().add(new ItemStack(Material.GOLD_NUGGET, 9));
+            if (event.getEntity() instanceof Player) {
+                levelMidasSword(killer.getInventory().getItemInMainHand(), true);
+            }
+        }
         if (killerWeapon == LegendaryType.LIFE_STEALER && event.getEntity() instanceof Player playerVictim) {
             grantLifeStealerKillBuff(killer, killer.getInventory().getItemInMainHand(), playerVictim.getUniqueId());
+        }
+        if (killerWeapon == LegendaryType.STRENGTH_SWORD && event.getEntity() instanceof Player playerVictim) {
+            grantStrengthSwordKillProgress(killer.getInventory().getItemInMainHand(), playerVictim.getUniqueId());
         }
         if (killerWeapon != LegendaryType.EMERALD_BLADE) return;
         int amount = event.getEntity() instanceof Player ? 5 : ThreadLocalRandom.current().nextInt(1, 4);
@@ -1131,7 +1403,15 @@ public final class LegendaryListener implements Listener {
     public void onMobTarget(EntityTargetLivingEntityEvent event) {
         if (!(event.getEntity() instanceof Mob mob)) return;
         UUID owner = ownerByMob.get(mob.getUniqueId());
-        if (owner == null) return;
+        if (owner == null) {
+            if (event.getTarget() instanceof Player target
+                && (mob.getType() == org.bukkit.entity.EntityType.PIGLIN || mob.getType() == org.bukkit.entity.EntityType.PIGLIN_BRUTE)
+                && hasLegendaryInHands(target, LegendaryType.MIDAS_SWORD)) {
+                event.setCancelled(true);
+                mob.setTarget(null);
+            }
+            return;
+        }
         if (event.getTarget() instanceof Player target && sameTeamOrSelf(owner, target.getUniqueId())) {
             event.setCancelled(true);
             mob.setTarget(null);
@@ -1167,12 +1447,18 @@ public final class LegendaryListener implements Listener {
         directControlledMobs(attacker, victim);
 
         LegendaryType held = typeOf(attacker.getInventory().getItemInMainHand());
-        if (held == LegendaryType.WITHER_BLADE) {
+        if (held == LegendaryType.ENDER_SWORD) {
+            event.setDamage(ENDER_SWORD_MELEE_DAMAGE);
+        } else if (held == LegendaryType.WITHER_BLADE) {
             refreshWitherBladeLore(attacker);
             double bonus = witherBladeBonusDamage(attacker);
             if (bonus > 0.0) {
                 event.setDamage(event.getDamage() + bonus);
             }
+        } else if (held == LegendaryType.MIDAS_SWORD) {
+            event.setDamage(MIDAS_SWORD_MELEE_DAMAGE);
+        } else if (held == LegendaryType.WARDEN_BLADE) {
+            event.setDamage(WARDEN_BLADE_MELEE_DAMAGE);
         } else if (held == LegendaryType.FROST_SCYTHE) {
             event.setDamage(FROST_SCYTHE_MELEE_DAMAGE);
             applyFrostScytheNausea(victim);
@@ -1187,10 +1473,22 @@ public final class LegendaryListener implements Listener {
             tryBlinkDaggerBackstab(attacker, victim);
         } else if (held == LegendaryType.TRIDENT_OF_PERCY) {
             event.setDamage(event.getDamage() + PERCY_TRIDENT_DAMAGE_BONUS);
+        } else if (held == LegendaryType.DIVINE_AXE_RHITTA) {
+            event.setDamage(RHITTA_MELEE_DAMAGE);
+        } else if (held == LegendaryType.REAPERS_SCYTHE) {
+            event.setDamage(REAPER_SCYTHE_MELEE_DAMAGE);
+            tryReaperScytheDrain(attacker, victim);
+        } else if (held == LegendaryType.SHADOW_BLADE) {
+            event.setDamage(shadowBladeDamage(attacker));
+            if (victim instanceof Player) {
+                cancelShadowBlade(attacker, true);
+            }
         } else if (held == LegendaryType.EXECUTIONER_BLADE) {
             event.setDamage(event.getDamage() + executionerBladeBonusDamage(attacker));
         } else if (held == LegendaryType.LIFE_STEALER) {
             refreshLifeStealerLore(attacker);
+        } else if (held == LegendaryType.STRENGTH_SWORD) {
+            applyStrengthSwordStageHit(attacker, victim);
         }
 
         if (held == LegendaryType.THORS_HAMMER) {
@@ -1199,6 +1497,8 @@ public final class LegendaryListener implements Listener {
         }
 
         if (!(victim instanceof Player targetPlayer)) return;
+        addHeadhunterRage(attacker, true);
+        addHeadhunterRage(targetPlayer, false);
         if (held != LegendaryType.WAR_PICK) return;
         if (!isCritical(attacker)) return;
         if (ThreadLocalRandom.current().nextDouble() > 0.20) return;
@@ -1393,6 +1693,139 @@ public final class LegendaryListener implements Listener {
         player.openInventory(inv);
     }
 
+    private void openAscendantCoreRecipeDetails(Player player) {
+        MythicForgeListener forge = plugin.getMythicForgeListener();
+        if (forge == null) {
+            player.sendMessage(MessageUtil.error("Mythic forge recipes are not ready yet."));
+            return;
+        }
+
+        Inventory inv = Bukkit.createInventory(
+            new AscendantCoreRecipeHolder(),
+            27,
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + "<gradient:#ffd166:#ff4df0><bold>Ascendant Core</bold></gradient>"),
+                "Recipe: Ascendant Core"
+            )
+        );
+
+        ItemStack filler = createGuiItem(Material.GRAY_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        for (int i = 0; i < inv.getSize(); i++) {
+            inv.setItem(i, filler);
+        }
+
+        int[] matrixSlots = {3, 4, 5, 12, 13, 14, 21, 22, 23};
+        ItemStack[] recipeMatrix = forge.recipeMatrix(MythicForgeListener.ASCENDANT_CORE_ITEM_ID);
+        for (int i = 0; i < matrixSlots.length && i < recipeMatrix.length; i++) {
+            ItemStack ingredient = recipeMatrix[i];
+            if (ingredient == null || ingredient.getType() == Material.AIR) {
+                continue;
+            }
+            inv.setItem(matrixSlots[i], ingredient);
+        }
+
+        inv.setItem(16, forge.createAscendantCoreItem());
+        inv.setItem(RECIPE_TRADE_SLOT, createGuiItem(
+            Material.CRAFTING_TABLE,
+            "<gold><bold>Craft In Table</bold></gold>",
+            List.of(
+                "<gray>This is a normal crafting recipe.</gray>",
+                "<gray>Use it as the catalyst in a <white>Mythic Forge</white>.</gray>"
+            )
+        ));
+        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to item list</gray>")));
+        player.openInventory(inv);
+    }
+
+    private void openMythicForgeRecipeDetails(Player player) {
+        MythicForgeListener forge = plugin.getMythicForgeListener();
+        if (forge == null) {
+            player.sendMessage(MessageUtil.error("Mythic forge recipes are not ready yet."));
+            return;
+        }
+
+        Inventory inv = Bukkit.createInventory(
+            new MythicForgeRecipeHolder(),
+            54,
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + "<gradient:#8a2be2:#ff4df0><bold>Mythic Forge</bold></gradient>"),
+                "Recipe: Mythic Forge"
+            )
+        );
+
+        ItemStack filler = createGuiItem(Material.GRAY_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        for (int i = 0; i < inv.getSize(); i++) {
+            inv.setItem(i, filler);
+        }
+
+        int[] matrixSlots = {3, 4, 5, 12, 13, 14, 21, 22, 23};
+        ItemStack[] recipeMatrix = forge.recipeMatrix(MythicForgeListener.MYTHIC_FORGE_ITEM_ID);
+        for (int i = 0; i < matrixSlots.length && i < recipeMatrix.length; i++) {
+            ItemStack ingredient = recipeMatrix[i];
+            if (ingredient == null || ingredient.getType() == Material.AIR) {
+                continue;
+            }
+            inv.setItem(matrixSlots[i], ingredient);
+        }
+
+        inv.setItem(16, forge.createMythicForgeItem());
+        inv.setItem(RECIPE_TRADE_SLOT, createGuiItem(
+            Material.CRAFTING_TABLE,
+            "<gold><bold>Craft In Table</bold></gold>",
+            List.of(
+                "<gray>This is a normal crafting recipe.</gray>",
+                "<gray>Place it, then combine <white>2 compatible legendaries</white></gray>",
+                "<gray>with an <white>Ascendant Core</white> inside.</gray>"
+            )
+        ));
+        inv.setItem(30, forge.createAscendantCoreItem());
+        inv.setItem(31, createGuiItem(
+            Material.AMETHYST_CLUSTER,
+            "<light_purple><bold>Fusion Catalyst</bold></light_purple>",
+            List.of(
+                "<gray>Every mythic fusion consumes</gray>",
+                "<gray><white>1 Ascendant Core</white>.</gray>"
+            )
+        ));
+
+        int[] outputSlots = {38, 40, 42, 44};
+        int index = 0;
+        for (MythicForgeListener.FusionRecipeView recipe : forge.fusionRecipes()) {
+            if (index >= outputSlots.length) {
+                break;
+            }
+            inv.setItem(outputSlots[index++], createFusionRecipePreview(recipe));
+        }
+
+        inv.setItem(45, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to item list</gray>")));
+        player.openInventory(inv);
+    }
+
+    private ItemStack createFusionRecipePreview(MythicForgeListener.FusionRecipeView recipe) {
+        LegendaryType outputType = LegendaryType.fromId(normalizeLegendaryId(recipe.outputId()));
+        if (outputType == null) {
+            return createGuiItem(Material.BARRIER, "<red>Unavailable</red>", List.of());
+        }
+
+        ItemStack preview = createDisplayLegendaryItem(outputType, true);
+        ItemMeta meta = preview.getItemMeta();
+        if (meta == null) {
+            return preview;
+        }
+
+        List<Component> lore = meta.lore() == null ? new ArrayList<>() : new ArrayList<>(meta.lore());
+        lore.add(Component.empty());
+        lore.add(MM.deserialize("<gold><bold>Mythic Fusion</bold></gold>"));
+        lore.add(MM.deserialize("<gray>Left:</gray> <white>" + displayNameForLegendary(recipe.leftId()) + "</white>"));
+        lore.add(MM.deserialize("<gray>Right:</gray> <white>" + displayNameForLegendary(recipe.rightId()) + "</white>"));
+        lore.add(MM.deserialize("<gray>Catalyst:</gray> <white>Ascendant Core</white>"));
+        meta.lore(lore);
+        preview.setItemMeta(meta);
+        return preview;
+    }
+
     private void openCustomToolRecipeDetails(Player player, String toolId) {
         if (plugin.getCustomToolListener() == null) {
             player.sendMessage(MessageUtil.error("Custom tool recipes are not ready yet."));
@@ -1431,6 +1864,42 @@ public final class LegendaryListener implements Listener {
         }
 
         inv.setItem(16, plugin.getCustomToolListener().createRecipePreview(toolId));
+        inv.setItem(RECIPE_TRADE_SLOT, createGuiItem(
+            Material.CRAFTING_TABLE,
+            "<gold><bold>Craft In Table</bold></gold>",
+            List.of("<gray>This is a normal crafting recipe.</gray>", "<gray>Use the shown ingredients in a crafting table.</gray>")
+        ));
+        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to item list</gray>")));
+        player.openInventory(inv);
+    }
+
+    private void openFaradaysMagnetRecipeDetails(Player player) {
+        Inventory inv = Bukkit.createInventory(
+            new FaradaysMagnetRecipeHolder(),
+            27,
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + "<gold><bold>Faraday's Magnet</bold></gold>"),
+                "Recipe: Faraday's Magnet"
+            )
+        );
+
+        ItemStack filler = createGuiItem(Material.GRAY_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        for (int i = 0; i < inv.getSize(); i++) {
+            inv.setItem(i, filler);
+        }
+
+        int[] matrixSlots = {3, 4, 5, 12, 13, 14, 21, 22, 23};
+        ItemStack[] recipeMatrix = faradaysMagnetRecipeMatrix();
+        for (int i = 0; i < matrixSlots.length && i < recipeMatrix.length; i++) {
+            ItemStack ingredient = recipeMatrix[i];
+            if (ingredient == null || ingredient.getType() == Material.AIR) {
+                continue;
+            }
+            inv.setItem(matrixSlots[i], ingredient);
+        }
+
+        inv.setItem(16, createFaradaysMagnetItem());
         inv.setItem(RECIPE_TRADE_SLOT, createGuiItem(
             Material.CRAFTING_TABLE,
             "<gold><bold>Craft In Table</bold></gold>",
@@ -1500,6 +1969,10 @@ public final class LegendaryListener implements Listener {
         return appendRecipeMenuHint(player, plugin.getCustomToolListener().createRecipePreview(toolId));
     }
 
+    private ItemStack createFaradaysMagnetPreview(Player player) {
+        return appendRecipeMenuHint(player, createDisplayLegendaryItem(LegendaryType.FARADAYS_MAGNET, true));
+    }
+
     private ItemStack createSustenanceTalismanPreview(Player player) {
         if (plugin.getSustenanceTalismanListener() == null) {
             return createGuiItem(Material.BARRIER, "<red>Unavailable</red>", List.of());
@@ -1514,6 +1987,22 @@ public final class LegendaryListener implements Listener {
         }
 
         return appendRecipeMenuHint(player, plugin.getSuperpowerManager().createAncientScrollItem());
+    }
+
+    private ItemStack createMythicForgePreview(Player player) {
+        if (plugin.getMythicForgeListener() == null) {
+            return createGuiItem(Material.BARRIER, "<red>Unavailable</red>", List.of());
+        }
+
+        return appendRecipeMenuHint(player, plugin.getMythicForgeListener().createMythicForgeItem());
+    }
+
+    private ItemStack createAscendantCorePreview(Player player) {
+        if (plugin.getMythicForgeListener() == null) {
+            return createGuiItem(Material.BARRIER, "<red>Unavailable</red>", List.of());
+        }
+
+        return appendRecipeMenuHint(player, plugin.getMythicForgeListener().createAscendantCoreItem());
     }
 
     private ItemStack createDisplayLegendaryItem(LegendaryType type, boolean stripLegendaryTag) {
@@ -1536,17 +2025,38 @@ public final class LegendaryListener implements Listener {
             entries.add(new CustomRecipeEntry(SuperpowerManager.ANCIENT_SCROLL_ITEM_ID, createAncientScrollPreview(player)));
         }
 
+        if (plugin.getMythicForgeListener() != null) {
+            entries.add(new CustomRecipeEntry(MythicForgeListener.MYTHIC_FORGE_ITEM_ID, createMythicForgePreview(player)));
+            entries.add(new CustomRecipeEntry(MythicForgeListener.ASCENDANT_CORE_ITEM_ID, createAscendantCorePreview(player)));
+        }
+
         if (plugin.getCustomToolListener() != null) {
             for (String toolId : plugin.getCustomToolListener().craftableToolIds()) {
                 entries.add(new CustomRecipeEntry(toolId, createCustomToolPreview(player, toolId)));
             }
         }
 
+        entries.add(new CustomRecipeEntry(LegendaryType.FARADAYS_MAGNET.id, createFaradaysMagnetPreview(player)));
+
         if (plugin.getSustenanceTalismanListener() != null) {
             entries.add(new CustomRecipeEntry(SustenanceTalismanListener.ITEM_ID, createSustenanceTalismanPreview(player)));
         }
 
         return entries;
+    }
+
+    private ItemStack[] faradaysMagnetRecipeMatrix() {
+        ItemStack[] matrix = new ItemStack[9];
+        matrix[0] = new ItemStack(Material.IRON_BLOCK);
+        matrix[1] = new ItemStack(Material.REDSTONE_BLOCK);
+        matrix[2] = new ItemStack(Material.IRON_BLOCK);
+        matrix[3] = new ItemStack(Material.COPPER_BLOCK);
+        matrix[4] = new ItemStack(Material.RECOVERY_COMPASS);
+        matrix[5] = new ItemStack(Material.COPPER_BLOCK);
+        matrix[6] = new ItemStack(Material.IRON_BLOCK);
+        matrix[7] = new ItemStack(Material.NETHERITE_INGOT);
+        matrix[8] = new ItemStack(Material.IRON_BLOCK);
+        return matrix;
     }
 
     private ItemStack appendRecipeMenuHint(Player player, ItemStack item) {
@@ -1598,7 +2108,7 @@ public final class LegendaryListener implements Listener {
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return item;
 
-        meta.setItemModel(new NamespacedKey(plugin, "backpack"));
+        meta.setItemModel(null);
         meta.displayName(MM.deserialize("<gold><bold>Backpack</bold></gold>"));
         meta.lore(List.of(
             MM.deserialize("<dark_gray>Portable Storage</dark_gray>"),
@@ -1617,13 +2127,13 @@ public final class LegendaryListener implements Listener {
         List<String> lore = new ArrayList<>();
         lore.add("<gray>Legendaries can only be crafted at the active altar.</gray>");
         if (claimed) {
-            lore.add("<red>This legendary has already been claimed on the server.</red>");
-            lore.add("<gray>It can no longer appear from the altar.</gray>");
+            lore.add("<red>This legendary already exists on the server right now.</red>");
+            lore.add("<gray>It will return to the altar pool once no tracked copy remains.</gray>");
             lore.add("<dark_gray> ");
             lore.addAll(recipeProgressLines(player, type.id));
             return createGuiItem(
                 Material.BARRIER,
-                "<red><bold>Already Claimed</bold></red>",
+                "<red><bold>Already Exists</bold></red>",
                 lore
             );
         }
@@ -2574,7 +3084,7 @@ public final class LegendaryListener implements Listener {
     private void feedEmeraldBlade(Player player, ItemStack blade) {
         int current = emeraldLevel(blade);
         if (current >= EMERALD_BLADE_MAX_LEVEL) {
-            player.sendMessage(MessageUtil.warn("Emerald Blade is already at max Sharpness <white>" + EMERALD_BLADE_MAX_LEVEL + "</white>."));
+            player.sendMessage(MessageUtil.warn("Verdant Fang is already at max Sharpness <white>" + EMERALD_BLADE_MAX_LEVEL + "</white>."));
             return;
         }
 
@@ -2586,7 +3096,7 @@ public final class LegendaryListener implements Listener {
         int lvl = current + 1;
         setEmeraldLevel(blade, lvl);
         player.getInventory().setItemInMainHand(blade);
-        player.sendMessage(MessageUtil.success("Emerald Blade Sharpness: <white>" + lvl + "</white>."));
+        player.sendMessage(MessageUtil.success("Verdant Fang Sharpness: <white>" + lvl + "</white>."));
     }
 
     private void toggleMagnet(Player player, ItemStack magnet) {
@@ -2596,7 +3106,183 @@ public final class LegendaryListener implements Listener {
         player.sendMessage(MessageUtil.info("Faraday's Magnet: <white>" + (active ? "ON" : "OFF") + "</white>."));
     }
 
+    private void useWardenBlade(Player player) {
+        if (player.isSneaking()) {
+            useWardenBladeProtection(player);
+            return;
+        }
+        useWardenBladeSoundWave(player);
+    }
+
+    private void useWardenBladeProtection(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (onCooldown(wardenBladeProtectionCd, playerId)) {
+            player.sendMessage(MessageUtil.warn(
+                "Sculk Protection cooldown: <white>" + secondsLeft(wardenBladeProtectionCd, playerId) + "s</white>."
+            ));
+            return;
+        }
+
+        applyPotionIfStrongerOrLonger(player, PotionEffectType.RESISTANCE, WARDEN_BLADE_PROTECTION_SECONDS * 20, 1);
+        setCooldown(wardenBladeProtectionCd, playerId, WARDEN_BLADE_PROTECTION_COOLDOWN);
+
+        World world = player.getWorld();
+        Location center = player.getLocation().clone().add(0.0, 1.0, 0.0);
+        world.spawnParticle(Particle.SCULK_SOUL, center, 28, 0.45, 0.65, 0.45, 0.02);
+        world.spawnParticle(Particle.SONIC_BOOM, center.clone().add(0.0, 0.55, 0.0), 1, 0.0, 0.0, 0.0, 0.0);
+        world.playSound(player.getLocation(), Sound.ENTITY_WARDEN_ROAR, 0.75f, 1.35f);
+        player.sendMessage(MessageUtil.success(
+            "Sculk Protection active: <white>Resistance II</white> for <white>3 minutes</white>."
+        ));
+    }
+
+    private void useWardenBladeSoundWave(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (onCooldown(wardenBladeSoundWaveCd, playerId)) {
+            player.sendMessage(MessageUtil.warn(
+                "Sound Wave cooldown: <white>" + secondsLeft(wardenBladeSoundWaveCd, playerId) + "s</white>."
+            ));
+            return;
+        }
+
+        Location eye = player.getEyeLocation();
+        Vector direction = eye.getDirection().clone();
+        if (direction.lengthSquared() <= 1.0E-6) {
+            return;
+        }
+        direction.normalize();
+
+        World world = player.getWorld();
+        RayTraceResult blockHit = world.rayTraceBlocks(
+            eye,
+            direction,
+            WARDEN_BLADE_SOUND_WAVE_RANGE,
+            FluidCollisionMode.NEVER,
+            true
+        );
+        double maxDistance = WARDEN_BLADE_SOUND_WAVE_RANGE;
+        if (blockHit != null) {
+            maxDistance = Math.max(0.0, blockHit.getHitPosition().distance(eye.toVector()));
+        }
+
+        double impactDistance = maxDistance;
+        Location impact = eye.clone().add(direction.clone().multiply(maxDistance));
+        LivingEntity target = null;
+        WardenBladeSoundWaveHit hit = findWardenBladeSoundWaveTarget(player, eye, direction, maxDistance);
+        if (hit != null) {
+            target = hit.target();
+            impactDistance = hit.distance();
+            impact = hit.impact();
+        }
+
+        spawnWardenBladeSoundWaveTrail(world, eye, direction, impactDistance);
+        world.spawnParticle(Particle.SONIC_BOOM, impact, 1, 0.0, 0.0, 0.0, 0.0);
+        world.playSound(player.getLocation(), Sound.ENTITY_WARDEN_SONIC_BOOM, 1.0f, 1.0f);
+        setCooldown(wardenBladeSoundWaveCd, playerId, WARDEN_BLADE_SOUND_WAVE_COOLDOWN);
+
+        if (target != null) {
+            if (applyWardenBladeTrueDamage(player, target, WARDEN_BLADE_SOUND_WAVE_DAMAGE)) {
+                world.spawnParticle(Particle.SCULK_SOUL, target.getLocation().clone().add(0.0, 1.0, 0.0), 16, 0.30, 0.45, 0.30, 0.02);
+                world.playSound(impact, Sound.ENTITY_WARDEN_ATTACK_IMPACT, 0.95f, 0.9f);
+            }
+        }
+    }
+
+    private WardenBladeSoundWaveHit findWardenBladeSoundWaveTarget(Player attacker, Location eye, Vector direction, double maxDistance) {
+        if (maxDistance <= 0.0) {
+            return null;
+        }
+
+        Vector start = eye.toVector();
+        LivingEntity nearestTarget = null;
+        Vector nearestHitPosition = null;
+        double nearestDistance = maxDistance + 0.0001D;
+
+        for (Entity entity : attacker.getNearbyEntities(maxDistance, maxDistance, maxDistance)) {
+            if (!(entity instanceof LivingEntity living) || !canWardenBladeSoundWaveHit(attacker, living)) {
+                continue;
+            }
+
+            BoundingBox hitbox = living.getBoundingBox().clone().expand(WARDEN_BLADE_SOUND_WAVE_HITBOX);
+            RayTraceResult hit = hitbox.rayTrace(start, direction, maxDistance);
+            if (hit == null || hit.getHitPosition() == null) {
+                continue;
+            }
+
+            double hitDistance = hit.getHitPosition().distance(start);
+            if (hitDistance >= nearestDistance) {
+                continue;
+            }
+
+            nearestTarget = living;
+            nearestHitPosition = hit.getHitPosition();
+            nearestDistance = hitDistance;
+        }
+
+        if (nearestTarget == null || nearestHitPosition == null) {
+            return null;
+        }
+
+        return new WardenBladeSoundWaveHit(
+            nearestTarget,
+            nearestDistance,
+            nearestHitPosition.toLocation(attacker.getWorld())
+        );
+    }
+
+    private void spawnWardenBladeSoundWaveTrail(World world, Location start, Vector direction, double distance) {
+        for (double step = 0.75; step < distance; step += 0.65) {
+            Location point = start.clone().add(direction.clone().multiply(step));
+            world.spawnParticle(Particle.SCULK_SOUL, point, 2, 0.08, 0.08, 0.08, 0.0);
+        }
+    }
+
+    private boolean canWardenBladeSoundWaveHit(Player attacker, LivingEntity target) {
+        if (target.equals(attacker)) {
+            return false;
+        }
+        if (target.isInvulnerable()) {
+            return false;
+        }
+        if (target instanceof Player player
+            && (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR)) {
+            return false;
+        }
+        return !(target instanceof Player teammate)
+            || !sameTeamOrSelf(attacker.getUniqueId(), teammate.getUniqueId());
+    }
+
+    private boolean applyWardenBladeTrueDamage(Player attacker, LivingEntity target, double damage) {
+        if (damage <= 0.0 || target.isDead() || !target.isValid()) {
+            return false;
+        }
+        if (!canWardenBladeSoundWaveHit(attacker, target)) {
+            return false;
+        }
+
+        if (target instanceof Player victim && plugin.getCombatLogListener() != null) {
+            plugin.getCombatLogListener().tagPlayers(attacker, victim);
+        }
+
+        double nextHealth = Math.max(0.0, target.getHealth() - damage);
+        if (nextHealth <= 0.0) {
+            target.setHealth(0.0);
+        } else {
+            target.setHealth(nextHealth);
+        }
+        return true;
+    }
+
     private void useFrostScythe(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (onCooldown(frostScytheCd, playerId)) {
+            player.sendMessage(MessageUtil.warn(
+                "Frost Scythe cooldown: <white>" + secondsLeft(frostScytheCd, playerId) + "s</white>."
+            ));
+            return;
+        }
+
+        setCooldown(frostScytheCd, playerId, plugin.getConfigManager().frostScytheAbilityCooldownSeconds);
         World world = player.getWorld();
         Location center = player.getLocation().clone().add(0.0, 1.0, 0.0);
 
@@ -2613,6 +3299,311 @@ public final class LegendaryListener implements Listener {
         }
     }
 
+    private void useDivineAxeRhitta(Player player) {
+        if (player.isSneaking()) {
+            useRhittaCruelSun(player);
+            return;
+        }
+        useRhittaSunsBlessing(player);
+    }
+
+    private void useRhittaSunsBlessing(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (onCooldown(rhittaBlessingCd, playerId)) {
+            player.sendMessage(MessageUtil.warn(
+                "Sun's Blessing cooldown: <white>" + secondsLeft(rhittaBlessingCd, playerId) + "s</white>."
+            ));
+            return;
+        }
+
+        applyPotionIfStrongerOrLonger(player, PotionEffectType.FIRE_RESISTANCE, RHITTA_SUNS_BLESSING_SECONDS * 20, 0);
+        applyPotionIfStrongerOrLonger(player, PotionEffectType.SPEED, RHITTA_SUNS_BLESSING_SECONDS * 20, 1);
+        setCooldown(rhittaBlessingCd, playerId, RHITTA_SUNS_BLESSING_COOLDOWN);
+
+        World world = player.getWorld();
+        Location center = player.getLocation().clone().add(0.0, 1.0, 0.0);
+        world.spawnParticle(Particle.FLAME, center, 38, 0.45, 0.65, 0.45, 0.02);
+        world.spawnParticle(Particle.SMALL_FLAME, center, 24, 0.30, 0.45, 0.30, 0.02);
+        world.playSound(player.getLocation(), Sound.ITEM_FIRECHARGE_USE, 1.0f, 1.1f);
+        player.sendMessage(MessageUtil.success(
+            "Sun's Blessing active: <white>Fire Resistance</white> and <white>Speed II</white> for <white>5 minutes</white>."
+        ));
+    }
+
+    private void useRhittaCruelSun(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (onCooldown(rhittaCruelSunCd, playerId)) {
+            player.sendMessage(MessageUtil.warn(
+                "Cruel Sun cooldown: <white>" + secondsLeft(rhittaCruelSunCd, playerId) + "s</white>."
+            ));
+            return;
+        }
+
+        World world = player.getWorld();
+        Location center = player.getLocation().clone().add(0.0, 1.0, 0.0);
+        List<LivingEntity> targets = new ArrayList<>();
+        for (LivingEntity target : world.getNearbyLivingEntities(center, RHITTA_CRUEL_SUN_RADIUS)) {
+            if (canRhittaBurnTarget(player, target)) {
+                targets.add(target);
+            }
+        }
+        if (targets.isEmpty()) {
+            player.sendMessage(MessageUtil.warn("No enemies were close enough for Cruel Sun."));
+            return;
+        }
+
+        setCooldown(rhittaCruelSunCd, playerId, RHITTA_CRUEL_SUN_COOLDOWN);
+        world.spawnParticle(Particle.FLAME, center, 52, 1.8, 0.35, 1.8, 0.03);
+        world.spawnParticle(Particle.SMALL_FLAME, center, 34, 1.4, 0.25, 1.4, 0.02);
+        world.playSound(player.getLocation(), Sound.ITEM_FIRECHARGE_USE, 1.0f, 0.8f);
+
+        for (LivingEntity target : targets) {
+            applyRhittaCruelSun(player, target);
+        }
+        player.sendMessage(MessageUtil.success(
+            "Cruel Sun scorched <white>" + targets.size() + "</white> nearby " + (targets.size() == 1 ? "enemy" : "enemies") + "."
+        ));
+    }
+
+    private void useFaradaysMagnet(Player player, ItemStack magnet) {
+        ItemMeta meta = magnet.getItemMeta();
+        if (meta == null) {
+            return;
+        }
+
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        int uses = Math.max(0, pdc.getOrDefault(keyFaradayUses, PersistentDataType.INTEGER, FARADAY_SCAN_MAX_USES));
+        if (uses <= 0) {
+            breakFaradaysMagnet(player);
+            return;
+        }
+
+        Player nearest = null;
+        double nearestDistanceSquared = FARADAY_PLAYER_SCAN_RANGE * FARADAY_PLAYER_SCAN_RANGE;
+        Location playerLocation = player.getLocation();
+        for (Player other : player.getWorld().getPlayers()) {
+            if (other.equals(player) || !other.isOnline() || other.isDead() || other.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            double distanceSquared = other.getLocation().distanceSquared(playerLocation);
+            if (distanceSquared >= nearestDistanceSquared) {
+                continue;
+            }
+            nearest = other;
+            nearestDistanceSquared = distanceSquared;
+        }
+
+        if (nearest == null) {
+            player.sendMessage(MessageUtil.warn("Faraday's Magnet found no nearby player signature."));
+            player.playSound(player.getLocation(), Sound.BLOCK_RESPAWN_ANCHOR_DEPLETE, 0.7f, 1.35f);
+            return;
+        }
+
+        int nextUses = uses - 1;
+        if (nextUses <= 0) {
+            breakFaradaysMagnet(player);
+        } else {
+            pdc.set(keyFaradayUses, PersistentDataType.INTEGER, nextUses);
+            meta.lore(buildMagnetLore(meta, isMagnetActive(magnet), nextUses));
+            magnet.setItemMeta(meta);
+        }
+
+        Vector delta = nearest.getLocation().toVector().subtract(playerLocation.toVector());
+        long blocksAway = Math.max(1L, Math.round(Math.sqrt(nearestDistanceSquared)));
+        player.sendMessage(MessageUtil.info(
+            "Nearest player: <white>" + faradayDirection(delta) + " " + blocksAway + " blocks away</white>."
+        ));
+        player.playSound(player.getLocation(), Sound.ITEM_LODESTONE_COMPASS_LOCK, 0.85f, 1.15f);
+        player.getWorld().spawnParticle(Particle.ELECTRIC_SPARK, player.getEyeLocation(), 18, 0.15, 0.15, 0.15, 0.02);
+    }
+
+    private void breakFaradaysMagnet(Player player) {
+        player.getInventory().setItemInMainHand(new ItemStack(Material.AIR));
+        player.sendMessage(MessageUtil.warn("Faraday's Magnet ran out of charge and shattered."));
+        player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 0.9f);
+        refreshMagnetTracking(player);
+    }
+
+    private void useShadowBlade(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (onCooldown(shadowBladeCd, playerId)) {
+            player.sendMessage(MessageUtil.warn(
+                "Nightfall cooldown: <white>" + secondsLeft(shadowBladeCd, playerId) + "s</white>."
+            ));
+            return;
+        }
+
+        int durationSeconds = shadowBladeDurationSeconds(player);
+        shadowBladeActiveUntil.put(playerId, System.currentTimeMillis() + (durationSeconds * 1000L));
+        setCooldown(shadowBladeCd, playerId, SHADOW_BLADE_COOLDOWN);
+        applyPotionIfStrongerOrLonger(player, PotionEffectType.INVISIBILITY, durationSeconds * 20, 0);
+        applyPotionIfStrongerOrLonger(player, PotionEffectType.SPEED, durationSeconds * 20, 2);
+
+        World world = player.getWorld();
+        Location center = player.getLocation().clone().add(0.0, 1.0, 0.0);
+        world.spawnParticle(Particle.SMOKE, center, 24, 0.35, 0.55, 0.35, 0.01);
+        world.spawnParticle(Particle.PORTAL, center, 18, 0.25, 0.45, 0.25, 0.01);
+        world.playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 0.8f, 0.75f);
+        player.sendMessage(MessageUtil.success(
+            "Nightfall cloaked you for <white>" + durationSeconds + "s</white>."
+        ));
+    }
+
+    private void cancelShadowBlade(Player player, boolean interrupted) {
+        if (player == null) {
+            return;
+        }
+        Long removed = shadowBladeActiveUntil.remove(player.getUniqueId());
+        if (removed == null) {
+            return;
+        }
+
+        removeTemporaryLegendaryPotion(player, PotionEffectType.INVISIBILITY, 0, SHADOW_BLADE_SHADOW_DURATION_SECONDS * 20);
+        removeTemporaryLegendaryPotion(player, PotionEffectType.SPEED, 2, SHADOW_BLADE_SHADOW_DURATION_SECONDS * 20);
+        if (interrupted) {
+            player.sendMessage(MessageUtil.warn("Nightfall faded after you struck a player."));
+        }
+    }
+
+    private void useStrengthSwordBeam(Player player) {
+        ItemStack sword = player.getInventory().getItemInMainHand();
+        int stage = strengthSwordStage(sword);
+        if (stage < 2) {
+            player.sendMessage(MessageUtil.warn(
+                "Crimson Dominion beam unlocks after <white>" + STRENGTH_SWORD_STAGE_TWO_KILLS + "</white> unique player kills."
+            ));
+            return;
+        }
+
+        UUID playerId = player.getUniqueId();
+        if (onCooldown(strengthSwordBeamCd, playerId)) {
+            player.sendMessage(MessageUtil.warn(
+                "Crimson Dominion beam cooldown: <white>" + secondsLeft(strengthSwordBeamCd, playerId) + "s</white>."
+            ));
+            return;
+        }
+
+        Location eye = player.getEyeLocation();
+        Vector direction = eye.getDirection().clone();
+        if (direction.lengthSquared() <= 1.0E-6) {
+            return;
+        }
+        direction.normalize();
+
+        World world = player.getWorld();
+        RayTraceResult blockHit = world.rayTraceBlocks(
+            eye,
+            direction,
+            WARDEN_BLADE_SOUND_WAVE_RANGE,
+            FluidCollisionMode.NEVER,
+            true
+        );
+        double maxDistance = WARDEN_BLADE_SOUND_WAVE_RANGE;
+        if (blockHit != null) {
+            maxDistance = Math.max(0.0, blockHit.getHitPosition().distance(eye.toVector()));
+        }
+
+        double impactDistance = maxDistance;
+        Location impact = eye.clone().add(direction.clone().multiply(maxDistance));
+        WardenBladeSoundWaveHit hit = findWardenBladeSoundWaveTarget(player, eye, direction, maxDistance);
+        LivingEntity target = null;
+        if (hit != null) {
+            target = hit.target();
+            impactDistance = hit.distance();
+            impact = hit.impact();
+        }
+
+        spawnStrengthSwordBeamTrail(world, eye, direction, impactDistance);
+        world.spawnParticle(Particle.SONIC_BOOM, impact, 1, 0.0, 0.0, 0.0, 0.0);
+        world.playSound(player.getLocation(), Sound.ENTITY_WARDEN_SONIC_BOOM, 1.0f, 0.8f);
+        setCooldown(strengthSwordBeamCd, playerId, STRENGTH_SWORD_BEAM_COOLDOWN);
+
+        if (target != null && applyWardenBladeTrueDamage(player, target, 8.0)) {
+            world.spawnParticle(Particle.DUST, target.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.25, 0.45, 0.25, 0.0, new Particle.DustOptions(Color.fromRGB(255, 60, 80), 1.2f));
+        }
+    }
+
+    private void spawnStrengthSwordBeamTrail(World world, Location start, Vector direction, double distance) {
+        Particle.DustOptions dust = new Particle.DustOptions(Color.fromRGB(255, 60, 80), 1.25f);
+        for (double step = 0.60; step < distance; step += 0.55) {
+            Location point = start.clone().add(direction.clone().multiply(step));
+            world.spawnParticle(Particle.DUST, point, 1, 0.0, 0.0, 0.0, 0.0, dust);
+            world.spawnParticle(Particle.SMALL_FLAME, point, 1, 0.02, 0.02, 0.02, 0.0);
+        }
+    }
+
+    private void useStrengthSwordDomain(Player player) {
+        ItemStack sword = player.getInventory().getItemInMainHand();
+        int stage = strengthSwordStage(sword);
+        if (stage < 3) {
+            player.sendMessage(MessageUtil.warn(
+                "Crimson Dominion domain unlocks after <white>" + STRENGTH_SWORD_STAGE_THREE_KILLS + "</white> unique player kills."
+            ));
+            return;
+        }
+
+        UUID playerId = player.getUniqueId();
+        if (onCooldown(strengthSwordDomainCd, playerId)) {
+            player.sendMessage(MessageUtil.warn(
+                "Crimson Dominion domain cooldown: <white>" + secondsLeft(strengthSwordDomainCd, playerId) + "s</white>."
+            ));
+            return;
+        }
+
+        long expiresAt = System.currentTimeMillis() + (STRENGTH_SWORD_DOMAIN_SECONDS * 1000L);
+        activeStrengthDomains.put(playerId, new StrengthDomainState(player.getLocation().clone(), expiresAt));
+        setCooldown(strengthSwordDomainCd, playerId, STRENGTH_SWORD_DOMAIN_COOLDOWN);
+
+        World world = player.getWorld();
+        Location center = player.getLocation().clone().add(0.0, 0.15, 0.0);
+        world.playSound(center, Sound.BLOCK_BEACON_ACTIVATE, 0.9f, 0.7f);
+        world.playSound(center, Sound.ENTITY_WARDEN_SONIC_BOOM, 0.5f, 0.6f);
+        world.spawnParticle(Particle.ENCHANT, center.clone().add(0.0, 1.0, 0.0), 42, 1.2, 0.6, 1.2, 0.03);
+        world.spawnParticle(Particle.DUST, center.clone().add(0.0, 0.3, 0.0), 28, STRENGTH_SWORD_DOMAIN_RADIUS, 0.1, STRENGTH_SWORD_DOMAIN_RADIUS, 0.0, new Particle.DustOptions(Color.fromRGB(255, 70, 100), 1.3f));
+        player.sendMessage(MessageUtil.success(
+            "Crimson Dominion domain opened for <white>" + STRENGTH_SWORD_DOMAIN_SECONDS + "s</white>."
+        ));
+    }
+
+    private void applyRhittaCruelSun(Player attacker, LivingEntity target) {
+        long expiresAt = System.currentTimeMillis() + (RHITTA_CRUEL_SUN_FIRE_SECONDS * 1000L);
+        rhittaBurns.put(target.getUniqueId(), new RhittaBurnState(attacker.getUniqueId(), expiresAt));
+        target.setFireTicks(Math.max(target.getFireTicks(), RHITTA_CRUEL_SUN_FIRE_SECONDS * 20));
+        target.getWorld().spawnParticle(Particle.FLAME, target.getLocation().clone().add(0.0, 1.0, 0.0), 12, 0.25, 0.45, 0.25, 0.01);
+        scheduleRhittaCruelSunTick(target.getUniqueId(), attacker.getUniqueId(), expiresAt, RHITTA_CRUEL_SUN_FIRE_SECONDS);
+    }
+
+    private void scheduleRhittaCruelSunTick(UUID targetId, UUID attackerId, long expiresAt, int ticksRemaining) {
+        if (ticksRemaining <= 0) {
+            return;
+        }
+
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            RhittaBurnState state = rhittaBurns.get(targetId);
+            if (state == null || !state.attackerId().equals(attackerId) || state.expiresAt() != expiresAt) {
+                return;
+            }
+            Entity entity = Bukkit.getEntity(targetId);
+            Player attacker = Bukkit.getPlayer(attackerId);
+            if (!(entity instanceof LivingEntity target) || !target.isValid() || target.isDead() || attacker == null || !attacker.isOnline()) {
+                rhittaBurns.remove(targetId, state);
+                return;
+            }
+            if (System.currentTimeMillis() > expiresAt) {
+                rhittaBurns.remove(targetId, state);
+                return;
+            }
+
+            target.damage(RHITTA_CRUEL_SUN_TICK_DAMAGE, attacker);
+            target.getWorld().spawnParticle(Particle.FLAME, target.getLocation().clone().add(0.0, 1.0, 0.0), 8, 0.20, 0.40, 0.20, 0.01);
+            if (ticksRemaining <= 1) {
+                rhittaBurns.remove(targetId, state);
+                return;
+            }
+            scheduleRhittaCruelSunTick(targetId, attackerId, expiresAt, ticksRemaining - 1);
+        }, 20L);
+    }
+
     private void useWindChargeCannon(Player player, ItemStack cannon, boolean superShot) {
         if (!refreshWindChargeCannonState(cannon)) {
             return;
@@ -2621,7 +3612,7 @@ public final class LegendaryListener implements Listener {
         int charges = windChargeCannonCharges(cannon);
         if (charges <= 0) {
             player.sendMessage(MessageUtil.warn(
-                "Wind Charge Cannon recharging: <white>" + windChargeCannonSecondsLeft(cannon) + "s</white>."));
+                "Tempest Cannon recharging: <white>" + windChargeCannonSecondsLeft(cannon) + "s</white>."));
             return;
         }
 
@@ -2874,6 +3865,26 @@ public final class LegendaryListener implements Listener {
         if (target.equals(attacker)) return false;
         return !(target instanceof Player teammate)
             || !sameTeamOrSelf(attacker.getUniqueId(), teammate.getUniqueId());
+    }
+
+    private boolean canRhittaBurnTarget(Player attacker, LivingEntity target) {
+        if (target.equals(attacker)) {
+            return false;
+        }
+        return !(target instanceof Player teammate)
+            || !sameTeamOrSelf(attacker.getUniqueId(), teammate.getUniqueId());
+    }
+
+    private void applyPotionIfStrongerOrLonger(LivingEntity entity, PotionEffectType type, int durationTicks, int amplifier) {
+        PotionEffect current = entity.getPotionEffect(type);
+        if (current != null
+            && (current.getAmplifier() > amplifier
+            || (current.getAmplifier() == amplifier && current.getDuration() >= durationTicks))) {
+            return;
+        }
+
+        entity.removePotionEffect(type);
+        entity.addPotionEffect(new PotionEffect(type, durationTicks, amplifier, false, true, true));
     }
 
     private void applyFrostScytheNausea(LivingEntity target) {
@@ -3240,45 +4251,190 @@ public final class LegendaryListener implements Listener {
         }
 
         LifeStealerState state = lifeStealerState(weapon);
-        if (state.seenVictims().contains(victimId)) {
-            LifeStealerState refreshed = state.refreshDuration();
-            applyLifeStealerEffects(killer, refreshed);
-            applyLifeStealerState(weapon, refreshed);
-            refreshLifeStealerLore(killer);
-            return;
+        if (!state.seenVictims().contains(victimId) && state.stacks() < LIFE_STEALER_MAX_STACKS) {
+            state = state.addVictim(victimId);
         }
 
-        LifeStealerState next = state.addVictim(victimId);
-        applyLifeStealerEffects(killer, next);
-        applyLifeStealerState(weapon, next);
+        ItemMeta meta = weapon.getItemMeta();
+        if (meta != null) {
+            setLifeStealerSharpness(meta, lifeStealerSharpness(meta) + 1);
+            applyLifeStealerState(meta, state);
+            weapon.setItemMeta(meta);
+        }
+        applyLifeStealerEffects(killer, state);
         refreshLifeStealerLore(killer);
     }
 
-    private void applyLifeStealerEffects(Player player, LifeStealerState state) {
-        if (state.stacks() <= 0) {
-            player.removePotionEffect(PotionEffectType.STRENGTH);
-            player.removePotionEffect(PotionEffectType.SPEED);
-            player.removePotionEffect(PotionEffectType.ABSORPTION);
+    private void levelMidasSword(ItemStack sword, boolean playerKill) {
+        if (typeOf(sword) != LegendaryType.MIDAS_SWORD || !playerKill || ThreadLocalRandom.current().nextDouble() > 0.50) {
             return;
         }
 
-        int amplifier = Math.max(0, state.stacks() - 1);
-        int durationTicks = Math.max(1, remainingLifeStealerTicks(state));
-        player.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH, durationTicks, amplifier, false, false, true));
-        player.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, durationTicks, amplifier, false, false, true));
-        player.addPotionEffect(new PotionEffect(PotionEffectType.ABSORPTION, durationTicks, amplifier, false, false, true));
+        ItemMeta meta = sword.getItemMeta();
+        if (meta == null) {
+            return;
+        }
+        int nextLevel = Math.min(MIDAS_SWORD_MAX_SHARPNESS, midasSharpness(meta) + 1);
+        if (nextLevel == midasSharpness(meta)) {
+            return;
+        }
+
+        meta.getPersistentDataContainer().set(keyMidasSharpness, PersistentDataType.INTEGER, nextLevel);
+        setEnchantLevel(meta, enchantSharpness, nextLevel);
+        meta.lore(buildMidasSwordLore(meta, nextLevel));
+        sword.setItemMeta(meta);
+    }
+
+    private void grantStrengthSwordKillProgress(ItemStack sword, UUID victimId) {
+        if (typeOf(sword) != LegendaryType.STRENGTH_SWORD || victimId == null) {
+            return;
+        }
+
+        ItemMeta meta = sword.getItemMeta();
+        if (meta == null) {
+            return;
+        }
+
+        Set<UUID> victims = parseLifeStealerVictims(
+            meta.getPersistentDataContainer().getOrDefault(keyStrengthSwordVictims, PersistentDataType.STRING, "")
+        );
+        if (!victims.add(victimId)) {
+            return;
+        }
+
+        meta.getPersistentDataContainer().set(keyStrengthSwordVictims, PersistentDataType.STRING, joinLifeStealerVictims(victims));
+        meta.lore(buildStrengthSwordLore(meta, victims.size()));
+        sword.setItemMeta(meta);
+    }
+
+    private void tryReaperScytheDrain(Player attacker, LivingEntity victim) {
+        UUID attackerId = attacker.getUniqueId();
+        if (onCooldown(reaperScytheCd, attackerId) || victim.isDead() || !victim.isValid()) {
+            return;
+        }
+        if (victim instanceof Player teammate && sameTeamOrSelf(attackerId, teammate.getUniqueId())) {
+            return;
+        }
+
+        double drainDamage = Math.max(1.0, victim.getHealth() * REAPER_SCYTHE_DRAIN_FRACTION);
+        setCooldown(reaperScytheCd, attackerId, REAPER_SCYTHE_DRAIN_COOLDOWN);
+        if (applyWardenBladeTrueDamage(attacker, victim, drainDamage)) {
+            copyBeneficialPotionEffects(victim, attacker);
+            healLivingEntity(attacker, drainDamage);
+            World world = attacker.getWorld();
+            Location hit = victim.getLocation().clone().add(0.0, 1.0, 0.0);
+            world.spawnParticle(Particle.SOUL, hit, 20, 0.25, 0.45, 0.25, 0.02);
+            world.spawnParticle(Particle.SCULK_SOUL, attacker.getLocation().clone().add(0.0, 1.0, 0.0), 16, 0.25, 0.45, 0.25, 0.02);
+            world.playSound(attacker.getLocation(), Sound.PARTICLE_SOUL_ESCAPE, 1.0f, 0.85f);
+        }
+    }
+
+    private void copyBeneficialPotionEffects(LivingEntity source, LivingEntity target) {
+        for (PotionEffect effect : source.getActivePotionEffects()) {
+            PotionEffectType type = effect.getType();
+            if (type == null || type.isInstant() || type.getCategory() != PotionEffectTypeCategory.BENEFICIAL) {
+                continue;
+            }
+            applyPotionIfStrongerOrLonger(target, type, effect.getDuration(), effect.getAmplifier());
+        }
+    }
+
+    private double shadowBladeDamage(Player attacker) {
+        if (plugin.getSuperpowerManager() != null && plugin.getSuperpowerManager().hasPower(attacker, me.rique.smpcore.power.SuperpowerType.MONARCH)) {
+            return SHADOW_BLADE_MONARCH_DAMAGE;
+        }
+        return SHADOW_BLADE_DAMAGE;
+    }
+
+    private void applyStrengthSwordStageHit(Player attacker, LivingEntity victim) {
+        int stage = strengthSwordStage(attacker.getInventory().getItemInMainHand());
+        if (stage < 1 || !(victim instanceof Player targetPlayer)) {
+            return;
+        }
+
+        targetPlayer.addPotionEffect(new PotionEffect(PotionEffectType.WEAKNESS, 5 * 20, 0, false, true, true));
+    }
+
+    private void addHeadhunterRage(Player player, boolean attacking) {
+        if (player == null || !player.isOnline() || typeOf(player.getInventory().getChestplate()) != LegendaryType.HEADHUNTERS_CHESTPIECE) {
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        if (onCooldown(headhunterCooldownMap(), playerId)) {
+            return;
+        }
+
+        int next = Math.min(HEADHUNTER_RAGE_MAX, headhunterRage.getOrDefault(playerId, 0) + 1);
+        if (next >= HEADHUNTER_RAGE_MAX) {
+            headhunterRage.remove(playerId);
+            setCooldown(headhunterCooldownMap(), playerId, HEADHUNTER_COOLDOWN);
+            applyPotionIfStrongerOrLonger(player, PotionEffectType.STRENGTH, HEADHUNTER_BUFF_SECONDS * 20, 2);
+            applyPotionIfStrongerOrLonger(player, PotionEffectType.SPEED, HEADHUNTER_BUFF_SECONDS * 20, 1);
+            player.getWorld().spawnParticle(Particle.ANGRY_VILLAGER, player.getLocation().clone().add(0.0, 1.0, 0.0), 20, 0.35, 0.45, 0.35, 0.0);
+            player.getWorld().playSound(player.getLocation(), Sound.ENTITY_RAVAGER_ROAR, 0.7f, 1.15f);
+            player.sendMessage(MessageUtil.success(
+                "Headhunter's Rage erupted: <white>Strength III</white> and <white>Speed II</white> for <white>"
+                    + HEADHUNTER_BUFF_SECONDS + "s</white>."
+            ));
+            return;
+        }
+
+        headhunterRage.put(playerId, next);
+        player.sendActionBar(MM.deserialize(
+            "<red><bold>Headhunter Rage</bold></red><gray> "
+                + next + "/" + HEADHUNTER_RAGE_MAX
+                + (attacking ? " built from battle." : " built from pain.")
+                + "</gray>"
+        ));
+    }
+
+    private Map<UUID, Long> headhunterCooldownMap() {
+        return headhunterBuffCd;
+    }
+
+    private void applyLifeStealerEffects(Player player, LifeStealerState state) {
+        ensureLifeStealerEffects(player, state);
     }
 
     private void ensureLifeStealerEffects(Player player, LifeStealerState state) {
         if (state.stacks() <= 0) {
+            clearLifeStealerEffects(player);
             return;
         }
 
         int amplifier = Math.max(0, state.stacks() - 1);
-        int durationTicks = Math.max(1, remainingLifeStealerTicks(state));
-        ensurePotionEffect(player, PotionEffectType.STRENGTH, durationTicks, amplifier);
-        ensurePotionEffect(player, PotionEffectType.SPEED, durationTicks, amplifier);
-        ensurePotionEffect(player, PotionEffectType.ABSORPTION, durationTicks, amplifier);
+        ensurePotionEffect(player, PotionEffectType.STRENGTH, 60, amplifier);
+        ensurePotionEffect(player, PotionEffectType.SPEED, 60, amplifier);
+        lifeStealerGrantedAmplifier.put(player.getUniqueId(), amplifier);
+
+        double targetAbsorption = lifeStealerAbsorptionAmount(state.stacks());
+        double currentAbsorption = player.getAbsorptionAmount();
+        if (currentAbsorption < targetAbsorption) {
+            player.setAbsorptionAmount(targetAbsorption);
+        }
+        lifeStealerGrantedAbsorption.put(player.getUniqueId(), targetAbsorption);
+    }
+
+    private void clearLifeStealerEffects(Player player) {
+        UUID playerId = player.getUniqueId();
+        Integer amplifier = lifeStealerGrantedAmplifier.remove(playerId);
+        if (amplifier != null) {
+            removeTemporaryLegendaryPotion(player, PotionEffectType.STRENGTH, amplifier, 60);
+            removeTemporaryLegendaryPotion(player, PotionEffectType.SPEED, amplifier, 60);
+        }
+        Double granted = lifeStealerGrantedAbsorption.remove(playerId);
+        if (granted != null && player.getAbsorptionAmount() <= granted + 0.01) {
+            player.setAbsorptionAmount(0.0);
+        }
+    }
+
+    private double lifeStealerAbsorptionAmount(int stacks) {
+        return switch (Math.max(0, Math.min(LIFE_STEALER_MAX_STACKS, stacks))) {
+            case 1 -> 2.0;
+            case 2 -> 6.0;
+            case 3 -> 10.0;
+            default -> 0.0;
+        };
     }
 
     private void ensurePotionEffect(Player player, PotionEffectType type, int durationTicks, int amplifier) {
@@ -3291,14 +4447,6 @@ public final class LegendaryListener implements Listener {
         player.addPotionEffect(new PotionEffect(type, durationTicks, amplifier, false, false, true));
     }
 
-    private int remainingLifeStealerTicks(LifeStealerState state) {
-        if (state.stacks() <= 0) {
-            return 0;
-        }
-        long remainingMillis = state.expiresAt() - System.currentTimeMillis();
-        return (int) Math.max(1L, (remainingMillis + 49L) / 50L);
-    }
-
     private LifeStealerState strongerLifeStealerState(LifeStealerState current, LifeStealerState candidate) {
         if (candidate.stacks() > current.stacks()) {
             return candidate;
@@ -3306,7 +4454,7 @@ public final class LegendaryListener implements Listener {
         if (candidate.stacks() < current.stacks()) {
             return current;
         }
-        return candidate.expiresAt() > current.expiresAt() ? candidate : current;
+        return candidate.seenVictims().size() > current.seenVictims().size() ? candidate : current;
     }
 
     private LifeStealerState lifeStealerState(ItemStack sword) {
@@ -3319,17 +4467,11 @@ public final class LegendaryListener implements Listener {
 
     private LifeStealerState refreshLifeStealerState(ItemMeta meta) {
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
-        int stacks = Math.max(0, pdc.getOrDefault(keyLifeStealerStacks, PersistentDataType.INTEGER, 0));
-        long expiresAt = pdc.getOrDefault(keyLifeStealerExpiresAt, PersistentDataType.LONG, 0L);
+        int stacks = Math.max(0, Math.min(LIFE_STEALER_MAX_STACKS, pdc.getOrDefault(keyLifeStealerStacks, PersistentDataType.INTEGER, 0)));
         Set<UUID> seenVictims = parseLifeStealerVictims(
             pdc.getOrDefault(keyLifeStealerSeenPlayers, PersistentDataType.STRING, "")
         );
-
-        if (stacks <= 0 || expiresAt <= System.currentTimeMillis()) {
-            return LifeStealerState.empty();
-        }
-
-        return new LifeStealerState(stacks, expiresAt, seenVictims);
+        return stacks <= 0 ? LifeStealerState.empty() : new LifeStealerState(stacks, Long.MAX_VALUE, seenVictims);
     }
 
     private void applyLifeStealerState(ItemStack sword, LifeStealerState state) {
@@ -3349,11 +4491,44 @@ public final class LegendaryListener implements Listener {
             pdc.remove(keyLifeStealerSeenPlayers);
         } else {
             pdc.set(keyLifeStealerStacks, PersistentDataType.INTEGER, state.stacks());
-            pdc.set(keyLifeStealerExpiresAt, PersistentDataType.LONG, state.expiresAt());
+            pdc.remove(keyLifeStealerExpiresAt);
             pdc.set(keyLifeStealerSeenPlayers, PersistentDataType.STRING, joinLifeStealerVictims(state.seenVictims()));
         }
-        meta.setItemModel(keyLifeStealerItemModel);
+        setLifeStealerSharpness(meta, lifeStealerSharpness(meta));
+        meta.setItemModel(null);
         meta.lore(buildLifeStealerLore(meta, state));
+    }
+
+    private int lifeStealerSharpness(ItemStack sword) {
+        ItemMeta meta = sword == null ? null : sword.getItemMeta();
+        return meta == null ? 3 : lifeStealerSharpness(meta);
+    }
+
+    private int lifeStealerSharpness(ItemMeta meta) {
+        return Math.max(3, Math.min(LIFE_STEALER_MAX_SHARPNESS, meta.getPersistentDataContainer().getOrDefault(
+            keyLifeStealerSharpness,
+            PersistentDataType.INTEGER,
+            3
+        )));
+    }
+
+    private void setLifeStealerSharpness(ItemMeta meta, int sharpness) {
+        int clamped = Math.max(3, Math.min(LIFE_STEALER_MAX_SHARPNESS, sharpness));
+        meta.getPersistentDataContainer().set(keyLifeStealerSharpness, PersistentDataType.INTEGER, clamped);
+        setEnchantLevel(meta, enchantSharpness, clamped);
+    }
+
+    private int midasSharpness(ItemStack sword) {
+        ItemMeta meta = sword == null ? null : sword.getItemMeta();
+        return meta == null ? MIDAS_SWORD_BASE_SHARPNESS : midasSharpness(meta);
+    }
+
+    private int midasSharpness(ItemMeta meta) {
+        return Math.max(MIDAS_SWORD_BASE_SHARPNESS, Math.min(MIDAS_SWORD_MAX_SHARPNESS, meta.getPersistentDataContainer().getOrDefault(
+            keyMidasSharpness,
+            PersistentDataType.INTEGER,
+            MIDAS_SWORD_BASE_SHARPNESS
+        )));
     }
 
     private Set<UUID> parseLifeStealerVictims(String raw) {
@@ -3383,6 +4558,288 @@ public final class LegendaryListener implements Listener {
             out.append(victim);
         }
         return out.toString();
+    }
+
+    private void tickLegendaryStates() {
+        long now = System.currentTimeMillis();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            syncMidasBlessing(player);
+            syncGodChestplateState(player);
+            syncShadowBladeAttackSpeed(player);
+            syncHeadhunterChestpieceState(player);
+            syncShadowBladeState(player, now);
+            syncStrengthDomainState(player, now);
+        }
+    }
+
+    private void syncMidasBlessing(Player player) {
+        boolean active = typeOf(player.getInventory().getItemInMainHand()) == LegendaryType.MIDAS_SWORD;
+        syncPlayerAttributeModifier(
+            player,
+            Attribute.MAX_HEALTH,
+            keyMidasHealthModifier,
+            active ? MIDAS_SWORD_HEALTH_BONUS : 0.0,
+            AttributeModifier.Operation.ADD_NUMBER
+        );
+    }
+
+    private void syncGodChestplateState(Player player) {
+        boolean active = typeOf(player.getInventory().getChestplate()) == LegendaryType.GOD_CHESTPLATE;
+        syncPlayerAttributeModifier(
+            player,
+            Attribute.MAX_HEALTH,
+            keyGodChestplateHealthModifier,
+            active ? GOD_CHESTPLATE_HEALTH_BONUS : 0.0,
+            AttributeModifier.Operation.ADD_NUMBER
+        );
+        syncPlayerAttributeModifier(
+            player,
+            Attribute.KNOCKBACK_RESISTANCE,
+            keyGodChestplateKnockbackModifier,
+            active ? 1.0 : 0.0,
+            AttributeModifier.Operation.ADD_NUMBER
+        );
+    }
+
+    private void syncShadowBladeAttackSpeed(Player player) {
+        boolean active = typeOf(player.getInventory().getItemInMainHand()) == LegendaryType.SHADOW_BLADE
+            && plugin.getSuperpowerManager() != null
+            && plugin.getSuperpowerManager().hasPower(player, me.rique.smpcore.power.SuperpowerType.SHADOW);
+        syncPlayerAttributeModifier(
+            player,
+            Attribute.ATTACK_SPEED,
+            keyShadowBladeAttackSpeedModifier,
+            active ? 0.9 : 0.0,
+            AttributeModifier.Operation.ADD_NUMBER
+        );
+    }
+
+    private void syncHeadhunterChestpieceState(Player player) {
+        if (typeOf(player.getInventory().getChestplate()) != LegendaryType.HEADHUNTERS_CHESTPIECE) {
+            headhunterRage.remove(player.getUniqueId());
+            return;
+        }
+        applyPotionIfStrongerOrLonger(player, PotionEffectType.STRENGTH, 40, 0);
+    }
+
+    private void syncShadowBladeState(Player player, long now) {
+        Long expiresAt = shadowBladeActiveUntil.get(player.getUniqueId());
+        if (expiresAt == null) {
+            return;
+        }
+        if (expiresAt <= now) {
+            cancelShadowBlade(player, false);
+            return;
+        }
+
+        int durationTicks = Math.max(20, (int) ((expiresAt - now + 49L) / 50L));
+        applyPotionIfStrongerOrLonger(player, PotionEffectType.INVISIBILITY, durationTicks, 0);
+        applyPotionIfStrongerOrLonger(player, PotionEffectType.SPEED, durationTicks, 2);
+    }
+
+    private void syncStrengthDomainState(Player player, long now) {
+        StrengthDomainState state = activeStrengthDomains.get(player.getUniqueId());
+        if (state == null) {
+            syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyStrengthDomainHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER);
+            syncPlayerAttributeModifier(player, Attribute.ATTACK_SPEED, keyStrengthDomainAttackSpeedModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR);
+            return;
+        }
+        if (state.expiresAt() <= now) {
+            activeStrengthDomains.remove(player.getUniqueId(), state);
+            syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyStrengthDomainHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER);
+            syncPlayerAttributeModifier(player, Attribute.ATTACK_SPEED, keyStrengthDomainAttackSpeedModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR);
+            return;
+        }
+
+        renderStrengthDomain(state);
+        boolean inside = state.center().getWorld() != null
+            && state.center().getWorld().equals(player.getWorld())
+            && player.getLocation().distanceSquared(state.center()) <= (STRENGTH_SWORD_DOMAIN_RADIUS * STRENGTH_SWORD_DOMAIN_RADIUS);
+        syncPlayerAttributeModifier(
+            player,
+            Attribute.MAX_HEALTH,
+            keyStrengthDomainHealthModifier,
+            inside ? STRENGTH_SWORD_DOMAIN_HEALTH_BONUS : 0.0,
+            AttributeModifier.Operation.ADD_NUMBER
+        );
+        syncPlayerAttributeModifier(
+            player,
+            Attribute.ATTACK_SPEED,
+            keyStrengthDomainAttackSpeedModifier,
+            inside ? STRENGTH_SWORD_DOMAIN_ATTACK_SPEED_SCALAR : 0.0,
+            AttributeModifier.Operation.ADD_SCALAR
+        );
+        if (inside) {
+            applyPotionIfStrongerOrLonger(player, PotionEffectType.STRENGTH, 30, 1);
+        }
+    }
+
+    private void renderStrengthDomain(StrengthDomainState state) {
+        World world = state.center().getWorld();
+        if (world == null) {
+            return;
+        }
+        Particle.DustOptions dust = new Particle.DustOptions(Color.fromRGB(255, 70, 100), 1.2f);
+        Location center = state.center().clone().add(0.0, 0.1, 0.0);
+        for (int i = 0; i < 24; i++) {
+            double angle = (Math.PI * 2.0 * i) / 24.0;
+            double x = Math.cos(angle) * STRENGTH_SWORD_DOMAIN_RADIUS;
+            double z = Math.sin(angle) * STRENGTH_SWORD_DOMAIN_RADIUS;
+            Location ring = center.clone().add(x, 0.0, z);
+            world.spawnParticle(Particle.DUST, ring, 1, 0.0, 0.0, 0.0, 0.0, dust);
+            world.spawnParticle(Particle.ENCHANT, ring.clone().add(0.0, 1.0, 0.0), 1, 0.02, 0.20, 0.02, 0.0);
+        }
+    }
+
+    private void syncPlayerAttributeModifier(
+        Player player,
+        Attribute attributeType,
+        NamespacedKey key,
+        double amount,
+        AttributeModifier.Operation operation
+    ) {
+        var attribute = player.getAttribute(attributeType);
+        if (attribute == null) {
+            return;
+        }
+
+        AttributeModifier existing = currentPlayerAttributeModifier(player, attributeType, key);
+        if (Math.abs(amount) <= 1.0E-6 || player.isDead() || player.getGameMode() == GameMode.SPECTATOR) {
+            if (existing != null) {
+                attribute.removeModifier(existing);
+            }
+            return;
+        }
+
+        if (existing != null
+            && Math.abs(existing.getAmount() - amount) <= 1.0E-6
+            && existing.getOperation() == operation) {
+            return;
+        }
+        if (existing != null) {
+            attribute.removeModifier(existing);
+        }
+        attribute.addModifier(new AttributeModifier(key, amount, operation, EquipmentSlotGroup.ANY));
+
+        if (attributeType == Attribute.MAX_HEALTH && player.getHealth() > attribute.getValue()) {
+            player.setHealth(attribute.getValue());
+        }
+    }
+
+    private AttributeModifier currentPlayerAttributeModifier(Player player, Attribute attributeType, NamespacedKey key) {
+        var attribute = player.getAttribute(attributeType);
+        if (attribute == null) {
+            return null;
+        }
+        for (AttributeModifier modifier : attribute.getModifiers()) {
+            if (key.equals(modifier.getKey())) {
+                return modifier;
+            }
+        }
+        return null;
+    }
+
+    private void clearPlayerLegendaryAttributeModifiers(Player player) {
+        syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyMidasHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER);
+        syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyGodChestplateHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER);
+        syncPlayerAttributeModifier(player, Attribute.KNOCKBACK_RESISTANCE, keyGodChestplateKnockbackModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER);
+        syncPlayerAttributeModifier(player, Attribute.ATTACK_SPEED, keyShadowBladeAttackSpeedModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER);
+        syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyStrengthDomainHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER);
+        syncPlayerAttributeModifier(player, Attribute.ATTACK_SPEED, keyStrengthDomainAttackSpeedModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR);
+    }
+
+    private void tryGodChestplateRescue(Player player, EntityDamageEvent event) {
+        if (player.getHealth() - event.getFinalDamage() > 0.0) {
+            return;
+        }
+        if (typeOf(player.getInventory().getChestplate()) != LegendaryType.GOD_CHESTPLATE) {
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        if (onCooldown(godChestplateCd, playerId)) {
+            return;
+        }
+
+        event.setCancelled(true);
+        setCooldown(godChestplateCd, playerId, GOD_CHESTPLATE_COOLDOWN);
+        player.setHealth(1.0);
+        player.setFireTicks(0);
+        applyPotionIfStrongerOrLonger(player, PotionEffectType.REGENERATION, 10 * 20, 1);
+        applyPotionIfStrongerOrLonger(player, PotionEffectType.ABSORPTION, 10 * 20, 1);
+        applyPotionIfStrongerOrLonger(player, PotionEffectType.FIRE_RESISTANCE, 10 * 20, 0);
+        player.getWorld().spawnParticle(Particle.TOTEM_OF_UNDYING, player.getLocation().clone().add(0.0, 1.0, 0.0), 1, 0.35, 0.45, 0.35, 0.0);
+        player.getWorld().playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 1.0f, 1.0f);
+        player.sendMessage(MessageUtil.success(
+            "Aegis of the Undying denied death. Cooldown: <white>" + GOD_CHESTPLATE_COOLDOWN + "s</white>."
+        ));
+    }
+
+    private boolean hasLegendaryInHands(Player player, LegendaryType type) {
+        return typeOf(player.getInventory().getItemInMainHand()) == type
+            || typeOf(player.getInventory().getItemInOffHand()) == type;
+    }
+
+    private int strengthSwordVictimCount(ItemStack sword) {
+        ItemMeta meta = sword == null ? null : sword.getItemMeta();
+        if (meta == null) {
+            return 0;
+        }
+        return strengthSwordVictimCount(meta);
+    }
+
+    private int strengthSwordVictimCount(ItemMeta meta) {
+        if (meta == null) {
+            return 0;
+        }
+        return parseLifeStealerVictims(
+            meta.getPersistentDataContainer().getOrDefault(keyStrengthSwordVictims, PersistentDataType.STRING, "")
+        ).size();
+    }
+
+    private int strengthSwordStage(ItemStack sword) {
+        return strengthSwordStage(strengthSwordVictimCount(sword));
+    }
+
+    private int strengthSwordStage(int uniqueKills) {
+        if (uniqueKills >= STRENGTH_SWORD_STAGE_THREE_KILLS) {
+            return 3;
+        }
+        if (uniqueKills >= STRENGTH_SWORD_STAGE_TWO_KILLS) {
+            return 2;
+        }
+        if (uniqueKills >= 1) {
+            return 1;
+        }
+        return 0;
+    }
+
+    private int shadowBladeDurationSeconds(Player player) {
+        return plugin.getSuperpowerManager() != null
+            && plugin.getSuperpowerManager().hasPower(player, me.rique.smpcore.power.SuperpowerType.SHADOW)
+            ? SHADOW_BLADE_SHADOW_DURATION_SECONDS
+            : SHADOW_BLADE_DURATION_SECONDS;
+    }
+
+    private void removeTemporaryLegendaryPotion(Player player, PotionEffectType type, int amplifier, int maxDurationTicks) {
+        PotionEffect current = player.getPotionEffect(type);
+        if (current == null) {
+            return;
+        }
+        if (current.getAmplifier() == amplifier && current.getDuration() <= maxDurationTicks + 40) {
+            player.removePotionEffect(type);
+        }
+    }
+
+    private String faradayDirection(Vector delta) {
+        Vector flat = delta.clone().setY(0.0);
+        if (flat.lengthSquared() <= 1.0E-6) {
+            return "Right here";
+        }
+        double angle = Math.toDegrees(Math.atan2(-flat.getX(), flat.getZ()));
+        angle = (angle + 360.0) % 360.0;
+        String[] directions = {"North", "Northeast", "East", "Southeast", "South", "Southwest", "West", "Northwest"};
+        int index = (int) Math.round(angle / 45.0) % directions.length;
+        return directions[index];
     }
 
     private boolean onCooldown(Map<UUID, Long> map, UUID uuid) {
@@ -3425,11 +4882,25 @@ public final class LegendaryListener implements Listener {
         cleanupExpiredCooldownMap(chronoCd, now);
         cleanupExpiredCooldownMap(harpoonCd, now);
         cleanupExpiredCooldownMap(hypnosisCd, now);
+        cleanupExpiredCooldownMap(wardenBladeProtectionCd, now);
+        cleanupExpiredCooldownMap(wardenBladeSoundWaveCd, now);
+        cleanupExpiredCooldownMap(frostScytheCd, now);
         cleanupExpiredCooldownMap(blinkDaggerCd, now);
         cleanupExpiredCooldownMap(blinkDaggerBackstabCd, now);
         cleanupExpiredCooldownMap(executionerStrengthCd, now);
         cleanupExpiredCooldownMap(executionerShockwaveCd, now);
+        cleanupExpiredCooldownMap(rhittaBlessingCd, now);
+        cleanupExpiredCooldownMap(rhittaCruelSunCd, now);
+        cleanupExpiredCooldownMap(reaperScytheCd, now);
+        cleanupExpiredCooldownMap(shadowBladeCd, now);
+        cleanupExpiredCooldownMap(headhunterBuffCd, now);
+        cleanupExpiredCooldownMap(godChestplateCd, now);
+        cleanupExpiredCooldownMap(strengthSwordBeamCd, now);
+        cleanupExpiredCooldownMap(strengthSwordDomainCd, now);
         cleanupExpiredCooldownMap(blinkDaggerStunnedUntil, now);
+        cleanupExpiredCooldownMap(shadowBladeActiveUntil, now);
+        rhittaBurns.entrySet().removeIf(entry -> entry.getValue() == null || entry.getValue().expiresAt() <= now);
+        activeStrengthDomains.entrySet().removeIf(entry -> entry.getValue() == null || entry.getValue().expiresAt() <= now);
     }
 
     private void cleanupExpiredCooldownMap(Map<UUID, Long> map, long now) {
@@ -3510,6 +4981,7 @@ public final class LegendaryListener implements Listener {
         ItemStack reward = createItem(type);
         Map<Integer, ItemStack> leftovers = player.getInventory().addItem(reward);
         leftovers.values().forEach(item -> player.getWorld().dropItemNaturally(player.getLocation(), item));
+        registerLegendaryInstance(player, reward, "altar".equals(source));
         announceLegendaryCraft(player, type);
         String sourceText = "trade".equals(source) ? "Traded materials for " : "Crafted ";
         player.sendMessage(MessageUtil.success(sourceText + type.display + "<green>.</green>"));
@@ -3578,6 +5050,12 @@ public final class LegendaryListener implements Listener {
         if (type == LegendaryType.ENDER_SWORD && material == Material.BONE) {
             return isEnderBone(item);
         }
+        if (type == LegendaryType.WARDEN_BLADE && material == Material.HEART_OF_THE_SEA) {
+            return plugin.getSuperpowerManager() != null && plugin.getSuperpowerManager().isWardenHeart(item);
+        }
+        if (type == LegendaryType.STRENGTH_SWORD && material == Material.HEART_OF_THE_SEA) {
+            return plugin.getSuperpowerManager() != null && plugin.getSuperpowerManager().isWardenHeart(item);
+        }
         return item != null
             && item.getType() == material
             && typeOf(item) == null;
@@ -3587,13 +5065,17 @@ public final class LegendaryListener implements Listener {
         if (type == LegendaryType.ENDER_SWORD && material == Material.BONE) {
             return "Ender Bone";
         }
+        if (type == LegendaryType.WARDEN_BLADE && material == Material.HEART_OF_THE_SEA) {
+            return "Warden Heart";
+        }
+        if (type == LegendaryType.STRENGTH_SWORD && material == Material.HEART_OF_THE_SEA) {
+            return "Warden Heart";
+        }
         return prettyMaterial(material);
     }
 
     private ItemStack displayRecipeIngredient(LegendaryType type, Material material, int amount) {
-        ItemStack ingredientItem = type == LegendaryType.ENDER_SWORD && material == Material.BONE
-            ? createEnderBone()
-            : new ItemStack(material);
+        ItemStack ingredientItem = recipeIngredientBaseItem(type, material);
         ingredientItem.setAmount(Math.min(64, Math.max(1, amount)));
         ItemMeta meta = ingredientItem.getItemMeta();
         if (meta != null) {
@@ -3603,6 +5085,19 @@ public final class LegendaryListener implements Listener {
             ingredientItem.setItemMeta(meta);
         }
         return ingredientItem;
+    }
+
+    private ItemStack recipeIngredientBaseItem(LegendaryType type, Material material) {
+        if (type == LegendaryType.ENDER_SWORD && material == Material.BONE) {
+            return createEnderBone();
+        }
+        if (type == LegendaryType.WARDEN_BLADE && material == Material.HEART_OF_THE_SEA && plugin.getSuperpowerManager() != null) {
+            return plugin.getSuperpowerManager().createWardenHeartItem();
+        }
+        if (type == LegendaryType.STRENGTH_SWORD && material == Material.HEART_OF_THE_SEA && plugin.getSuperpowerManager() != null) {
+            return plugin.getSuperpowerManager().createWardenHeartItem();
+        }
+        return new ItemStack(material);
     }
 
     private String prettyMaterial(Material material) {
@@ -3672,7 +5167,7 @@ public final class LegendaryListener implements Listener {
 
     private void applyEnderBonePresentation(ItemMeta meta) {
         meta.displayName(MM.deserialize("<dark_purple><bold>Ender Bone</bold></dark_purple>"));
-        meta.setItemModel(keyEnderBoneItemModel);
+        meta.setItemModel(null);
         meta.lore(CustomLoreUtil.buildStyledLore(
             Material.BONE,
             "LEGENDARY",
@@ -3689,7 +5184,8 @@ public final class LegendaryListener implements Listener {
 
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return false;
-        if (keyEnderBoneItemModel.equals(meta.getItemModel())) return false;
+        String displayName = meta.hasDisplayName() ? PLAIN.serialize(meta.displayName()).trim() : "";
+        if ("Ender Bone".equals(displayName) && meta.hasLore()) return false;
 
         applyEnderBonePresentation(meta);
         item.setItemMeta(meta);
@@ -3698,7 +5194,7 @@ public final class LegendaryListener implements Listener {
 
     private void applyOrbOfTheMysticsPresentation(ItemMeta meta) {
         meta.displayName(MM.deserialize("<light_purple><bold>Orb of the Mystics</bold></light_purple>"));
-        meta.setItemModel(keyOrbOfTheMysticsItemModel);
+        meta.setItemModel(null);
         meta.lore(CustomLoreUtil.buildStyledLore(
             Material.ENDER_EYE,
             "MYTHIC",
@@ -3728,7 +5224,8 @@ public final class LegendaryListener implements Listener {
 
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
         boolean missingInstance = !pdc.has(keyOrbOfTheMysticsInstance, PersistentDataType.STRING);
-        if (keyOrbOfTheMysticsItemModel.equals(meta.getItemModel()) && !missingInstance) return false;
+        String displayName = meta.hasDisplayName() ? PLAIN.serialize(meta.displayName()).trim() : "";
+        if ("Orb of the Mystics".equals(displayName) && meta.hasLore() && !missingInstance) return false;
 
         applyOrbOfTheMysticsPresentation(meta);
         item.setItemMeta(meta);
@@ -3830,6 +5327,7 @@ public final class LegendaryListener implements Listener {
             "SWORD",
             List.of(
                 "<gray>Unbreakable</gray>",
+                "<gray>Hit Damage: <white>" + formatDamageNumber(ENDER_SWORD_MELEE_DAMAGE) + "</white></gray>",
                 "<gray>Summon Cooldown: <white>" + plugin.getConfigManager().enderSwordSummonCooldownSeconds + "s</white></gray>"
             ),
             CustomLoreUtil.section(
@@ -3885,18 +5383,56 @@ public final class LegendaryListener implements Listener {
         );
     }
 
-    private List<Component> buildMagnetLore(ItemMeta meta, boolean active) {
+    private List<Component> buildWardenBladeLore(ItemMeta meta) {
+        return CustomLoreUtil.buildStyledLore(
+            meta,
+            Material.NETHERITE_SWORD,
+            "MYTHICAL",
+            "BLADE",
+            List.of(
+                "<gray>Hit Damage: <white>" + formatDamageNumber(WARDEN_BLADE_MELEE_DAMAGE) + "</white></gray>",
+                "<gray>Sculk Protection Cooldown: <white>" + WARDEN_BLADE_PROTECTION_COOLDOWN + "s</white></gray>",
+                "<gray>Sound Wave Cooldown: <white>" + WARDEN_BLADE_SOUND_WAVE_COOLDOWN + "s</white></gray>"
+            ),
+            List.of(
+                CustomLoreUtil.section(
+                    "Item Ability",
+                    "Sculk Protection",
+                    "<gray><white>Shift + Right-click</white> to gain <white>Resistance II</white> for <white>3 minutes</white>.</gray>"
+                ),
+                CustomLoreUtil.section(
+                    "Item Ability",
+                    "Sound Wave",
+                    "<gray><white>Right-click</white> to fire a sonic shriek where you are aiming.</gray>",
+                    "<gray>The shriek deals <white>4.5 hearts</white> of <white>true damage</white> to enemy players and mobs.</gray>",
+                    "<gray>Teammates are ignored by the shriek.</gray>"
+                )
+            )
+        );
+    }
+
+    private List<Component> buildMagnetLore(ItemMeta meta, boolean active, int uses) {
         return buildLegendaryLore(
             meta,
             Material.RECOVERY_COMPASS,
             "UTILITY",
-            List.of("<gray>Current State: " + (active ? "<green>ON</green>" : "<red>OFF</red>") + "</gray>"),
+            List.of(
+                "<gray>Current State: " + (active ? "<green>ON</green>" : "<red>OFF</red>") + "</gray>",
+                "<gray>Player Scan Uses: <white>" + uses + "</white>/<white>" + FARADAY_SCAN_MAX_USES + "</white></gray>"
+            ),
             CustomLoreUtil.section(
-                "Item Ability",
+                "Passive",
                 "Faraday Pull",
-                "<gray><white>Right-click</white> while holding to toggle the magnet.</gray>",
+                "<gray><white>Shift + Right-click</white> while holding to toggle the magnet.</gray>",
                 "<gray>When enabled, pulls dropped items within <white>" + MAGNET_RADIUS + "</white> blocks.</gray>",
                 "<gray>Works from anywhere in your inventory.</gray>"
+            ),
+            CustomLoreUtil.section(
+                "Item Ability",
+                "Player Trace",
+                "<gray><white>Right-click</white> to reveal the general direction of the nearest player.</gray>",
+                "<gray>Shows a result like <white>Northeast 500 blocks away</white>.</gray>",
+                "<gray>Each scan spends <white>1 use</white>. The magnet breaks at <white>0</white>.</gray>"
             )
         );
     }
@@ -3908,7 +5444,8 @@ public final class LegendaryListener implements Listener {
             "SCYTHE",
             List.of(
                 "<gray>Hit Damage: <white>" + formatDamageNumber(FROST_SCYTHE_MELEE_DAMAGE) + "</white></gray>",
-                "<gray>Nausea + Freeze Duration: <white>2s</white></gray>"
+                "<gray>Nausea + Freeze Duration: <white>2s</white></gray>",
+                "<gray>Frozen Reap Cooldown: <white>" + plugin.getConfigManager().frostScytheAbilityCooldownSeconds + "s</white></gray>"
             ),
             CustomLoreUtil.section(
                 "Passive",
@@ -3922,6 +5459,197 @@ public final class LegendaryListener implements Listener {
                 "<gray><white>Right-click</white> to freeze nearby mobs and players for <white>2s</white>.</gray>",
                 "<gray>Applies <white>Nausea</white> at the same time.</gray>",
                 "<gray>Teammates are ignored by the frost burst.</gray>"
+            )
+        );
+    }
+
+    private List<Component> buildRhittaLore(ItemMeta meta) {
+        return buildLegendaryLore(
+            meta,
+            Material.NETHERITE_AXE,
+            "AXE",
+            List.of(
+                "<gray>Hit Damage: <white>" + formatDamageNumber(RHITTA_MELEE_DAMAGE) + "</white></gray>",
+                "<gray>Sun's Blessing Cooldown: <white>" + RHITTA_SUNS_BLESSING_COOLDOWN + "s</white></gray>",
+                "<gray>Cruel Sun Cooldown: <white>" + RHITTA_CRUEL_SUN_COOLDOWN + "s</white></gray>"
+            ),
+            CustomLoreUtil.section(
+                "Item Ability",
+                "Sun's Blessing",
+                "<gray><white>Right-click</white> to gain <white>Fire Resistance</white> and <white>Speed II</white> for <white>300s</white>.</gray>"
+            ),
+            CustomLoreUtil.section(
+                "Item Ability",
+                "Cruel Sun",
+                "<gray><white>Shift + Right-click</white> to ignite nearby enemies for <white>5s</white>.</gray>",
+                "<gray>Targets burn for <white>0.5 hearts</white> each second while the fire lasts.</gray>",
+                "<gray>Teammates are ignored by the flames.</gray>"
+            )
+        );
+    }
+
+    private List<Component> buildMidasSwordLore(ItemMeta meta, int sharpnessLevel) {
+        return buildMythicLore(
+            meta,
+            Material.GOLDEN_SWORD,
+            "SWORD",
+            List.of(
+                "<gray>Hit Damage: <white>" + formatDamageNumber(MIDAS_SWORD_MELEE_DAMAGE) + "</white></gray>",
+                "<gray>Current Sharpness: <white>" + sharpnessLevel + "</white>/<white>" + MIDAS_SWORD_MAX_SHARPNESS + "</white></gray>",
+                "<gray>Main-hand Blessing: <white>+5 hearts</white></gray>"
+            ),
+            CustomLoreUtil.section(
+                "Passive",
+                "Golden Tribute",
+                "<gray>Kills spill <white>9 gold nuggets</white>.</gray>",
+                "<gray>Piglins remain neutral while you hold the blade.</gray>"
+            ),
+            CustomLoreUtil.section(
+                "Passive",
+                "Midas Hunger",
+                "<gray>Player kills have a <white>50%</white> chance to raise the sword by <white>+1 Sharpness</white>.</gray>",
+                "<gray>Caps at <white>Sharpness " + MIDAS_SWORD_MAX_SHARPNESS + "</white>.</gray>"
+            )
+        );
+    }
+
+    private List<Component> buildReaperScytheLore(ItemMeta meta) {
+        return buildLegendaryLore(
+            meta,
+            Material.NETHERITE_HOE,
+            "SCYTHE",
+            List.of(
+                "<gray>Hit Damage: <white>" + formatDamageNumber(REAPER_SCYTHE_MELEE_DAMAGE) + "</white></gray>",
+                "<gray>Attack Speed: <white>1</white></gray>",
+                "<gray>Soul Rend Cooldown: <white>" + REAPER_SCYTHE_DRAIN_COOLDOWN + "s</white></gray>"
+            ),
+            CustomLoreUtil.section(
+                "Passive",
+                "Soul Rend",
+                "<gray>Your next ready hit drains <white>25%</white> of the target's current health.</gray>",
+                "<gray>You heal for the health drained and steal their positive potion effects.</gray>"
+            )
+        );
+    }
+
+    private List<Component> buildShadowBladeLore(ItemMeta meta, Player holder) {
+        boolean monarch = holder != null
+            && plugin.getSuperpowerManager() != null
+            && plugin.getSuperpowerManager().hasPower(holder, me.rique.smpcore.power.SuperpowerType.MONARCH);
+        boolean shadow = holder != null
+            && plugin.getSuperpowerManager() != null
+            && plugin.getSuperpowerManager().hasPower(holder, me.rique.smpcore.power.SuperpowerType.SHADOW);
+        double damage = monarch ? SHADOW_BLADE_MONARCH_DAMAGE : SHADOW_BLADE_DAMAGE;
+        double attackSpeed = shadow ? 2.5 : 1.6;
+        return buildLegendaryLore(
+            meta,
+            Material.DIAMOND_SWORD,
+            "BLADE",
+            List.of(
+                "<gray>Hit Damage: <white>" + formatDamageNumber(damage) + "</white></gray>",
+                "<gray>Attack Speed: <white>" + formatDamageNumber(attackSpeed) + "</white></gray>",
+                "<gray>Cooldown: <white>" + SHADOW_BLADE_COOLDOWN + "s</white></gray>"
+            ),
+            CustomLoreUtil.section(
+                "Item Ability",
+                "Veil Step",
+                "<gray><white>Right-click</white> to gain <white>Invisibility</white> and <white>Speed III</white>.</gray>",
+                "<gray>Base duration: <white>" + SHADOW_BLADE_DURATION_SECONDS + "s</white>.</gray>",
+                "<gray>If the wielder has <white>Nightshade</white>, duration becomes <white>" + SHADOW_BLADE_SHADOW_DURATION_SECONDS + "s</white>.</gray>"
+            ),
+            CustomLoreUtil.section(
+                "Passive",
+                "Shadow Hunger",
+                "<gray>The blade grows stronger in the hands of a <white>Sovereign</white> or <white>Nightshade</white>.</gray>",
+                "<gray>Hitting another player instantly breaks the cloak.</gray>"
+            )
+        );
+    }
+
+    private List<Component> buildHeadhunterChestpieceLore(ItemMeta meta) {
+        return buildLegendaryLore(
+            meta,
+            Material.DIAMOND_CHESTPLATE,
+            "CHESTPLATE",
+            List.of(
+                "<gray>Protection: <white>III</white></gray>",
+                "<gray>Max Rage: <white>" + HEADHUNTER_RAGE_MAX + "</white></gray>",
+                "<gray>Fury Cooldown: <white>" + HEADHUNTER_COOLDOWN + "s</white></gray>"
+            ),
+            CustomLoreUtil.section(
+                "Passive",
+                "Battle Lust",
+                "<gray>Wearing it grants <white>Strength I</white>.</gray>",
+                "<gray>It can still be enchanted normally.</gray>"
+            ),
+            CustomLoreUtil.section(
+                "Passive",
+                "Headhunter's Rage",
+                "<gray>Deal or take player damage to build Rage.</gray>",
+                "<gray>At max Rage, gain <white>Strength III</white> and <white>Speed II</white> for <white>" + HEADHUNTER_BUFF_SECONDS + "s</white>.</gray>"
+            )
+        );
+    }
+
+    private List<Component> buildGodChestplateLore(ItemMeta meta) {
+        return buildMythicLore(
+            meta,
+            Material.DIAMOND_CHESTPLATE,
+            "CHESTPLATE",
+            List.of(
+                "<gray>Worn Blessing: <white>+5 hearts</white></gray>",
+                "<gray>Knockback: <white>Negated</white></gray>",
+                "<gray>Death Save Cooldown: <white>" + GOD_CHESTPLATE_COOLDOWN + "s</white></gray>"
+            ),
+            CustomLoreUtil.section(
+                "Passive",
+                "Divine Denial",
+                "<gray>While worn, lethal damage is denied once per cooldown.</gray>",
+                "<gray>Triggers a built-in totem-like rescue with no totem required.</gray>"
+            ),
+            CustomLoreUtil.section(
+                "Limit",
+                "Sacred Forge",
+                "<gray>This chestplate cannot be enchanted.</gray>",
+                "<gray>It remains permanently unbreakable.</gray>"
+            )
+        );
+    }
+
+    private List<Component> buildStrengthSwordLore(ItemMeta meta, int uniqueVictimCount) {
+        int stage = strengthSwordStage(uniqueVictimCount);
+        return buildLegendaryLore(
+            meta,
+            Material.NETHERITE_SWORD,
+            "SWORD",
+            List.of(
+                "<gray>Unique Player Kills: <white>" + uniqueVictimCount + "</white></gray>",
+                "<gray>Current Stage: <white>" + stage + "</white>/3</gray>",
+                "<gray>Beam Cooldown: <white>" + STRENGTH_SWORD_BEAM_COOLDOWN + "s</white> | Domain Cooldown: <white>" + STRENGTH_SWORD_DOMAIN_COOLDOWN + "s</white></gray>"
+            ),
+            CustomLoreUtil.section(
+                "Stage I",
+                "Curse Mark",
+                "<gray>Unlocks after <white>1 unique player kill</white>.</gray>",
+                "<gray>Hits on players apply <white>Weakness I</white> for <white>5s</white>.</gray>"
+            ),
+            CustomLoreUtil.section(
+                "Stage II",
+                "Crimson Beam",
+                "<gray>Unlocks after <white>" + STRENGTH_SWORD_STAGE_TWO_KILLS + " unique player kills</white>.</gray>",
+                "<gray><white>Shift + Left-click</white> to fire a crimson warden beam for <white>4 hearts true damage</white>.</gray>"
+            ),
+            CustomLoreUtil.section(
+                "Stage III",
+                "Dominion",
+                "<gray>Unlocks after <white>" + STRENGTH_SWORD_STAGE_THREE_KILLS + " unique player kills</white>.</gray>",
+                "<gray><white>Right-click</white> to open a <white>" + STRENGTH_SWORD_DOMAIN_RADIUS + " block</white> domain for <white>" + STRENGTH_SWORD_DOMAIN_SECONDS + "s</white>.</gray>",
+                "<gray>Inside it, the user gains <white>+5 hearts</white>, <white>Strength II</white>, and <white>15% faster attack speed</white>.</gray>"
+            ),
+            CustomLoreUtil.section(
+                "Limit",
+                "Bound Edge",
+                "<gray>This sword can never receive <white>Mending</white>.</gray>"
             )
         );
     }
@@ -3977,7 +5705,7 @@ public final class LegendaryListener implements Listener {
             PersistentDataType.BYTE,
             riptideMode ? PERCY_TRIDENT_MODE_RIPTIDE : PERCY_TRIDENT_MODE_THROW
         );
-        meta.setItemModel(keyTridentOfPercyItemModel);
+        meta.setItemModel(null);
         setEnchantLevel(meta, enchantLoyalty, riptideMode ? 0 : 3);
         setEnchantLevel(meta, enchantChanneling, riptideMode ? 0 : 1);
         setEnchantLevel(meta, enchantImpaling, 5);
@@ -4040,7 +5768,7 @@ public final class LegendaryListener implements Listener {
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
         WarPickMode mode = warPickMode(meta);
         pdc.set(keyWarPickMode, PersistentDataType.INTEGER, mode.ordinal());
-        meta.setItemModel(keyWarPickItemModel);
+        meta.setItemModel(null);
         setEnchantLevel(meta, enchantSharpness, 10);
         setEnchantLevel(meta, enchantEfficiency, 1);
         setEnchantLevel(meta, enchantFortune, 3);
@@ -4055,7 +5783,7 @@ public final class LegendaryListener implements Listener {
         meta.getPersistentDataContainer().set(keyWarPickMode, PersistentDataType.INTEGER, nextMode.ordinal());
         applyWarPickState(meta);
         warPick.setItemMeta(meta);
-        player.sendMessage(MessageUtil.info("War Pick mode: <white>" + nextMode.label() + "</white>."));
+        player.sendMessage(MessageUtil.info("Siegebreaker Pick mode: <white>" + nextMode.label() + "</white>."));
     }
 
     private List<Block> warPickTargets(Player player, Block center, WarPickMode mode) {
@@ -4173,12 +5901,11 @@ public final class LegendaryListener implements Listener {
 
     private List<Component> buildLifeStealerLore(ItemMeta meta, LifeStealerState state) {
         int stacks = state.stacks();
-        int absorptionHearts = stacks * 2;
+        double absorptionHearts = lifeStealerAbsorptionAmount(stacks) / 2.0;
+        int sharpness = lifeStealerSharpness(meta);
         List<String> topLines = new ArrayList<>();
-        topLines.add("<gray>Current Bonus:</gray> <red>" + stacks + " Strength</red><gray>,</gray> <aqua>" + stacks + " Speed</aqua><gray>,</gray> <gold>" + absorptionHearts + " Absorption Hearts</gold>");
-        if (state.stacks() > 0) {
-            topLines.add("<gray>Streak Timer: <white>" + Math.max(1L, (state.expiresAt() - System.currentTimeMillis() + 999L) / 1000L) + "s</white></gray>");
-        }
+        topLines.add("<gray>Current Bonus:</gray> <red>" + stacks + " Strength</red><gray>,</gray> <aqua>" + stacks + " Speed</aqua><gray>,</gray> <gold>" + formatDamageNumber(absorptionHearts) + " Absorption Hearts</gold>");
+        topLines.add("<gray>Current Sharpness: <white>" + sharpness + "</white>/<white>" + LIFE_STEALER_MAX_SHARPNESS + "</white></gray>");
         return buildMythicLore(
             meta,
             Material.NETHERITE_SWORD,
@@ -4192,9 +5919,9 @@ public final class LegendaryListener implements Listener {
             CustomLoreUtil.section(
                 "Item Ability",
                 "Blood Alchemy",
-                "<gray>For each <white>unique player</white> killed, gain <red>1 level of Strength</red> and <aqua>Speed</aqua></gray>",
-                "<gray>plus <gold>2 Absorption Hearts</gold> for <white>1 minute</white>.</gray>",
-                "<gray>Stacks on new player kills and the timer resets every kill.</gray>"
+                "<gray>Unique player kills permanently build up to <white>Strength III</white>, <white>Speed III</white>, and</gray>",
+                "<gray><white>5 Absorption Hearts</white> while you carry the blade.</gray>",
+                "<gray>Every player kill also raises the sword by <white>+1 Sharpness</white> up to <white>" + LIFE_STEALER_MAX_SHARPNESS + "</white>.</gray>"
             )
         );
     }
@@ -4210,7 +5937,11 @@ public final class LegendaryListener implements Listener {
         ItemMeta meta = magnet.getItemMeta();
         if (meta == null) return;
         meta.getPersistentDataContainer().set(keyMagnetActive, PersistentDataType.BYTE, active ? (byte) 1 : (byte) 0);
-        meta.lore(buildMagnetLore(meta, active));
+        int uses = Math.max(0, Math.min(
+            FARADAY_SCAN_MAX_USES,
+            meta.getPersistentDataContainer().getOrDefault(keyFaradayUses, PersistentDataType.INTEGER, FARADAY_SCAN_MAX_USES)
+        ));
+        meta.lore(buildMagnetLore(meta, active, uses));
         magnet.setItemMeta(meta);
     }
 
@@ -4310,12 +6041,12 @@ public final class LegendaryListener implements Listener {
     private void sendWindChargeCannonActionBar(Player player, int remainingCharges) {
         if (remainingCharges > 0) {
             player.sendActionBar(MM.deserialize(
-                "<gold><bold>Wind Charge Cannon</bold></gold><gray> charges: <white>" + remainingCharges + "/" + WIND_CHARGE_CANNON_MAX_CHARGES + "</white>.</gray>"
+                "<gold><bold>Tempest Cannon</bold></gold><gray> charges: <white>" + remainingCharges + "/" + WIND_CHARGE_CANNON_MAX_CHARGES + "</white>.</gray>"
             ));
             return;
         }
         player.sendActionBar(MM.deserialize(
-            "<gold><bold>Wind Charge Cannon</bold></gold><gray> depleted. Recharge: <white>" + WIND_CHARGE_CANNON_RECHARGE + "s</white>.</gray>"
+            "<gold><bold>Tempest Cannon</bold></gold><gray> depleted. Recharge: <white>" + WIND_CHARGE_CANNON_RECHARGE + "s</white>.</gray>"
         ));
     }
 
@@ -4462,7 +6193,7 @@ public final class LegendaryListener implements Listener {
         double bonusDamage
     ) {
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
-        meta.setItemModel(keyWitherBladeItemModel);
+        meta.setItemModel(null);
         pdc.set(keyWitherBladeSkullCharges, PersistentDataType.INTEGER, skullCharges);
         pdc.set(keyWitherBladeDashCharges, PersistentDataType.INTEGER, dashCharges);
         if (skullCharges >= WITHER_BLADE_SKULL_MAX_CHARGES || skullRechargeStartedAt <= 0L) {
@@ -4582,6 +6313,7 @@ public final class LegendaryListener implements Listener {
         for (Player player : Bukkit.getOnlinePlayers()) {
             collectLegendaryCopies(player, player.getInventory(), copiesByLegendaryId);
             collectLegendaryCopies(player, player.getEnderChest(), copiesByLegendaryId);
+            collectLegendaryCursorCopy(player, copiesByLegendaryId);
         }
 
         for (Map.Entry<String, List<LegendaryCopy>> entry : copiesByLegendaryId.entrySet()) {
@@ -4591,16 +6323,57 @@ public final class LegendaryListener implements Listener {
                 continue;
             }
 
-            altarManager.recordClaimedLegendary(legendaryId, null, false);
             int totalCopies = 0;
             for (LegendaryCopy copy : copies) {
                 totalCopies += Math.max(1, copy.amount());
             }
-            if (totalCopies <= 1) {
+            int maxCopies = maxServerCopiesForLegendary(legendaryId);
+            if (totalCopies <= maxCopies) {
                 continue;
             }
 
-            refundAndRemoveDuplicateLegendaries(legendaryId, copies);
+            refundAndRemoveDuplicateLegendaries(legendaryId, copies, maxCopies);
+        }
+
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            syncLegendaryOwnership(player);
+        }
+    }
+
+    private void syncLegendaryOwnership(Player player) {
+        LegendaryAltarManager altarManager = plugin.getLegendaryAltarManager();
+        if (altarManager == null || player == null) {
+            return;
+        }
+
+        Map<String, String> heldLegendaryInstances = new LinkedHashMap<>();
+        collectLegendaryOwnership(player.getInventory(), heldLegendaryInstances);
+        collectLegendaryOwnership(player.getEnderChest(), heldLegendaryInstances);
+        collectLegendaryOwnership(player.getOpenInventory().getCursor(), heldLegendaryInstances);
+        altarManager.syncLegendaryOwnership(player.getUniqueId(), heldLegendaryInstances);
+    }
+
+    private void collectLegendaryOwnership(Inventory inventory, Map<String, String> heldLegendaryInstances) {
+        if (inventory == null || heldLegendaryInstances == null) {
+            return;
+        }
+
+        for (ItemStack item : inventory.getContents()) {
+            collectLegendaryOwnership(item, heldLegendaryInstances);
+        }
+    }
+
+    private void collectLegendaryOwnership(ItemStack item, Map<String, String> heldLegendaryInstances) {
+        if (heldLegendaryInstances == null) {
+            return;
+        }
+
+        LegendaryType type = typeOf(item);
+        if (type != null && isExclusiveLegendaryType(type)) {
+            String instanceId = legendaryInstanceId(item);
+            if (instanceId != null && !instanceId.isBlank()) {
+                heldLegendaryInstances.put(instanceId, type.id);
+            }
         }
     }
 
@@ -4613,20 +6386,87 @@ public final class LegendaryListener implements Listener {
         for (int slot = 0; slot < contents.length; slot++) {
             ItemStack item = contents[slot];
             LegendaryType type = typeOf(item);
-            if (type == null) {
+            if (type == null || !isExclusiveLegendaryType(type)) {
                 continue;
             }
             copiesByLegendaryId.computeIfAbsent(type.id, ignored -> new ArrayList<>())
-                .add(new LegendaryCopy(player, inventory, slot, type, Math.max(1, item.getAmount())));
+                .add(new LegendaryCopy(player, inventory, slot, type, Math.max(1, item.getAmount()), false));
         }
     }
 
-    private void refundAndRemoveDuplicateLegendaries(String legendaryId, List<LegendaryCopy> copies) {
+    private void collectLegendaryCursorCopy(Player player, Map<String, List<LegendaryCopy>> copiesByLegendaryId) {
+        if (player == null || copiesByLegendaryId == null) {
+            return;
+        }
+
+        ItemStack cursor = player.getOpenInventory().getCursor();
+        LegendaryType type = typeOf(cursor);
+        if (type == null || !isExclusiveLegendaryType(type)) {
+            return;
+        }
+
+        copiesByLegendaryId.computeIfAbsent(type.id, ignored -> new ArrayList<>())
+            .add(new LegendaryCopy(player, null, -1, type, Math.max(1, cursor.getAmount()), true));
+    }
+
+    private boolean isExclusiveLegendaryType(LegendaryType type) {
+        return type != null && type != LegendaryType.FARADAYS_MAGNET;
+    }
+
+    private int maxServerCopiesForLegendary(LegendaryType type) {
+        if (type == null || type == LegendaryType.FARADAYS_MAGNET) {
+            return Integer.MAX_VALUE;
+        }
+        return isMythicForgeSourceLegendary(type) ? 2 : 1;
+    }
+
+    private boolean isMythicForgeSourceLegendary(LegendaryType type) {
+        if (type == null) {
+            return false;
+        }
+        return switch (type) {
+            case EMERALD_BLADE,
+                 DIVINE_AXE_RHITTA,
+                 WITHER_BLADE,
+                 EXECUTIONER_BLADE,
+                 BLINK_DAGGER,
+                 HYPNOSIS_STAFF,
+                 HARD_HITTER,
+                 WARDEN_BLADE -> true;
+            default -> false;
+        };
+    }
+
+    private boolean isMythicForgeOutputLegendary(LegendaryType type) {
+        if (type == null) {
+            return false;
+        }
+        return switch (type) {
+            case MIDAS_SWORD,
+                 REAPERS_SCYTHE,
+                 SHADOW_BLADE,
+                 STRENGTH_SWORD -> true;
+            default -> false;
+        };
+    }
+
+    private void refundAndRemoveDuplicateLegendaries(String legendaryId, List<LegendaryCopy> copies, int allowedCopies) {
         Map<UUID, Map<LegendaryType, Integer>> refundsByPlayer = new LinkedHashMap<>();
         Map<UUID, Player> playersById = new HashMap<>();
+        List<LegendaryCopy> copiesToRemove = new ArrayList<>();
+        int keptCopies = 0;
 
         for (LegendaryCopy copy : copies) {
-            copy.inventory().setItem(copy.slot(), null);
+            int amount = Math.max(1, copy.amount());
+            if (keptCopies + amount <= allowedCopies) {
+                keptCopies += amount;
+                continue;
+            }
+            copiesToRemove.add(copy);
+        }
+
+        for (LegendaryCopy copy : copiesToRemove) {
+            removeLegendaryCopy(copy);
             refundsByPlayer
                 .computeIfAbsent(copy.player().getUniqueId(), ignored -> new LinkedHashMap<>())
                 .merge(copy.type(), Math.max(1, copy.amount()), Integer::sum);
@@ -4645,11 +6485,32 @@ public final class LegendaryListener implements Listener {
             player.updateInventory();
         }
 
-        plugin.getLogger().warning("Removed duplicate legendary copies for " + legendaryId + " and refunded recipe materials.");
+        plugin.getLogger().warning(
+            "Removed excess legendary copies for " + legendaryId + " above the server cap and refunded recipe materials."
+        );
+    }
+
+    private void removeLegendaryCopy(LegendaryCopy copy) {
+        if (copy == null || copy.player() == null) {
+            return;
+        }
+
+        if (copy.cursor()) {
+            copy.player().setItemOnCursor(null);
+            return;
+        }
+
+        if (copy.inventory() != null && copy.slot() >= 0) {
+            copy.inventory().setItem(copy.slot(), null);
+        }
     }
 
     private void refundLegendaryMaterials(Player player, LegendaryType type, int copiesRemoved) {
         if (copiesRemoved <= 0) {
+            return;
+        }
+
+        if (refundMythicForgeInputs(player, type, copiesRemoved)) {
             return;
         }
 
@@ -4664,10 +6525,11 @@ public final class LegendaryListener implements Listener {
         List<ItemStack> refundStacks = new ArrayList<>();
         for (Map.Entry<Material, Integer> ingredient : ingredients.entrySet()) {
             int remaining = ingredient.getValue() * copiesRemoved;
-            int maxStack = Math.max(1, ingredient.getKey().getMaxStackSize());
+            ItemStack baseItem = recipeIngredientBaseItem(type, ingredient.getKey());
+            int maxStack = Math.max(1, baseItem.getType().getMaxStackSize());
             while (remaining > 0) {
                 int amount = Math.min(remaining, maxStack);
-                refundStacks.add(new ItemStack(ingredient.getKey(), amount));
+                refundStacks.add(recipeIngredientBaseItem(type, ingredient.getKey()).asQuantity(amount));
                 remaining -= amount;
             }
         }
@@ -4678,6 +6540,39 @@ public final class LegendaryListener implements Listener {
             "Duplicate " + type.display + "<yellow> was removed. Refunded materials for <white>"
                 + copiesRemoved + "</white> copy/copies.</yellow>"
         ));
+    }
+
+    private boolean refundMythicForgeInputs(Player player, LegendaryType type, int copiesRemoved) {
+        MythicForgeListener forge = plugin.getMythicForgeListener();
+        if (forge == null) {
+            return false;
+        }
+
+        MythicForgeListener.FusionRecipeView recipe = forge.fusionRecipeForOutput(type.id);
+        if (recipe == null) {
+            return false;
+        }
+
+        List<ItemStack> refundStacks = new ArrayList<>();
+        for (int i = 0; i < copiesRemoved; i++) {
+            ItemStack left = createLegendaryById(recipe.leftId());
+            ItemStack right = createLegendaryById(recipe.rightId());
+            ItemStack catalyst = forge.createAscendantCoreItem();
+            if (left == null || right == null) {
+                return false;
+            }
+            refundStacks.add(left);
+            refundStacks.add(right);
+            refundStacks.add(catalyst);
+        }
+
+        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(refundStacks.toArray(new ItemStack[0]));
+        leftovers.values().forEach(item -> player.getWorld().dropItemNaturally(player.getLocation(), item));
+        player.sendMessage(MessageUtil.warn(
+            "Duplicate " + type.display + "<yellow> was removed. Refunded the Mythic Forge inputs for <white>"
+                + copiesRemoved + "</white> copy/copies.</yellow>"
+        ));
+        return true;
     }
 
     private void sendWitherBladeActionBar(Player player, WitherBladeState state) {
@@ -4861,7 +6756,6 @@ public final class LegendaryListener implements Listener {
         meta.setItemModel(null);
         switch (type) {
             case ENDER_SWORD -> {
-                meta.setItemModel(keyEnderSwordItemModel);
                 setEnchantLevel(meta, enchantSharpness, 5);
                 meta.lore(buildEnderSwordLore(meta));
             }
@@ -4897,7 +6791,6 @@ public final class LegendaryListener implements Listener {
                 )
             ));
             case HYPNOSIS_STAFF -> {
-                meta.setItemModel(keyHypnosisStaffItemModel);
                 meta.lore(buildLegendaryLore(
                     meta,
                     Material.BLAZE_ROD,
@@ -4917,27 +6810,30 @@ public final class LegendaryListener implements Listener {
                     pdc.getOrDefault(keyEmeraldLevel, PersistentDataType.INTEGER, 1)
                 ));
                 pdc.set(keyEmeraldLevel, PersistentDataType.INTEGER, level);
-                meta.setItemModel(keyEmeraldBladeItemModel);
                 setEnchantLevel(meta, enchantSharpness, level);
                 setEnchantLevel(meta, enchantUnbreaking, 3);
                 meta.lore(buildEmeraldBladeLore(meta, level));
             }
             case BLINK_DAGGER -> {
-                meta.setItemModel(keyBlinkDaggerItemModel);
                 meta.lore(buildBlinkDaggerLore(meta));
             }
+            case WARDEN_BLADE -> meta.lore(buildWardenBladeLore(meta));
             case FROST_SCYTHE -> {
-                meta.setItemModel(keyFrostScytheItemModel);
                 meta.removeAttributeModifier(Attribute.ATTACK_DAMAGE);
                 meta.lore(buildFrostScytheLore(meta));
             }
+            case DIVINE_AXE_RHITTA -> meta.lore(buildRhittaLore(meta));
             case TRIDENT_OF_PERCY -> applyPercyTridentState(meta);
             case WAR_PICK -> applyWarPickState(meta);
             case FARADAYS_MAGNET -> {
                 boolean active = pdc.getOrDefault(keyMagnetActive, PersistentDataType.BYTE, (byte) 0) == (byte) 1;
+                int uses = Math.max(0, Math.min(
+                    FARADAY_SCAN_MAX_USES,
+                    pdc.getOrDefault(keyFaradayUses, PersistentDataType.INTEGER, FARADAY_SCAN_MAX_USES)
+                ));
                 pdc.set(keyMagnetActive, PersistentDataType.BYTE, active ? (byte) 1 : (byte) 0);
-                meta.setItemModel(keyFaradaysMagnetItemModel);
-                meta.lore(buildMagnetLore(meta, active));
+                pdc.set(keyFaradayUses, PersistentDataType.INTEGER, uses);
+                meta.lore(buildMagnetLore(meta, active, uses));
             }
             case WIND_CHARGE_CANNON -> {
                 int charges = clampWindChargeCannonCharges(
@@ -4952,8 +6848,39 @@ public final class LegendaryListener implements Listener {
                 }
                 writeWindChargeCannonState(meta, charges, cooldownUntil);
             }
+            case MIDAS_SWORD -> {
+                int sharpness = midasSharpness(meta);
+                pdc.set(keyMidasSharpness, PersistentDataType.INTEGER, sharpness);
+                setEnchantLevel(meta, enchantSharpness, sharpness);
+                meta.lore(buildMidasSwordLore(meta, sharpness));
+            }
+            case REAPERS_SCYTHE -> {
+                meta.removeAttributeModifier(Attribute.ATTACK_DAMAGE);
+                meta.lore(buildReaperScytheLore(meta));
+            }
+            case SHADOW_BLADE -> {
+                meta.removeAttributeModifier(Attribute.ATTACK_DAMAGE);
+                meta.lore(buildShadowBladeLore(meta, null));
+            }
+            case HEADHUNTERS_CHESTPIECE -> {
+                setEnchantLevel(meta, enchantProtection, 3);
+                meta.lore(buildHeadhunterChestpieceLore(meta));
+            }
+            case GOD_CHESTPLATE -> {
+                for (Enchantment enchantment : new HashSet<>(meta.getEnchants().keySet())) {
+                    meta.removeEnchant(enchantment);
+                }
+                meta.lore(buildGodChestplateLore(meta));
+            }
+            case STRENGTH_SWORD -> {
+                setEnchantLevel(meta, enchantUnbreaking, 3);
+                setEnchantLevel(meta, enchantSharpness, 5);
+                setEnchantLevel(meta, enchantFireAspect, 2);
+                setEnchantLevel(meta, enchantLooting, 3);
+                meta.removeEnchant(enchantMending);
+                meta.lore(buildStrengthSwordLore(meta, strengthSwordVictimCount(meta)));
+            }
             case EXECUTIONER_BLADE -> {
-                meta.setItemModel(keyExecutionerBladeItemModel);
                 meta.lore(buildLegendaryLore(
                     meta,
                     Material.NETHERITE_SWORD,
@@ -4975,29 +6902,34 @@ public final class LegendaryListener implements Listener {
                 ));
             }
             case HERMES_BOOTS -> {
-                if (meta instanceof LeatherArmorMeta leatherArmorMeta) {
-                    leatherArmorMeta.setColor(HERMES_BOOTS_COLOR);
-                }
+                boolean awakened = plugin.getAwakeningTableListener() != null
+                    && plugin.getAwakeningTableListener().isAwakened(meta);
+                double speedScalar = awakened ? (HERMES_BOOTS_SPEED_SCALAR * 2.0) : HERMES_BOOTS_SPEED_SCALAR;
                 meta.removeAttributeModifier(Attribute.MOVEMENT_SPEED);
                 meta.addAttributeModifier(
                     Attribute.MOVEMENT_SPEED,
                     new AttributeModifier(
                         keyHermesBootsSpeedModifier,
-                        HERMES_BOOTS_SPEED_SCALAR,
+                        speedScalar,
                         AttributeModifier.Operation.ADD_SCALAR,
                         EquipmentSlotGroup.FEET
                     )
                 );
                 meta.lore(buildLegendaryLore(
                     meta,
-                    Material.LEATHER_BOOTS,
+                    awakened ? Material.DIAMOND_BOOTS : Material.LEATHER_BOOTS,
                     "BOOTS",
-                    List.of("<gray>Only works while worn</gray>"),
+                    List.of(
+                        "<gray>Only works while worn</gray>",
+                        "<gray>Speed Bonus: <white>" + Math.round(speedScalar * 100.0) + "%</white></gray>"
+                    ),
                     CustomLoreUtil.section(
                         "Passive",
                         "Hermes Step",
                         "<gray>Negates all fall damage.</gray>",
-                        "<gray>Greatly increases movement speed.</gray>"
+                        awakened
+                            ? "<gray>Awakened Hermes flow doubles the movement boost.</gray>"
+                            : "<gray>Greatly increases movement speed.</gray>"
                     )
                 ));
             }
@@ -5012,8 +6944,6 @@ public final class LegendaryListener implements Listener {
                 );
             }
             case LIFE_STEALER -> {
-                meta.setItemModel(keyLifeStealerItemModel);
-                setEnchantLevel(meta, enchantSharpness, 3);
                 applyLifeStealerState(meta, refreshLifeStealerState(meta));
             }
             case THORS_HAMMER -> meta.lore(buildLegendaryLore(
@@ -5140,23 +7070,31 @@ public final class LegendaryListener implements Listener {
             new LegendaryRecipe(LegendaryType.BLINK_DAGGER, ingredients(
                 e(Material.IRON_SWORD, 1), e(Material.ENDER_PEARL, 16), e(Material.CHORUS_FRUIT, 8),
                 e(Material.ECHO_SHARD, 4), e(Material.BREEZE_ROD, 2), e(Material.PHANTOM_MEMBRANE, 4), e(Material.DIAMOND, 12))),
+            new LegendaryRecipe(LegendaryType.WARDEN_BLADE, ingredients(
+                e(Material.HEART_OF_THE_SEA, 1), e(Material.ECHO_SHARD, 12), e(Material.NETHERITE_SWORD, 1),
+                e(Material.NETHERITE_INGOT, 4), e(Material.SCULK_SHRIEKER, 2))),
             new LegendaryRecipe(LegendaryType.FROST_SCYTHE, ingredients(
                 e(Material.DIAMOND_HOE, 1), e(Material.BLUE_ICE, 24), e(Material.PACKED_ICE, 24),
                 e(Material.POWDER_SNOW_BUCKET, 4), e(Material.AMETHYST_SHARD, 16), e(Material.BREEZE_ROD, 2))),
+            new LegendaryRecipe(LegendaryType.DIVINE_AXE_RHITTA, ingredients(
+                e(Material.NETHERITE_AXE, 1), e(Material.NETHERITE_INGOT, 4), e(Material.BLAZE_ROD, 8),
+                e(Material.MAGMA_CREAM, 16), e(Material.FIRE_CHARGE, 8), e(Material.NETHER_STAR, 1))),
             new LegendaryRecipe(LegendaryType.TRIDENT_OF_PERCY, ingredients(
                 e(Material.TRIDENT, 1), e(Material.HEART_OF_THE_SEA, 1), e(Material.CONDUIT, 1),
                 e(Material.NAUTILUS_SHELL, 8), e(Material.PRISMARINE_CRYSTALS, 32), e(Material.PRISMARINE_SHARD, 32),
                 e(Material.NETHERITE_INGOT, 4), e(Material.NETHER_STAR, 1))),
+            new LegendaryRecipe(LegendaryType.HEADHUNTERS_CHESTPIECE, ingredients(
+                e(Material.PIGLIN_HEAD, 1), e(Material.WEEPING_VINES, 4), e(Material.IRON_BLOCK, 2), e(Material.NETHERITE_SCRAP, 1), e(Material.DIAMOND_CHESTPLATE, 1))),
+            new LegendaryRecipe(LegendaryType.GOD_CHESTPLATE, ingredients(
+                e(Material.DIAMOND_CHESTPLATE, 1), e(Material.TOTEM_OF_UNDYING, 1), e(Material.ENCHANTED_GOLDEN_APPLE, 1), e(Material.DIAMOND_BLOCK, 2))),
             new LegendaryRecipe(LegendaryType.WAR_PICK, ingredients(
                 e(Material.REDSTONE_BLOCK, 32), e(Material.TNT, 32), e(Material.DIAMOND_PICKAXE, 1), e(Material.CRYING_OBSIDIAN, 16))),
-            new LegendaryRecipe(LegendaryType.FARADAYS_MAGNET, ingredients(
-                e(Material.IRON_BLOCK, 12), e(Material.REDSTONE_BLOCK, 12), e(Material.COPPER_BLOCK, 6), e(Material.NETHERITE_INGOT, 1))),
             new LegendaryRecipe(LegendaryType.WIND_CHARGE_CANNON, ingredients(
                 e(Material.PRISMARINE_SHARD, 24), e(Material.WIND_CHARGE, 24), e(Material.COPPER_BLOCK, 6), e(Material.DISPENSER, 1))),
             new LegendaryRecipe(LegendaryType.EXECUTIONER_BLADE, ingredients(
                 e(Material.NETHERITE_SWORD, 1), e(Material.BLAZE_ROD, 12), e(Material.ANVIL, 1), e(Material.WIND_CHARGE, 6), e(Material.REDSTONE_BLOCK, 12))),
             new LegendaryRecipe(LegendaryType.HERMES_BOOTS, ingredients(
-                e(Material.LEATHER_BOOTS, 1), e(Material.LEATHER, 12), e(Material.FEATHER, 24), e(Material.GOLD_BLOCK, 6))),
+                e(Material.DIAMOND_BOOTS, 1), e(Material.FEATHER, 24), e(Material.GOLD_BLOCK, 6), e(Material.RABBIT_FOOT, 4))),
             new LegendaryRecipe(LegendaryType.WITHER_BLADE, ingredients(
                 e(Material.NETHERITE_SWORD, 1), e(Material.WITHER_SKELETON_SKULL, 2), e(Material.NETHER_STAR, 1), e(Material.SOUL_SAND, 24))),
             new LegendaryRecipe(LegendaryType.LIFE_STEALER, ingredients(
@@ -5174,6 +7112,26 @@ public final class LegendaryListener implements Listener {
             NamespacedKey key = new NamespacedKey(plugin, "legendary_" + recipe.type().id);
             Bukkit.removeRecipe(key);
         }
+    }
+
+    private void registerNormalCraftingRecipes() {
+        Bukkit.removeRecipe(faradaysMagnetRecipeKey);
+
+        ShapedRecipe recipe = new ShapedRecipe(faradaysMagnetRecipeKey, createFaradaysMagnetItem());
+        recipe.shape("IRI", "CMC", "INI");
+        recipe.setIngredient('I', Material.IRON_BLOCK);
+        recipe.setIngredient('R', Material.REDSTONE_BLOCK);
+        recipe.setIngredient('C', Material.COPPER_BLOCK);
+        recipe.setIngredient('M', Material.RECOVERY_COMPASS);
+        recipe.setIngredient('N', Material.NETHERITE_INGOT);
+        Bukkit.addRecipe(recipe);
+    }
+
+    private void discoverNormalCraftingRecipes(Player player) {
+        if (player == null) {
+            return;
+        }
+        player.discoverRecipe(faradaysMagnetRecipeKey);
     }
 
     private void discoverLegendaryRecipes(Player player) {
@@ -5217,9 +7175,12 @@ public final class LegendaryListener implements Listener {
     private boolean isReadOnlyLegendaryMenu(Inventory inventory) {
         return inventory.getHolder() instanceof RecipeMenuHolder
             || inventory.getHolder() instanceof AncientScrollRecipeHolder
+            || inventory.getHolder() instanceof AscendantCoreRecipeHolder
             || inventory.getHolder() instanceof BackpackRecipeHolder
             || inventory.getHolder() instanceof TalismanRecipeHolder
-            || inventory.getHolder() instanceof CustomToolRecipeHolder;
+            || inventory.getHolder() instanceof MythicForgeRecipeHolder
+            || inventory.getHolder() instanceof CustomToolRecipeHolder
+            || inventory.getHolder() instanceof FaradaysMagnetRecipeHolder;
     }
 
     private boolean isUnsafeReadOnlyMenuAction(InventoryClickEvent event) {
@@ -5284,6 +7245,9 @@ public final class LegendaryListener implements Listener {
 
         LegendaryType out = typeOf(event.getCurrentItem());
         LegendaryRecipe recipe = findRecipe(inv.getMatrix());
+        if (out != null && !isExclusiveLegendaryType(out) && recipe == null) {
+            return false;
+        }
         if (out == null && recipe == null) return false;
 
         event.setCancelled(true);
@@ -5357,6 +7321,9 @@ public final class LegendaryListener implements Listener {
         Z
     }
 
+    private record WardenBladeSoundWaveHit(LivingEntity target, double distance, Location impact) {
+    }
+
     private enum WarPickMode {
         TWO_BY_TWO_BY_ONE("2x2x1", 2, true),
         THREE_BY_THREE_BY_ONE("3x3x1", 3, true),
@@ -5419,6 +7386,13 @@ public final class LegendaryListener implements Listener {
         }
     }
 
+    private record AscendantCoreRecipeHolder() implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
     private record BackpackRecipeHolder() implements InventoryHolder {
         @Override
         public Inventory getInventory() {
@@ -5427,6 +7401,20 @@ public final class LegendaryListener implements Listener {
     }
 
     private record TalismanRecipeHolder() implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
+    private record FaradaysMagnetRecipeHolder() implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
+    private record MythicForgeRecipeHolder() implements InventoryHolder {
         @Override
         public Inventory getInventory() {
             return null;
@@ -5444,24 +7432,32 @@ public final class LegendaryListener implements Listener {
     }
 
     private enum LegendaryType {
-        ENDER_SWORD("ender_sword", Material.NETHERITE_SWORD, "<dark_purple><bold>Ender Sword</bold></dark_purple>"),
-        ENDERBOW("enderbow", Material.BOW, "<gold><bold>Enderbow</bold></gold>"),
-        CHRONO_SWORD("chrono_sword", Material.DIAMOND_SWORD, "<gold><bold>Chrono Sword</bold></gold>"),
-        HARPOON_LAUNCHER("harpoon_launcher", Material.CROSSBOW, "<gold><bold>Harpoon Launcher</bold></gold>"),
-        HYPNOSIS_STAFF("hypnosis_staff", Material.BLAZE_ROD, "<gold><bold>Hypnosis Staff</bold></gold>"),
-        EMERALD_BLADE("emerald_blade", Material.DIAMOND_SWORD, "<gold><bold>Emerald Blade</bold></gold>"),
+        ENDER_SWORD("ender_sword", Material.NETHERITE_SWORD, "<dark_purple><bold>Riftreaver</bold></dark_purple>"),
+        ENDERBOW("enderbow", Material.BOW, "<gold><bold>Riftbow</bold></gold>"),
+        CHRONO_SWORD("chrono_sword", Material.DIAMOND_SWORD, "<gold><bold>Hourglass Blade</bold></gold>"),
+        HARPOON_LAUNCHER("harpoon_launcher", Material.CROSSBOW, "<gold><bold>Leviathan Launcher</bold></gold>"),
+        HYPNOSIS_STAFF("hypnosis_staff", Material.BLAZE_ROD, "<gold><bold>Siren's Cane</bold></gold>"),
+        EMERALD_BLADE("emerald_blade", Material.DIAMOND_SWORD, "<gold><bold>Verdant Fang</bold></gold>"),
         BLINK_DAGGER("blink_dagger", Material.IRON_SWORD, "<yellow><bold>Blink Dagger</bold></yellow>"),
+        WARDEN_BLADE("warden_blade", Material.NETHERITE_SWORD, "<dark_aqua><bold>Warden Blade</bold></dark_aqua>"),
         TRIDENT_OF_PERCY("trident_of_percy", Material.TRIDENT, "<aqua><bold>Trident of Percy</bold></aqua>"),
-        WAR_PICK("war_pick", Material.DIAMOND_PICKAXE, "<gold><bold>War Pick</bold></gold>"),
+        WAR_PICK("war_pick", Material.DIAMOND_PICKAXE, "<gold><bold>Siegebreaker Pick</bold></gold>"),
         FARADAYS_MAGNET("faradays_magnet", Material.RECOVERY_COMPASS, "<gold><bold>Faraday's Magnet</bold></gold>"),
-        WIND_CHARGE_CANNON("wind_charge_cannon", Material.PRISMARINE_SHARD, "<gold><bold>Wind Charge Cannon</bold></gold>"),
+        WIND_CHARGE_CANNON("wind_charge_cannon", Material.PRISMARINE_SHARD, "<gold><bold>Tempest Cannon</bold></gold>"),
         FROST_SCYTHE("frost_scythe", Material.DIAMOND_HOE, "<aqua><bold>Frost Scythe</bold></aqua>"),
+        DIVINE_AXE_RHITTA("divine_axe_rhitta", Material.NETHERITE_AXE, "<gradient:#ffd166:#f77f00><bold>Divine Axe Rhitta</bold></gradient>"),
+        MIDAS_SWORD("midas_sword", Material.GOLDEN_SWORD, "<gold><bold>Gilded Sovereign</bold></gold>"),
+        REAPERS_SCYTHE("reapers_scythe", Material.NETHERITE_HOE, "<dark_gray><bold>Soulrender</bold></dark_gray>"),
+        SHADOW_BLADE("shadow_blade", Material.DIAMOND_SWORD, "<dark_purple><bold>Nightfall</bold></dark_purple>"),
+        HEADHUNTERS_CHESTPIECE("headhunters_chestpiece", Material.DIAMOND_CHESTPLATE, "<red><bold>Headhunter's Harness</bold></red>"),
+        GOD_CHESTPLATE("god_chestplate", Material.DIAMOND_CHESTPLATE, "<white><bold>Aegis of the Undying</bold></white>"),
+        STRENGTH_SWORD("strength_sword", Material.NETHERITE_SWORD, "<gradient:#ff4d6d:#c9184a><bold>Crimson Dominion</bold></gradient>"),
         EXECUTIONER_BLADE("executioner_blade", Material.NETHERITE_SWORD, "<red><bold>Executioner Blade</bold></red>"),
-        HERMES_BOOTS("hermes_boots", Material.LEATHER_BOOTS, "<gold><bold>Hermes Boots</bold></gold>"),
+        HERMES_BOOTS("hermes_boots", Material.DIAMOND_BOOTS, "<gold><bold>Hermes Boots</bold></gold>"),
         WITHER_BLADE("wither_blade", Material.NETHERITE_SWORD, "<dark_gray><bold>Wither Blade</bold></dark_gray>"),
         LIFE_STEALER("life_stealer", Material.NETHERITE_SWORD, "<light_purple><bold>Life Stealer</bold></light_purple>"),
-        THORS_HAMMER("thors_hammer", Material.MACE, "<gold><bold>Thor's Hammer</bold></gold>"),
-        HARD_HITTER("hard_hitter", Material.MACE, "<gold><bold>Hard Hitter</bold></gold>");
+        THORS_HAMMER("thors_hammer", Material.MACE, "<gold><bold>Mjolnir</bold></gold>"),
+        HARD_HITTER("hard_hitter", Material.MACE, "<gold><bold>Titanbreaker</bold></gold>");
 
         private static final Map<String, LegendaryType> BY_ID = new HashMap<>();
         static {
@@ -5482,8 +7478,9 @@ public final class LegendaryListener implements Listener {
     }
 
     private record FrostScytheFreezeState(long expiresAt, int previousFreezeTicks, boolean previousFreezeLocked) {}
+    private record RhittaBurnState(UUID attackerId, long expiresAt) {}
 
-    private record LegendaryCopy(Player player, Inventory inventory, int slot, LegendaryType type, int amount) {}
+    private record LegendaryCopy(Player player, Inventory inventory, int slot, LegendaryType type, int amount, boolean cursor) {}
 
     private record LegendaryRecipe(LegendaryType type, Map<Material, Integer> ingredients) {}
     private record ChronoState(Location loc, long readyAt) {}
@@ -5496,16 +7493,17 @@ public final class LegendaryListener implements Listener {
         private LifeStealerState addVictim(UUID victimId) {
             Set<UUID> nextVictims = new HashSet<>(seenVictims);
             nextVictims.add(victimId);
-            return new LifeStealerState(stacks + 1, System.currentTimeMillis() + (LIFE_STEALER_BUFF_SECONDS * 1000L), nextVictims);
+            return new LifeStealerState(Math.min(LIFE_STEALER_MAX_STACKS, stacks + 1), Long.MAX_VALUE, nextVictims);
         }
 
         private LifeStealerState refreshDuration() {
             if (stacks <= 0) {
                 return empty();
             }
-            return new LifeStealerState(stacks, System.currentTimeMillis() + (LIFE_STEALER_BUFF_SECONDS * 1000L), new HashSet<>(seenVictims));
+            return new LifeStealerState(stacks, Long.MAX_VALUE, new HashSet<>(seenVictims));
         }
     }
+    private record StrengthDomainState(Location center, long expiresAt) {}
     private record WitherBladeState(int skullCharges, long skullRechargeStartedAt, int dashCharges, long dashRechargeStartedAt) {
         private long skullMillisUntilNext() {
             return millisUntilNextCharge(skullCharges, skullRechargeStartedAt, WITHER_BLADE_SKULL_MAX_CHARGES, WITHER_BLADE_SKULL_RECHARGE_MS);
