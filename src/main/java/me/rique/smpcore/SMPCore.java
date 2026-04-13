@@ -3,9 +3,11 @@ package me.rique.smpcore;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.backpack.BackpackListener;
+import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.combat.CombatLogListener;
 import me.rique.smpcore.crafting.CraftingRulesListener;
 import me.rique.smpcore.command.AdminCommands;
+import me.rique.smpcore.command.BossCommands;
 import me.rique.smpcore.command.GamemodeCommands;
 import me.rique.smpcore.command.HomeCommands;
 import me.rique.smpcore.command.LegendaryCommands;
@@ -25,6 +27,7 @@ import me.rique.smpcore.item.SustenanceTalismanListener;
 import me.rique.smpcore.item.VeinMinerListener;
 import me.rique.smpcore.legendary.LegendaryAltarManager;
 import me.rique.smpcore.legendary.LegendaryListener;
+import me.rique.smpcore.legendary.MythicForgeListener;
 import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.player.DragonEggListener;
 import me.rique.smpcore.player.JoinListener;
@@ -40,7 +43,7 @@ import org.bukkit.plugin.PluginManager;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
- * SMPCore - Paper 1.21.11 core plugin.
+ * SMPCore - Paper 26.1.2 core plugin.
  * Author: Rique
  */
 @SuppressWarnings("UnstableApiUsage")
@@ -61,6 +64,8 @@ public final class SMPCore extends JavaPlugin {
     private SuperpowerManager superpowerManager;
     private LegendaryListener legendaryListener;
     private LegendaryAltarManager legendaryAltarManager;
+    private MythicForgeListener mythicForgeListener;
+    private BossManager bossManager;
     private ReplenishListener replenishListener;
     private CustomEnchantListener customEnchantListener;
     private CustomToolListener customToolListener;
@@ -110,6 +115,8 @@ public final class SMPCore extends JavaPlugin {
         }
         if (legendaryListener != null) legendaryListener.shutdown();
         if (legendaryAltarManager != null) legendaryAltarManager.shutdown();
+        if (mythicForgeListener != null) mythicForgeListener.shutdown();
+        if (bossManager != null) bossManager.shutdown();
         if (veinMinerListener != null) veinMinerListener.shutdown();
         if (backpackListener != null) backpackListener.shutdown();
         if (spawnerManager != null) spawnerManager.shutdown();
@@ -154,6 +161,12 @@ public final class SMPCore extends JavaPlugin {
         pm.registerEvents(legendaryListener, this);
         legendaryAltarManager = new LegendaryAltarManager(this);
         pm.registerEvents(legendaryAltarManager, this);
+        mythicForgeListener = new MythicForgeListener(this);
+        pm.registerEvents(mythicForgeListener, this);
+        mythicForgeListener.start();
+        bossManager = new BossManager(this);
+        pm.registerEvents(bossManager, this);
+        bossManager.start();
         customToolListener = new CustomToolListener(this);
         pm.registerEvents(customToolListener, this);
         awakeningTableListener = new AwakeningTableListener(this);
@@ -186,6 +199,7 @@ public final class SMPCore extends JavaPlugin {
             GamemodeCommands.register(commands, this);
             SpawnerAdminCommand.register(commands, this);
             LegendaryCommands.register(commands, this);
+            BossCommands.register(commands, this);
 
             SMPCoreCommand.register(commands, this);
         });
@@ -203,6 +217,8 @@ public final class SMPCore extends JavaPlugin {
     public AwakeningTableListener getAwakeningTableListener() { return awakeningTableListener; }
     public LegendaryListener getLegendaryListener() { return legendaryListener; }
     public LegendaryAltarManager getLegendaryAltarManager() { return legendaryAltarManager; }
+    public MythicForgeListener getMythicForgeListener() { return mythicForgeListener; }
+    public BossManager getBossManager() { return bossManager; }
     public SuperpowerManager getSuperpowerManager() { return superpowerManager; }
     public ReplenishListener getReplenishListener() { return replenishListener; }
     public CustomEnchantListener getCustomEnchantListener() { return customEnchantListener; }

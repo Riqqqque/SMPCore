@@ -187,6 +187,9 @@ ender-sword:
     vertical-speed: 0.75
     dismount-despawn-seconds: 10
 
+frost-scythe:
+  ability-cooldown-seconds: 15
+
 awakening-table:
   enabled: true
   loot-chance: 0.05
@@ -219,7 +222,6 @@ custom-enchants:
     ancient-city-chest-chance: 0.23
     vertical-boost: 0.82
     forward-boost: 0.75
-    saturation-cost: 2.0
     hunger-cost: 4
 
 custom-tools:
@@ -229,13 +231,15 @@ custom-tools:
     lucky-drop-chance: 0.25
     bonus-weights:
       coal: 1.0
-      iron: 0.6667
+      iron: 0.5
       redstone: 0.5
       gold: 0.3333
       lapis: 0.5
       copper: 1.0
-      diamond: 0.1
-      emerald: 0.1
+      diamond: 0.25
+      emerald: 0.25
+  grapple-hook:
+    cooldown-seconds: 3
 
 talisman-of-sustenance:
   interval-seconds: 7

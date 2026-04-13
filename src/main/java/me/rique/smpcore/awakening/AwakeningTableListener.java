@@ -1,5 +1,7 @@
 package me.rique.smpcore.awakening;
 
+import io.papermc.paper.event.entity.EntityEquipmentChangedEvent;
+import io.papermc.paper.event.player.PlayerInventorySlotChangeEvent;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.legendary.LegendaryListener;
@@ -47,7 +49,9 @@ import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.event.inventory.PrepareGrindstoneEvent;
 import org.bukkit.event.inventory.PrepareSmithingEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.LootGenerateEvent;
 import org.bukkit.inventory.EquipmentSlot;
@@ -107,6 +111,9 @@ public final class AwakeningTableListener implements Listener {
     private final NamespacedKey keyArmorModifier;
     private final NamespacedKey keyArmorToughnessModifier;
     private final NamespacedKey keyKnockbackResistanceModifier;
+    private final NamespacedKey keyEquippedArmorBonusModifier;
+    private final NamespacedKey keyEquippedArmorToughnessBonusModifier;
+    private final NamespacedKey keyEquippedKnockbackResistanceBonusModifier;
     private final NamespacedKey keyAwakeningTableHologram;
     private final NamespacedKey keyAwakeningTableHologramBlock;
     private final Map<UUID, Long> pendingTridentLaunches = new ConcurrentHashMap<>();
@@ -123,15 +130,27 @@ public final class AwakeningTableListener implements Listener {
         this.keyArmorModifier = new NamespacedKey(plugin, "awakening_armor");
         this.keyArmorToughnessModifier = new NamespacedKey(plugin, "awakening_armor_toughness");
         this.keyKnockbackResistanceModifier = new NamespacedKey(plugin, "awakening_knockback_resistance");
+        this.keyEquippedArmorBonusModifier = new NamespacedKey(plugin, "awakening_equipped_armor_bonus");
+        this.keyEquippedArmorToughnessBonusModifier = new NamespacedKey(plugin, "awakening_equipped_armor_toughness_bonus");
+        this.keyEquippedKnockbackResistanceBonusModifier = new NamespacedKey(plugin, "awakening_equipped_knockback_resistance_bonus");
         this.keyAwakeningTableHologram = new NamespacedKey(plugin, "awakening_table_hologram");
         this.keyAwakeningTableHologramBlock = new NamespacedKey(plugin, "awakening_table_hologram_block");
     }
 
     public void start() {
-        Bukkit.getScheduler().runTask(plugin, this::syncLoadedTableHolograms);
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            syncLoadedTableHolograms();
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                normalizePlayerAwakeningItems(player);
+                syncEquippedAwakeningArmor(player);
+            }
+        });
     }
 
     public void shutdown() {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            clearEquippedAwakeningArmorBonuses(player);
+        }
         for (World world : Bukkit.getWorlds()) {
             for (Chunk chunk : world.getLoadedChunks()) {
                 removeStaleChunkHolograms(chunk, true);
@@ -168,6 +187,17 @@ public final class AwakeningTableListener implements Listener {
         copyString(sourceMeta, targetMeta, keyBaseName);
         copyByte(sourceMeta, targetMeta, keyAwakened);
         copyByte(sourceMeta, targetMeta, keyRestoreUnbreakable);
+    }
+
+    public void clearAwakeningState(ItemMeta meta) {
+        if (meta == null) {
+            return;
+        }
+        removeAwakeningAttributeModifiers(meta);
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        pdc.remove(keyBaseName);
+        pdc.remove(keyAwakened);
+        pdc.remove(keyRestoreUnbreakable);
     }
 
     public void applyManagedItemState(ItemMeta meta, Material material, Component baseDisplayName, boolean defaultUnbreakable) {
@@ -462,6 +492,42 @@ public final class AwakeningTableListener implements Listener {
         pendingTridentLaunches.remove(player.getUniqueId());
     }
 
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onEquipmentChanged(EntityEquipmentChangedEvent event) {
+        if (!(event.getEntity() instanceof Player player)) {
+            return;
+        }
+
+        boolean armorChanged = false;
+        for (EquipmentSlot slot : event.getEquipmentChanges().keySet()) {
+            if (isArmorEquipmentSlot(slot)) {
+                armorChanged = true;
+                break;
+            }
+        }
+        if (!armorChanged) {
+            return;
+        }
+
+        Bukkit.getScheduler().runTask(plugin, () -> syncEquippedAwakeningArmor(player));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onInventorySlotChange(PlayerInventorySlotChangeEvent event) {
+        Player player = event.getPlayer();
+        int slot = event.getSlot();
+        if (slot < 0 || slot >= player.getInventory().getSize()) {
+            return;
+        }
+
+        ItemStack updated = event.getNewItemStack();
+        if (!needsAwakeningNormalization(updated)) {
+            return;
+        }
+
+        Bukkit.getScheduler().runTask(plugin, () -> normalizePlayerInventorySlot(player, slot));
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onDamageByEntity(EntityDamageByEntityEvent event) {
         if (event.getDamager() instanceof Player player) {
@@ -485,8 +551,24 @@ public final class AwakeningTableListener implements Listener {
     }
 
     @EventHandler
+    public void onJoin(PlayerJoinEvent event) {
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Player player = event.getPlayer();
+            normalizePlayerAwakeningItems(player);
+            syncEquippedAwakeningArmor(player);
+        });
+    }
+
+    @EventHandler
+    public void onRespawn(PlayerRespawnEvent event) {
+        Bukkit.getScheduler().runTask(plugin, () -> syncEquippedAwakeningArmor(event.getPlayer()));
+    }
+
+    @EventHandler
     public void onQuit(PlayerQuitEvent event) {
-        pendingTridentLaunches.remove(event.getPlayer().getUniqueId());
+        Player player = event.getPlayer();
+        pendingTridentLaunches.remove(player.getUniqueId());
+        clearEquippedAwakeningArmorBonuses(player);
     }
 
     private void openMenu(Player player, Location tableLocation) {
@@ -834,11 +916,6 @@ public final class AwakeningTableListener implements Listener {
         if (isToolOrWeapon(material)) {
             applyAttackSpeedBonus(meta, baseStats.attackSpeedBase());
         }
-        if (isArmor(material)) {
-            applyArmorBonus(meta, material, baseStats.armorBase(), Attribute.ARMOR, keyArmorModifier, plugin.getConfigManager().awakeningTableArmorMultiplier);
-            applyArmorBonus(meta, material, baseStats.armorToughnessBase(), Attribute.ARMOR_TOUGHNESS, keyArmorToughnessModifier, plugin.getConfigManager().awakeningTableArmorToughnessMultiplier);
-            applyArmorBonus(meta, material, baseStats.knockbackResistanceBase(), Attribute.KNOCKBACK_RESISTANCE, keyKnockbackResistanceModifier, plugin.getConfigManager().awakeningTableKnockbackResistanceMultiplier);
-        }
     }
 
     private void applyAwakeningLore(ItemMeta meta, Material material, boolean awakened, AwakeningBaseStats baseStats) {
@@ -898,27 +975,27 @@ public final class AwakeningTableListener implements Listener {
         if (isToolOrWeapon(material)) {
             double damageMultiplier = plugin.getConfigManager().awakeningTableWeaponDamageMultiplier;
             if (damageMultiplier > 1.0) {
-                lore.add(MM.deserialize("<gray>Damage: <red>+" + formatPercentAmount(damageMultiplier - 1.0) + "</red></gray>"));
+                lore.add(MM.deserialize("<gray>Damage Multiplier: <red>x" + formatAmount(damageMultiplier) + "</red></gray>"));
             }
             double attackSpeedMultiplier = plugin.getConfigManager().awakeningTableAttackSpeedMultiplier;
             if (attackSpeedMultiplier > 1.0 && !Double.isNaN(baseStats.attackSpeedBase())) {
-                lore.add(MM.deserialize("<gray>Attack Speed: <red>+" + formatPercentAmount(attackSpeedMultiplier - 1.0) + "</red></gray>"));
+                lore.add(MM.deserialize("<gray>Attack Speed Multiplier: <red>x" + formatAmount(attackSpeedMultiplier) + "</red></gray>"));
             }
         }
         if (isArmor(material)) {
-            appendArmorBonusLore(
+            appendArmorTotalLore(
                 lore,
                 baseStats.armorBase(),
                 plugin.getConfigManager().awakeningTableArmorMultiplier,
                 "Armor"
             );
-            appendArmorBonusLore(
+            appendArmorTotalLore(
                 lore,
                 baseStats.armorToughnessBase(),
                 plugin.getConfigManager().awakeningTableArmorToughnessMultiplier,
                 "Armor Toughness"
             );
-            appendArmorBonusLore(
+            appendArmorTotalLore(
                 lore,
                 baseStats.knockbackResistanceBase(),
                 plugin.getConfigManager().awakeningTableKnockbackResistanceMultiplier,
@@ -928,7 +1005,7 @@ public final class AwakeningTableListener implements Listener {
         return lore;
     }
 
-    private void appendArmorBonusLore(List<Component> lore, double baseAmount, double multiplier, String label) {
+    private void appendArmorTotalLore(List<Component> lore, double baseAmount, double multiplier, String label) {
         if (multiplier <= 1.0) {
             return;
         }
@@ -937,7 +1014,11 @@ public final class AwakeningTableListener implements Listener {
         if (bonus <= 0.0) {
             return;
         }
-        lore.add(MM.deserialize("<gray>" + label + ": <red>+" + formatAmount(bonus) + "</red></gray>"));
+        double total = baseAmount + bonus;
+        lore.add(MM.deserialize(
+            "<gray>" + label + " Total: <red>" + formatAmount(total) + "</red> <dark_gray>(base "
+                + formatAmount(baseAmount) + " + " + formatAmount(bonus) + ")</dark_gray></gray>"
+        ));
     }
 
     private double awakeningArmorBonus(double baseAmount, double multiplier) {
@@ -954,10 +1035,15 @@ public final class AwakeningTableListener implements Listener {
     private boolean isManagedAwakeningBonusLine(String plain) {
         return plain.isBlank()
             || plain.startsWith("Damage: ")
+            || plain.startsWith("Damage Multiplier: ")
             || plain.startsWith("Attack Speed: ")
+            || plain.startsWith("Attack Speed Multiplier: ")
             || plain.startsWith("Armor: ")
+            || plain.startsWith("Armor Total: ")
             || plain.startsWith("Armor Toughness: ")
-            || plain.startsWith("Knockback Resistance: ");
+            || plain.startsWith("Armor Toughness Total: ")
+            || plain.startsWith("Knockback Resistance: ")
+            || plain.startsWith("Knockback Resistance Total: ");
     }
 
     private void applyAttackSpeedBonus(ItemMeta meta, double baseModifier) {
@@ -988,38 +1074,6 @@ public final class AwakeningTableListener implements Listener {
         );
     }
 
-    private void applyArmorBonus(
-        ItemMeta meta,
-        Material material,
-        double baseAmount,
-        Attribute attribute,
-        NamespacedKey modifierKey,
-        double multiplier
-    ) {
-        if (multiplier <= 1.0) {
-            return;
-        }
-
-        if (Double.isNaN(baseAmount) || baseAmount == 0.0) {
-            return;
-        }
-
-        double extraAmount = baseAmount * (multiplier - 1.0);
-        if (extraAmount == 0.0) {
-            return;
-        }
-
-        meta.addAttributeModifier(
-            attribute,
-            new AttributeModifier(
-                modifierKey,
-                extraAmount,
-                AttributeModifier.Operation.ADD_NUMBER,
-                equipmentSlotGroup(material.getEquipmentSlot())
-            )
-        );
-    }
-
     private void removeAwakeningAttributeModifiers(ItemMeta meta) {
         removeAttributeModifier(meta, Attribute.ATTACK_SPEED, keyAttackSpeedModifier);
         removeAttributeModifier(meta, Attribute.ARMOR, keyArmorModifier);
@@ -1044,17 +1098,253 @@ public final class AwakeningTableListener implements Listener {
         }
     }
 
-    private EquipmentSlotGroup equipmentSlotGroup(EquipmentSlot slot) {
+    private boolean hasAttributeModifier(ItemMeta meta, Attribute attribute, NamespacedKey key) {
+        Collection<AttributeModifier> modifiers = meta.getAttributeModifiers(attribute);
+        if (modifiers == null || modifiers.isEmpty()) {
+            return false;
+        }
+        for (AttributeModifier modifier : modifiers) {
+            if (key.equals(modifier.getKey())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void normalizePlayerAwakeningItems(Player player) {
+        if (player == null) {
+            return;
+        }
+
+        normalizeInventory(player.getInventory());
+        normalizeInventory(player.getEnderChest());
+    }
+
+    private void normalizePlayerInventorySlot(Player player, int slot) {
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+        if (slot < 0 || slot >= player.getInventory().getSize()) {
+            return;
+        }
+
+        ItemStack item = player.getInventory().getItem(slot);
+        if (!needsAwakeningNormalization(item)) {
+            return;
+        }
+
+        ItemStack refreshed = normalizeAwakeningItem(item);
+        if (refreshed != item) {
+            player.getInventory().setItem(slot, refreshed);
+        }
+    }
+
+    private void normalizeInventory(Inventory inventory) {
+        if (inventory == null) {
+            return;
+        }
+
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            ItemStack item = inventory.getItem(slot);
+            if (!needsAwakeningNormalization(item)) {
+                continue;
+            }
+            inventory.setItem(slot, normalizeAwakeningItem(item));
+        }
+    }
+
+    private boolean needsAwakeningNormalization(ItemStack item) {
+        return hasAwakeningState(item)
+            && (hasAwakeningArmorItemModifiers(item) || hasLegacyAwakeningLore(item));
+    }
+
+    private ItemStack normalizeAwakeningItem(ItemStack item) {
+        if (!hasAwakeningState(item)) {
+            return item;
+        }
+
+        ItemStack refreshed = item.clone();
+        reapplyPresentation(refreshed);
+        return refreshed;
+    }
+
+    private boolean hasLegacyAwakeningLore(ItemStack item) {
+        ItemMeta meta = item == null ? null : item.getItemMeta();
+        if (meta == null || !meta.hasLore() || meta.lore() == null) {
+            return false;
+        }
+
+        for (Component line : meta.lore()) {
+            String plain = plainLoreLine(line);
+            if (plain.startsWith("Damage: ")
+                || plain.startsWith("Attack Speed: ")
+                || plain.startsWith("Armor: ")
+                || plain.startsWith("Armor Toughness: ")
+                || plain.startsWith("Knockback Resistance: ")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void syncEquippedAwakeningArmor(Player player) {
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+
+        sanitizeEquippedAwakenedArmor(player);
+        if (player.isDead() || player.getGameMode() == org.bukkit.GameMode.SPECTATOR) {
+            clearEquippedAwakeningArmorBonuses(player);
+            return;
+        }
+
+        ArmorBonuses bonuses = collectEquippedAwakeningArmorBonuses(player);
+        syncPlayerAttributeModifier(player, Attribute.ARMOR, keyEquippedArmorBonusModifier, bonuses.armor());
+        syncPlayerAttributeModifier(player, Attribute.ARMOR_TOUGHNESS, keyEquippedArmorToughnessBonusModifier, bonuses.armorToughness());
+        syncPlayerAttributeModifier(player, Attribute.KNOCKBACK_RESISTANCE, keyEquippedKnockbackResistanceBonusModifier, bonuses.knockbackResistance());
+    }
+
+    private void sanitizeEquippedAwakenedArmor(Player player) {
+        sanitizeEquippedAwakenedArmor(player, EquipmentSlot.HEAD);
+        sanitizeEquippedAwakenedArmor(player, EquipmentSlot.CHEST);
+        sanitizeEquippedAwakenedArmor(player, EquipmentSlot.LEGS);
+        sanitizeEquippedAwakenedArmor(player, EquipmentSlot.FEET);
+    }
+
+    private void sanitizeEquippedAwakenedArmor(Player player, EquipmentSlot slot) {
+        ItemStack equipped = equippedArmorItem(player, slot);
+        if (equipped == null || equipped.getType() == Material.AIR || !hasAwakeningArmorItemModifiers(equipped)) {
+            return;
+        }
+
+        ItemStack refreshed = equipped.clone();
+        reapplyPresentation(refreshed);
+        setEquippedArmorItem(player, slot, refreshed);
+    }
+
+    private boolean hasAwakeningArmorItemModifiers(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR || !isArmor(item.getType())) {
+            return false;
+        }
+
+        ItemMeta meta = item.getItemMeta();
+        return meta != null && (
+            hasAttributeModifier(meta, Attribute.ARMOR, keyArmorModifier)
+                || hasAttributeModifier(meta, Attribute.ARMOR_TOUGHNESS, keyArmorToughnessModifier)
+                || hasAttributeModifier(meta, Attribute.KNOCKBACK_RESISTANCE, keyKnockbackResistanceModifier)
+        );
+    }
+
+    private ArmorBonuses collectEquippedAwakeningArmorBonuses(Player player) {
+        double armorBonus = 0.0;
+        double armorToughnessBonus = 0.0;
+        double knockbackResistanceBonus = 0.0;
+
+        for (EquipmentSlot slot : List.of(EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET)) {
+            ItemStack equipped = equippedArmorItem(player, slot);
+            if (!isAwakenedArmor(equipped)) {
+                continue;
+            }
+
+            AwakeningBaseStats baseStats = collectItemBaseStatsWithoutAwakening(equipped);
+            armorBonus += awakeningArmorBonus(baseStats.armorBase(), plugin.getConfigManager().awakeningTableArmorMultiplier);
+            armorToughnessBonus += awakeningArmorBonus(baseStats.armorToughnessBase(), plugin.getConfigManager().awakeningTableArmorToughnessMultiplier);
+            knockbackResistanceBonus += awakeningArmorBonus(baseStats.knockbackResistanceBase(), plugin.getConfigManager().awakeningTableKnockbackResistanceMultiplier);
+        }
+
+        return new ArmorBonuses(armorBonus, armorToughnessBonus, knockbackResistanceBonus);
+    }
+
+    private AwakeningBaseStats collectItemBaseStatsWithoutAwakening(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) {
+            return new AwakeningBaseStats(Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+        }
+
+        ItemStack cloned = item.clone();
+        ItemMeta meta = cloned.getItemMeta();
+        if (meta == null) {
+            return new AwakeningBaseStats(Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+        }
+
+        removeAwakeningAttributeModifiers(meta);
+        return collectBaseStats(meta, cloned.getType());
+    }
+
+    private void clearEquippedAwakeningArmorBonuses(Player player) {
+        syncPlayerAttributeModifier(player, Attribute.ARMOR, keyEquippedArmorBonusModifier, 0.0);
+        syncPlayerAttributeModifier(player, Attribute.ARMOR_TOUGHNESS, keyEquippedArmorToughnessBonusModifier, 0.0);
+        syncPlayerAttributeModifier(player, Attribute.KNOCKBACK_RESISTANCE, keyEquippedKnockbackResistanceBonusModifier, 0.0);
+    }
+
+    private void syncPlayerAttributeModifier(Player player, Attribute attribute, NamespacedKey key, double amount) {
+        var instance = player.getAttribute(attribute);
+        if (instance == null) {
+            return;
+        }
+
+        AttributeModifier existing = null;
+        for (AttributeModifier modifier : instance.getModifiers()) {
+            if (key.equals(modifier.getKey())) {
+                existing = modifier;
+                break;
+            }
+        }
+
+        if (amount <= 0.0) {
+            if (existing != null) {
+                instance.removeModifier(existing);
+            }
+            return;
+        }
+
+        if (existing != null) {
+            if (Math.abs(existing.getAmount() - amount) < 0.0001D) {
+                return;
+            }
+            instance.removeModifier(existing);
+        }
+
+        instance.addModifier(new AttributeModifier(
+            key,
+            amount,
+            AttributeModifier.Operation.ADD_NUMBER,
+            EquipmentSlotGroup.ANY
+        ));
+    }
+
+    private ItemStack equippedArmorItem(Player player, EquipmentSlot slot) {
         return switch (slot) {
-            case FEET -> EquipmentSlotGroup.FEET;
-            case LEGS -> EquipmentSlotGroup.LEGS;
-            case CHEST -> EquipmentSlotGroup.CHEST;
-            case HEAD -> EquipmentSlotGroup.HEAD;
-            case OFF_HAND -> EquipmentSlotGroup.OFFHAND;
-            case HAND -> EquipmentSlotGroup.MAINHAND;
-            case BODY -> EquipmentSlotGroup.BODY;
-            default -> EquipmentSlotGroup.ANY;
+            case HEAD -> player.getInventory().getHelmet();
+            case CHEST -> player.getInventory().getChestplate();
+            case LEGS -> player.getInventory().getLeggings();
+            case FEET -> player.getInventory().getBoots();
+            default -> null;
         };
+    }
+
+    private void setEquippedArmorItem(Player player, EquipmentSlot slot, ItemStack item) {
+        switch (slot) {
+            case HEAD -> player.getInventory().setHelmet(item);
+            case CHEST -> player.getInventory().setChestplate(item);
+            case LEGS -> player.getInventory().setLeggings(item);
+            case FEET -> player.getInventory().setBoots(item);
+            default -> {
+            }
+        }
+    }
+
+    private boolean isArmorEquipmentSlot(EquipmentSlot slot) {
+        return slot == EquipmentSlot.HEAD
+            || slot == EquipmentSlot.CHEST
+            || slot == EquipmentSlot.LEGS
+            || slot == EquipmentSlot.FEET;
+    }
+
+    private boolean isAwakenedArmor(ItemStack item) {
+        return item != null
+            && item.getType() != Material.AIR
+            && isArmor(item.getType())
+            && isAwakened(item);
     }
 
     private double defaultAttributeAmount(Material material, EquipmentSlot slot, Attribute attribute) {
@@ -1134,9 +1424,6 @@ public final class AwakeningTableListener implements Listener {
     private boolean isAwakenable(ItemStack item) {
         if (item == null || item.getType() == Material.AIR || item.getAmount() <= 0) {
             return false;
-        }
-        if (plugin.getSuperpowerManager() != null && plugin.getSuperpowerManager().isAncientScroll(item)) {
-            return true;
         }
         return item.getType().getMaxDurability() > 0
             && (isArmor(item.getType()) || isToolOrWeapon(item.getType()));
@@ -1631,6 +1918,9 @@ public final class AwakeningTableListener implements Listener {
         public Inventory getInventory() {
             return null;
         }
+    }
+
+    private record ArmorBonuses(double armor, double armorToughness, double knockbackResistance) {
     }
 
     private record AwakeningBaseStats(

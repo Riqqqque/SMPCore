@@ -3,6 +3,7 @@ package me.rique.smpcore.database;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.boss.BossRecord;
 import me.rique.smpcore.home.HomeEntry;
 import me.rique.smpcore.spawner.SpawnerData;
 import me.rique.smpcore.waystone.WaystoneEntry;
@@ -224,6 +225,37 @@ public final class DatabaseManager {
                 claimed_by   TEXT
             )""";
 
+        String legendaryInstances = """
+            CREATE TABLE IF NOT EXISTS legendary_instances (
+                instance_id TEXT PRIMARY KEY,
+                legendary_id TEXT NOT NULL COLLATE NOCASE,
+                claimed_at INTEGER NOT NULL,
+                owner_uuid TEXT
+            )""";
+
+        String legendaryInstancesByType = """
+            CREATE INDEX IF NOT EXISTS idx_legendary_instances_type
+            ON legendary_instances(legendary_id COLLATE NOCASE)
+            """;
+
+        String customBosses = """
+            CREATE TABLE IF NOT EXISTS custom_bosses (
+                entity_uuid TEXT PRIMARY KEY,
+                boss_id     TEXT    NOT NULL COLLATE NOCASE,
+                world       TEXT    NOT NULL,
+                x           REAL    NOT NULL,
+                y           REAL    NOT NULL,
+                z           REAL    NOT NULL,
+                chunk_x     INTEGER NOT NULL,
+                chunk_z     INTEGER NOT NULL,
+                spawned_at  INTEGER NOT NULL
+            )""";
+
+        String customBossesByType = """
+            CREATE INDEX IF NOT EXISTS idx_custom_bosses_type
+            ON custom_bosses(boss_id COLLATE NOCASE)
+            """;
+
         try (Connection conn = connection(); Statement stmt = conn.createStatement()) {
             stmt.executeUpdate(spawners);
             stmt.executeUpdate(homes);
@@ -238,6 +270,10 @@ public final class DatabaseManager {
             stmt.executeUpdate(waystoneKnownByPlayer);
             stmt.executeUpdate(legendaryAltar);
             stmt.executeUpdate(legendaryClaimed);
+            stmt.executeUpdate(legendaryInstances);
+            stmt.executeUpdate(legendaryInstancesByType);
+            stmt.executeUpdate(customBosses);
+            stmt.executeUpdate(customBossesByType);
         }
     }
 
@@ -786,45 +822,158 @@ public final class DatabaseManager {
         }, executor);
     }
 
-    public CompletableFuture<Set<String>> loadClaimedLegendaryIds() {
+    public CompletableFuture<Map<String, UUID>> loadClaimedLegendaryOwners() {
         return CompletableFuture.supplyAsync(() -> {
-            Set<String> ids = new LinkedHashSet<>();
-            String sql = "SELECT legendary_id FROM legendary_claimed";
+            Map<String, UUID> owners = new LinkedHashMap<>();
+            String sql = "SELECT legendary_id, claimed_by FROM legendary_claimed";
             try (Connection conn = connection();
                  PreparedStatement ps = conn.prepareStatement(sql);
                  ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     String legendaryId = rs.getString("legendary_id");
-                    if (legendaryId != null && !legendaryId.isBlank()) {
-                        ids.add(legendaryId.trim().toLowerCase(Locale.ROOT));
+                    String claimedBy = rs.getString("claimed_by");
+                    if (legendaryId == null || legendaryId.isBlank() || claimedBy == null || claimedBy.isBlank()) {
+                        continue;
+                    }
+                    try {
+                        owners.put(legendaryId.trim().toLowerCase(Locale.ROOT), UUID.fromString(claimedBy));
+                    } catch (IllegalArgumentException ignored) {
+                        // Skip malformed rows rather than locking all legendary claims behind bad data.
                     }
                 }
             } catch (SQLException e) {
-                plugin.getLogger().severe("loadClaimedLegendaryIds: " + e.getMessage());
-                throw new RuntimeException("loadClaimedLegendaryIds failed", e);
+                plugin.getLogger().severe("loadClaimedLegendaryOwners: " + e.getMessage());
+                throw new RuntimeException("loadClaimedLegendaryOwners failed", e);
             }
-            return ids;
+            return owners;
         }, executor);
     }
 
-    public CompletableFuture<Void> markLegendaryClaimed(String legendaryId, UUID claimedBy) {
+    public CompletableFuture<Map<String, LegendaryClaimedInstanceRecord>> loadClaimedLegendaryInstances() {
+        return CompletableFuture.supplyAsync(() -> {
+            Map<String, LegendaryClaimedInstanceRecord> instances = new LinkedHashMap<>();
+            String sql = "SELECT instance_id, legendary_id, owner_uuid FROM legendary_instances";
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql);
+                 ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String instanceId = rs.getString("instance_id");
+                    String legendaryId = rs.getString("legendary_id");
+                    String ownerUuid = rs.getString("owner_uuid");
+                    if (instanceId == null || instanceId.isBlank() || legendaryId == null || legendaryId.isBlank()) {
+                        continue;
+                    }
+                    UUID ownerId = null;
+                    if (ownerUuid != null && !ownerUuid.isBlank()) {
+                        try {
+                            ownerId = UUID.fromString(ownerUuid);
+                        } catch (IllegalArgumentException ignored) {
+                            ownerId = null;
+                        }
+                    }
+                    instances.put(
+                        instanceId,
+                        new LegendaryClaimedInstanceRecord(
+                            instanceId,
+                            legendaryId.trim().toLowerCase(Locale.ROOT),
+                            ownerId
+                        )
+                    );
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadClaimedLegendaryInstances: " + e.getMessage());
+                throw new RuntimeException("loadClaimedLegendaryInstances failed", e);
+            }
+            return instances;
+        }, executor);
+    }
+
+    public CompletableFuture<Void> saveClaimedLegendaryOwner(String legendaryId, UUID claimedBy) {
         return CompletableFuture.runAsync(() -> {
-            if (legendaryId == null || legendaryId.isBlank()) {
+            if (legendaryId == null || legendaryId.isBlank() || claimedBy == null) {
                 return;
             }
             String sql = """
-                INSERT OR IGNORE INTO legendary_claimed (legendary_id, claimed_at, claimed_by)
+                INSERT INTO legendary_claimed (legendary_id, claimed_at, claimed_by)
                 VALUES (?, ?, ?)
+                ON CONFLICT(legendary_id) DO UPDATE SET
+                    claimed_at = excluded.claimed_at,
+                    claimed_by = excluded.claimed_by
                 """;
             try (Connection conn = connection();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, legendaryId.trim().toLowerCase(Locale.ROOT));
                 ps.setLong(2, System.currentTimeMillis());
-                ps.setString(3, claimedBy == null ? null : claimedBy.toString());
+                ps.setString(3, claimedBy.toString());
                 ps.executeUpdate();
             } catch (SQLException e) {
-                plugin.getLogger().severe("markLegendaryClaimed: " + e.getMessage());
-                throw new RuntimeException("markLegendaryClaimed failed", e);
+                plugin.getLogger().severe("saveClaimedLegendaryOwner: " + e.getMessage());
+                throw new RuntimeException("saveClaimedLegendaryOwner failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Void> saveClaimedLegendaryInstance(String instanceId, String legendaryId, UUID ownerId) {
+        return CompletableFuture.runAsync(() -> {
+            if (instanceId == null || instanceId.isBlank() || legendaryId == null || legendaryId.isBlank()) {
+                return;
+            }
+            String sql = """
+                INSERT INTO legendary_instances (instance_id, legendary_id, claimed_at, owner_uuid)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(instance_id) DO UPDATE SET
+                    legendary_id = excluded.legendary_id,
+                    claimed_at = excluded.claimed_at,
+                    owner_uuid = excluded.owner_uuid
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, instanceId.trim());
+                ps.setString(2, legendaryId.trim().toLowerCase(Locale.ROOT));
+                ps.setLong(3, System.currentTimeMillis());
+                if (ownerId == null) {
+                    ps.setNull(4, Types.VARCHAR);
+                } else {
+                    ps.setString(4, ownerId.toString());
+                }
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("saveClaimedLegendaryInstance: " + e.getMessage());
+                throw new RuntimeException("saveClaimedLegendaryInstance failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Void> deleteClaimedLegendary(String legendaryId) {
+        return CompletableFuture.runAsync(() -> {
+            if (legendaryId == null || legendaryId.isBlank()) {
+                return;
+            }
+            String sql = "DELETE FROM legendary_claimed WHERE legendary_id = ?";
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, legendaryId.trim().toLowerCase(Locale.ROOT));
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("deleteClaimedLegendary: " + e.getMessage());
+                throw new RuntimeException("deleteClaimedLegendary failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Void> deleteClaimedLegendaryInstance(String instanceId) {
+        return CompletableFuture.runAsync(() -> {
+            if (instanceId == null || instanceId.isBlank()) {
+                return;
+            }
+            String sql = "DELETE FROM legendary_instances WHERE instance_id = ?";
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, instanceId.trim());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("deleteClaimedLegendaryInstance: " + e.getMessage());
+                throw new RuntimeException("deleteClaimedLegendaryInstance failed", e);
             }
         }, executor);
     }
@@ -871,6 +1020,103 @@ public final class DatabaseManager {
             } catch (SQLException e) {
                 plugin.getLogger().severe("saveLegendaryAltar: " + e.getMessage());
                 throw new RuntimeException("saveLegendaryAltar failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<List<BossRecord>> loadAllBosses() {
+        return CompletableFuture.supplyAsync(() -> {
+            List<BossRecord> bosses = new ArrayList<>();
+            String sql = """
+                SELECT entity_uuid, boss_id, world, x, y, z, chunk_x, chunk_z, spawned_at
+                FROM custom_bosses
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql);
+                 ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String uuidText = rs.getString("entity_uuid");
+                    String bossId = rs.getString("boss_id");
+                    String world = rs.getString("world");
+                    if (uuidText == null || uuidText.isBlank() || bossId == null || bossId.isBlank() || world == null || world.isBlank()) {
+                        continue;
+                    }
+                    UUID entityUuid;
+                    try {
+                        entityUuid = UUID.fromString(uuidText);
+                    } catch (IllegalArgumentException ignored) {
+                        continue;
+                    }
+                    bosses.add(new BossRecord(
+                        entityUuid,
+                        bossId.trim().toLowerCase(Locale.ROOT),
+                        world,
+                        rs.getDouble("x"),
+                        rs.getDouble("y"),
+                        rs.getDouble("z"),
+                        rs.getInt("chunk_x"),
+                        rs.getInt("chunk_z"),
+                        rs.getLong("spawned_at")
+                    ));
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadAllBosses: " + e.getMessage());
+                throw new RuntimeException("loadAllBosses failed", e);
+            }
+            return bosses;
+        }, executor);
+    }
+
+    public CompletableFuture<Void> saveBossRecord(BossRecord record) {
+        return CompletableFuture.runAsync(() -> {
+            if (record == null || record.entityUuid() == null || record.bossId() == null || record.bossId().isBlank() || record.world() == null || record.world().isBlank()) {
+                return;
+            }
+            String sql = """
+                INSERT INTO custom_bosses (entity_uuid, boss_id, world, x, y, z, chunk_x, chunk_z, spawned_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(entity_uuid) DO UPDATE SET
+                    boss_id = excluded.boss_id,
+                    world = excluded.world,
+                    x = excluded.x,
+                    y = excluded.y,
+                    z = excluded.z,
+                    chunk_x = excluded.chunk_x,
+                    chunk_z = excluded.chunk_z,
+                    spawned_at = excluded.spawned_at
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, record.entityUuid().toString());
+                ps.setString(2, record.bossId().trim().toLowerCase(Locale.ROOT));
+                ps.setString(3, record.world());
+                ps.setDouble(4, record.x());
+                ps.setDouble(5, record.y());
+                ps.setDouble(6, record.z());
+                ps.setInt(7, record.chunkX());
+                ps.setInt(8, record.chunkZ());
+                ps.setLong(9, record.spawnedAt());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("saveBossRecord: " + e.getMessage());
+                throw new RuntimeException("saveBossRecord failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Void> deleteBossRecord(UUID entityUuid) {
+        return CompletableFuture.runAsync(() -> {
+            if (entityUuid == null) {
+                return;
+            }
+            String sql = "DELETE FROM custom_bosses WHERE entity_uuid = ?";
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, entityUuid.toString());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("deleteBossRecord: " + e.getMessage());
+                throw new RuntimeException("deleteBossRecord failed", e);
             }
         }, executor);
     }
@@ -961,6 +1207,7 @@ public final class DatabaseManager {
     }
 
     public record TeamRecord(String name, UUID ownerUuid, Set<UUID> members) {}
+    public record LegendaryClaimedInstanceRecord(String instanceId, String legendaryId, UUID ownerUuid) {}
     public record LegendaryAltarRecord(
         String legendaryId,
         String world,

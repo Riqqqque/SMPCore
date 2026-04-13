@@ -6,6 +6,7 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
+import io.papermc.paper.ban.BanListType;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import io.papermc.paper.command.brigadier.argument.resolvers.selector.PlayerSelectorArgumentResolver;
@@ -18,17 +19,22 @@ import me.rique.smpcore.item.ReplenishListener;
 import me.rique.smpcore.item.RewardLanternListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
 import me.rique.smpcore.legendary.LegendaryListener;
+import me.rique.smpcore.legendary.MythicForgeListener;
 import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.power.SuperpowerType;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
+import org.bukkit.ban.ProfileBanList;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
+import com.destroystokyo.paper.profile.PlayerProfile;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -44,6 +50,9 @@ public final class AdminCommands {
     private static final String AWAKENING_TABLE_ITEM_ID = "awakening_table";
     private static final String ENDER_BONE_ITEM_ID = "ender_bone";
     private static final String ORB_OF_THE_MYSTICS_ITEM_ID = "orb_of_the_mystics";
+    private static final String FARADAYS_MAGNET_ITEM_ID = "faradays_magnet";
+    private static final String MYTHIC_FORGE_ITEM_ID = MythicForgeListener.MYTHIC_FORGE_ITEM_ID;
+    private static final String ASCENDANT_CORE_ITEM_ID = MythicForgeListener.ASCENDANT_CORE_ITEM_ID;
     private static final String TALISMAN_OF_SUSTENANCE_ITEM_ID = SustenanceTalismanListener.ITEM_ID;
     private static final String ANCIENT_SCROLL_ITEM_ID = SuperpowerManager.ANCIENT_SCROLL_ITEM_ID;
     private static final String WARDEN_HEART_ITEM_ID = SuperpowerManager.WARDEN_HEART_ITEM_ID;
@@ -54,6 +63,9 @@ public final class AdminCommands {
         AWAKENING_TABLE_ITEM_ID,
         ENDER_BONE_ITEM_ID,
         ORB_OF_THE_MYSTICS_ITEM_ID,
+        FARADAYS_MAGNET_ITEM_ID,
+        MYTHIC_FORGE_ITEM_ID,
+        ASCENDANT_CORE_ITEM_ID,
         TALISMAN_OF_SUSTENANCE_ITEM_ID,
         ANCIENT_SCROLL_ITEM_ID,
         WARDEN_HEART_ITEM_ID,
@@ -74,6 +86,8 @@ public final class AdminCommands {
         registerNick(commands, plugin);
         registerInvSee(commands, plugin);
         registerSetSpawn(commands, plugin);
+        registerAnnounce(commands);
+        registerUnban(commands);
         registerReplenishBook(commands, plugin);
         registerDelicateBook(commands, plugin);
         registerTelekinesisBook(commands, plugin);
@@ -83,6 +97,7 @@ public final class AdminCommands {
         registerSetPower(commands, plugin);
         registerPowerInfo(commands, plugin);
         registerAdminRewardCommand(commands, plugin);
+        registerAbsoluteOwnerTeamVaultView(commands, plugin);
         registerAbsoluteOwnerCommands(commands, plugin);
         registerCustomItemCommand(commands, plugin);
     }
@@ -221,6 +236,31 @@ public final class AdminCommands {
     }
 
     // ── /speed <walk|fly> <0.1‑10> [player] ──────────────────────────────────
+
+    private static void registerAnnounce(Commands commands) {
+        commands.register(
+            Commands.literal("announce")
+                .requires(src -> src.getSender().hasPermission("smpcore.announce"))
+                .then(Commands.argument("message", StringArgumentType.greedyString())
+                    .executes(ctx -> {
+                        String message = StringArgumentType.getString(ctx, "message").trim();
+                        if (message.isEmpty()) {
+                            ctx.getSource().getSender().sendMessage(MessageUtil.error("Usage: /announce <message>"));
+                            return 0;
+                        }
+
+                        Bukkit.broadcast(MessageUtil.prefixedRaw(
+                            "<white><message></white>",
+                            MessageUtil.placeholder("message", message)
+                        ));
+                        ctx.getSource().getSender().sendMessage(MessageUtil.success("Announcement sent."));
+                        return Command.SINGLE_SUCCESS;
+                    }))
+                .build(),
+            "Broadcast an announcement to the whole server",
+            List.of("broadcast")
+        );
+    }
 
     private static void registerSpeed(Commands commands, SMPCore plugin) {
         commands.register(
@@ -386,6 +426,39 @@ public final class AdminCommands {
                 })
                 .build(),
             "Set the world spawn point to your location"
+        );
+    }
+
+    private static void registerUnban(Commands commands) {
+        commands.register(
+            Commands.literal("unban")
+                .requires(src -> src.getSender().hasPermission("smpcore.unban"))
+                .then(Commands.argument("player", StringArgumentType.word())
+                    .suggests((ctx, builder) -> suggestBannedProfiles(builder))
+                    .executes(ctx -> executeUnban(ctx.getSource().getSender(), StringArgumentType.getString(ctx, "player"))))
+                .build(),
+            "Unban a player profile",
+            List.of("pardon")
+        );
+    }
+
+    private static void registerAbsoluteOwnerTeamVaultView(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("viewteamvault")
+                .requires(src -> src.getSender() instanceof Player player && hasAbsoluteOwnerRights(player))
+                .then(Commands.argument("team", StringArgumentType.greedyString())
+                    .suggests((ctx, builder) -> suggestTeamNames(plugin, builder))
+                    .executes(ctx -> {
+                        Player viewer = (Player) ctx.getSource().getSender();
+                        plugin.getTeamManager().openTeamVaultInspector(
+                            viewer,
+                            StringArgumentType.getString(ctx, "team")
+                        );
+                        return Command.SINGLE_SUCCESS;
+                    }))
+                .build(),
+            "View a team vault without editing it",
+            List.of("teamvaultsee", "tvaultsee")
         );
     }
 
@@ -854,6 +927,9 @@ public final class AdminCommands {
             case AWAKENING_TABLE_ITEM_ID -> createAwakeningTableAdminItem(plugin, sender);
             case ENDER_BONE_ITEM_ID -> createEnderBoneAdminItem(plugin, sender);
             case ORB_OF_THE_MYSTICS_ITEM_ID -> createOrbOfTheMysticsAdminItem(plugin, sender);
+            case FARADAYS_MAGNET_ITEM_ID -> createFaradaysMagnetAdminItem(plugin, sender);
+            case MYTHIC_FORGE_ITEM_ID -> createMythicForgeAdminItem(plugin, sender);
+            case ASCENDANT_CORE_ITEM_ID -> createAscendantCoreAdminItem(plugin, sender);
             case TALISMAN_OF_SUSTENANCE_ITEM_ID -> createTalismanOfSustenanceAdminItem(plugin, sender);
             case ANCIENT_SCROLL_ITEM_ID -> createAncientScrollAdminItem(plugin, sender);
             case WARDEN_HEART_ITEM_ID -> createWardenHeartAdminItem(plugin, sender);
@@ -866,7 +942,7 @@ public final class AdminCommands {
         if (item == null) {
             if (itemId == null || !CUSTOM_ITEM_IDS.contains(itemId)) {
                 sender.sendMessage(MessageUtil.error(
-                    "Unknown custom item. Options: <white>" + String.join(", ", CUSTOM_ITEM_IDS) + "</white>."
+                    "Unknown custom item. Options: <white>" + String.join(", ", customItemCommandOptions()) + "</white>."
                 ));
             }
             return 0;
@@ -932,6 +1008,33 @@ public final class AdminCommands {
         return new AdminGiveItem(legendary.createOrbOfTheMysticsItem(), "Orb of the Mystics");
     }
 
+    private static AdminGiveItem createFaradaysMagnetAdminItem(SMPCore plugin, CommandSender sender) {
+        LegendaryListener legendary = plugin.getLegendaryListener();
+        if (legendary == null) {
+            sender.sendMessage(MessageUtil.error("Legendary system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(legendary.createFaradaysMagnetItem(), "Faraday's Magnet");
+    }
+
+    private static AdminGiveItem createMythicForgeAdminItem(SMPCore plugin, CommandSender sender) {
+        MythicForgeListener forge = plugin.getMythicForgeListener();
+        if (forge == null) {
+            sender.sendMessage(MessageUtil.error("Mythic Forge system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(forge.createMythicForgeItem(), "Mythic Forge");
+    }
+
+    private static AdminGiveItem createAscendantCoreAdminItem(SMPCore plugin, CommandSender sender) {
+        MythicForgeListener forge = plugin.getMythicForgeListener();
+        if (forge == null) {
+            sender.sendMessage(MessageUtil.error("Mythic Forge system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(forge.createAscendantCoreItem(), "Ascendant Core");
+    }
+
     private static AdminGiveItem createTalismanOfSustenanceAdminItem(SMPCore plugin, CommandSender sender) {
         SustenanceTalismanListener talisman = plugin.getSustenanceTalismanListener();
         if (talisman == null) {
@@ -994,9 +1097,75 @@ public final class AdminCommands {
         return Command.SINGLE_SUCCESS;
     }
 
+    private static int executeUnban(CommandSender sender, String rawName) {
+        String targetName = rawName == null ? "" : rawName.trim();
+        if (targetName.isEmpty()) {
+            sender.sendMessage(MessageUtil.error("Enter a player name to unban."));
+            return 0;
+        }
+
+        ProfileBanList banList = Bukkit.getServer().getBanList(BanListType.PROFILE);
+        PlayerProfile bannedProfile = findBannedProfile(banList, targetName);
+        if (bannedProfile == null) {
+            OfflinePlayer offline = Bukkit.getOfflinePlayer(targetName);
+            if (offline.isBanned()) {
+                bannedProfile = offline.getPlayerProfile();
+            }
+        }
+
+        if (bannedProfile == null) {
+            sender.sendMessage(MessageUtil.error("No active profile ban was found for <white>" + targetName + "</white>."));
+            return 0;
+        }
+
+        String displayName = bannedProfile.getName() == null || bannedProfile.getName().isBlank()
+            ? targetName
+            : bannedProfile.getName();
+        banList.pardon(bannedProfile);
+        sender.sendMessage(MessageUtil.success("Unbanned <white>" + displayName + "</white>."));
+        return Command.SINGLE_SUCCESS;
+    }
+
     private static CompletableFuture<Suggestions> suggestCustomItemIds(SuggestionsBuilder builder) {
+        for (String option : customItemCommandOptions()) {
+            builder.suggest(option);
+        }
+        return builder.buildFuture();
+    }
+
+    private static Set<String> customItemCommandOptions() {
+        LinkedHashSet<String> options = new LinkedHashSet<>();
         for (String id : CUSTOM_ITEM_IDS) {
-            builder.suggest(id);
+            String displayToken = switch (id) {
+                case CustomToolListener.ADVANCED_PICKAXE_ID -> "prospectors_pick";
+                case CustomToolListener.GRAPPLE_HOOK_ID -> "skyhook";
+                default -> id;
+            };
+            options.add(displayToken);
+            options.add(id);
+        }
+        return options;
+    }
+
+    private static CompletableFuture<Suggestions> suggestBannedProfiles(SuggestionsBuilder builder) {
+        ProfileBanList banList = Bukkit.getServer().getBanList(BanListType.PROFILE);
+        for (var entry : banList.getEntries()) {
+            Object target = entry.getBanTarget();
+            if (target instanceof PlayerProfile profile) {
+                String name = profile.getName();
+                if (name != null && !name.isBlank()) {
+                    builder.suggest(name);
+                }
+            }
+        }
+        return builder.buildFuture();
+    }
+
+    private static CompletableFuture<Suggestions> suggestTeamNames(SMPCore plugin, SuggestionsBuilder builder) {
+        if (plugin.getTeamManager() != null) {
+            for (String name : plugin.getTeamManager().teamNames()) {
+                builder.suggest(name);
+            }
         }
         return builder.buildFuture();
     }
@@ -1015,16 +1184,32 @@ public final class AdminCommands {
         return builder.buildFuture();
     }
 
+    private static PlayerProfile findBannedProfile(ProfileBanList banList, String input) {
+        for (var entry : banList.getEntries()) {
+            Object target = entry.getBanTarget();
+            if (target instanceof PlayerProfile profile) {
+                String name = profile.getName();
+                if (name != null && name.equalsIgnoreCase(input)) {
+                    return profile;
+                }
+            }
+        }
+        return null;
+    }
+
     private static String normalizeCustomItemId(String input) {
         if (input == null) return null;
         String normalized = input.trim().toLowerCase(Locale.ROOT).replace('-', '_');
         if (normalized.isBlank()) return null;
         return switch (normalized) {
-            case "advancedpickaxe", "advanced_pick" -> CustomToolListener.ADVANCED_PICKAXE_ID;
+            case "advancedpickaxe", "advanced_pick", "prospector", "prospectorspick", "prospectors_pick", "prospectorspickaxe", "prospectors_pickaxe" -> CustomToolListener.ADVANCED_PICKAXE_ID;
             case "ancientscroll", "ancient_scroll", "scroll" -> ANCIENT_SCROLL_ITEM_ID;
             case "awakening", "awakeningtable", "awakening_table", "awaken_table", "table" -> AWAKENING_TABLE_ITEM_ID;
+            case "ascendant", "ascendantcore", "ascendant_core", "core" -> ASCENDANT_CORE_ITEM_ID;
             case "enderbone", "bone" -> ENDER_BONE_ITEM_ID;
-            case "grapple", "grapplehook", "grapple_hook", "hook" -> CustomToolListener.GRAPPLE_HOOK_ID;
+            case "magnet", "faraday", "faradays", "faradaysmagnet", "faradays_magnet" -> FARADAYS_MAGNET_ITEM_ID;
+            case "grapple", "grapplehook", "grapple_hook", "hook", "skyhook" -> CustomToolListener.GRAPPLE_HOOK_ID;
+            case "mythicforge", "mythic_forge", "forge" -> MYTHIC_FORGE_ITEM_ID;
             case "mothernature", "mother_nature", "mothernaturestick", "mother_nature_stick", "naturestick" -> MOTHER_NATURE_STICK_ITEM_ID;
             case "orb", "mystic_orb", "orb_of_mystics", "orb_of_the_mystic", "orbofthemystics" -> ORB_OF_THE_MYSTICS_ITEM_ID;
             case "talisman", "sustenance_talisman", "talisman_of_sustenance" -> TALISMAN_OF_SUSTENANCE_ITEM_ID;

@@ -14,8 +14,10 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 @SuppressWarnings("UnstableApiUsage")
@@ -91,14 +93,18 @@ public final class LegendaryCommands {
         ItemStack item = legendary.createLegendaryById(normalized);
         if (item == null) {
             sender.sendMessage(MessageUtil.error(
-                "Unknown legendary item. Options: <white>" + String.join(", ", legendary.legendaryIds()) + "</white>."));
+                "Unknown legendary item. Options: <white>" + String.join(", ", legendaryCommandOptions(legendary)) + "</white>."));
             return 0;
         }
 
         Map<Integer, ItemStack> leftovers = target.getInventory().addItem(item);
         leftovers.values().forEach(left -> target.getWorld().dropItemNaturally(target.getLocation(), left));
+        legendary.resyncLegendaryOwnership(target);
 
-        String pretty = prettyName(normalized);
+        String pretty = legendary.displayNameForLegendary(normalized);
+        if (pretty == null || pretty.isBlank()) {
+            pretty = prettyName(normalized);
+        }
         target.sendMessage(MessageUtil.success("You received <white>" + pretty + "</white>."));
         if (!sender.equals(target)) {
             sender.sendMessage(MessageUtil.success(
@@ -110,11 +116,35 @@ public final class LegendaryCommands {
     private static CompletableFuture<Suggestions> suggestLegendaryIds(SMPCore plugin, SuggestionsBuilder builder) {
         LegendaryListener legendary = plugin.getLegendaryListener();
         if (legendary != null) {
-            for (String id : legendary.legendaryIds()) {
-                builder.suggest(id);
+            for (String option : legendaryCommandOptions(legendary)) {
+                builder.suggest(option);
             }
         }
         return builder.buildFuture();
+    }
+
+    private static Set<String> legendaryCommandOptions(LegendaryListener legendary) {
+        LinkedHashSet<String> options = new LinkedHashSet<>();
+        for (String id : legendary.legendaryIds()) {
+            String displayName = legendary.displayNameForLegendary(id);
+            String commandToken = toCommandToken(displayName);
+            if (commandToken != null && !commandToken.isBlank()) {
+                options.add(commandToken);
+            }
+            options.add(id);
+        }
+        return options;
+    }
+
+    private static String toCommandToken(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        String normalized = text.toLowerCase(Locale.ROOT)
+            .replace("'", "")
+            .replaceAll("[^a-z0-9]+", "_")
+            .replaceAll("^_+|_+$", "");
+        return normalized.isBlank() ? null : normalized;
     }
 
     private static String prettyName(String id) {

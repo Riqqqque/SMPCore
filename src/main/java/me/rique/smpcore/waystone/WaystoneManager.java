@@ -177,7 +177,8 @@ public final class WaystoneManager {
             }
         }
 
-        return new Location(world, bx + 0.5, by + 1.0, bz + 0.5);
+        Location glowstoneTop = glowstoneTopLocation(entry);
+        return glowstoneTop == null || glowstoneTop.getWorld() == null ? null : glowstoneTop;
     }
 
     public void sendWaystoneList(Player player, List<WaystoneEntry> waystones) {
@@ -324,7 +325,7 @@ public final class WaystoneManager {
             Component.text("World: " + entry.world(), NamedTextColor.GRAY),
             Component.text("X: " + entry.x() + " Y: " + entry.y() + " Z: " + entry.z(), NamedTextColor.GRAY),
             Component.text("Left-click: Normal teleport", NamedTextColor.DARK_GRAY),
-            Component.text("Right-click: lluminaries weird TP", NamedTextColor.DARK_GRAY)
+            Component.text("Right-click: Teleport to the glowstone top", NamedTextColor.DARK_GRAY)
         ));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         meta.getPersistentDataContainer().set(waystoneMenuTargetKey, PersistentDataType.STRING, entry.key());
@@ -489,7 +490,7 @@ public final class WaystoneManager {
     }
 
     private static boolean isSafe(World world, int x, int y, int z) {
-        if (y < world.getMinHeight() || y + 1 > world.getMaxHeight()) return false;
+        if (y < world.getMinHeight() || y + 1 >= world.getMaxHeight()) return false;
         Block feet = world.getBlockAt(x, y, z);
         Block head = world.getBlockAt(x, y + 1, z);
         Block below = world.getBlockAt(x, y - 1, z);

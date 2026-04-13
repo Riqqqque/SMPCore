@@ -50,16 +50,7 @@ public final class CombatLogListener implements Listener {
 
         Player attacker = resolveAttacker(event.getDamager());
         if (attacker == null || attacker.equals(victim)) return;
-        if (!isCombatTaggable(attacker) || !isCombatTaggable(victim)) return;
-
-        long expiresAt = System.currentTimeMillis() + plugin.getConfigManager().combatTagSeconds * 1000L;
-        combatTags.put(attacker.getUniqueId(), new CombatTag(victim.getUniqueId(), expiresAt));
-        combatTags.put(victim.getUniqueId(), new CombatTag(attacker.getUniqueId(), expiresAt));
-
-        stopGlidingIfTagged(attacker);
-        stopGlidingIfTagged(victim);
-        maybeNotify(attacker);
-        maybeNotify(victim);
+        tagPlayers(attacker, victim);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -241,6 +232,24 @@ public final class CombatLogListener implements Listener {
 
     public boolean isInPlayerCombat(UUID playerId) {
         return activeTag(playerId) != null;
+    }
+
+    public void tagPlayers(Player attacker, Player victim) {
+        if (attacker == null || victim == null || attacker.equals(victim)) {
+            return;
+        }
+        if (!isCombatTaggable(attacker) || !isCombatTaggable(victim)) {
+            return;
+        }
+
+        long expiresAt = System.currentTimeMillis() + plugin.getConfigManager().combatTagSeconds * 1000L;
+        combatTags.put(attacker.getUniqueId(), new CombatTag(victim.getUniqueId(), expiresAt));
+        combatTags.put(victim.getUniqueId(), new CombatTag(attacker.getUniqueId(), expiresAt));
+
+        stopGlidingIfTagged(attacker);
+        stopGlidingIfTagged(victim);
+        maybeNotify(attacker);
+        maybeNotify(victim);
     }
 
     private record CombatTag(UUID opponentUuid, long expiresAt) {}

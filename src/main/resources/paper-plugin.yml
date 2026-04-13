@@ -4,7 +4,7 @@ main: me.rique.smpcore.SMPCore
 description: Core SMP plugin — spawners, homes, essentials
 authors:
   - Rique
-api-version: '1.21.11'
+api-version: '26.1.2'
 
 dependencies:
   server:
@@ -125,8 +125,17 @@ permissions:
   smpcore.setspawn:
     description: Use /setspawn
     default: op
+  smpcore.announce:
+    description: Use /announce
+    default: op
+  smpcore.unban:
+    description: Use /unban
+    default: op
   smpcore.reload:
     description: Use /smpcore reload
+    default: op
+  smpcore.boss.admin:
+    description: Use /bosses and custom boss controls
     default: op
   smpcore.legendary.admin:
     description: Use /legendary give

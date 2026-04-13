@@ -9,7 +9,9 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
@@ -146,6 +148,20 @@ public final class TeamManager implements Listener {
             plugin.getLogger().severe("Failed to save team vault for " + session.displayName() + ": " + ex.getMessage());
             return null;
         });
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onInspectorClick(InventoryClickEvent event) {
+        if (event.getView().getTopInventory().getHolder() instanceof TeamVaultInspectorHolder) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onInspectorDrag(InventoryDragEvent event) {
+        if (event.getView().getTopInventory().getHolder() instanceof TeamVaultInspectorHolder) {
+            event.setCancelled(true);
+        }
     }
 
     public void shutdown() {
@@ -483,6 +499,59 @@ public final class TeamManager implements Listener {
         });
     }
 
+    public void openTeamVaultInspector(Player viewer, String rawTeamName) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) {
+            viewer.sendMessage(MessageUtil.error(unavailable));
+            return;
+        }
+
+        String displayName = normalizeDisplayName(rawTeamName);
+        if (displayName.isBlank()) {
+            viewer.sendMessage(MessageUtil.error("Enter a team name."));
+            return;
+        }
+
+        TeamData team = teamsByKey.get(key(displayName));
+        if (team == null) {
+            viewer.sendMessage(MessageUtil.error("That team does not exist."));
+            return;
+        }
+
+        loadTeamVault(team).thenAccept(session ->
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!viewer.isOnline()) return;
+                Inventory snapshot = Bukkit.createInventory(
+                    new TeamVaultInspectorHolder(team.key),
+                    TEAM_VAULT_SIZE,
+                    Component.text(team.displayName + " Vault View")
+                );
+                snapshot.setContents(cloneContents(session.inventory().getContents()));
+                viewer.openInventory(snapshot);
+            })
+        ).exceptionally(ex -> {
+            plugin.getLogger().severe("Failed to inspect team vault for " + team.displayName + ": " + ex.getMessage());
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (viewer.isOnline()) {
+                    viewer.sendMessage(MessageUtil.error("Team vault is unavailable right now."));
+                }
+            });
+            return null;
+        });
+    }
+
+    public List<String> teamNames() {
+        if (!teamsLoaded) {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>();
+        for (TeamData team : teamsByKey.values()) {
+            names.add(team.displayName);
+        }
+        names.sort(String.CASE_INSENSITIVE_ORDER);
+        return names;
+    }
+
     public boolean inTeam(UUID playerId) {
         if (!teamsLoaded) return false;
         return teamByPlayer.containsKey(playerId);
@@ -771,6 +840,14 @@ public final class TeamManager implements Listener {
         return out;
     }
 
+    private ItemStack[] cloneContents(ItemStack[] contents) {
+        ItemStack[] copy = new ItemStack[contents.length];
+        for (int i = 0; i < contents.length; i++) {
+            copy[i] = contents[i] == null ? null : contents[i].clone();
+        }
+        return copy;
+    }
+
     private static final class TeamData {
         private final String key;
         private final String displayName;
@@ -788,6 +865,13 @@ public final class TeamManager implements Listener {
     private record TeamVaultSession(String teamKey, String displayName, Inventory inventory) {}
 
     private record TeamVaultHolder(String teamKey) implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
+    private record TeamVaultInspectorHolder(String teamKey) implements InventoryHolder {
         @Override
         public Inventory getInventory() {
             return null;

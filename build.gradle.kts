@@ -1,14 +1,14 @@
 plugins {
     `java-library`
-    id("com.gradleup.shadow") version "8.3.3"
+    id("com.gradleup.shadow") version "9.4.1"
 }
 
 group = "me.rique"
 version = "1.0.0"
-description = "SMPCore - Core plugin for Paper 1.21.11"
+description = "SMPCore - Core plugin for Paper 26.1.2"
 
 java {
-    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    toolchain.languageVersion = JavaLanguageVersion.of(25)
 }
 
 repositories {
@@ -17,7 +17,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
+    compileOnly("io.papermc.paper:paper-api:26.1.2.build.5-alpha")
     implementation("org.xerial:sqlite-jdbc:3.47.1.0")
     implementation("com.zaxxer:HikariCP:5.1.0")
 }
@@ -51,7 +51,7 @@ tasks {
     }
     compileJava {
         options.encoding = "UTF-8"
-        options.release = 21
+        options.release = 25
         options.compilerArgs.add("-Xlint:deprecation")
     }
     processResources {

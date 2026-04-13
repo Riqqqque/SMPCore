@@ -6,9 +6,13 @@ import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import io.papermc.paper.command.brigadier.Commands;
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.util.MessageUtil;
 
 import java.util.List;
+import java.util.LinkedHashSet;
+import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 @SuppressWarnings("UnstableApiUsage")
@@ -36,6 +40,9 @@ public final class SMPCoreCommand {
                         }
                         if (plugin.getCustomToolListener() != null) {
                             plugin.getCustomToolListener().reloadConfig();
+                        }
+                        if (plugin.getMythicForgeListener() != null) {
+                            plugin.getMythicForgeListener().reloadConfig();
                         }
                         if (plugin.getLegendaryAltarManager() != null) {
                             plugin.getLegendaryAltarManager().reloadConfig();
@@ -154,11 +161,36 @@ public final class SMPCoreCommand {
     }
 
     private static CompletableFuture<Suggestions> suggestLegendaryIds(SMPCore plugin, SuggestionsBuilder builder) {
-        if (plugin.getLegendaryListener() != null) {
-            for (String id : plugin.getLegendaryListener().legendaryIds()) {
-                builder.suggest(id);
+        LegendaryListener legendary = plugin.getLegendaryListener();
+        if (legendary != null) {
+            for (String option : legendaryCommandOptions(legendary)) {
+                builder.suggest(option);
             }
         }
         return builder.buildFuture();
+    }
+
+    private static Set<String> legendaryCommandOptions(LegendaryListener legendary) {
+        LinkedHashSet<String> options = new LinkedHashSet<>();
+        for (String id : legendary.legendaryIds()) {
+            String displayName = legendary.displayNameForLegendary(id);
+            String commandToken = toCommandToken(displayName);
+            if (commandToken != null && !commandToken.isBlank()) {
+                options.add(commandToken);
+            }
+            options.add(id);
+        }
+        return options;
+    }
+
+    private static String toCommandToken(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        String normalized = text.toLowerCase(Locale.ROOT)
+            .replace("'", "")
+            .replaceAll("[^a-z0-9]+", "_")
+            .replaceAll("^_+|_+$", "");
+        return normalized.isBlank() ? null : normalized;
     }
 }
