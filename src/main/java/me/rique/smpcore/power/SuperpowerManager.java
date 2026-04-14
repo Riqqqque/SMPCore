@@ -117,12 +117,16 @@ public final class SuperpowerManager implements Listener {
     public static final String WARDEN_HEART_ITEM_ID = "warden_heart";
     public static final String MOTHER_NATURE_STICK_ITEM_ID = "mother_nature_stick";
     public static final String THE_WORLD_CLOCK_ITEM_ID = "the_world_clock";
+    public static final String DRUID_GRIMOIRE_ITEM_ID = "druid_grimoire";
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final Component POWERS_MENU_TITLE =
         MM.deserialize("<gradient:#ff9a3d:#d61c4e><bold>Superpower Info</bold></gradient>");
+    private static final Component DRUID_MENU_TITLE =
+        MM.deserialize("<gradient:#63c74d:#2f8f47><bold>Druid's Grimoire</bold></gradient>");
 
     private static final int MENU_SIZE = 45;
+    private static final int DRUID_MENU_SIZE = 27;
     private static final int SHADOW_DURATION_SECONDS = 15 * 60;
     private static final int SHADOW_COOLDOWN_SECONDS = 5 * 60;
     private static final int SHADOW_HIT_COOLDOWN_SECONDS = 7 * 60;
@@ -134,6 +138,9 @@ public final class SuperpowerManager implements Listener {
     private static final double FLORIST_GROWTH_BONUS_CHANCE = 0.20;
     private static final int FLORIST_CROUCH_GROWTH_RADIUS = 2;
     private static final int FLORIST_CROUCH_GROWTH_STAGES = 2;
+    private static final int DRUID_BUFF_RADIUS = 5;
+    private static final int DRUID_BUFF_DURATION_SECONDS = 180;
+    private static final int DRUID_BUFF_COOLDOWN_SECONDS = 90;
     private static final int IMMORTALITY_REGEN_SECONDS = 10;
     private static final int IMMORTALITY_RESCUE_SECONDS = 4;
     private static final double IMMORTALITY_SURVIVAL_HEALTH = 1.0;
@@ -237,6 +244,7 @@ public final class SuperpowerManager implements Listener {
     private final NamespacedKey keyWardenHeart;
     private final NamespacedKey keyMotherNatureStick;
     private final NamespacedKey keyTheWorldClock;
+    private final NamespacedKey keyDruidGrimoire;
     private final NamespacedKey keyEnchanterLapis;
     private final NamespacedKey keyTankImmovableModifier;
     private final NamespacedKey keyEnchanterLuckModifier;
@@ -254,10 +262,12 @@ public final class SuperpowerManager implements Listener {
     private final NamespacedKey keyTimeStopCooldownUntil;
     private final NamespacedKey keyShadowCooldownUntil;
     private final NamespacedKey keyShadowActiveUntil;
+    private final NamespacedKey keyDruidBuffCooldownUntil;
     private final NamespacedKey keyMonarchSummonOwner;
     private final NamespacedKey keyMonarchSummonTag;
     private final Map<UUID, Integer> pendingFloristStickReturns = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> pendingTheWorldClockReturns = new ConcurrentHashMap<>();
+    private final Map<UUID, Integer> pendingDruidGrimoireReturns = new ConcurrentHashMap<>();
     private final Map<UUID, PortalPair> activeTravelerPortals = new ConcurrentHashMap<>();
     private final Map<UUID, Long> recentPortalTravel = new ConcurrentHashMap<>();
     private final Map<UUID, Set<UUID>> monarchSummonsByOwner = new ConcurrentHashMap<>();
@@ -286,6 +296,7 @@ public final class SuperpowerManager implements Listener {
         this.keyWardenHeart = new NamespacedKey(plugin, WARDEN_HEART_ITEM_ID);
         this.keyMotherNatureStick = new NamespacedKey(plugin, MOTHER_NATURE_STICK_ITEM_ID);
         this.keyTheWorldClock = new NamespacedKey(plugin, THE_WORLD_CLOCK_ITEM_ID);
+        this.keyDruidGrimoire = new NamespacedKey(plugin, DRUID_GRIMOIRE_ITEM_ID);
         this.keyEnchanterLapis = new NamespacedKey(plugin, "superpower_enchanter_lapis");
         this.keyTankImmovableModifier = new NamespacedKey(plugin, "superpower_tank_immovable");
         this.keyEnchanterLuckModifier = new NamespacedKey(plugin, "superpower_enchanter_luck");
@@ -303,6 +314,7 @@ public final class SuperpowerManager implements Listener {
         this.keyTimeStopCooldownUntil = new NamespacedKey(plugin, "superpower_time_stop_cooldown_until");
         this.keyShadowCooldownUntil = new NamespacedKey(plugin, "superpower_shadow_cooldown_until");
         this.keyShadowActiveUntil = new NamespacedKey(plugin, "superpower_shadow_active_until");
+        this.keyDruidBuffCooldownUntil = new NamespacedKey(plugin, "superpower_druid_buff_cooldown_until");
         this.keyMonarchSummonOwner = new NamespacedKey(plugin, "superpower_monarch_owner");
         this.keyMonarchSummonTag = new NamespacedKey(plugin, "superpower_monarch_summon");
     }
@@ -345,6 +357,7 @@ public final class SuperpowerManager implements Listener {
         clearAllTimeStops();
         pendingFloristStickReturns.clear();
         pendingTheWorldClockReturns.clear();
+        pendingDruidGrimoireReturns.clear();
         recentPortalTravel.clear();
         floristCrouchGrowthCooldowns.clear();
         floristLeftClickCooldowns.clear();
@@ -400,6 +413,18 @@ public final class SuperpowerManager implements Listener {
         return item;
     }
 
+    public ItemStack createDruidGrimoireItem() {
+        ItemStack item = new ItemStack(Material.BOOK);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        applyDruidGrimoireState(meta);
+        applyDruidGrimoirePresentation(meta);
+        item.setItemMeta(meta);
+        return item;
+    }
+
     public List<ItemStack> ancientScrollRecipeDisplayItems() {
         return List.of(
             new ItemStack(Material.TOTEM_OF_UNDYING),
@@ -424,13 +449,17 @@ public final class SuperpowerManager implements Listener {
         return hasTaggedItem(item, keyTheWorldClock, THE_WORLD_CLOCK_ITEM_ID);
     }
 
+    public boolean isDruidGrimoire(ItemStack item) {
+        return hasTaggedItem(item, keyDruidGrimoire, DRUID_GRIMOIRE_ITEM_ID);
+    }
+
     public void openAdminInfoMenu(Player player) {
         Inventory inventory = Bukkit.createInventory(
             new PowerInfoHolder(),
             MENU_SIZE,
             BedrockCompat.menuTitle(player, POWERS_MENU_TITLE, "Superpower Info")
         );
-        fillInfoMenu(inventory);
+        fillInfoMenu(player, inventory);
         player.openInventory(inventory);
     }
 
@@ -689,6 +718,21 @@ public final class SuperpowerManager implements Listener {
                 pendingTheWorldClockReturns.merge(player.getUniqueId(), kept, Integer::sum);
             }
         }
+        if (hasPower(player, SuperpowerType.DRUID)) {
+            int kept = 0;
+            List<ItemStack> drops = event.getDrops();
+            for (int i = drops.size() - 1; i >= 0; i--) {
+                ItemStack drop = drops.get(i);
+                if (!isDruidGrimoire(drop)) {
+                    continue;
+                }
+                kept += Math.max(1, drop.getAmount());
+                drops.remove(i);
+            }
+            if (kept > 0) {
+                pendingDruidGrimoireReturns.merge(player.getUniqueId(), kept, Integer::sum);
+            }
+        }
         if (isShadowActive(player)) {
             deactivateShadow(player, false, false);
         }
@@ -708,6 +752,8 @@ public final class SuperpowerManager implements Listener {
         int pending = pendingValue == null ? 0 : pendingValue;
         Integer pendingClockValue = pendingTheWorldClockReturns.remove(player.getUniqueId());
         int pendingClocks = pendingClockValue == null ? 0 : pendingClockValue;
+        Integer pendingGrimoireValue = pendingDruidGrimoireReturns.remove(player.getUniqueId());
+        int pendingGrimoires = pendingGrimoireValue == null ? 0 : pendingGrimoireValue;
         Bukkit.getScheduler().runTask(plugin, () -> {
             if (!player.isOnline()) {
                 return;
@@ -717,6 +763,9 @@ public final class SuperpowerManager implements Listener {
             }
             for (int i = 0; i < pendingClocks; i++) {
                 giveTheWorldClock(player, true);
+            }
+            for (int i = 0; i < pendingGrimoires; i++) {
+                giveDruidGrimoire(player, true);
             }
         });
     }
@@ -935,7 +984,16 @@ public final class SuperpowerManager implements Listener {
         Player killer = entity.getKiller();
 
         if (entity.getType() == EntityType.WARDEN && killer != null) {
-            event.getDrops().add(createWardenHeartItem());
+            ItemStack heartDrop = createWardenHeartItem();
+            if (plugin.getItemAuditManager() != null) {
+                plugin.getItemAuditManager().recordKnownAcquisition(
+                    killer,
+                    heartDrop,
+                    "warden_drop",
+                    "Dropped from a Warden kill."
+                );
+            }
+            event.getDrops().add(heartDrop);
         }
 
         if (killer != null
@@ -1162,6 +1220,19 @@ public final class SuperpowerManager implements Listener {
         event.getPlayer().sendMessage(MessageUtil.warn("The World Clock refuses to leave its master."));
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onDropDruidGrimoire(PlayerDropItemEvent event) {
+        if (!isDruidGrimoire(event.getItemDrop().getItemStack())) {
+            return;
+        }
+        if (!hasPower(event.getPlayer(), SuperpowerType.DRUID)) {
+            return;
+        }
+
+        event.setCancelled(true);
+        event.getPlayer().sendMessage(MessageUtil.warn("The Druid's Grimoire refuses to leave its keeper."));
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onTimeStopBlockPhysics(BlockPhysicsEvent event) {
         if (isInsideActiveTimeStop(event.getBlock().getLocation())) {
@@ -1211,7 +1282,7 @@ public final class SuperpowerManager implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onPowerInteract(PlayerInteractEvent event) {
         if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND) {
             return;
@@ -1233,6 +1304,13 @@ public final class SuperpowerManager implements Listener {
         if (isTheWorldClock(item) && (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK)) {
             event.setCancelled(true);
             useTheWorldClock(player);
+            return;
+        }
+        if (isDruidGrimoire(item) && (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK)) {
+            event.setCancelled(true);
+            event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
+            event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
+            openDruidGrimoire(player);
             return;
         }
         if (!isMotherNatureStick(item) || !hasPower(player, SuperpowerType.FLORIST)) {
@@ -1334,13 +1412,23 @@ public final class SuperpowerManager implements Listener {
         }
 
         event.setCancelled(true);
-        if (!giveCraftResult(player, event, createAncientScrollItem())) {
+        if (!canReceiveCraftResult(player, event)) {
             return;
         }
         if (!consumeAncientScrollIngredients(inventory)) {
             player.sendMessage(MessageUtil.error("The Ancient Scroll recipe ingredients were invalid."));
             return;
         }
+        ItemStack result = createAncientScrollItem();
+        if (plugin.getItemAuditManager() != null) {
+            plugin.getItemAuditManager().recordKnownAcquisition(
+                player,
+                result,
+                "ancient_scroll_craft",
+                "Crafted an Ancient Scroll."
+            );
+        }
+        giveCraftResult(player, event, result);
 
         inventory.setResult(null);
         player.updateInventory();
@@ -1350,16 +1438,18 @@ public final class SuperpowerManager implements Listener {
     public void onPrepareAnvil(PrepareAnvilEvent event) {
         ItemStack left = event.getInventory().getFirstItem();
         ItemStack right = event.getInventory().getSecondItem();
-        if (!isMotherNatureStick(left) && !isMotherNatureStick(right)) {
+        if (!isMotherNatureStick(left) && !isMotherNatureStick(right)
+            && !isTheWorldClock(left) && !isTheWorldClock(right)
+            && !isDruidGrimoire(left) && !isDruidGrimoire(right)) {
             return;
         }
 
-        ItemStack source = isMotherNatureStick(left) ? left : right;
+        ItemStack source = isMotherNatureStick(left) || isTheWorldClock(left) || isDruidGrimoire(left) ? left : right;
         ItemStack result = event.getResult();
         if (source == null || result == null || result.getType() == Material.AIR) {
             return;
         }
-        event.setResult(preserveMotherNatureStick(result));
+        event.setResult(preserveBoundPowerItem(result, source));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -1369,35 +1459,57 @@ public final class SuperpowerManager implements Listener {
         }
         ItemStack top = grindstone.getUpperItem();
         ItemStack bottom = grindstone.getLowerItem();
-        if (!isMotherNatureStick(top) && !isMotherNatureStick(bottom)) {
+        if (!isMotherNatureStick(top) && !isMotherNatureStick(bottom)
+            && !isTheWorldClock(top) && !isTheWorldClock(bottom)
+            && !isDruidGrimoire(top) && !isDruidGrimoire(bottom)) {
             return;
         }
 
-        ItemStack source = isMotherNatureStick(top) ? top : bottom;
+        ItemStack source = isMotherNatureStick(top) || isTheWorldClock(top) || isDruidGrimoire(top) ? top : bottom;
         ItemStack result = event.getResult();
         if (source == null || result == null || result.getType() == Material.AIR) {
             return;
         }
-        event.setResult(preserveMotherNatureStick(result));
+        event.setResult(preserveBoundPowerItem(result, source));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPowerMenuClick(InventoryClickEvent event) {
         if (event.getView().getTopInventory().getHolder() instanceof PowerInfoHolder) {
             event.setCancelled(true);
+            return;
+        }
+        if (event.getView().getTopInventory().getHolder() instanceof DruidGrimoireHolder holder) {
+            event.setCancelled(true);
+            if (!(event.getWhoClicked() instanceof Player player)) {
+                return;
+            }
+            if (!player.getUniqueId().equals(holder.ownerId())) {
+                return;
+            }
+            if (event.getClickedInventory() != event.getView().getTopInventory()) {
+                return;
+            }
+            DruidBlessing blessing = DruidBlessing.fromSlot(event.getSlot());
+            if (blessing == null) {
+                return;
+            }
+            useDruidBlessing(player, blessing);
         }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPowerMenuDrag(InventoryDragEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof PowerInfoHolder) {
+        if (event.getView().getTopInventory().getHolder() instanceof PowerInfoHolder
+            || event.getView().getTopInventory().getHolder() instanceof DruidGrimoireHolder) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler
     public void onPowerMenuClose(InventoryCloseEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof PowerInfoHolder) {
+        if (event.getView().getTopInventory().getHolder() instanceof PowerInfoHolder
+            || event.getView().getTopInventory().getHolder() instanceof DruidGrimoireHolder) {
             event.getView().getTopInventory().clear();
         }
     }
@@ -1410,6 +1522,9 @@ public final class SuperpowerManager implements Listener {
         }
         if (power == SuperpowerType.THE_WORLD && !hasTheWorldClock(player)) {
             giveTheWorldClock(player, false);
+        }
+        if (power == SuperpowerType.DRUID && !hasDruidGrimoire(player)) {
+            giveDruidGrimoire(player, false);
         }
         if (power == SuperpowerType.SHADOW && isShadowActive(player)) {
             applyShadowEffects(player);
@@ -1502,6 +1617,11 @@ public final class SuperpowerManager implements Listener {
                     giveTheWorldClock(player, false);
                 }
             }
+            case DRUID -> {
+                if (!hasDruidGrimoire(player)) {
+                    giveDruidGrimoire(player, false);
+                }
+            }
             case XRAY_VISION -> {
                 if (xrayActiveUntil(player) > System.currentTimeMillis()) {
                     renderXrayHighlights(player);
@@ -1568,6 +1688,9 @@ public final class SuperpowerManager implements Listener {
         if (power == SuperpowerType.THE_WORLD && !hasTheWorldClock(player)) {
             giveTheWorldClock(player, false);
         }
+        if (power == SuperpowerType.DRUID && !hasDruidGrimoire(player)) {
+            giveDruidGrimoire(player, false);
+        }
         applyPassiveEffects(player);
         player.updateInventory();
         if (notifyScrollResult || power.hasCommandHint()) {
@@ -1579,6 +1702,7 @@ public final class SuperpowerManager implements Listener {
         UUID playerId = player.getUniqueId();
         pendingFloristStickReturns.remove(playerId);
         pendingTheWorldClockReturns.remove(playerId);
+        pendingDruidGrimoireReturns.remove(playerId);
         closeTravelerPortal(playerId, false);
         despawnMonarchSummons(playerId);
         clearTimeStopForOwner(playerId);
@@ -1599,6 +1723,9 @@ public final class SuperpowerManager implements Listener {
         if (nextPower != SuperpowerType.THE_WORLD) {
             removeTheWorldClocks(player);
         }
+        if (nextPower != SuperpowerType.DRUID) {
+            removeDruidGrimoires(player);
+        }
         syncTankImmovableState(player, false);
         clearPowerAttributeModifiers(player);
         clearVirtualEnchanterLapis(player);
@@ -1611,6 +1738,7 @@ public final class SuperpowerManager implements Listener {
         pdc.remove(keyTimeStopCooldownUntil);
         pdc.remove(keyShadowCooldownUntil);
         pdc.remove(keyShadowActiveUntil);
+        pdc.remove(keyDruidBuffCooldownUntil);
         pdc.remove(keySupermanFlightActiveUntil);
         pdc.remove(keySupermanFlightCooldownUntil);
     }
@@ -1765,6 +1893,10 @@ public final class SuperpowerManager implements Listener {
         return player.getPersistentDataContainer().getOrDefault(keyShadowActiveUntil, PersistentDataType.LONG, 0L);
     }
 
+    private long druidBuffCooldownUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keyDruidBuffCooldownUntil, PersistentDataType.LONG, 0L);
+    }
+
     private void setShadowCooldownUntil(Player player, long value) {
         PersistentDataContainer pdc = player.getPersistentDataContainer();
         if (value <= 0L) {
@@ -1781,6 +1913,15 @@ public final class SuperpowerManager implements Listener {
             return;
         }
         pdc.set(keyShadowActiveUntil, PersistentDataType.LONG, value);
+    }
+
+    private void setDruidBuffCooldownUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keyDruidBuffCooldownUntil);
+            return;
+        }
+        pdc.set(keyDruidBuffCooldownUntil, PersistentDataType.LONG, value);
     }
 
     private boolean isShadowActive(Player player) {
@@ -1870,6 +2011,115 @@ public final class SuperpowerManager implements Listener {
             : randomDifferentPower(currentPower, false);
         assignPower(player, rerolled, true, true);
         player.sendMessage(MessageUtil.success("The Ancient Scroll rewrites your fate."));
+    }
+
+    private void openDruidGrimoire(Player player) {
+        if (!hasPower(player, SuperpowerType.DRUID)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return;
+        }
+
+        Inventory inventory = Bukkit.createInventory(
+            new DruidGrimoireHolder(player.getUniqueId()),
+            DRUID_MENU_SIZE,
+            BedrockCompat.menuTitle(player, DRUID_MENU_TITLE, "Druid's Grimoire")
+        );
+        fillDruidMenu(inventory);
+        player.openInventory(inventory);
+    }
+
+    private void fillDruidMenu(Inventory inventory) {
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            inventory.setItem(slot, fillerPane());
+        }
+        for (DruidBlessing blessing : DruidBlessing.values()) {
+            inventory.setItem(blessing.slot(), createDruidBlessingIcon(blessing));
+        }
+    }
+
+    private ItemStack createDruidBlessingIcon(DruidBlessing blessing) {
+        ItemStack item = new ItemStack(blessing.icon());
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        meta.displayName(MM.deserialize(blessing.display()));
+        List<Component> lore = new ArrayList<>();
+        lore.add(MM.deserialize("<gray>Bless yourself and nearby teammates within <white>" + DRUID_BUFF_RADIUS + " blocks</white>.</gray>"));
+        lore.add(MM.deserialize(blessing.lore()));
+        lore.add(Component.empty());
+        lore.add(MM.deserialize("<gray>Duration: <white>" + blessing.durationText() + "</white></gray>"));
+        lore.add(MM.deserialize("<gray>Cooldown: <white>" + DRUID_BUFF_COOLDOWN_SECONDS + "s</white></gray>"));
+        meta.lore(lore);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private void useDruidBlessing(Player player, DruidBlessing blessing) {
+        if (!hasPower(player, SuperpowerType.DRUID)) {
+            player.closeInventory();
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        long cooldownUntil = druidBuffCooldownUntil(player);
+        if (cooldownUntil > now) {
+            player.sendMessage(MessageUtil.warn(
+                "Druid blessing cooldown: <white>" + secondsLeft(cooldownUntil, now) + "s</white>."
+            ));
+            player.closeInventory();
+            return;
+        }
+
+        List<Player> targets = nearbyDruidTargets(player);
+        if (targets.isEmpty()) {
+            player.sendMessage(MessageUtil.warn("No one is close enough to receive that blessing."));
+            player.closeInventory();
+            return;
+        }
+
+        for (Player target : targets) {
+            blessing.apply(this, target);
+            Location effectCenter = target.getLocation().clone().add(0.0, 1.0, 0.0);
+            target.getWorld().strikeLightningEffect(target.getLocation());
+            target.getWorld().spawnParticle(Particle.HAPPY_VILLAGER, effectCenter, 10, 0.3, 0.4, 0.3, 0.02);
+            target.getWorld().spawnParticle(blessing.particle(), effectCenter, 12, 0.25, 0.35, 0.25, 0.01);
+            target.playSound(target.getLocation(), blessing.sound(), 0.8f, 1.1f);
+            if (!target.equals(player)) {
+                target.sendMessage(MessageUtil.success("The druid blessed you with <white>" + blessing.plainName() + "</white>."));
+            }
+        }
+
+        setDruidBuffCooldownUntil(player, now + (DRUID_BUFF_COOLDOWN_SECONDS * 1000L));
+        player.closeInventory();
+        player.sendMessage(MessageUtil.success(
+            "You channeled <white>" + blessing.plainName() + "</white> into <white>" + targets.size() + "</white> ally(s), including yourself."
+        ));
+        player.getWorld().playSound(player.getLocation(), Sound.BLOCK_ENCHANTMENT_TABLE_USE, 0.95f, 0.85f);
+        player.getWorld().spawnParticle(Particle.ENCHANT, player.getLocation().add(0.0, 1.2, 0.0), 32, 0.6, 0.8, 0.6, 0.02);
+    }
+
+    private List<Player> nearbyDruidTargets(Player player) {
+        double radiusSquared = DRUID_BUFF_RADIUS * DRUID_BUFF_RADIUS;
+        List<Player> targets = new ArrayList<>();
+        targets.add(player);
+        for (Player nearby : player.getWorld().getPlayers()) {
+            if (nearby.equals(player)) {
+                continue;
+            }
+            if (nearby.isDead() || nearby.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            if (player.getLocation().distanceSquared(nearby.getLocation()) > radiusSquared) {
+                continue;
+            }
+            if (!sameTeamOrSelf(player.getUniqueId(), nearby.getUniqueId())) {
+                continue;
+            }
+            targets.add(nearby);
+        }
+        return targets;
     }
 
     private void useMotherNatureStickAttack(Player player) {
@@ -2872,8 +3122,25 @@ public final class SuperpowerManager implements Listener {
         return isTheWorldClock(player.getItemOnCursor());
     }
 
+    private boolean hasDruidGrimoire(Player player) {
+        for (ItemStack item : player.getInventory().getContents()) {
+            if (isDruidGrimoire(item)) {
+                return true;
+            }
+        }
+        return isDruidGrimoire(player.getItemOnCursor());
+    }
+
     private void giveMotherNatureStick(Player player, boolean restored) {
         ItemStack stick = createMotherNatureStickItem();
+        if (plugin.getItemAuditManager() != null) {
+            plugin.getItemAuditManager().recordKnownAcquisition(
+                player,
+                stick,
+                restored ? "power_item_restore" : "power_item_grant",
+                restored ? "Restored Stick from Mother Nature." : "Granted Stick from Mother Nature."
+            );
+        }
         Map<Integer, ItemStack> leftovers = player.getInventory().addItem(stick);
         leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
         if (restored) {
@@ -2896,6 +3163,14 @@ public final class SuperpowerManager implements Listener {
 
     private void giveTheWorldClock(Player player, boolean restored) {
         ItemStack clock = createTheWorldClockItem();
+        if (plugin.getItemAuditManager() != null) {
+            plugin.getItemAuditManager().recordKnownAcquisition(
+                player,
+                clock,
+                restored ? "power_item_restore" : "power_item_grant",
+                restored ? "Restored The World Clock." : "Granted The World Clock."
+            );
+        }
         Map<Integer, ItemStack> leftovers = player.getInventory().addItem(clock);
         leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
         if (restored) {
@@ -2912,6 +3187,36 @@ public final class SuperpowerManager implements Listener {
         }
 
         if (isTheWorldClock(player.getItemOnCursor())) {
+            player.setItemOnCursor(null);
+        }
+    }
+
+    private void giveDruidGrimoire(Player player, boolean restored) {
+        ItemStack grimoire = createDruidGrimoireItem();
+        if (plugin.getItemAuditManager() != null) {
+            plugin.getItemAuditManager().recordKnownAcquisition(
+                player,
+                grimoire,
+                restored ? "power_item_restore" : "power_item_grant",
+                restored ? "Restored Druid's Grimoire." : "Granted Druid's Grimoire."
+            );
+        }
+        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(grimoire);
+        leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
+        if (restored) {
+            player.sendMessage(MessageUtil.info("The Druid's Grimoire returned to you."));
+        }
+    }
+
+    private void removeDruidGrimoires(Player player) {
+        for (int slot = 0; slot < player.getInventory().getSize(); slot++) {
+            ItemStack item = player.getInventory().getItem(slot);
+            if (isDruidGrimoire(item)) {
+                player.getInventory().setItem(slot, null);
+            }
+        }
+
+        if (isDruidGrimoire(player.getItemOnCursor())) {
             player.setItemOnCursor(null);
         }
     }
@@ -2962,7 +3267,19 @@ public final class SuperpowerManager implements Listener {
                     item.setItemMeta(meta);
                     player.getInventory().setItem(slot, item);
                 }
+                continue;
             }
+            if (isDruidGrimoire(item)) {
+                ItemStack refreshed = createDruidGrimoireItem();
+                refreshed.setAmount(item.getAmount());
+                player.getInventory().setItem(slot, refreshed);
+            }
+        }
+
+        if (isDruidGrimoire(player.getItemOnCursor())) {
+            ItemStack refreshed = createDruidGrimoireItem();
+            refreshed.setAmount(player.getItemOnCursor().getAmount());
+            player.setItemOnCursor(refreshed);
         }
     }
 
@@ -3059,14 +3376,39 @@ public final class SuperpowerManager implements Listener {
         return true;
     }
 
-    private ItemStack preserveMotherNatureStick(ItemStack result) {
+    private boolean canReceiveCraftResult(Player player, InventoryClickEvent event) {
+        if (event.isShiftClick()) {
+            if (player.getInventory().firstEmpty() != -1) {
+                return true;
+            }
+            player.sendMessage(MessageUtil.warn("You need at least one empty inventory slot."));
+            return false;
+        }
+
+        ItemStack cursor = event.getCursor();
+        if (cursor == null || cursor.getType() == Material.AIR) {
+            return true;
+        }
+        player.sendMessage(MessageUtil.warn("Your cursor must be empty."));
+        return false;
+    }
+
+    private ItemStack preserveBoundPowerItem(ItemStack result, ItemStack source) {
         ItemStack updated = result.clone();
         ItemMeta meta = updated.getItemMeta();
         if (meta == null) {
             return updated;
         }
-        applyMotherNatureStickState(meta);
-        applyMotherNatureStickPresentation(meta);
+        if (isMotherNatureStick(source)) {
+            applyMotherNatureStickState(meta);
+            applyMotherNatureStickPresentation(meta);
+        } else if (isTheWorldClock(source)) {
+            applyTheWorldClockState(meta);
+            applyTheWorldClockPresentation(meta);
+        } else if (isDruidGrimoire(source)) {
+            applyDruidGrimoireState(meta);
+            applyDruidGrimoirePresentation(meta);
+        }
         updated.setItemMeta(meta);
         return updated;
     }
@@ -3086,15 +3428,16 @@ public final class SuperpowerManager implements Listener {
         return plugin.getSustenanceTalismanListener() != null && plugin.getSustenanceTalismanListener().isTalisman(item);
     }
 
-    private void fillInfoMenu(Inventory inventory) {
+    private void fillInfoMenu(Player viewer, Inventory inventory) {
         for (int slot = 0; slot < inventory.getSize(); slot++) {
             inventory.setItem(slot, fillerPane());
         }
         SuperpowerType[] types = SuperpowerType.values();
-        int[] slots = {11, 12, 13, 14, 15, 20, 21, 22, 23, 24, 29, 30, 31, 32, 33};
+        int[] slots = {10, 11, 12, 13, 14, 15, 19, 20, 21, 22, 23, 24, 28, 29, 30, 31};
         for (int i = 0; i < types.length && i < slots.length; i++) {
             inventory.setItem(slots[i], createPowerInfoIcon(types[i]));
         }
+        inventory.setItem(4, createCurrentPowerStatusIcon(viewer));
     }
 
     private ItemStack fillerPane() {
@@ -3115,6 +3458,25 @@ public final class SuperpowerManager implements Listener {
         }
         meta.displayName(MM.deserialize("<gold><bold>" + type.displayName() + "</bold></gold>"));
         meta.lore(powerInfoLore(type));
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private ItemStack createCurrentPowerStatusIcon(Player viewer) {
+        SuperpowerType currentPower = powerOf(viewer);
+        Material icon = currentPower == null ? Material.BARRIER : currentPower.icon();
+        ItemStack item = new ItemStack(icon);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        String powerName = currentPower == null ? "Unknown" : currentPower.displayName();
+        meta.displayName(MM.deserialize("<aqua><bold>Your Power</bold></aqua>"));
+        meta.lore(List.of(
+            MM.deserialize("<gray>Current Fate: <white>" + powerName + "</white></gray>"),
+            Component.empty(),
+            MM.deserialize("<gray>The menu below shows every possible power and its effects.</gray>")
+        ));
         item.setItemMeta(meta);
         return item;
     }
@@ -3167,6 +3529,13 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Regenerates health outdoors.</gray>"));
                 lore.add(MM.deserialize("<gray>Spam-crouching near crops surges their growth.</gray>"));
                 lore.add(MM.deserialize("<gray>Grants the <white>Stick from Mother Nature</white>.</gray>"));
+            }
+            case DRUID -> {
+                lore.add(MM.deserialize("<gray>Receives a bound <white>Druid's Grimoire</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Choose one blessing for yourself and nearby teammates within <white>" + DRUID_BUFF_RADIUS + " blocks</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Can grant strength, speed, regeneration, resistance, fire resistance, absorption, or instant health.</gray>"));
+                lore.add(MM.deserialize("<gray>Only one blessing can be chosen each use.</gray>"));
+                lore.add(MM.deserialize("<gray>Cooldown: <white>" + DRUID_BUFF_COOLDOWN_SECONDS + "s</white>.</gray>"));
             }
             case MONARCH -> {
                 lore.add(MM.deserialize("<gray>Stores slain mobs for later battle.</gray>"));
@@ -3309,6 +3678,30 @@ public final class SuperpowerManager implements Listener {
                 "<gray>Freezes mobs, players, projectiles, redstone, and block updates</gray>",
                 "<gray>inside a <white>" + TIME_STOP_RADIUS + " block</white> radius for <white>" + TIME_STOP_DURATION_SECONDS + "s</white>.</gray>",
                 "<gray>Cooldown: <white>" + (TIME_STOP_COOLDOWN_SECONDS / 60) + " minutes</white>.</gray>"
+            ))
+        ));
+    }
+
+    private void applyDruidGrimoireState(ItemMeta meta) {
+        meta.getPersistentDataContainer().set(keyDruidGrimoire, PersistentDataType.STRING, DRUID_GRIMOIRE_ITEM_ID);
+        meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+        CustomLoreUtil.applyStyledItemFlags(meta);
+    }
+
+    private void applyDruidGrimoirePresentation(ItemMeta meta) {
+        meta.displayName(MM.deserialize("<green><bold>Druid's Grimoire</bold></green>"));
+        meta.lore(CustomLoreUtil.buildStyledLore(
+            meta,
+            Material.BOOK,
+            "BOUND",
+            "GRIMOIRE",
+            List.of("<gray>Bound to the keeper of the grove.</gray>"),
+            List.of(CustomLoreUtil.section(
+                "Right Click",
+                "Wild Communion",
+                "<gray>Open the grimoire and choose <white>one</white> blessing.</gray>",
+                "<gray>Blesses you and nearby teammates within <white>" + DRUID_BUFF_RADIUS + " blocks</white>.</gray>",
+                "<gray>Cooldown: <white>" + DRUID_BUFF_COOLDOWN_SECONDS + "s</white>.</gray>"
             ))
         ));
     }
@@ -3489,6 +3882,100 @@ public final class SuperpowerManager implements Listener {
     private record PowerInfoHolder() implements InventoryHolder {
         @Override
         public Inventory getInventory() {
+            return null;
+        }
+    }
+
+    private record DruidGrimoireHolder(UUID ownerId) implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
+    private enum DruidBlessing {
+        STRENGTH(10, Material.IRON_SWORD, "<red><bold>Strength</bold></red>", "<gray>Grants <white>Strength I</white>.</gray>", Particle.CRIT, Sound.ENTITY_PLAYER_ATTACK_STRONG),
+        SPEED(11, Material.SUGAR, "<aqua><bold>Speed</bold></aqua>", "<gray>Grants <white>Speed I</white>.</gray>", Particle.CLOUD, Sound.ENTITY_BREEZE_SLIDE),
+        REGENERATION(12, Material.GLISTERING_MELON_SLICE, "<light_purple><bold>Regeneration</bold></light_purple>", "<gray>Grants <white>Regeneration I</white>.</gray>", Particle.HEART, Sound.BLOCK_AMETHYST_BLOCK_CHIME),
+        RESISTANCE(13, Material.SHIELD, "<gray><bold>Resistance</bold></gray>", "<gray>Grants <white>Resistance I</white>.</gray>", Particle.ANGRY_VILLAGER, Sound.ITEM_ARMOR_EQUIP_NETHERITE),
+        FIRE_RESISTANCE(14, Material.MAGMA_CREAM, "<gold><bold>Fire Resistance</bold></gold>", "<gray>Grants <white>Fire Resistance I</white>.</gray>", Particle.FLAME, Sound.ITEM_FIRECHARGE_USE),
+        ABSORPTION(15, Material.GOLDEN_APPLE, "<yellow><bold>Absorption</bold></yellow>", "<gray>Grants <white>Absorption I</white>.</gray>", Particle.TOTEM_OF_UNDYING, Sound.BLOCK_BEACON_POWER_SELECT),
+        INSTANT_HEALTH(16, Material.SPLASH_POTION, "<green><bold>Instant Health</bold></green>", "<gray>Restores a quick burst of health.</gray>", Particle.HAPPY_VILLAGER, Sound.ENTITY_PLAYER_LEVELUP);
+
+        private final int slot;
+        private final Material icon;
+        private final String display;
+        private final String lore;
+        private final Particle particle;
+        private final Sound sound;
+
+        DruidBlessing(int slot, Material icon, String display, String lore, Particle particle, Sound sound) {
+            this.slot = slot;
+            this.icon = icon;
+            this.display = display;
+            this.lore = lore;
+            this.particle = particle;
+            this.sound = sound;
+        }
+
+        int slot() {
+            return slot;
+        }
+
+        Material icon() {
+            return icon;
+        }
+
+        String display() {
+            return display;
+        }
+
+        String lore() {
+            return lore;
+        }
+
+        Particle particle() {
+            return particle;
+        }
+
+        Sound sound() {
+            return sound;
+        }
+
+        String plainName() {
+            return switch (this) {
+                case STRENGTH -> "Strength";
+                case SPEED -> "Speed";
+                case REGENERATION -> "Regeneration";
+                case RESISTANCE -> "Resistance";
+                case FIRE_RESISTANCE -> "Fire Resistance";
+                case ABSORPTION -> "Absorption";
+                case INSTANT_HEALTH -> "Instant Health";
+            };
+        }
+
+        String durationText() {
+            return this == INSTANT_HEALTH ? "Instant" : (DRUID_BUFF_DURATION_SECONDS + "s");
+        }
+
+        void apply(SuperpowerManager manager, Player target) {
+            switch (this) {
+                case STRENGTH -> manager.applyPotion(target, PotionEffectType.STRENGTH, DRUID_BUFF_DURATION_SECONDS * 20, 0);
+                case SPEED -> manager.applyPotion(target, PotionEffectType.SPEED, DRUID_BUFF_DURATION_SECONDS * 20, 0);
+                case REGENERATION -> manager.applyPotion(target, PotionEffectType.REGENERATION, DRUID_BUFF_DURATION_SECONDS * 20, 0);
+                case RESISTANCE -> manager.applyPotion(target, PotionEffectType.RESISTANCE, DRUID_BUFF_DURATION_SECONDS * 20, 0);
+                case FIRE_RESISTANCE -> manager.applyPotion(target, PotionEffectType.FIRE_RESISTANCE, DRUID_BUFF_DURATION_SECONDS * 20, 0);
+                case ABSORPTION -> manager.applyPotion(target, PotionEffectType.ABSORPTION, DRUID_BUFF_DURATION_SECONDS * 20, 0);
+                case INSTANT_HEALTH -> target.addPotionEffect(new PotionEffect(PotionEffectType.INSTANT_HEALTH, 1, 0, true, true, true));
+            }
+        }
+
+        static DruidBlessing fromSlot(int slot) {
+            for (DruidBlessing blessing : values()) {
+                if (blessing.slot == slot) {
+                    return blessing;
+                }
+            }
             return null;
         }
     }

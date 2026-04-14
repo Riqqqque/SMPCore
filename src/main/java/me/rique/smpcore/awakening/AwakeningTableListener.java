@@ -180,6 +180,10 @@ public final class AwakeningTableListener implements Listener {
         return item;
     }
 
+    public boolean isAwakeningTableCustomItem(ItemStack item) {
+        return isAwakeningTableItem(item);
+    }
+
     public void copyAwakeningState(ItemMeta sourceMeta, ItemMeta targetMeta) {
         if (sourceMeta == null || targetMeta == null) {
             return;
@@ -567,6 +571,11 @@ public final class AwakeningTableListener implements Listener {
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
+        Inventory top = player.getOpenInventory().getTopInventory();
+        if (top.getHolder() instanceof AwakeningMenuHolder) {
+            returnMenuItem(player, top, ITEM_SLOT);
+            returnMenuItem(player, top, STAR_SLOT);
+        }
         pendingTridentLaunches.remove(player.getUniqueId());
         clearEquippedAwakeningArmorBonuses(player);
     }

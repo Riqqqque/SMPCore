@@ -144,6 +144,7 @@ public final class ConfigManager {
     public double advancedPickaxeDiamondChance;
     public double advancedPickaxeEmeraldChance;
     public int grappleHookCooldownSeconds;
+    public int grappleHookMaxUses;
 
     public int sustenanceTalismanIntervalSeconds;
     public int sustenanceTalismanHungerGain;
@@ -330,6 +331,7 @@ public final class ConfigManager {
         advancedPickaxeDiamondChance = advancedPickaxeWeight(c, "diamond", 0.25);
         advancedPickaxeEmeraldChance = advancedPickaxeWeight(c, "emerald", 0.25);
         grappleHookCooldownSeconds = Math.max(0, c.getInt("custom-tools.grapple-hook.cooldown-seconds", 3));
+        grappleHookMaxUses = Math.max(1, c.getInt("custom-tools.grapple-hook.max-uses", 50));
 
         sustenanceTalismanIntervalSeconds = Math.max(1, c.getInt("talisman-of-sustenance.interval-seconds", 7));
         sustenanceTalismanHungerGain = clamp(c.getInt("talisman-of-sustenance.hunger-gain", 1), 0, 20);

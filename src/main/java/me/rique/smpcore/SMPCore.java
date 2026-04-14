@@ -1,6 +1,7 @@
 package me.rique.smpcore;
 
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
+import me.rique.smpcore.audit.ItemAuditManager;
 import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.backpack.BackpackListener;
 import me.rique.smpcore.boss.BossManager;
@@ -21,6 +22,7 @@ import me.rique.smpcore.death.DeathChestListener;
 import me.rique.smpcore.home.HomeManager;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.CustomToolListener;
+import me.rique.smpcore.item.RareDropVisualListener;
 import me.rique.smpcore.item.ReplenishListener;
 import me.rique.smpcore.item.RewardLanternListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
@@ -69,6 +71,8 @@ public final class SMPCore extends JavaPlugin {
     private ReplenishListener replenishListener;
     private CustomEnchantListener customEnchantListener;
     private CustomToolListener customToolListener;
+    private ItemAuditManager itemAuditManager;
+    private RareDropVisualListener rareDropVisualListener;
     private RewardLanternListener rewardLanternListener;
     private SustenanceTalismanListener sustenanceTalismanListener;
     private VeinMinerListener veinMinerListener;
@@ -123,6 +127,8 @@ public final class SMPCore extends JavaPlugin {
         if (awakeningTableListener != null) awakeningTableListener.shutdown();
         if (superpowerManager != null) superpowerManager.shutdown();
         if (rewardLanternListener != null) rewardLanternListener.shutdown();
+        if (rareDropVisualListener != null) rareDropVisualListener.shutdown();
+        if (itemAuditManager != null) itemAuditManager.shutdown();
         if (teamManager != null) teamManager.shutdown();
         if (databaseManager != null) databaseManager.close();
         getLogger().info("SMPCore disabled.");
@@ -172,6 +178,12 @@ public final class SMPCore extends JavaPlugin {
         awakeningTableListener = new AwakeningTableListener(this);
         pm.registerEvents(awakeningTableListener, this);
         awakeningTableListener.start();
+        rareDropVisualListener = new RareDropVisualListener(this);
+        pm.registerEvents(rareDropVisualListener, this);
+        rareDropVisualListener.start();
+        itemAuditManager = new ItemAuditManager(this);
+        pm.registerEvents(itemAuditManager, this);
+        itemAuditManager.start();
         pm.registerEvents(teamManager, this);
         pm.registerEvents(new JoinListener(this), this);
         restartDragonEggListener();
@@ -223,6 +235,8 @@ public final class SMPCore extends JavaPlugin {
     public ReplenishListener getReplenishListener() { return replenishListener; }
     public CustomEnchantListener getCustomEnchantListener() { return customEnchantListener; }
     public CustomToolListener getCustomToolListener() { return customToolListener; }
+    public ItemAuditManager getItemAuditManager() { return itemAuditManager; }
+    public RareDropVisualListener getRareDropVisualListener() { return rareDropVisualListener; }
     public RewardLanternListener getRewardLanternListener() { return rewardLanternListener; }
     public SustenanceTalismanListener getSustenanceTalismanListener() { return sustenanceTalismanListener; }
     public VeinMinerListener getVeinMinerListener() { return veinMinerListener; }

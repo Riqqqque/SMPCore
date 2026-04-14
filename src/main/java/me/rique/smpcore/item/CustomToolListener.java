@@ -72,6 +72,7 @@ public final class CustomToolListener implements Listener {
 
     private final SMPCore plugin;
     private final NamespacedKey keyCustomToolId;
+    private final NamespacedKey keyGrappleHookUses;
     private final NamespacedKey advancedPickaxeRecipeKey;
     private final NamespacedKey grappleHookRecipeKey;
     private final Map<BlockKey, AdvancedPickaxeContext> advancedPickaxeContexts = new ConcurrentHashMap<>();
@@ -80,6 +81,7 @@ public final class CustomToolListener implements Listener {
     public CustomToolListener(SMPCore plugin) {
         this.plugin = plugin;
         this.keyCustomToolId = new NamespacedKey(plugin, "custom_tool_id");
+        this.keyGrappleHookUses = new NamespacedKey(plugin, "grapple_hook_uses");
         this.advancedPickaxeRecipeKey = new NamespacedKey(plugin, "advanced_pickaxe_recipe");
         this.grappleHookRecipeKey = new NamespacedKey(plugin, "grapple_hook_recipe");
         registerRecipes();
@@ -106,11 +108,15 @@ public final class CustomToolListener implements Listener {
         return customToolId(item) != null;
     }
 
+    public String customToolId(ItemStack item) {
+        return customToolIdInternal(item);
+    }
+
     public boolean refreshCustomToolItem(ItemStack item) {
         if (stripLegacyAmethystPickaxe(item)) {
             return true;
         }
-        if (customToolId(item) == null) {
+        if (customToolIdInternal(item) == null) {
             return false;
         }
         refreshCustomToolPresentation(item);
@@ -386,6 +392,10 @@ public final class CustomToolListener implements Listener {
             return;
         }
 
+        if (!consumeSkyhookUse(player)) {
+            return;
+        }
+
         Vector velocity = pull.normalize().multiply(Math.min(1.85, 0.60 + (distance * 0.08)));
         velocity.setY(Math.max(0.35, Math.min(1.05, velocity.getY() + 0.35)));
         player.setFallDistance(0.0f);
@@ -451,6 +461,11 @@ public final class CustomToolListener implements Listener {
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return item;
         applyCustomToolState(meta, GRAPPLE_HOOK_ID);
+        meta.getPersistentDataContainer().set(
+            keyGrappleHookUses,
+            PersistentDataType.INTEGER,
+            plugin.getConfigManager().grappleHookMaxUses
+        );
         applyCustomToolPresentation(meta, GRAPPLE_HOOK_ID, item.getType());
         item.setItemMeta(meta);
         return item;
@@ -462,7 +477,7 @@ public final class CustomToolListener implements Listener {
         CustomLoreUtil.applyStyledItemFlags(meta);
     }
 
-    private String customToolId(ItemStack item) {
+    private String customToolIdInternal(ItemStack item) {
         String rawId = rawCustomToolId(item);
         return isCustomToolId(rawId) ? rawId : null;
     }
@@ -482,6 +497,7 @@ public final class CustomToolListener implements Listener {
         if (sourceMeta == null || resultMeta == null) return updated;
 
         applyCustomToolState(resultMeta, toolId);
+        copyManagedToolState(sourceMeta, resultMeta, toolId);
         AwakeningTableListener awakening = plugin.getAwakeningTableListener();
         if (awakening != null) {
             awakening.copyAwakeningState(sourceMeta, resultMeta);
@@ -553,6 +569,7 @@ public final class CustomToolListener implements Listener {
             }
             case GRAPPLE_HOOK_ID -> {
                 baseDisplayName = MM.deserialize("<gold><bold>Skyhook</bold></gold>");
+                int uses = normalizeGrappleHookUses(meta);
                 meta.displayName(baseDisplayName);
                 meta.lore(CustomLoreUtil.buildStyledLore(
                     meta,
@@ -565,6 +582,7 @@ public final class CustomToolListener implements Listener {
                         "Sky Pull",
                         "<gray>Cast and reel it in to yank yourself toward the hook.</gray>",
                         "<gray>Cooldown: <white>" + plugin.getConfigManager().grappleHookCooldownSeconds + "s</white>.</gray>",
+                        "<gray>Uses Remaining: <white>" + uses + "</white></gray>",
                         "<gray>Built with simple parts for easy early crafting.</gray>"
                     ))
                 ));
@@ -636,6 +654,57 @@ public final class CustomToolListener implements Listener {
         }
 
         return fallback == null ? null : new ItemStack(fallback.drop(), ThreadLocalRandom.current().nextInt(1, 4));
+    }
+
+    private void copyManagedToolState(ItemMeta sourceMeta, ItemMeta targetMeta, String toolId) {
+        if (!GRAPPLE_HOOK_ID.equals(toolId)) {
+            return;
+        }
+        int uses = normalizeGrappleHookUses(sourceMeta);
+        targetMeta.getPersistentDataContainer().set(keyGrappleHookUses, PersistentDataType.INTEGER, uses);
+    }
+
+    private int normalizeGrappleHookUses(ItemMeta meta) {
+        int maxUses = Math.max(1, plugin.getConfigManager().grappleHookMaxUses);
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        int uses = pdc.getOrDefault(keyGrappleHookUses, PersistentDataType.INTEGER, maxUses);
+        uses = Math.max(0, Math.min(maxUses, uses));
+        pdc.set(keyGrappleHookUses, PersistentDataType.INTEGER, uses);
+        return uses;
+    }
+
+    private boolean consumeSkyhookUse(Player player) {
+        ItemStack skyhook = player.getInventory().getItemInMainHand();
+        if (!GRAPPLE_HOOK_ID.equals(customToolId(skyhook))) {
+            return false;
+        }
+
+        ItemMeta meta = skyhook.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+
+        int uses = normalizeGrappleHookUses(meta);
+        if (uses <= 0) {
+            player.getInventory().setItemInMainHand(null);
+            player.sendMessage(MessageUtil.warn("Your Skyhook has no uses left."));
+            player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 0.8f, 0.9f);
+            return false;
+        }
+
+        uses--;
+        if (uses <= 0) {
+            player.getInventory().setItemInMainHand(null);
+            player.sendMessage(MessageUtil.warn("Your Skyhook snapped apart."));
+            player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 0.9f, 0.8f);
+            return true;
+        }
+
+        meta.getPersistentDataContainer().set(keyGrappleHookUses, PersistentDataType.INTEGER, uses);
+        applyCustomToolPresentation(meta, GRAPPLE_HOOK_ID, skyhook.getType());
+        skyhook.setItemMeta(meta);
+        player.getInventory().setItemInMainHand(skyhook);
+        return true;
     }
 
     private AdvancedPickaxeBonusFamily bonusFamilyOf(Material broken) {

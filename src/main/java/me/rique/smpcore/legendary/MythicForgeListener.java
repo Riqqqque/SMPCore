@@ -28,6 +28,7 @@ import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
@@ -165,6 +166,14 @@ public final class MythicForgeListener implements Listener {
         meta.getPersistentDataContainer().set(keyAscendantCore, PersistentDataType.BYTE, (byte) 1);
         item.setItemMeta(meta);
         return item;
+    }
+
+    public boolean isMythicForgeItemStack(ItemStack item) {
+        return isMythicForgeItem(item);
+    }
+
+    public boolean isAscendantCoreItem(ItemStack item) {
+        return isAscendantCore(item);
     }
 
     public ItemStack[] mythicForgeRecipeMatrix() {
@@ -374,6 +383,18 @@ public final class MythicForgeListener implements Listener {
         if (legendary != null) {
             legendary.resyncLegendaryOwnership(player);
         }
+    }
+
+    @EventHandler
+    public void onQuit(PlayerQuitEvent event) {
+        Inventory top = event.getPlayer().getOpenInventory().getTopInventory();
+        if (!(top.getHolder() instanceof MythicForgeMenuHolder)) {
+            return;
+        }
+
+        returnInput(event.getPlayer(), top, LEFT_SLOT);
+        returnInput(event.getPlayer(), top, CATALYST_SLOT);
+        returnInput(event.getPlayer(), top, RIGHT_SLOT);
     }
 
     private void registerRecipes() {
@@ -622,6 +643,14 @@ public final class MythicForgeListener implements Listener {
         if (reward == null) {
             player.sendMessage(MessageUtil.error("That mythic output is not available right now."));
             return;
+        }
+        if (plugin.getItemAuditManager() != null) {
+            plugin.getItemAuditManager().recordKnownAcquisition(
+                player,
+                reward,
+                "mythic_forge",
+                "Forged at the Mythic Forge from " + recipe.leftId() + " + " + recipe.rightId() + "."
+            );
         }
 
         inventory.setItem(LEFT_SLOT, null);

@@ -248,13 +248,14 @@ public final class CustomEnchantListener implements Listener {
         if (result == null || result.getType() == Material.AIR) return;
 
         event.setCancelled(true);
-        if (!giveAnvilResult(player, event, result)) {
+        if (!canReceiveAnvilResult(player, event)) {
             return;
         }
 
         anvil.setItem(0, null);
         anvil.setItem(1, consumeOne(right));
         anvil.setItem(2, null);
+        giveAnvilResult(player, event, result);
         player.sendMessage(MessageUtil.success(
             "Applied <white>" + enchant.enchant().plainDisplay(enchant.level()) + "</white> to your item."
         ));
@@ -673,6 +674,23 @@ public final class CustomEnchantListener implements Listener {
 
         player.setItemOnCursor(result);
         return true;
+    }
+
+    private boolean canReceiveAnvilResult(Player player, InventoryClickEvent event) {
+        if (event.isShiftClick()) {
+            if (player.getInventory().firstEmpty() != -1) {
+                return true;
+            }
+            player.sendMessage(MessageUtil.warn("You need at least one empty inventory slot."));
+            return false;
+        }
+
+        ItemStack cursor = event.getCursor();
+        if (cursor == null || cursor.getType() == Material.AIR) {
+            return true;
+        }
+        player.sendMessage(MessageUtil.warn("Your cursor must be empty."));
+        return false;
     }
 
     private NamespacedKey keyFor(CustomEnchantEntry enchant) {

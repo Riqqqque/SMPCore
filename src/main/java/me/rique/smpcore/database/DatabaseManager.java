@@ -256,6 +256,50 @@ public final class DatabaseManager {
             ON custom_bosses(boss_id COLLATE NOCASE)
             """;
 
+        String managedItemInstances = """
+            CREATE TABLE IF NOT EXISTS managed_item_instances (
+                instance_id        TEXT PRIMARY KEY,
+                item_key           TEXT NOT NULL,
+                created_at         INTEGER NOT NULL,
+                created_method     TEXT NOT NULL,
+                created_by_uuid    TEXT,
+                created_by_name    TEXT,
+                current_owner_uuid TEXT,
+                current_owner_name TEXT,
+                first_seen_at      INTEGER NOT NULL,
+                last_seen_at       INTEGER NOT NULL
+            )""";
+
+        String managedItemInstancesByOwner = """
+            CREATE INDEX IF NOT EXISTS idx_managed_item_instances_owner
+            ON managed_item_instances(current_owner_uuid)
+            """;
+
+        String managedItemEvents = """
+            CREATE TABLE IF NOT EXISTS managed_item_events (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                logged_at   INTEGER NOT NULL,
+                instance_id TEXT NOT NULL,
+                item_key    TEXT NOT NULL,
+                subject_uuid TEXT,
+                subject_name TEXT,
+                actor_uuid   TEXT,
+                actor_name   TEXT,
+                event_type   TEXT NOT NULL,
+                method       TEXT NOT NULL,
+                details      TEXT
+            )""";
+
+        String managedItemEventsBySubject = """
+            CREATE INDEX IF NOT EXISTS idx_managed_item_events_subject
+            ON managed_item_events(subject_uuid, logged_at DESC)
+            """;
+
+        String managedItemEventsByInstance = """
+            CREATE INDEX IF NOT EXISTS idx_managed_item_events_instance
+            ON managed_item_events(instance_id, logged_at DESC)
+            """;
+
         try (Connection conn = connection(); Statement stmt = conn.createStatement()) {
             stmt.executeUpdate(spawners);
             stmt.executeUpdate(homes);
@@ -274,6 +318,11 @@ public final class DatabaseManager {
             stmt.executeUpdate(legendaryInstancesByType);
             stmt.executeUpdate(customBosses);
             stmt.executeUpdate(customBossesByType);
+            stmt.executeUpdate(managedItemInstances);
+            stmt.executeUpdate(managedItemInstancesByOwner);
+            stmt.executeUpdate(managedItemEvents);
+            stmt.executeUpdate(managedItemEventsBySubject);
+            stmt.executeUpdate(managedItemEventsByInstance);
         }
     }
 
@@ -1121,6 +1170,165 @@ public final class DatabaseManager {
         }, executor);
     }
 
+    public CompletableFuture<List<ManagedItemInstanceRecord>> loadManagedItemInstances() {
+        return CompletableFuture.supplyAsync(() -> {
+            List<ManagedItemInstanceRecord> records = new ArrayList<>();
+            String sql = """
+                SELECT instance_id, item_key, created_at, created_method, created_by_uuid, created_by_name,
+                       current_owner_uuid, current_owner_name, first_seen_at, last_seen_at
+                FROM managed_item_instances
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql);
+                 ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    records.add(new ManagedItemInstanceRecord(
+                        rs.getString("instance_id"),
+                        rs.getString("item_key"),
+                        rs.getLong("created_at"),
+                        rs.getString("created_method"),
+                        parseUuid(rs.getString("created_by_uuid")),
+                        rs.getString("created_by_name"),
+                        parseUuid(rs.getString("current_owner_uuid")),
+                        rs.getString("current_owner_name"),
+                        rs.getLong("first_seen_at"),
+                        rs.getLong("last_seen_at")
+                    ));
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadManagedItemInstances: " + e.getMessage());
+                throw new RuntimeException("loadManagedItemInstances failed", e);
+            }
+            return records;
+        }, executor);
+    }
+
+    public CompletableFuture<Void> saveManagedItemInstance(ManagedItemInstanceRecord record) {
+        return CompletableFuture.runAsync(() -> {
+            if (record == null || record.instanceId() == null || record.instanceId().isBlank() || record.itemKey() == null || record.itemKey().isBlank()) {
+                return;
+            }
+            String sql = """
+                INSERT INTO managed_item_instances (
+                    instance_id, item_key, created_at, created_method, created_by_uuid, created_by_name,
+                    current_owner_uuid, current_owner_name, first_seen_at, last_seen_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(instance_id) DO UPDATE SET
+                    item_key = excluded.item_key,
+                    created_at = excluded.created_at,
+                    created_method = excluded.created_method,
+                    created_by_uuid = excluded.created_by_uuid,
+                    created_by_name = excluded.created_by_name,
+                    current_owner_uuid = excluded.current_owner_uuid,
+                    current_owner_name = excluded.current_owner_name,
+                    first_seen_at = excluded.first_seen_at,
+                    last_seen_at = excluded.last_seen_at
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, record.instanceId());
+                ps.setString(2, record.itemKey());
+                ps.setLong(3, record.createdAt());
+                ps.setString(4, record.createdMethod());
+                setUuid(ps, 5, record.createdByUuid());
+                ps.setString(6, record.createdByName());
+                setUuid(ps, 7, record.currentOwnerUuid());
+                ps.setString(8, record.currentOwnerName());
+                ps.setLong(9, record.firstSeenAt());
+                ps.setLong(10, record.lastSeenAt());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("saveManagedItemInstance: " + e.getMessage());
+                throw new RuntimeException("saveManagedItemInstance failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Void> saveManagedItemEvent(ManagedItemEventRecord record) {
+        return CompletableFuture.runAsync(() -> {
+            if (record == null || record.itemKey() == null || record.itemKey().isBlank() || record.eventType() == null || record.eventType().isBlank()) {
+                return;
+            }
+            String sql = """
+                INSERT INTO managed_item_events (
+                    logged_at, instance_id, item_key, subject_uuid, subject_name,
+                    actor_uuid, actor_name, event_type, method, details
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setLong(1, record.loggedAt());
+                ps.setString(2, record.instanceId() == null ? "" : record.instanceId());
+                ps.setString(3, record.itemKey());
+                setUuid(ps, 4, record.subjectUuid());
+                ps.setString(5, record.subjectName());
+                setUuid(ps, 6, record.actorUuid());
+                ps.setString(7, record.actorName());
+                ps.setString(8, record.eventType());
+                ps.setString(9, record.method());
+                ps.setString(10, record.details());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("saveManagedItemEvent: " + e.getMessage());
+                throw new RuntimeException("saveManagedItemEvent failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<List<ManagedItemEventRecord>> loadManagedItemEvents(UUID subjectUuid, String itemKeyFilter, int limit) {
+        return CompletableFuture.supplyAsync(() -> {
+            List<ManagedItemEventRecord> records = new ArrayList<>();
+            if (subjectUuid == null) {
+                return records;
+            }
+
+            String sql = """
+                SELECT id, logged_at, instance_id, item_key, subject_uuid, subject_name,
+                       actor_uuid, actor_name, event_type, method, details
+                FROM managed_item_events
+                WHERE subject_uuid = ?
+                  AND (? IS NULL OR item_key = ?)
+                ORDER BY logged_at DESC, id DESC
+                LIMIT ?
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, subjectUuid.toString());
+                if (itemKeyFilter == null || itemKeyFilter.isBlank()) {
+                    ps.setNull(2, Types.VARCHAR);
+                    ps.setNull(3, Types.VARCHAR);
+                } else {
+                    ps.setString(2, itemKeyFilter);
+                    ps.setString(3, itemKeyFilter);
+                }
+                ps.setInt(4, Math.max(1, limit));
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        records.add(new ManagedItemEventRecord(
+                            rs.getLong("id"),
+                            rs.getLong("logged_at"),
+                            rs.getString("instance_id"),
+                            rs.getString("item_key"),
+                            parseUuid(rs.getString("subject_uuid")),
+                            rs.getString("subject_name"),
+                            parseUuid(rs.getString("actor_uuid")),
+                            rs.getString("actor_name"),
+                            rs.getString("event_type"),
+                            rs.getString("method"),
+                            rs.getString("details")
+                        ));
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadManagedItemEvents: " + e.getMessage());
+                throw new RuntimeException("loadManagedItemEvents failed", e);
+            }
+            return records;
+        }, executor);
+    }
+
     /** Upsert a player record; returns the join count AFTER this visit. */
     public CompletableFuture<Integer> upsertPlayer(UUID uuid, String username) {
         return CompletableFuture.supplyAsync(() -> {
@@ -1201,6 +1409,25 @@ public final class DatabaseManager {
         }, executor);
     }
 
+    private static void setUuid(PreparedStatement ps, int index, UUID uuid) throws SQLException {
+        if (uuid == null) {
+            ps.setNull(index, Types.VARCHAR);
+        } else {
+            ps.setString(index, uuid.toString());
+        }
+    }
+
+    private static UUID parseUuid(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
     private static boolean isConstraintViolation(SQLException e) {
         String state = e.getSQLState();
         return "23000".equals(state) || e.getMessage().toLowerCase(Locale.ROOT).contains("constraint");
@@ -1208,6 +1435,31 @@ public final class DatabaseManager {
 
     public record TeamRecord(String name, UUID ownerUuid, Set<UUID> members) {}
     public record LegendaryClaimedInstanceRecord(String instanceId, String legendaryId, UUID ownerUuid) {}
+    public record ManagedItemInstanceRecord(
+        String instanceId,
+        String itemKey,
+        long createdAt,
+        String createdMethod,
+        UUID createdByUuid,
+        String createdByName,
+        UUID currentOwnerUuid,
+        String currentOwnerName,
+        long firstSeenAt,
+        long lastSeenAt
+    ) {}
+    public record ManagedItemEventRecord(
+        long id,
+        long loggedAt,
+        String instanceId,
+        String itemKey,
+        UUID subjectUuid,
+        String subjectName,
+        UUID actorUuid,
+        String actorName,
+        String eventType,
+        String method,
+        String details
+    ) {}
     public record LegendaryAltarRecord(
         String legendaryId,
         String world,

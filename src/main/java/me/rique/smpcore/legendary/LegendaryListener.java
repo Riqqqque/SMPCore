@@ -2,6 +2,7 @@ package me.rique.smpcore.legendary;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.awakening.AwakeningTableListener;
+import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
 import me.rique.smpcore.power.SuperpowerManager;
@@ -124,7 +125,7 @@ public final class LegendaryListener implements Listener {
     private static final String BACKPACK_RECIPE_ID = "backpack";
     private static final int[] CUSTOM_RECIPE_MENU_SLOTS = {31, 36, 37, 38, 39, 40, 41, 42, 43, 44};
 
-    private static final int LEGENDARY_ITEM_DATA_VERSION = 17;
+    private static final int LEGENDARY_ITEM_DATA_VERSION = 19;
     private static final double ORB_OF_THE_MYSTICS_DROP_CHANCE = 0.10;
     private static final int STARTUP_LEGENDARY_MIGRATION_CHUNKS_PER_TICK = 24;
     private static final int LEGENDARY_ITEM_SCAN_MAX_DEPTH = 2;
@@ -183,6 +184,8 @@ public final class LegendaryListener implements Listener {
     private static final double STRENGTH_SWORD_DOMAIN_RADIUS = 10.0;
     private static final double STRENGTH_SWORD_DOMAIN_HEALTH_BONUS = 10.0;
     private static final double STRENGTH_SWORD_DOMAIN_ATTACK_SPEED_SCALAR = 0.15;
+    private static final int STRENGTH_SWORD_MAX_DURABILITY = 4096;
+    private static final int STRENGTH_SWORD_REPAIR_XP_COST = 12;
     private static final double FARADAY_PLAYER_SCAN_RANGE = 5000.0;
     private static final int FARADAY_SCAN_MAX_USES = 15;
     private static final int LIFE_STEALER_MAX_STACKS = 3;
@@ -518,6 +521,24 @@ public final class LegendaryListener implements Listener {
         ItemStack right = event.getInventory().getSecondItem();
         LegendaryType leftType = typeOf(left);
         LegendaryType rightType = typeOf(right);
+
+        if ((leftType == LegendaryType.STRENGTH_SWORD && isCrimsonDominionRepairItem(right))
+            || (rightType == LegendaryType.STRENGTH_SWORD && isCrimsonDominionRepairItem(left))) {
+            ItemStack source = leftType == LegendaryType.STRENGTH_SWORD ? left : right;
+            ItemStack repaired = createStrengthSwordRepairResult(source);
+            if (repaired == null) {
+                event.setResult(null);
+                return;
+            }
+            if (event.getView() instanceof org.bukkit.inventory.view.AnvilView anvilView) {
+                anvilView.setRepairCost(STRENGTH_SWORD_REPAIR_XP_COST);
+                anvilView.setRepairItemCountCost(1);
+                anvilView.setMaximumRepairCost(40);
+            }
+            event.setResult(repaired);
+            return;
+        }
+
         if (leftType == null && rightType == null) return;
         if (!canUseVanillaLegendaryUtilities(leftType, rightType)) {
             event.setResult(null);
@@ -526,8 +547,13 @@ public final class LegendaryListener implements Listener {
 
         LegendaryType sourceType = utilitySourceType(leftType, rightType);
         ItemStack source = sourceType == leftType ? left : right;
+        ItemStack other = sourceType == leftType ? right : left;
         ItemStack result = event.getResult();
         if (source == null || result == null || result.getType() == Material.AIR) return;
+        if (sourceType == LegendaryType.STRENGTH_SWORD && !canUseStrengthSwordUtility(other, leftType, rightType)) {
+            event.setResult(null);
+            return;
+        }
         if (sourceType == LegendaryType.GOD_CHESTPLATE && !result.getEnchantments().isEmpty()) {
             event.setResult(null);
             return;
@@ -554,6 +580,73 @@ public final class LegendaryListener implements Listener {
             return first != null || second != null;
         }
         return first == second;
+    }
+
+    private boolean canUseStrengthSwordUtility(ItemStack other, LegendaryType first, LegendaryType second) {
+        if (other == null || other.getType() == Material.AIR) {
+            return true;
+        }
+        if (first == LegendaryType.STRENGTH_SWORD && second == LegendaryType.STRENGTH_SWORD) {
+            return true;
+        }
+        if (isCrimsonDominionRepairItem(other)) {
+            return true;
+        }
+        return other.getType() == Material.ENCHANTED_BOOK;
+    }
+
+    private boolean isCrimsonDominionRepairItem(ItemStack item) {
+        BossManager bossManager = plugin.getBossManager();
+        return bossManager != null && bossManager.isDominionCore(item);
+    }
+
+    private ItemStack createStrengthSwordRepairResult(ItemStack source) {
+        if (typeOf(source) != LegendaryType.STRENGTH_SWORD) {
+            return null;
+        }
+
+        ItemStack repaired = source.clone();
+        ItemMeta meta = repaired.getItemMeta();
+        if (!(meta instanceof Damageable damageable) || !damageable.hasDamage() || damageable.getDamage() <= 0) {
+            return null;
+        }
+
+        applyLegendaryDurabilitySettings(meta, LegendaryType.STRENGTH_SWORD);
+        damageable.setDamage(0);
+        meta.removeEnchant(enchantMending);
+        meta.lore(buildStrengthSwordLore(meta, strengthSwordVictimCount(meta)));
+        repaired.setItemMeta(meta);
+        return repaired;
+    }
+
+    private boolean damageStrengthSwordAbilityUse(Player player, int amount) {
+        if (player == null || amount <= 0) {
+            return false;
+        }
+
+        ItemStack sword = player.getInventory().getItemInMainHand();
+        if (typeOf(sword) != LegendaryType.STRENGTH_SWORD) {
+            return false;
+        }
+
+        ItemMeta meta = sword.getItemMeta();
+        if (!(meta instanceof Damageable damageable)) {
+            return false;
+        }
+
+        applyLegendaryDurabilitySettings(meta, LegendaryType.STRENGTH_SWORD);
+        int maxDamage = damageable.hasMaxDamage() ? damageable.getMaxDamage() : STRENGTH_SWORD_MAX_DURABILITY;
+        int nextDamage = damageable.getDamage() + amount;
+        if (nextDamage >= maxDamage) {
+            player.getInventory().setItemInMainHand(new ItemStack(Material.AIR));
+            player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
+            return true;
+        }
+
+        damageable.setDamage(nextDamage);
+        sword.setItemMeta(meta);
+        player.getInventory().setItemInMainHand(sword);
+        return true;
     }
 
     private LegendaryType utilitySourceType(LegendaryType first, LegendaryType second) {
@@ -583,13 +676,7 @@ public final class LegendaryListener implements Listener {
         }
         resultMeta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         CustomLoreUtil.applyStyledItemFlags(resultMeta);
-        if (type == LegendaryType.EMERALD_BLADE) {
-            resultMeta.setUnbreakable(false);
-            resultMeta.removeItemFlags(ItemFlag.HIDE_UNBREAKABLE);
-        } else {
-            resultMeta.setUnbreakable(true);
-            resultMeta.addItemFlags(ItemFlag.HIDE_UNBREAKABLE);
-        }
+        applyLegendaryDurabilitySettings(resultMeta, type);
         AwakeningTableListener awakening = plugin.getAwakeningTableListener();
         if (awakening != null) {
             awakening.copyAwakeningState(sourceMeta, resultMeta);
@@ -821,8 +908,10 @@ public final class LegendaryListener implements Listener {
         Inventory top = event.getView().getTopInventory();
         if (top.getHolder() instanceof RecipeMenuHolder
             || top.getHolder() instanceof AncientScrollRecipeHolder
+            || top.getHolder() instanceof AscendantCoreRecipeHolder
             || top.getHolder() instanceof BackpackRecipeHolder
             || top.getHolder() instanceof TalismanRecipeHolder
+            || top.getHolder() instanceof MythicForgeRecipeHolder
             || top.getHolder() instanceof CustomToolRecipeHolder
             || top.getHolder() instanceof FaradaysMagnetRecipeHolder) {
             event.setCancelled(true);
@@ -921,6 +1010,14 @@ public final class LegendaryListener implements Listener {
 
     public boolean isLegendaryItem(ItemStack item) {
         return typeOf(item) != null;
+    }
+
+    public boolean isEnderBoneItem(ItemStack item) {
+        return isEnderBone(item);
+    }
+
+    public boolean isOrbOfTheMysticsItem(ItemStack item) {
+        return isOrbOfTheMystics(item);
     }
 
     public boolean refreshLegendaryItem(ItemStack item) {
@@ -1357,7 +1454,17 @@ public final class LegendaryListener implements Listener {
                 return;
             }
 
-            event.getDrops().add(createEnderBone().asQuantity(plugin.getConfigManager().enderBoneDropCount));
+            ItemStack enderBoneDrop = createEnderBone().asQuantity(plugin.getConfigManager().enderBoneDropCount);
+            Player killer = dragon.getKiller();
+            if (killer != null && plugin.getItemAuditManager() != null) {
+                plugin.getItemAuditManager().recordKnownAcquisition(
+                    killer,
+                    enderBoneDrop,
+                    "ender_dragon_drop",
+                    "Dropped from the Ender Dragon."
+                );
+            }
+            event.getDrops().add(enderBoneDrop);
         }
 
         UUID mobId = event.getEntity().getUniqueId();
@@ -1373,7 +1480,16 @@ public final class LegendaryListener implements Listener {
         Player killer = event.getEntity().getKiller();
         if (event.getEntity() instanceof Enderman && killer != null
             && ThreadLocalRandom.current().nextDouble() < ORB_OF_THE_MYSTICS_DROP_CHANCE) {
-            event.getDrops().add(createOrbOfTheMystics());
+            ItemStack orbDrop = createOrbOfTheMystics();
+            if (plugin.getItemAuditManager() != null) {
+                plugin.getItemAuditManager().recordKnownAcquisition(
+                    killer,
+                    orbDrop,
+                    "enderman_drop",
+                    "Dropped from an Enderman kill."
+                );
+            }
+            event.getDrops().add(orbDrop);
         }
         if (killer == null) return;
         if ((event.getEntity().getType() == org.bukkit.entity.EntityType.PIGLIN
@@ -3517,6 +3633,7 @@ public final class LegendaryListener implements Listener {
         world.spawnParticle(Particle.SONIC_BOOM, impact, 1, 0.0, 0.0, 0.0, 0.0);
         world.playSound(player.getLocation(), Sound.ENTITY_WARDEN_SONIC_BOOM, 1.0f, 0.8f);
         setCooldown(strengthSwordBeamCd, playerId, STRENGTH_SWORD_BEAM_COOLDOWN);
+        damageStrengthSwordAbilityUse(player, 1);
 
         if (target != null && applyWardenBladeTrueDamage(player, target, 8.0)) {
             world.spawnParticle(Particle.DUST, target.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.25, 0.45, 0.25, 0.0, new Particle.DustOptions(Color.fromRGB(255, 60, 80), 1.2f));
@@ -3560,6 +3677,7 @@ public final class LegendaryListener implements Listener {
         world.playSound(center, Sound.ENTITY_WARDEN_SONIC_BOOM, 0.5f, 0.6f);
         world.spawnParticle(Particle.ENCHANT, center.clone().add(0.0, 1.0, 0.0), 42, 1.2, 0.6, 1.2, 0.03);
         world.spawnParticle(Particle.DUST, center.clone().add(0.0, 0.3, 0.0), 28, STRENGTH_SWORD_DOMAIN_RADIUS, 0.1, STRENGTH_SWORD_DOMAIN_RADIUS, 0.0, new Particle.DustOptions(Color.fromRGB(255, 70, 100), 1.3f));
+        damageStrengthSwordAbilityUse(player, 1);
         player.sendMessage(MessageUtil.success(
             "Crimson Dominion domain opened for <white>" + STRENGTH_SWORD_DOMAIN_SECONDS + "s</white>."
         ));
@@ -4979,6 +5097,14 @@ public final class LegendaryListener implements Listener {
         }
 
         ItemStack reward = createItem(type);
+        if (plugin.getItemAuditManager() != null) {
+            plugin.getItemAuditManager().recordKnownAcquisition(
+                player,
+                reward,
+                source,
+                "Created " + type.display + " from " + source + "."
+            );
+        }
         Map<Integer, ItemStack> leftovers = player.getInventory().addItem(reward);
         leftovers.values().forEach(item -> player.getWorld().dropItemNaturally(player.getLocation(), item));
         registerLegendaryInstance(player, reward, "altar".equals(source));
@@ -5618,13 +5744,14 @@ public final class LegendaryListener implements Listener {
 
     private List<Component> buildStrengthSwordLore(ItemMeta meta, int uniqueVictimCount) {
         int stage = strengthSwordStage(uniqueVictimCount);
-        return buildLegendaryLore(
+        return buildMythicLore(
             meta,
             Material.NETHERITE_SWORD,
             "SWORD",
             List.of(
                 "<gray>Unique Player Kills: <white>" + uniqueVictimCount + "</white></gray>",
                 "<gray>Current Stage: <white>" + stage + "</white>/3</gray>",
+                "<gray>Durability: <white>" + STRENGTH_SWORD_MAX_DURABILITY + "</white></gray>",
                 "<gray>Beam Cooldown: <white>" + STRENGTH_SWORD_BEAM_COOLDOWN + "s</white> | Domain Cooldown: <white>" + STRENGTH_SWORD_DOMAIN_COOLDOWN + "s</white></gray>"
             ),
             CustomLoreUtil.section(
@@ -5649,7 +5776,8 @@ public final class LegendaryListener implements Listener {
             CustomLoreUtil.section(
                 "Limit",
                 "Bound Edge",
-                "<gray>This sword can never receive <white>Mending</white>.</gray>"
+                "<gray>This sword can never receive <white>Mending</white>.</gray>",
+                "<gray>Repair it in an <white>Anvil</white> using a <white>Dominion Core</white>.</gray>"
             )
         );
     }
@@ -6730,6 +6858,7 @@ public final class LegendaryListener implements Listener {
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return;
 
+        applyLegendaryDurabilitySettings(meta, type);
         applyLegendaryTypeState(meta, type);
         item.setItemMeta(meta);
     }
@@ -6742,13 +6871,25 @@ public final class LegendaryListener implements Listener {
         meta.displayName(MM.deserialize(type.display));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         CustomLoreUtil.applyStyledItemFlags(meta);
-        if (type == LegendaryType.EMERALD_BLADE) {
+        applyLegendaryDurabilitySettings(meta, type);
+    }
+
+    private void applyLegendaryDurabilitySettings(ItemMeta meta, LegendaryType type) {
+        if (type == LegendaryType.EMERALD_BLADE || type == LegendaryType.STRENGTH_SWORD) {
             meta.setUnbreakable(false);
             meta.removeItemFlags(ItemFlag.HIDE_UNBREAKABLE);
-            return;
+        } else {
+            meta.setUnbreakable(true);
+            meta.addItemFlags(ItemFlag.HIDE_UNBREAKABLE);
         }
-        meta.setUnbreakable(true);
-        meta.addItemFlags(ItemFlag.HIDE_UNBREAKABLE);
+
+        if (meta instanceof Damageable damageable) {
+            if (type == LegendaryType.STRENGTH_SWORD) {
+                damageable.setMaxDamage(STRENGTH_SWORD_MAX_DURABILITY);
+            } else if (damageable.hasMaxDamage()) {
+                damageable.setMaxDamage(null);
+            }
+        }
     }
 
     private void applyLegendaryTypeState(ItemMeta meta, LegendaryType type) {
@@ -6917,7 +7058,7 @@ public final class LegendaryListener implements Listener {
                 );
                 meta.lore(buildLegendaryLore(
                     meta,
-                    awakened ? Material.DIAMOND_BOOTS : Material.LEATHER_BOOTS,
+                    Material.DIAMOND_BOOTS,
                     "BOOTS",
                     List.of(
                         "<gray>Only works while worn</gray>",

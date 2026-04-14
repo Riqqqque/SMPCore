@@ -160,13 +160,23 @@ public final class SustenanceTalismanListener implements Listener {
         }
 
         event.setCancelled(true);
-        if (!giveCraftResult(player, event, createTalismanItem())) {
+        if (!canReceiveCraftResult(player, event)) {
             return;
         }
         if (!consumeRecipeIngredients(inventory)) {
             player.sendMessage(MessageUtil.error("The talisman recipe ingredients were invalid."));
             return;
         }
+        ItemStack result = createTalismanItem();
+        if (plugin.getItemAuditManager() != null) {
+            plugin.getItemAuditManager().recordKnownAcquisition(
+                player,
+                result,
+                "talisman_craft",
+                "Crafted a Talisman of Sustenance."
+            );
+        }
+        giveCraftResult(player, event, result);
 
         inventory.setResult(null);
         player.updateInventory();
@@ -423,6 +433,23 @@ public final class SustenanceTalismanListener implements Listener {
 
         player.setItemOnCursor(result);
         return true;
+    }
+
+    private boolean canReceiveCraftResult(Player player, InventoryClickEvent event) {
+        if (event.isShiftClick()) {
+            if (player.getInventory().firstEmpty() != -1) {
+                return true;
+            }
+            player.sendMessage(MessageUtil.warn("You need at least one empty inventory slot."));
+            return false;
+        }
+
+        ItemStack cursor = event.getCursor();
+        if (cursor == null || cursor.getType() == Material.AIR) {
+            return true;
+        }
+        player.sendMessage(MessageUtil.warn("Your cursor must be empty."));
+        return false;
     }
 
     private boolean isRealTotem(ItemStack item) {
