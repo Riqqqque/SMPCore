@@ -104,25 +104,14 @@ public final class ReplenishListener implements Listener {
         if (result == null || result.getType() == Material.AIR) return;
 
         event.setCancelled(true);
-
-        if (event.isShiftClick()) {
-            if (player.getInventory().firstEmpty() == -1) {
-                player.sendMessage(MessageUtil.warn("You need at least one empty inventory slot."));
-                return;
-            }
-            player.getInventory().addItem(result.clone());
-        } else {
-            ItemStack cursor = event.getCursor();
-            if (cursor != null && cursor.getType() != Material.AIR) {
-                player.sendMessage(MessageUtil.warn("Your cursor must be empty."));
-                return;
-            }
-            player.setItemOnCursor(result.clone());
+        if (!canReceiveAnvilResult(player, event)) {
+            return;
         }
 
         anvil.setItem(0, null);
         anvil.setItem(1, consumeOne(right));
         anvil.setItem(2, null);
+        giveAnvilResult(player, event, result.clone());
         player.sendMessage(MessageUtil.success("Applied <white>Replenish I</white> to your hoe."));
     }
 
@@ -259,6 +248,31 @@ public final class ReplenishListener implements Listener {
             Map<Integer, ItemStack> leftovers = player.getInventory().addItem(drop);
             leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(origin, left));
         }
+    }
+
+    private boolean canReceiveAnvilResult(Player player, InventoryClickEvent event) {
+        if (event.isShiftClick()) {
+            if (player.getInventory().firstEmpty() != -1) {
+                return true;
+            }
+            player.sendMessage(MessageUtil.warn("You need at least one empty inventory slot."));
+            return false;
+        }
+
+        ItemStack cursor = event.getCursor();
+        if (cursor == null || cursor.getType() == Material.AIR) {
+            return true;
+        }
+        player.sendMessage(MessageUtil.warn("Your cursor must be empty."));
+        return false;
+    }
+
+    private void giveAnvilResult(Player player, InventoryClickEvent event, ItemStack result) {
+        if (event.isShiftClick()) {
+            player.getInventory().addItem(result);
+            return;
+        }
+        player.setItemOnCursor(result);
     }
 
     private record CropReplantState(BlockData replanted, boolean mature) {}

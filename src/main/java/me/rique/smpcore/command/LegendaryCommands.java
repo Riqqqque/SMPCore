@@ -8,6 +8,7 @@ import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import io.papermc.paper.command.brigadier.argument.resolvers.selector.PlayerSelectorArgumentResolver;
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.audit.ItemAuditManager;
 import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.entity.Player;
@@ -97,6 +98,10 @@ public final class LegendaryCommands {
             return 0;
         }
 
+        ItemAuditManager audit = plugin.getItemAuditManager();
+        if (audit != null) {
+            audit.recordKnownAcquisition(target, item, sender, "admin_legendary_give", "Given via /legendary give.");
+        }
         Map<Integer, ItemStack> leftovers = target.getInventory().addItem(item);
         leftovers.values().forEach(left -> target.getWorld().dropItemNaturally(target.getLocation(), left));
         legendary.resyncLegendaryOwnership(target);

@@ -31,6 +31,7 @@ import org.bukkit.entity.Projectile;
 import org.bukkit.entity.Skeleton;
 import org.bukkit.entity.Spider;
 import org.bukkit.entity.TextDisplay;
+import org.bukkit.entity.Warden;
 import org.bukkit.entity.Zombie;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -74,6 +75,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class BossManager implements Listener {
 
+    public static final String DOMINION_CORE_ITEM_ID = "dominion_core";
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final Component MENU_TITLE = MM.deserialize("<gradient:#ff5e5b:#ff914d><bold>Boss Control</bold></gradient>");
     private static final int[] BOSS_SLOTS = {
@@ -90,6 +92,9 @@ public final class BossManager implements Listener {
     private final NamespacedKey keyBossPhase;
     private final NamespacedKey keyBossPrimaryCooldown;
     private final NamespacedKey keyBossSecondaryCooldown;
+    private final NamespacedKey keyBossMinionMarker;
+    private final NamespacedKey keyBossMinionOwner;
+    private final NamespacedKey keyDominionCoreItem;
 
     private final Map<UUID, BossRecord> trackedBosses = new ConcurrentHashMap<>();
     private final Map<String, Set<UUID>> trackedByBossId = new ConcurrentHashMap<>();
@@ -105,6 +110,9 @@ public final class BossManager implements Listener {
         this.keyBossPhase = new NamespacedKey(plugin, "boss_phase");
         this.keyBossPrimaryCooldown = new NamespacedKey(plugin, "boss_primary_cd");
         this.keyBossSecondaryCooldown = new NamespacedKey(plugin, "boss_secondary_cd");
+        this.keyBossMinionMarker = new NamespacedKey(plugin, "boss_minion_marker");
+        this.keyBossMinionOwner = new NamespacedKey(plugin, "boss_minion_owner");
+        this.keyDominionCoreItem = new NamespacedKey(plugin, DOMINION_CORE_ITEM_ID);
     }
 
     public void start() {
@@ -166,6 +174,37 @@ public final class BossManager implements Listener {
             options.add(type.id());
         }
         return options;
+    }
+
+    public ItemStack createDominionCoreItem() {
+        ItemStack item = new ItemStack(Material.ECHO_SHARD);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+
+        meta.displayName(MM.deserialize("<gradient:#ef4444:#f97316><bold>Dominion Core</bold></gradient>"));
+        meta.lore(List.of(
+            MM.deserialize("<gray>A pulsing shard torn from a fallen dominion warden.</gray>"),
+            MM.deserialize("<gray>Use it in an <white>Anvil</white> with <white>Crimson Dominion</white></gray>"),
+            MM.deserialize("<gray>to fully restore the blade's durability.</gray>")
+        ));
+        meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+        meta.getPersistentDataContainer().set(keyDominionCoreItem, PersistentDataType.BYTE, (byte) 1);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    public boolean isDominionCore(ItemStack item) {
+        if (item == null || item.getType() != Material.ECHO_SHARD) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        Byte tagged = meta.getPersistentDataContainer().get(keyDominionCoreItem, PersistentDataType.BYTE);
+        return tagged != null && tagged == (byte) 1;
     }
 
     public void openBossMenu(Player player) {
@@ -352,16 +391,45 @@ public final class BossManager implements Listener {
             updateBossHologram(living, type);
             tickBossBehavior(living, type);
         }
+
+        for (World world : Bukkit.getWorlds()) {
+            for (Chunk chunk : world.getLoadedChunks()) {
+                cleanupOrphanBossMinions(chunk);
+            }
+        }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBossDeath(EntityDeathEvent event) {
         Entity entity = event.getEntity();
         BossRecord record = bossRecord(entity);
         if (record != null) {
+            BossType type = BossType.fromId(record.bossId());
+            if (type == BossType.VORALITH_THE_CRIMSON_WARDEN) {
+                Player killer = event.getEntity().getKiller();
+                ItemStack coreDrop = createDominionCoreItem();
+                if (killer != null && plugin.getItemAuditManager() != null) {
+                    plugin.getItemAuditManager().recordKnownAcquisition(
+                        killer,
+                        coreDrop,
+                        "boss_drop",
+                        "Dropped from Voralith the Crimson Warden."
+                    );
+                }
+                event.getDrops().clear();
+                event.getDrops().add(coreDrop);
+                event.setDroppedExp(Math.max(event.getDroppedExp(), 80));
+            }
+            despawnBossMinions(record.entityUuid());
             destroyBossVisuals(record.entityUuid());
             untrackRecord(record.entityUuid());
             plugin.getDatabase().deleteBossRecord(record.entityUuid());
+            return;
+        }
+
+        if (isBossMinion(entity)) {
+            entity.getPersistentDataContainer().remove(keyBossMinionMarker);
+            entity.getPersistentDataContainer().remove(keyBossMinionOwner);
         }
     }
 
@@ -425,6 +493,11 @@ public final class BossManager implements Listener {
 
         if (type == BossType.VESPER_THE_WIDOW_QUEEN && !projectileHit) {
             handleVesperMeleeHit(bossEntity, target, phase);
+            return;
+        }
+
+        if (type == BossType.VORALITH_THE_CRIMSON_WARDEN && !projectileHit) {
+            handleVoralithMeleeHit(bossEntity, target, phase, event);
         }
     }
 
@@ -801,6 +874,7 @@ public final class BossManager implements Listener {
             case YULE_THE_MINION -> tickYuleTheMinion(entity);
             case KAEL_THE_ASHEN -> tickKaelTheAshen(entity);
             case VESPER_THE_WIDOW_QUEEN -> tickVesperTheWidowQueen(entity);
+            case VORALITH_THE_CRIMSON_WARDEN -> tickVoralithTheCrimsonWarden(entity);
         }
     }
 
@@ -815,9 +889,97 @@ public final class BossManager implements Listener {
 
         setBossPhase(entity, 2);
         entity.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH, Integer.MAX_VALUE, 0, false, true, true));
+        spawnYulePhaseTwoMinions(entity);
         entity.getWorld().spawnParticle(Particle.DUST, entity.getLocation().clone().add(0.0, 1.0, 0.0), 28, 0.35, 0.55, 0.35, 0.0, new Particle.DustOptions(Color.fromRGB(178, 34, 34), 1.2f));
         entity.getWorld().spawnParticle(Particle.ANGRY_VILLAGER, entity.getLocation().clone().add(0.0, 1.1, 0.0), 12, 0.25, 0.40, 0.25, 0.0);
         entity.getWorld().playSound(entity.getLocation(), Sound.ENTITY_ZOMBIE_VILLAGER_CONVERTED, 0.9f, 0.65f);
+    }
+
+    private void spawnYulePhaseTwoMinions(LivingEntity bossEntity) {
+        BossRecord record = bossRecord(bossEntity);
+        if (record == null || bossEntity.getWorld() == null) {
+            return;
+        }
+
+        LivingEntity currentTarget = currentBossTarget(bossEntity);
+        World world = bossEntity.getWorld();
+        Location origin = bossEntity.getLocation();
+        double[][] offsets = {
+            {2.0, 0.0},
+            {-2.0, 0.0},
+            {0.0, 2.0}
+        };
+
+        for (double[] offset : offsets) {
+            Location spawn = origin.clone().add(offset[0], 0.0, offset[1]);
+            spawn = findGroundedSpawn(world, spawn);
+            Zombie minion = world.spawn(spawn, Zombie.class, zombie -> {
+                zombie.setAdult();
+                zombie.setPersistent(true);
+                zombie.setRemoveWhenFarAway(false);
+                zombie.setCanPickupItems(false);
+                zombie.setConversionTime(-1);
+                zombie.customName(MM.deserialize("<red>Yule's Thrall</red>"));
+                zombie.setCustomNameVisible(false);
+            });
+
+            clearBossEquipment(minion);
+            equipBossArmor(
+                minion,
+                new ItemStack(Material.GOLDEN_HELMET),
+                new ItemStack(Material.GOLDEN_CHESTPLATE),
+                new ItemStack(Material.GOLDEN_LEGGINGS),
+                new ItemStack(Material.GOLDEN_BOOTS)
+            );
+            equipBossHands(minion, new ItemStack(Material.GOLDEN_SWORD), null);
+            setAttributeBase(minion, Attribute.MAX_HEALTH, 40.0);
+            minion.setHealth(40.0);
+            setAttributeBase(minion, Attribute.ATTACK_DAMAGE, 8.0);
+            setAttributeBase(minion, Attribute.MOVEMENT_SPEED, 0.33);
+            setAttributeBase(minion, Attribute.FOLLOW_RANGE, 28.0);
+            setAttributeBase(minion, Attribute.KNOCKBACK_RESISTANCE, 0.20);
+            markBossMinion(minion, record.entityUuid());
+            if (currentTarget != null && currentTarget.isValid() && !currentTarget.isDead()) {
+                minion.setTarget(currentTarget);
+            }
+
+            Location center = minion.getLocation().clone().add(0.0, 1.0, 0.0);
+            world.spawnParticle(Particle.SMOKE, center, 10, 0.25, 0.35, 0.25, 0.02);
+            world.spawnParticle(
+                Particle.DUST,
+                center,
+                10,
+                0.18,
+                0.25,
+                0.18,
+                0.0,
+                new Particle.DustOptions(Color.fromRGB(196, 80, 40), 1.0f)
+            );
+        }
+    }
+
+    private Location findGroundedSpawn(World world, Location preferred) {
+        Location candidate = preferred.clone();
+        int baseY = Math.max(world.getMinHeight(), Math.min(world.getMaxHeight() - 2, candidate.getBlockY()));
+        candidate.setY(baseY);
+
+        for (int offset = 0; offset <= 4; offset++) {
+            int[] checks = offset == 0 ? new int[]{0} : new int[]{offset, -offset};
+            for (int dy : checks) {
+                int y = baseY + dy;
+                if (y < world.getMinHeight() || y >= world.getMaxHeight() - 1) {
+                    continue;
+                }
+                Block feet = world.getBlockAt(candidate.getBlockX(), y, candidate.getBlockZ());
+                Block head = feet.getRelative(BlockFace.UP);
+                Block below = feet.getRelative(BlockFace.DOWN);
+                if (!feet.isPassable() || !head.isPassable() || below.isPassable()) {
+                    continue;
+                }
+                return feet.getLocation().add(0.5, 0.0, 0.5);
+            }
+        }
+        return preferred.clone().add(0.0, 0.1, 0.0);
     }
 
     private void tickKaelTheAshen(LivingEntity entity) {
@@ -874,6 +1036,44 @@ public final class BossManager implements Listener {
         entity.getWorld().spawnParticle(Particle.SPORE_BLOSSOM_AIR, entity.getLocation().clone().add(0.0, 0.6, 0.0), 16, 0.26, 0.18, 0.26, 0.02);
         entity.getWorld().playSound(entity.getLocation(), Sound.ENTITY_SPIDER_STEP, 1.0f, bossPhase(entity) >= 2 ? 0.6f : 0.8f);
         setBossCooldown(entity, keyBossPrimaryCooldown, bossPhase(entity) >= 2 ? 3000L : 4600L);
+    }
+
+    private void tickVoralithTheCrimsonWarden(LivingEntity entity) {
+        double maxHealth = Math.max(1.0, entity.getAttribute(Attribute.MAX_HEALTH) == null ? 1.0 : entity.getAttribute(Attribute.MAX_HEALTH).getValue());
+        if (bossPhase(entity) < 2 && entity.getHealth() <= maxHealth * 0.45) {
+            setBossPhase(entity, 2);
+            entity.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH, Integer.MAX_VALUE, 0, false, true, true));
+            entity.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, Integer.MAX_VALUE, 0, false, true, true));
+            entity.getWorld().spawnParticle(Particle.SONIC_BOOM, entity.getLocation().clone().add(0.0, 1.35, 0.0), 1, 0.0, 0.0, 0.0, 0.0);
+            entity.getWorld().spawnParticle(Particle.SCULK_SOUL, entity.getLocation().clone().add(0.0, 1.0, 0.0), 32, 0.45, 0.65, 0.45, 0.02);
+            entity.getWorld().spawnParticle(
+                Particle.DUST,
+                entity.getLocation().clone().add(0.0, 1.0, 0.0),
+                28,
+                0.40,
+                0.55,
+                0.40,
+                0.0,
+                new Particle.DustOptions(Color.fromRGB(180, 30, 55), 1.2f)
+            );
+            entity.getWorld().playSound(entity.getLocation(), Sound.ENTITY_WARDEN_ROAR, 1.6f, 0.72f);
+        }
+
+        LivingEntity target = currentBossTarget(entity);
+        if (target == null) {
+            return;
+        }
+
+        double distanceSquared = entity.getLocation().distanceSquared(target.getLocation());
+        if (bossCooldownReady(entity, keyBossPrimaryCooldown) && distanceSquared <= 8.0 * 8.0) {
+            unleashDominionPulse(entity, bossPhase(entity));
+        }
+        if (bossPhase(entity) >= 2
+            && bossCooldownReady(entity, keyBossSecondaryCooldown)
+            && distanceSquared <= 18.0 * 18.0
+            && entity.hasLineOfSight(target)) {
+            unleashCrimsonResonance(entity, target);
+        }
     }
 
     private void spawnYuleAttackParticles(LivingEntity attacker, LivingEntity target, int phase) {
@@ -954,6 +1154,120 @@ public final class BossManager implements Listener {
             }
         } else {
             target.addPotionEffect(new PotionEffect(PotionEffectType.POISON, 60, 0, false, true, true));
+        }
+    }
+
+    private void unleashDominionPulse(LivingEntity entity, int phase) {
+        Location center = entity.getLocation().clone().add(0.0, 1.0, 0.0);
+        World world = entity.getWorld();
+        double radius = phase >= 2 ? 7.0 : 6.0;
+
+        world.spawnParticle(Particle.SONIC_BOOM, center, 1, 0.0, 0.0, 0.0, 0.0);
+        world.spawnParticle(Particle.SCULK_SOUL, center, phase >= 2 ? 42 : 26, 0.90, 0.40, 0.90, 0.03);
+        world.spawnParticle(
+            Particle.DUST,
+            center,
+            phase >= 2 ? 30 : 18,
+            1.10,
+            0.45,
+            1.10,
+            0.0,
+            new Particle.DustOptions(Color.fromRGB(190, 25, 45), phase >= 2 ? 1.35f : 1.05f)
+        );
+        world.playSound(entity.getLocation(), Sound.ENTITY_WARDEN_SONIC_BOOM, 1.7f, phase >= 2 ? 0.72f : 0.9f);
+
+        for (Entity nearby : entity.getNearbyEntities(radius, 2.5, radius)) {
+            if (!(nearby instanceof LivingEntity target) || target.equals(entity) || target.isDead() || !target.isValid()) {
+                continue;
+            }
+            if (target instanceof Player player
+                && (player.getGameMode() == org.bukkit.GameMode.CREATIVE || player.getGameMode() == org.bukkit.GameMode.SPECTATOR)) {
+                continue;
+            }
+
+            Vector push = target.getLocation().toVector().subtract(entity.getLocation().toVector());
+            if (push.lengthSquared() > 1.0E-6) {
+                push.normalize().multiply(phase >= 2 ? 1.05 : 0.65);
+                push.setY(phase >= 2 ? 0.30 : 0.20);
+                target.setVelocity(target.getVelocity().add(push));
+            }
+            target.addPotionEffect(new PotionEffect(PotionEffectType.DARKNESS, phase >= 2 ? 100 : 60, 0, false, true, true));
+            target.damage(phase >= 2 ? 8.0 : 5.0, entity);
+        }
+
+        setBossCooldown(entity, keyBossPrimaryCooldown, phase >= 2 ? 5200L : 7000L);
+    }
+
+    private void unleashCrimsonResonance(LivingEntity entity, LivingEntity target) {
+        Location eye = entity.getEyeLocation();
+        Vector direction = target.getEyeLocation().toVector().subtract(eye.toVector());
+        double length = Math.min(18.0, direction.length());
+        if (length <= 0.5) {
+            return;
+        }
+
+        direction.normalize();
+        World world = entity.getWorld();
+        for (double step = 0.5; step <= length; step += 0.65) {
+            Location point = eye.clone().add(direction.clone().multiply(step));
+            world.spawnParticle(Particle.SCULK_SOUL, point, 2, 0.04, 0.04, 0.04, 0.0);
+            world.spawnParticle(
+                Particle.DUST,
+                point,
+                1,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                new Particle.DustOptions(Color.fromRGB(220, 40, 65), 1.15f)
+            );
+        }
+        world.spawnParticle(Particle.SONIC_BOOM, target.getLocation().clone().add(0.0, 1.0, 0.0), 1, 0.0, 0.0, 0.0, 0.0);
+        world.playSound(entity.getLocation(), Sound.ENTITY_WARDEN_ROAR, 1.35f, 0.56f);
+        world.playSound(target.getLocation(), Sound.ENTITY_WARDEN_SONIC_BOOM, 1.2f, 0.82f);
+
+        target.damage(10.0, entity);
+        target.addPotionEffect(new PotionEffect(PotionEffectType.DARKNESS, 120, 0, false, true, true));
+        target.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 60, 0, false, true, true));
+
+        Vector shove = target.getLocation().toVector().subtract(entity.getLocation().toVector());
+        if (shove.lengthSquared() > 1.0E-6) {
+            shove.normalize().multiply(0.70);
+            shove.setY(Math.max(0.24, target.getVelocity().getY()));
+            target.setVelocity(target.getVelocity().add(shove));
+        }
+
+        setBossCooldown(entity, keyBossSecondaryCooldown, 9500L);
+    }
+
+    private void handleVoralithMeleeHit(LivingEntity attacker, LivingEntity target, int phase, EntityDamageByEntityEvent event) {
+        World world = target.getWorld();
+        Location center = target.getLocation().clone().add(0.0, 1.0, 0.0);
+        world.spawnParticle(Particle.SCULK_SOUL, center, 16, 0.28, 0.35, 0.28, 0.02);
+        world.spawnParticle(
+            Particle.DUST,
+            center,
+            14,
+            0.25,
+            0.30,
+            0.25,
+            0.0,
+            new Particle.DustOptions(Color.fromRGB(190, 32, 45), phase >= 2 ? 1.2f : 0.95f)
+        );
+        world.playSound(center, Sound.ENTITY_WARDEN_ATTACK_IMPACT, 1.0f, phase >= 2 ? 0.7f : 0.88f);
+
+        target.addPotionEffect(new PotionEffect(PotionEffectType.DARKNESS, phase >= 2 ? 100 : 60, 0, false, true, true));
+        if (phase >= 2) {
+            target.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 50, 0, false, true, true));
+            event.setDamage(event.getDamage() + 2.0);
+            Vector slam = target.getLocation().toVector().subtract(attacker.getLocation().toVector());
+            if (slam.lengthSquared() > 1.0E-6) {
+                slam.normalize().multiply(0.85);
+                slam.setY(Math.max(0.28, target.getVelocity().getY()));
+                target.setVelocity(target.getVelocity().add(slam));
+            }
+        } else {
+            event.setDamage(event.getDamage() + 1.0);
         }
     }
 
@@ -1068,6 +1382,7 @@ public final class BossManager implements Listener {
             entity.remove();
         }
 
+        despawnBossMinions(record.entityUuid());
         destroyBossVisuals(record.entityUuid());
         untrackRecord(record.entityUuid());
         plugin.getDatabase().deleteBossRecord(record.entityUuid());
@@ -1083,6 +1398,7 @@ public final class BossManager implements Listener {
     }
 
     private void reconcileChunk(Chunk chunk) {
+        cleanupOrphanBossMinions(chunk);
         Map<UUID, Entity> foundEntities = new HashMap<>();
         for (Entity entity : chunk.getEntities()) {
             BossRecord record = bossRecord(entity);
@@ -1110,6 +1426,60 @@ public final class BossManager implements Listener {
             destroyBossVisuals(record.entityUuid());
             untrackRecord(record.entityUuid());
             plugin.getDatabase().deleteBossRecord(record.entityUuid());
+        }
+    }
+
+    private void markBossMinion(LivingEntity entity, UUID ownerBossId) {
+        PersistentDataContainer pdc = entity.getPersistentDataContainer();
+        pdc.set(keyBossMinionMarker, PersistentDataType.BYTE, (byte) 1);
+        pdc.set(keyBossMinionOwner, PersistentDataType.STRING, ownerBossId.toString());
+        entity.addScoreboardTag(SCOREBOARD_TAG + "_minion");
+    }
+
+    private boolean isBossMinion(Entity entity) {
+        return entity != null && entity.getPersistentDataContainer().has(keyBossMinionMarker, PersistentDataType.BYTE);
+    }
+
+    private UUID bossMinionOwner(Entity entity) {
+        if (!isBossMinion(entity)) {
+            return null;
+        }
+        String raw = entity.getPersistentDataContainer().get(keyBossMinionOwner, PersistentDataType.STRING);
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
+    private void despawnBossMinions(UUID ownerBossId) {
+        if (ownerBossId == null) {
+            return;
+        }
+        for (World world : Bukkit.getWorlds()) {
+            for (Entity entity : world.getEntities()) {
+                if (!isBossMinion(entity) || !ownerBossId.equals(bossMinionOwner(entity))) {
+                    continue;
+                }
+                entity.remove();
+            }
+        }
+    }
+
+    private void cleanupOrphanBossMinions(Chunk chunk) {
+        for (Entity entity : chunk.getEntities()) {
+            UUID ownerBossId = bossMinionOwner(entity);
+            if (ownerBossId == null) {
+                continue;
+            }
+            Entity owner = Bukkit.getEntity(ownerBossId);
+            if (owner instanceof LivingEntity living && living.isValid() && !living.isDead() && trackedBosses.containsKey(ownerBossId)) {
+                continue;
+            }
+            entity.remove();
         }
     }
 
@@ -1302,6 +1672,30 @@ public final class BossManager implements Listener {
                 "<gray>Do not let her control the gap or the fight snowballs fast.</gray>"
             ),
             (manager, entity) -> { }
+        ),
+        VORALITH_THE_CRIMSON_WARDEN(
+            "voralith_the_crimson_warden",
+            EntityType.WARDEN,
+            Material.SCULK_SHRIEKER,
+            "<gradient:#991b1b:#ef4444><bold>Voralith the Crimson Warden</bold></gradient>",
+            650.0,
+            16.0,
+            0.31,
+            48.0,
+            0.90,
+            4,
+            false,
+            List.of(
+                "<gray>A deep-dark tyrant that mixes Warden pressure with crimson shockwaves.</gray>",
+                "<gray>Phase One:</gray> <white>dominion pulses, darkness, and bruising melee hits</white>",
+                "<gray>Phase Two:</gray> <white>resonance blasts, harder slams, and much heavier punishment</white>",
+                "<gray>Drops a <white>Dominion Core</white> used to repair <white>Crimson Dominion</white>.</gray>"
+            ),
+            (manager, entity) -> {
+                if (entity instanceof Warden warden) {
+                    warden.setCanPickupItems(false);
+                }
+            }
         );
 
         private static final Map<String, BossType> BY_ID = new HashMap<>();

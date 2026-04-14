@@ -149,6 +149,9 @@ permissions:
   smpcore.customitem.admin:
     description: Use /customitem give
     default: op
+  smpcore.itemaudit.admin:
+    description: Use /itemaudit
+    default: op
   smpcore.superpower.admin:
     description: Use /powerinfo
     default: true

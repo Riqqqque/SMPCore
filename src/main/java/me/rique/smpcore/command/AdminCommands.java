@@ -11,8 +11,10 @@ import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import io.papermc.paper.command.brigadier.argument.resolvers.selector.PlayerSelectorArgumentResolver;
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.audit.ItemAuditManager;
 import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.backpack.BackpackListener;
+import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.ReplenishListener;
@@ -57,6 +59,9 @@ public final class AdminCommands {
     private static final String ANCIENT_SCROLL_ITEM_ID = SuperpowerManager.ANCIENT_SCROLL_ITEM_ID;
     private static final String WARDEN_HEART_ITEM_ID = SuperpowerManager.WARDEN_HEART_ITEM_ID;
     private static final String MOTHER_NATURE_STICK_ITEM_ID = SuperpowerManager.MOTHER_NATURE_STICK_ITEM_ID;
+    private static final String THE_WORLD_CLOCK_ITEM_ID = SuperpowerManager.THE_WORLD_CLOCK_ITEM_ID;
+    private static final String DRUID_GRIMOIRE_ITEM_ID = SuperpowerManager.DRUID_GRIMOIRE_ITEM_ID;
+    private static final String DOMINION_CORE_ITEM_ID = BossManager.DOMINION_CORE_ITEM_ID;
     private static final Set<String> ABSOLUTE_OWNER_ACCOUNTS = Set.of("riqqqque");
     private static final List<String> CUSTOM_ITEM_IDS = List.of(
         BACKPACK_ITEM_ID,
@@ -70,6 +75,9 @@ public final class AdminCommands {
         ANCIENT_SCROLL_ITEM_ID,
         WARDEN_HEART_ITEM_ID,
         MOTHER_NATURE_STICK_ITEM_ID,
+        THE_WORLD_CLOCK_ITEM_ID,
+        DRUID_GRIMOIRE_ITEM_ID,
+        DOMINION_CORE_ITEM_ID,
         CustomToolListener.ADVANCED_PICKAXE_ID,
         CustomToolListener.GRAPPLE_HOOK_ID
     );
@@ -100,6 +108,7 @@ public final class AdminCommands {
         registerAbsoluteOwnerTeamVaultView(commands, plugin);
         registerAbsoluteOwnerCommands(commands, plugin);
         registerCustomItemCommand(commands, plugin);
+        registerItemAudit(commands, plugin);
     }
 
     // ── /fly [player] ────────────────────────────────────────────────────────
@@ -845,7 +854,7 @@ public final class AdminCommands {
 
         rewardLanterns.grantRewardAccess(target);
         ItemStack lantern = rewardLanterns.createRewardLantern(target);
-        return giveItem(sender, target, lantern, "Reward Soul Lantern");
+        return giveItem(plugin, sender, target, lantern, "Reward Soul Lantern");
     }
 
     private static int revokeRewardLantern(SMPCore plugin, CommandSender sender, Player target) {
@@ -934,6 +943,9 @@ public final class AdminCommands {
             case ANCIENT_SCROLL_ITEM_ID -> createAncientScrollAdminItem(plugin, sender);
             case WARDEN_HEART_ITEM_ID -> createWardenHeartAdminItem(plugin, sender);
             case MOTHER_NATURE_STICK_ITEM_ID -> createMotherNatureStickAdminItem(plugin, sender);
+            case THE_WORLD_CLOCK_ITEM_ID -> createTheWorldClockAdminItem(plugin, sender);
+            case DRUID_GRIMOIRE_ITEM_ID -> createDruidGrimoireAdminItem(plugin, sender);
+            case DOMINION_CORE_ITEM_ID -> createDominionCoreAdminItem(plugin, sender);
             case CustomToolListener.ADVANCED_PICKAXE_ID,
                  CustomToolListener.GRAPPLE_HOOK_ID ->
                 createCustomToolAdminItem(plugin, sender, itemId);
@@ -947,7 +959,7 @@ public final class AdminCommands {
             }
             return 0;
         }
-        return giveItem(sender, target, item.item(), item.displayName());
+        return giveItem(plugin, sender, target, item.item(), item.displayName());
     }
 
     private static int setSuperpower(SMPCore plugin, CommandSender sender, Player target, String rawPower) {
@@ -1071,6 +1083,33 @@ public final class AdminCommands {
         return new AdminGiveItem(powers.createMotherNatureStickItem(), "Stick from Mother Nature");
     }
 
+    private static AdminGiveItem createTheWorldClockAdminItem(SMPCore plugin, CommandSender sender) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            sender.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(powers.createTheWorldClockItem(), "World Clock");
+    }
+
+    private static AdminGiveItem createDruidGrimoireAdminItem(SMPCore plugin, CommandSender sender) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            sender.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(powers.createDruidGrimoireItem(), "Druid's Grimoire");
+    }
+
+    private static AdminGiveItem createDominionCoreAdminItem(SMPCore plugin, CommandSender sender) {
+        BossManager bossManager = plugin.getBossManager();
+        if (bossManager == null) {
+            sender.sendMessage(MessageUtil.error("Boss system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(bossManager.createDominionCoreItem(), "Dominion Core");
+    }
+
     private static AdminGiveItem createCustomToolAdminItem(SMPCore plugin, CommandSender sender, String itemId) {
         CustomToolListener tools = plugin.getCustomToolListener();
         if (tools == null) {
@@ -1084,7 +1123,11 @@ public final class AdminCommands {
         );
     }
 
-    private static int giveItem(CommandSender sender, Player target, ItemStack item, String displayName) {
+    private static int giveItem(SMPCore plugin, CommandSender sender, Player target, ItemStack item, String displayName) {
+        ItemAuditManager audit = plugin.getItemAuditManager();
+        if (audit != null) {
+            audit.recordKnownAcquisition(target, item, sender, "admin_give", "Given via admin command.");
+        }
         var leftovers = target.getInventory().addItem(item);
         leftovers.values().forEach(left -> target.getWorld().dropItemNaturally(target.getLocation(), left));
 
@@ -1095,6 +1138,59 @@ public final class AdminCommands {
             ));
         }
         return Command.SINGLE_SUCCESS;
+    }
+
+    private static void registerItemAudit(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("itemaudit")
+                .requires(src -> src.getSender().hasPermission("smpcore.itemaudit.admin"))
+                .then(Commands.argument("player", StringArgumentType.word())
+                    .suggests((ctx, builder) -> suggestOnlinePlayers(builder))
+                    .executes(ctx -> {
+                        String rawName = StringArgumentType.getString(ctx, "player");
+                        return executeItemAudit(plugin, ctx.getSource().getSender(), rawName, null);
+                    })
+                    .then(Commands.argument("item", StringArgumentType.word())
+                        .suggests((ctx, builder) -> suggestAuditItems(plugin, builder))
+                        .executes(ctx -> {
+                            String rawName = StringArgumentType.getString(ctx, "player");
+                            String itemKey = StringArgumentType.getString(ctx, "item");
+                            return executeItemAudit(plugin, ctx.getSource().getSender(), rawName, itemKey);
+                        })))
+                .build(),
+            "View tracked custom item audit logs",
+            List.of("itemtrace", "audititem")
+        );
+    }
+
+    private static int executeItemAudit(SMPCore plugin, CommandSender sender, String rawName, String itemKey) {
+        ItemAuditManager audit = plugin.getItemAuditManager();
+        if (audit == null) {
+            sender.sendMessage(MessageUtil.error("Item audit system is not ready yet."));
+            return 0;
+        }
+        OfflinePlayer target = resolveOfflinePlayer(rawName);
+        if (target == null || target.getUniqueId() == null) {
+            sender.sendMessage(MessageUtil.error("Player not found."));
+            return 0;
+        }
+        audit.sendAuditLog(sender, target, itemKey);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static OfflinePlayer resolveOfflinePlayer(String rawName) {
+        if (rawName == null || rawName.isBlank()) {
+            return null;
+        }
+        Player online = Bukkit.getPlayerExact(rawName);
+        if (online != null) {
+            return online;
+        }
+        online = Bukkit.getPlayer(rawName);
+        if (online != null) {
+            return online;
+        }
+        return Bukkit.getOfflinePlayer(rawName);
     }
 
     private static int executeUnban(CommandSender sender, String rawName) {
@@ -1129,6 +1225,23 @@ public final class AdminCommands {
     private static CompletableFuture<Suggestions> suggestCustomItemIds(SuggestionsBuilder builder) {
         for (String option : customItemCommandOptions()) {
             builder.suggest(option);
+        }
+        return builder.buildFuture();
+    }
+
+    private static CompletableFuture<Suggestions> suggestOnlinePlayers(SuggestionsBuilder builder) {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            builder.suggest(player.getName());
+        }
+        return builder.buildFuture();
+    }
+
+    private static CompletableFuture<Suggestions> suggestAuditItems(SMPCore plugin, SuggestionsBuilder builder) {
+        ItemAuditManager audit = plugin.getItemAuditManager();
+        if (audit != null) {
+            for (String option : audit.itemAuditOptions()) {
+                builder.suggest(option);
+            }
         }
         return builder.buildFuture();
     }
@@ -1177,13 +1290,6 @@ public final class AdminCommands {
         return builder.buildFuture();
     }
 
-    private static CompletableFuture<Suggestions> suggestOnlinePlayers(SuggestionsBuilder builder) {
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            builder.suggest(player.getName());
-        }
-        return builder.buildFuture();
-    }
-
     private static PlayerProfile findBannedProfile(ProfileBanList banList, String input) {
         for (var entry : banList.getEntries()) {
             Object target = entry.getBanTarget();
@@ -1206,6 +1312,8 @@ public final class AdminCommands {
             case "ancientscroll", "ancient_scroll", "scroll" -> ANCIENT_SCROLL_ITEM_ID;
             case "awakening", "awakeningtable", "awakening_table", "awaken_table", "table" -> AWAKENING_TABLE_ITEM_ID;
             case "ascendant", "ascendantcore", "ascendant_core", "core" -> ASCENDANT_CORE_ITEM_ID;
+            case "druid", "druidbook", "druid_book", "druidgrimoire", "druid_grimoire", "grimoire" -> DRUID_GRIMOIRE_ITEM_ID;
+            case "dominioncore", "dominion_core", "coreofdominion", "repaircore", "repair_core" -> DOMINION_CORE_ITEM_ID;
             case "enderbone", "bone" -> ENDER_BONE_ITEM_ID;
             case "magnet", "faraday", "faradays", "faradaysmagnet", "faradays_magnet" -> FARADAYS_MAGNET_ITEM_ID;
             case "grapple", "grapplehook", "grapple_hook", "hook", "skyhook" -> CustomToolListener.GRAPPLE_HOOK_ID;
@@ -1213,6 +1321,7 @@ public final class AdminCommands {
             case "mothernature", "mother_nature", "mothernaturestick", "mother_nature_stick", "naturestick" -> MOTHER_NATURE_STICK_ITEM_ID;
             case "orb", "mystic_orb", "orb_of_mystics", "orb_of_the_mystic", "orbofthemystics" -> ORB_OF_THE_MYSTICS_ITEM_ID;
             case "talisman", "sustenance_talisman", "talisman_of_sustenance" -> TALISMAN_OF_SUSTENANCE_ITEM_ID;
+            case "theworld", "the_world", "worldclock", "world_clock", "clock" -> THE_WORLD_CLOCK_ITEM_ID;
             case "wardenheart", "warden_heart" -> WARDEN_HEART_ITEM_ID;
             default -> normalized;
         };
@@ -1235,19 +1344,12 @@ public final class AdminCommands {
     }
 
     private static List<String> powerSuggestionValues() {
-        return List.of(
-            "immortality",
-            "flash",
-            "enchanter",
-            "berserk",
-            "tank",
-            "human",
-            "no_powers",
-            "traveler",
-            "florist",
-            "monarch",
-            "shadow"
-        );
+        List<String> values = new java.util.ArrayList<>();
+        for (SuperpowerType type : SuperpowerType.values()) {
+            values.add(type.name().toLowerCase(Locale.ROOT));
+        }
+        values.add("no_powers");
+        return values;
     }
 
     private static String prettyCustomItemName(String itemId) {

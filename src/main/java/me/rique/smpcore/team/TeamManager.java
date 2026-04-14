@@ -8,7 +8,10 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -135,6 +138,20 @@ public final class TeamManager implements Listener {
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         invitesByTarget.remove(event.getPlayer().getUniqueId());
+
+        if (!(event.getPlayer().getOpenInventory().getTopInventory().getHolder() instanceof TeamVaultHolder holder)) {
+            return;
+        }
+
+        TeamVaultSession session = teamVaultsByKey.get(holder.teamKey());
+        if (session == null) {
+            return;
+        }
+
+        saveTeamVault(session).exceptionally(ex -> {
+            plugin.getLogger().severe("Failed to save team vault for " + session.displayName() + " on quit: " + ex.getMessage());
+            return null;
+        });
     }
 
     @EventHandler
@@ -148,6 +165,16 @@ public final class TeamManager implements Listener {
             plugin.getLogger().severe("Failed to save team vault for " + session.displayName() + ": " + ex.getMessage());
             return null;
         });
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onTeamVaultClick(InventoryClickEvent event) {
+        if (!(event.getView().getTopInventory().getHolder() instanceof TeamVaultHolder)) {
+            return;
+        }
+        if (event.getAction() == InventoryAction.CLONE_STACK || event.getClick() == ClickType.CREATIVE) {
+            event.setCancelled(true);
+        }
     }
 
     @EventHandler(ignoreCancelled = true)
