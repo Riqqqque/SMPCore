@@ -148,10 +148,15 @@ public final class BackpackListener implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    @EventHandler(priority = EventPriority.LOWEST)
     public void onDeath(PlayerDeathEvent event) {
         OpenBackpackSession session = openBackpacks.remove(event.getPlayer().getUniqueId());
         if (session == null) {
+            return;
+        }
+
+        if (event.getKeepInventory()) {
+            persistBackpack(event.getPlayer(), session, session.inventory());
             return;
         }
 
