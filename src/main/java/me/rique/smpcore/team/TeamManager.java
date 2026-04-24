@@ -6,6 +6,7 @@ import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -174,6 +175,24 @@ public final class TeamManager implements Listener {
         }
         if (event.getAction() == InventoryAction.CLONE_STACK || event.getClick() == ClickType.CREATIVE) {
             event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onTeamVaultDrag(InventoryDragEvent event) {
+        if (!(event.getView().getTopInventory().getHolder() instanceof TeamVaultHolder)) {
+            return;
+        }
+        if (!(event.getWhoClicked() instanceof Player player) || player.getGameMode() != GameMode.CREATIVE) {
+            return;
+        }
+
+        int topSize = event.getView().getTopInventory().getSize();
+        for (int rawSlot : event.getRawSlots()) {
+            if (rawSlot < topSize) {
+                event.setCancelled(true);
+                return;
+            }
         }
     }
 

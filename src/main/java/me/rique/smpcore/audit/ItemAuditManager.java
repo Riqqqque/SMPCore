@@ -39,6 +39,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -304,6 +305,7 @@ public final class ItemAuditManager implements Listener {
             actorName,
             subject.getUniqueId(),
             subject.getName(),
+            now,
             now
         );
         knownInstances.put(instanceId, state);
@@ -337,9 +339,9 @@ public final class ItemAuditManager implements Listener {
         Map<String, List<String>> seenInstanceLocations = new LinkedHashMap<>();
         Map<String, Integer> legendaryCounts = new LinkedHashMap<>();
 
-        scanInventory(player, player.getInventory(), "inventory", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>());
-        scanInventory(player, player.getEnderChest(), "ender_chest", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>());
-        scanItem(player, player.getItemOnCursor(), "cursor", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>());
+        scanInventory(player, player.getInventory(), "inventory", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true);
+        scanInventory(player, player.getEnderChest(), "ender_chest", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true);
+        scanItem(player, player.getItemOnCursor(), "cursor", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true);
 
         for (Map.Entry<String, List<String>> entry : seenInstanceLocations.entrySet()) {
             if (entry.getValue().size() <= 1) {
@@ -374,14 +376,15 @@ public final class ItemAuditManager implements Listener {
         String scope,
         Map<String, List<String>> seenInstanceLocations,
         Map<String, Integer> legendaryCounts,
-        Set<String> backpackTrail
+        Set<String> backpackTrail,
+        boolean canMutateIdentity
     ) {
         if (inventory == null) {
             return;
         }
         ItemStack[] contents = inventory.getContents();
         for (int slot = 0; slot < contents.length; slot++) {
-            scanItem(owner, contents[slot], scope + "[" + slot + "]", seenInstanceLocations, legendaryCounts, backpackTrail);
+            scanItem(owner, contents[slot], scope + "[" + slot + "]", seenInstanceLocations, legendaryCounts, backpackTrail, canMutateIdentity);
         }
     }
 
@@ -391,7 +394,8 @@ public final class ItemAuditManager implements Listener {
         String location,
         Map<String, List<String>> seenInstanceLocations,
         Map<String, Integer> legendaryCounts,
-        Set<String> backpackTrail
+        Set<String> backpackTrail,
+        boolean canMutateIdentity
     ) {
         ManagedItemDescriptor descriptor = describe(item);
         if (descriptor == null) {
@@ -406,7 +410,19 @@ public final class ItemAuditManager implements Listener {
             return;
         }
 
-        String instanceId = ensureTrackedIdentity(item, descriptor);
+        String instanceId = currentInstanceId(item);
+        if ((instanceId == null || instanceId.isBlank()) && !canMutateIdentity) {
+            logAnomaly(
+                owner,
+                descriptor.itemKey(),
+                "unknown_origin",
+                "backpack_scan",
+                "Untracked item seen inside stored backpack data at " + location
+            );
+            return;
+        }
+
+        instanceId = ensureTrackedIdentity(item, descriptor);
         seenInstanceLocations.computeIfAbsent(instanceId, ignored -> new ArrayList<>()).add(location);
 
         if (item != null && item.getAmount() > 1) {
@@ -436,6 +452,7 @@ public final class ItemAuditManager implements Listener {
                 owner.getName(),
                 owner.getUniqueId(),
                 owner.getName(),
+                now,
                 now
             );
             knownInstances.put(instanceId, created);
@@ -491,7 +508,7 @@ public final class ItemAuditManager implements Listener {
         try {
             List<ItemStack> contents = backpacks.auditContents(owner, item);
             for (int i = 0; i < contents.size(); i++) {
-                scanItem(owner, contents.get(i), location + "/backpack[" + i + "]", seenInstanceLocations, legendaryCounts, backpackTrail);
+                scanItem(owner, contents.get(i), location + "/backpack[" + i + "]", seenInstanceLocations, legendaryCounts, backpackTrail, false);
             }
         } finally {
             backpackTrail.remove(backpackId);
@@ -624,9 +641,11 @@ public final class ItemAuditManager implements Listener {
         while (!queue.isEmpty() && queue.peekFirst().createdAt() < cutoff) {
             queue.removeFirst();
         }
-        for (PendingAcquisition acquisition : queue) {
+        Iterator<PendingAcquisition> iterator = queue.iterator();
+        while (iterator.hasNext()) {
+            PendingAcquisition acquisition = iterator.next();
             if (acquisition.itemKey().equals(itemKey)) {
-                queue.remove(acquisition);
+                iterator.remove();
                 return acquisition;
             }
         }
@@ -673,7 +692,7 @@ public final class ItemAuditManager implements Listener {
             state.createdByName,
             state.currentOwnerUuid,
             state.currentOwnerName,
-            state.createdAt,
+            state.firstSeenAt,
             state.lastSeenAt
         ));
     }
@@ -724,6 +743,7 @@ public final class ItemAuditManager implements Listener {
         private final String createdMethod;
         private final UUID createdByUuid;
         private final String createdByName;
+        private final long firstSeenAt;
         private UUID currentOwnerUuid;
         private String currentOwnerName;
         private long lastSeenAt;
@@ -737,6 +757,7 @@ public final class ItemAuditManager implements Listener {
             String createdByName,
             UUID currentOwnerUuid,
             String currentOwnerName,
+            long firstSeenAt,
             long lastSeenAt
         ) {
             this.instanceId = instanceId;
@@ -747,6 +768,7 @@ public final class ItemAuditManager implements Listener {
             this.createdByName = createdByName;
             this.currentOwnerUuid = currentOwnerUuid;
             this.currentOwnerName = currentOwnerName;
+            this.firstSeenAt = firstSeenAt;
             this.lastSeenAt = lastSeenAt;
         }
 
@@ -760,6 +782,7 @@ public final class ItemAuditManager implements Listener {
                 record.createdByName(),
                 record.currentOwnerUuid(),
                 record.currentOwnerName(),
+                record.firstSeenAt(),
                 record.lastSeenAt()
             );
         }

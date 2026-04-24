@@ -84,6 +84,7 @@ public final class BossManager implements Listener {
         28, 29, 30, 31, 32, 33, 34
     };
     private static final String SCOREBOARD_TAG = "smpcore_custom_boss";
+    private static final long ORPHAN_MINION_CLEANUP_INTERVAL_MS = 30_000L;
 
     private final SMPCore plugin;
     private final NamespacedKey keyBossId;
@@ -101,6 +102,7 @@ public final class BossManager implements Listener {
     private final Map<UUID, BossBar> bossBars = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> holograms = new ConcurrentHashMap<>();
     private BukkitTask heartbeatTask;
+    private long nextOrphanMinionCleanupAt;
 
     public BossManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -392,6 +394,16 @@ public final class BossManager implements Listener {
             tickBossBehavior(living, type);
         }
 
+        maybeCleanupOrphanBossMinions();
+    }
+
+    private void maybeCleanupOrphanBossMinions() {
+        long now = System.currentTimeMillis();
+        if (now < nextOrphanMinionCleanupAt) {
+            return;
+        }
+
+        nextOrphanMinionCleanupAt = now + ORPHAN_MINION_CLEANUP_INTERVAL_MS;
         for (World world : Bukkit.getWorlds()) {
             for (Chunk chunk : world.getLoadedChunks()) {
                 cleanupOrphanBossMinions(chunk);
