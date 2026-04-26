@@ -1,7 +1,7 @@
 name: SMPCore
 version: '${version}'
 main: me.rique.smpcore.SMPCore
-description: Core SMP plugin — spawners, homes, essentials
+description: Core SMP plugin for spawners, homes, custom items, bosses, powers, and essentials
 authors:
   - Rique
 api-version: '26.1.2'
@@ -13,7 +13,7 @@ dependencies:
       required: false
 
 permissions:
-  # ── Spawner ──────────────────────────────────────────────
+  # Spawner
   smpcore.spawner.use:
     description: Silk-touch spawners and apply modifiers (sugar, redstone, eye of ender)
     default: true
@@ -21,7 +21,7 @@ permissions:
     description: Admin-level spawner commands
     default: op
 
-  # ── Homes ─────────────────────────────────────────────────
+  # Homes
   smpcore.home:
     description: Use /home, /sethome, /delhome, /homes
     default: true
@@ -29,7 +29,7 @@ permissions:
     description: Set more than one home (count controlled by config)
     default: false
 
-  # ── Utility (player) ─────────────────────────────────────
+  # Utility (player)
   smpcore.top:
     description: Use /top
     default: op
@@ -67,7 +67,7 @@ permissions:
     description: Use /veinminer and native vein mining
     default: true
 
-  # ── Admin ─────────────────────────────────────────────────
+  # Admin
   smpcore.gmc:
     description: Use /gmc
     default: op

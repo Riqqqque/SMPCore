@@ -1,0 +1,37 @@
+# Gradle
+.gradle/
+build/
+bin/
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# Local server/runtime data
+run/
+server/
+plugins/
+world/
+world_nether/
+world_the_end/
+logs/
+crash-reports/
+cache/
+
+# Local databases/backups
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.bak
+
+# Generated archives
+*.jar
+*.zip
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
