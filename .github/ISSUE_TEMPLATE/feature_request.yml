@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest a new item, power, boss, command, or system.
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea
+      description: Describe the feature and why it would be good for the SMP.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Behavior
+      description: Include recipes, cooldowns, damage, drops, permissions, and edge cases if known.
+  - type: textarea
+    id: balance
+    attributes:
+      label: Balance notes
+      description: Mention rarity, cost, limits, counters, or abuse risks.
