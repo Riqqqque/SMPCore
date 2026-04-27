@@ -125,7 +125,7 @@ public final class SuperpowerManager implements Listener {
     private static final Component DRUID_MENU_TITLE =
         MM.deserialize("<gradient:#63c74d:#2f8f47><bold>Druid's Grimoire</bold></gradient>");
 
-    private static final int MENU_SIZE = 45;
+    private static final int MENU_SIZE = 54;
     private static final int DRUID_MENU_SIZE = 27;
     private static final int SHADOW_DURATION_SECONDS = 15 * 60;
     private static final int SHADOW_COOLDOWN_SECONDS = 5 * 60;
@@ -167,6 +167,30 @@ public final class SuperpowerManager implements Listener {
     private static final int TIME_STOP_RADIUS = 10;
     private static final int TIME_STOP_DURATION_SECONDS = 5;
     private static final int TIME_STOP_COOLDOWN_SECONDS = 5 * 60;
+    private static final int PHOENIX_COOLDOWN_SECONDS = 10 * 60;
+    private static final double PHOENIX_RECOVERY_HEALTH = 8.0;
+    private static final double PHOENIX_BURST_RADIUS = 4.5;
+    private static final double PHOENIX_BURST_DAMAGE = 4.0;
+    private static final double PHOENIX_SEARING_STRIKE_DAMAGE = 1.0;
+    private static final double PHOENIX_LOW_HEALTH_RATIO = 0.35;
+    private static final int VOIDSTEP_COOLDOWN_SECONDS = 45;
+    private static final double VOIDSTEP_RANGE = 14.0;
+    private static final int VOIDSTEP_VEIL_SECONDS = 4;
+    private static final double VOIDSTEP_AMBUSH_DAMAGE = 3.0;
+    private static final double SENTINEL_AURA_RADIUS = 6.0;
+    private static final double SENTINEL_HEALTH_BONUS = 4.0;
+    private static final double SENTINEL_BRACE_DAMAGE_REDUCTION = 0.20;
+    private static final double WATERMAN_DAMAGE_MULTIPLIER = 1.25;
+    private static final double WATERMAN_DAMAGE_REDUCTION = 0.25;
+    private static final double WATERMAN_SUBMERGED_MINING_BONUS = 0.8;
+    private static final int FROSTBORN_CHILL_SECONDS = 4;
+    private static final double FROSTBORN_FROZEN_TARGET_DAMAGE_MULTIPLIER = 1.15;
+    private static final double DEADEYE_PROJECTILE_DAMAGE_MULTIPLIER = 1.20;
+    private static final double DEADEYE_MARKED_SHOT_DAMAGE_MULTIPLIER = 1.35;
+    private static final double DEADEYE_MARKED_SHOT_VELOCITY_MULTIPLIER = 1.18;
+    private static final int DEADEYE_GLOW_SECONDS = 5;
+    private static final int DEADEYE_MARKED_SHOT_SLOW_SECONDS = 3;
+    private static final int PASSIVE_NIGHT_VISION_TICKS = 600;
     private static final long PORTAL_RECENT_TRAVEL_MS = 2500L;
     private static final long FLORIST_CROUCH_GROWTH_COOLDOWN_MS = 150L;
     private static final long FLORIST_STICK_RIGHT_CLICK_COOLDOWN_MS = 1250L;
@@ -255,11 +279,18 @@ public final class SuperpowerManager implements Listener {
     private final NamespacedKey keyGiantScaleModifier;
     private final NamespacedKey keyGiantKnockbackModifier;
     private final NamespacedKey keySupermanHealthModifier;
+    private final NamespacedKey keySentinelHealthModifier;
+    private final NamespacedKey keyWatermanSubmergedMiningModifier;
     private final NamespacedKey keySupermanFlightActiveUntil;
     private final NamespacedKey keySupermanFlightCooldownUntil;
     private final NamespacedKey keyXrayActiveUntil;
     private final NamespacedKey keyXrayCooldownUntil;
     private final NamespacedKey keyTimeStopCooldownUntil;
+    private final NamespacedKey keyPhoenixCooldownUntil;
+    private final NamespacedKey keyVoidstepCooldownUntil;
+    private final NamespacedKey keyVoidstepVeilUntil;
+    private final NamespacedKey keyVoidwalkerNightVisionEnabled;
+    private final NamespacedKey keyDeadeyeMarkedShot;
     private final NamespacedKey keyShadowCooldownUntil;
     private final NamespacedKey keyShadowActiveUntil;
     private final NamespacedKey keyDruidBuffCooldownUntil;
@@ -307,11 +338,18 @@ public final class SuperpowerManager implements Listener {
         this.keyGiantScaleModifier = new NamespacedKey(plugin, "superpower_giant_scale");
         this.keyGiantKnockbackModifier = new NamespacedKey(plugin, "superpower_giant_knockback");
         this.keySupermanHealthModifier = new NamespacedKey(plugin, "superpower_superman_health");
+        this.keySentinelHealthModifier = new NamespacedKey(plugin, "superpower_sentinel_health");
+        this.keyWatermanSubmergedMiningModifier = new NamespacedKey(plugin, "superpower_waterman_submerged_mining");
         this.keySupermanFlightActiveUntil = new NamespacedKey(plugin, "superpower_superman_flight_until");
         this.keySupermanFlightCooldownUntil = new NamespacedKey(plugin, "superpower_superman_flight_cooldown_until");
         this.keyXrayActiveUntil = new NamespacedKey(plugin, "superpower_xray_active_until");
         this.keyXrayCooldownUntil = new NamespacedKey(plugin, "superpower_xray_cooldown_until");
         this.keyTimeStopCooldownUntil = new NamespacedKey(plugin, "superpower_time_stop_cooldown_until");
+        this.keyPhoenixCooldownUntil = new NamespacedKey(plugin, "superpower_phoenix_cooldown_until");
+        this.keyVoidstepCooldownUntil = new NamespacedKey(plugin, "superpower_voidstep_cooldown_until");
+        this.keyVoidstepVeilUntil = new NamespacedKey(plugin, "superpower_voidstep_veil_until");
+        this.keyVoidwalkerNightVisionEnabled = new NamespacedKey(plugin, "superpower_voidwalker_night_vision_enabled");
+        this.keyDeadeyeMarkedShot = new NamespacedKey(plugin, "superpower_deadeye_marked_shot");
         this.keyShadowCooldownUntil = new NamespacedKey(plugin, "superpower_shadow_cooldown_until");
         this.keyShadowActiveUntil = new NamespacedKey(plugin, "superpower_shadow_active_until");
         this.keyDruidBuffCooldownUntil = new NamespacedKey(plugin, "superpower_druid_buff_cooldown_until");
@@ -549,6 +587,72 @@ public final class SuperpowerManager implements Listener {
         player.sendMessage(MessageUtil.success("Oracle Eye tears through the walls around you."));
         player.getWorld().playSound(player.getLocation(), Sound.BLOCK_BEACON_ACTIVATE, 0.7f, 1.8f);
         renderXrayHighlights(player);
+        return true;
+    }
+
+    public boolean handleVoidstepCommand(Player player) {
+        if (!hasPower(player, SuperpowerType.VOIDWALKER)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+        if (player.isDead() || player.getGameMode() == GameMode.SPECTATOR) {
+            player.sendMessage(MessageUtil.warn("You cannot step through the void right now."));
+            return false;
+        }
+
+        long now = System.currentTimeMillis();
+        long cooldownUntil = voidstepCooldownUntil(player);
+        if (cooldownUntil > now) {
+            player.sendMessage(MessageUtil.warn("Voidstep cooldown: <white>" + secondsLeft(cooldownUntil, now) + "s</white>."));
+            return false;
+        }
+
+        Location destination = findVoidstepDestination(player);
+        if (destination == null) {
+            player.sendMessage(MessageUtil.warn("The void cannot find a safe path there."));
+            return false;
+        }
+
+        Location start = player.getLocation();
+        setVoidstepCooldownUntil(player, now + (VOIDSTEP_COOLDOWN_SECONDS * 1000L));
+        if (player.isInsideVehicle()) {
+            player.leaveVehicle();
+        }
+        player.getWorld().spawnParticle(Particle.PORTAL, start.clone().add(0.0, 1.0, 0.0), 45, 0.45, 0.65, 0.45, 0.08);
+        player.getWorld().playSound(start, Sound.ENTITY_ENDERMAN_TELEPORT, 0.85f, 0.75f);
+        player.teleportAsync(destination).thenAccept(ok -> Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!player.isOnline()) {
+                return;
+            }
+            if (!ok) {
+                setVoidstepCooldownUntil(player, 0L);
+                player.sendMessage(MessageUtil.error("Voidstep failed."));
+                return;
+            }
+            setVoidstepVeilUntil(player, System.currentTimeMillis() + (VOIDSTEP_VEIL_SECONDS * 1000L));
+            applyPotion(player, PotionEffectType.INVISIBILITY, VOIDSTEP_VEIL_SECONDS * 20, 0);
+            applyPotion(player, PotionEffectType.SLOW_FALLING, VOIDSTEP_VEIL_SECONDS * 20, 0);
+            player.getWorld().spawnParticle(Particle.PORTAL, player.getLocation().clone().add(0.0, 1.0, 0.0), 55, 0.45, 0.65, 0.45, 0.08);
+            player.getWorld().playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 0.9f, 1.35f);
+        }));
+        return true;
+    }
+
+    public boolean handleVoidwalkerNightVisionCommand(Player player) {
+        if (!hasPower(player, SuperpowerType.VOIDWALKER)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+
+        boolean enabled = !isVoidwalkerNightVisionEnabled(player);
+        setVoidwalkerNightVisionEnabled(player, enabled);
+        if (enabled) {
+            applyPotion(player, PotionEffectType.NIGHT_VISION, 240, 0);
+            player.sendMessage(MessageUtil.success("Voidwalker night vision <white>enabled</white>."));
+        } else {
+            removePassiveNightVision(player);
+            player.sendMessage(MessageUtil.info("Voidwalker night vision <white>disabled</white>."));
+        }
         return true;
     }
 
@@ -945,8 +1049,129 @@ public final class SuperpowerManager implements Listener {
             }
         }
 
+        if (hasPower(player, SuperpowerType.PHOENIX)) {
+            double finalDamage = event.getFinalDamage();
+            if (finalDamage > 0.0 && player.getHealth() - finalDamage <= 0.0 && tryPhoenixRebirth(player, event.getCause())) {
+                event.setCancelled(true);
+                return;
+            }
+        }
+
+        if (hasPower(player, SuperpowerType.VOIDWALKER)
+            && event.getCause() == EntityDamageEvent.DamageCause.FALL
+            && voidstepVeilUntil(player) > System.currentTimeMillis()) {
+            event.setCancelled(true);
+            return;
+        }
+
+        if (hasPower(player, SuperpowerType.FROSTBORN)
+            && event.getCause() == EntityDamageEvent.DamageCause.FREEZE) {
+            event.setCancelled(true);
+            return;
+        }
+
+        if (hasPower(player, SuperpowerType.WATERMAN)
+            && event.getCause() == EntityDamageEvent.DamageCause.DROWNING) {
+            event.setCancelled(true);
+            player.setRemainingAir(player.getMaximumAir());
+            return;
+        }
+
         if (isShadowActive(player) && event.getFinalDamage() > 0.0) {
             deactivateShadow(player, true, false);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPowerCombat(EntityDamageByEntityEvent event) {
+        LivingEntity source = actualLivingDamager(event.getDamager());
+        if (source == null || !(event.getEntity() instanceof LivingEntity victim)) {
+            return;
+        }
+        Player attacker = source instanceof Player player ? player : null;
+        if (attacker != null && isFriendlyTo(attacker, victim)) {
+            return;
+        }
+
+        if (attacker != null && event.getDamage() > 0.0) {
+            if (hasPower(attacker, SuperpowerType.WATERMAN) && isWatermanEmpowered(attacker)) {
+                event.setDamage(event.getDamage() * WATERMAN_DAMAGE_MULTIPLIER);
+                victim.getWorld().spawnParticle(Particle.SPLASH, victim.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.45, 0.35, 0.45, 0.05);
+                victim.getWorld().playSound(victim.getLocation(), Sound.ITEM_TRIDENT_HIT, 0.55f, 1.25f);
+            }
+
+            if (hasPower(attacker, SuperpowerType.PHOENIX)) {
+                if (victim.getFireTicks() > 0) {
+                    event.setDamage(event.getDamage() + PHOENIX_SEARING_STRIKE_DAMAGE);
+                }
+                victim.setFireTicks(Math.max(victim.getFireTicks(), 60));
+                victim.getWorld().spawnParticle(Particle.FLAME, victim.getLocation().clone().add(0.0, 1.0, 0.0), 12, 0.35, 0.35, 0.35, 0.02);
+            }
+
+            if (hasPower(attacker, SuperpowerType.VOIDWALKER) && voidstepVeilUntil(attacker) > System.currentTimeMillis()) {
+                event.setDamage(event.getDamage() + VOIDSTEP_AMBUSH_DAMAGE);
+                applyPotion(victim, PotionEffectType.BLINDNESS, 60, 0);
+                applyPotion(victim, PotionEffectType.WEAKNESS, 60, 0);
+                setVoidstepVeilUntil(attacker, 0L);
+                removeLikelyPowerPotion(attacker, PotionEffectType.INVISIBILITY, 0);
+                removeLikelyPowerPotion(attacker, PotionEffectType.SLOW_FALLING, 0);
+                victim.getWorld().spawnParticle(Particle.PORTAL, victim.getLocation().clone().add(0.0, 1.0, 0.0), 35, 0.45, 0.45, 0.45, 0.06);
+                victim.getWorld().playSound(victim.getLocation(), Sound.ENTITY_ENDERMAN_HURT, 0.8f, 0.8f);
+            }
+
+            if (hasPower(attacker, SuperpowerType.FROSTBORN)) {
+                if (victim.getPotionEffect(PotionEffectType.SLOWNESS) != null) {
+                    event.setDamage(event.getDamage() * FROSTBORN_FROZEN_TARGET_DAMAGE_MULTIPLIER);
+                }
+                applyPotion(victim, PotionEffectType.SLOWNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
+                applyPotion(victim, PotionEffectType.WEAKNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
+                victim.getWorld().spawnParticle(Particle.CLOUD, victim.getLocation().clone().add(0.0, 1.0, 0.0), 12, 0.35, 0.35, 0.35, 0.02);
+            }
+
+            if (event.getDamager() instanceof Projectile projectile
+                && hasPower(attacker, SuperpowerType.DEADEYE)) {
+                boolean markedShot = projectile.getPersistentDataContainer().has(keyDeadeyeMarkedShot, PersistentDataType.BYTE);
+                event.setDamage(event.getDamage() * (markedShot ? DEADEYE_MARKED_SHOT_DAMAGE_MULTIPLIER : DEADEYE_PROJECTILE_DAMAGE_MULTIPLIER));
+                applyPotion(victim, PotionEffectType.GLOWING, DEADEYE_GLOW_SECONDS * 20, 0);
+                if (markedShot) {
+                    applyPotion(victim, PotionEffectType.SLOWNESS, DEADEYE_MARKED_SHOT_SLOW_SECONDS * 20, 1);
+                }
+                victim.getWorld().spawnParticle(Particle.CRIT, victim.getLocation().clone().add(0.0, 1.0, 0.0), markedShot ? 28 : 18, 0.35, 0.35, 0.35, 0.05);
+            }
+        }
+
+        if (!(victim instanceof Player defender) || source.getUniqueId().equals(defender.getUniqueId()) || isFriendlyTo(defender, source)) {
+            return;
+        }
+
+        if (hasPower(defender, SuperpowerType.PHOENIX) && event.getDamage() > 0.0) {
+            source.setFireTicks(Math.max(source.getFireTicks(), 60));
+            applyPotion(defender, PotionEffectType.ABSORPTION, 80, 0);
+            source.getWorld().spawnParticle(Particle.FLAME, source.getLocation().clone().add(0.0, 1.0, 0.0), 10, 0.35, 0.35, 0.35, 0.02);
+        }
+
+        if (hasPower(defender, SuperpowerType.SENTINEL) && defender.isSneaking() && event.getDamage() > 0.0) {
+            event.setDamage(event.getDamage() * (1.0 - SENTINEL_BRACE_DAMAGE_REDUCTION));
+            applyPotion(source, PotionEffectType.WEAKNESS, 80, 0);
+            Vector push = source.getLocation().toVector().subtract(defender.getLocation().toVector());
+            push.setY(0.0);
+            if (push.lengthSquared() > 0.001) {
+                source.setVelocity(source.getVelocity().add(push.normalize().multiply(0.45).setY(0.18)));
+            }
+            defender.getWorld().spawnParticle(Particle.CRIT, defender.getLocation().clone().add(0.0, 1.0, 0.0), 16, 0.55, 0.45, 0.55, 0.02);
+            defender.getWorld().playSound(defender.getLocation(), Sound.ITEM_SHIELD_BLOCK, 0.75f, 0.9f);
+        }
+
+        if (hasPower(defender, SuperpowerType.WATERMAN) && isWatermanEmpowered(defender) && event.getDamage() > 0.0) {
+            event.setDamage(event.getDamage() * (1.0 - WATERMAN_DAMAGE_REDUCTION));
+            applyPotion(source, PotionEffectType.SLOWNESS, 60, 0);
+            defender.getWorld().spawnParticle(Particle.BUBBLE_POP, defender.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.65, 0.4, 0.65, 0.03);
+            defender.getWorld().playSound(defender.getLocation(), Sound.BLOCK_CONDUIT_ATTACK_TARGET, 0.45f, 1.4f);
+        }
+
+        if (hasPower(defender, SuperpowerType.FROSTBORN) && event.getDamage() > 0.0) {
+            applyPotion(source, PotionEffectType.SLOWNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
+            source.getWorld().spawnParticle(Particle.CLOUD, source.getLocation().clone().add(0.0, 1.0, 0.0), 10, 0.35, 0.35, 0.35, 0.02);
         }
     }
 
@@ -1024,6 +1249,13 @@ public final class SuperpowerManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onMobTarget(EntityTargetLivingEntityEvent event) {
         if (!(event.getEntity() instanceof Mob mob)) {
+            return;
+        }
+        if (event.getTarget() instanceof Player target
+            && hasPower(target, SuperpowerType.VOIDWALKER)
+            && mob.getType() == EntityType.ENDERMAN) {
+            event.setCancelled(true);
+            mob.setTarget(null);
             return;
         }
         UUID ownerId = monarchOwnerByMob.get(mob.getUniqueId());
@@ -1177,6 +1409,23 @@ public final class SuperpowerManager implements Listener {
         if (timeStoppedPlayers.contains(player.getUniqueId())) {
             event.setCancelled(true);
         }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onDeadeyeProjectileLaunch(ProjectileLaunchEvent event) {
+        if (!(event.getEntity().getShooter() instanceof Player player)
+            || !hasPower(player, SuperpowerType.DEADEYE)
+            || !(event.getEntity() instanceof org.bukkit.entity.AbstractArrow projectile)) {
+            return;
+        }
+        if (!player.isSneaking()) {
+            return;
+        }
+
+        projectile.getPersistentDataContainer().set(keyDeadeyeMarkedShot, PersistentDataType.BYTE, (byte) 1);
+        projectile.setVelocity(projectile.getVelocity().multiply(DEADEYE_MARKED_SHOT_VELOCITY_MULTIPLIER));
+        player.getWorld().spawnParticle(Particle.CRIT, player.getEyeLocation().add(player.getEyeLocation().getDirection()), 10, 0.18, 0.18, 0.18, 0.02);
+        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_ARROW_SHOOT, 0.7f, 1.55f);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -1642,6 +1891,57 @@ public final class SuperpowerManager implements Listener {
                 syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySupermanHealthModifier, SUPERMAN_HEALTH_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
                 syncSupermanFlightState(player, true);
             }
+            case WATERMAN -> {
+                syncPlayerAttributeModifier(player, Attribute.SUBMERGED_MINING_SPEED, keyWatermanSubmergedMiningModifier, WATERMAN_SUBMERGED_MINING_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
+                player.setRemainingAir(player.getMaximumAir());
+                applyPotion(player, PotionEffectType.WATER_BREATHING, 80, 0);
+                if (isWatermanEmpowered(player)) {
+                    applyPassiveNightVision(player);
+                    applyPotion(player, PotionEffectType.CONDUIT_POWER, 80, 0);
+                    applyPotion(player, PotionEffectType.DOLPHINS_GRACE, 80, 0);
+                    applyPotion(player, PotionEffectType.HASTE, 80, 1);
+                    applyPotion(player, PotionEffectType.SPEED, 80, 1);
+                    applyPotion(player, PotionEffectType.STRENGTH, 80, 0);
+                    applyPotion(player, PotionEffectType.RESISTANCE, 80, 0);
+                    applyPotion(player, PotionEffectType.REGENERATION, 80, 0);
+                } else {
+                    removePassiveNightVision(player);
+                    removeWatermanWaterBuffs(player);
+                }
+            }
+            case PHOENIX -> {
+                applyPotion(player, PotionEffectType.FIRE_RESISTANCE, 80, 0);
+                var phoenixHealth = player.getAttribute(Attribute.MAX_HEALTH);
+                double healthCap = phoenixHealth == null ? 20.0 : phoenixHealth.getValue();
+                if (healthCap > 0.0 && player.getHealth() <= healthCap * PHOENIX_LOW_HEALTH_RATIO) {
+                    applyPotion(player, PotionEffectType.SPEED, 60, 0);
+                    applyPotion(player, PotionEffectType.REGENERATION, 60, 0);
+                }
+            }
+            case VOIDWALKER -> {
+                if (isVoidwalkerNightVisionEnabled(player)) {
+                    applyPassiveNightVision(player);
+                } else {
+                    removePassiveNightVision(player);
+                }
+                if (voidstepVeilUntil(player) > System.currentTimeMillis()) {
+                    applyPotion(player, PotionEffectType.SLOW_FALLING, 60, 0);
+                }
+            }
+            case SENTINEL -> {
+                syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySentinelHealthModifier, SENTINEL_HEALTH_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
+                applySentinelAura(player);
+            }
+            case FROSTBORN -> {
+                applyPotion(player, PotionEffectType.WATER_BREATHING, 80, 0);
+                if (isStandingOnFrostBlock(player)) {
+                    applyPotion(player, PotionEffectType.SPEED, 60, 0);
+                }
+            }
+            case DEADEYE -> {
+                applyPassiveNightVision(player);
+                applyPotion(player, PotionEffectType.SPEED, 80, 0);
+            }
             default -> {
             }
         }
@@ -1661,6 +1961,17 @@ public final class SuperpowerManager implements Listener {
             return;
         }
         player.addPotionEffect(new PotionEffect(type, durationTicks, amplifier, true, false, false));
+    }
+
+    private void applyPotion(LivingEntity entity, PotionEffectType type, int durationTicks, int amplifier) {
+        PotionEffect current = entity.getPotionEffect(type);
+        if (current != null && current.getAmplifier() > amplifier && current.getDuration() > 20) {
+            return;
+        }
+        if (current != null && current.getAmplifier() == amplifier && current.getDuration() > (durationTicks / 2)) {
+            return;
+        }
+        entity.addPotionEffect(new PotionEffect(type, durationTicks, amplifier, true, false, false));
     }
 
     private SuperpowerType ensurePowerAssigned(Player player) {
@@ -1716,6 +2027,7 @@ public final class SuperpowerManager implements Listener {
 
         clearLikelyPassivePowerEffects(player);
         clearPowerCooldownState(player);
+        removePassiveNightVision(player);
 
         if (nextPower != SuperpowerType.FLORIST) {
             removeMotherNatureSticks(player);
@@ -1736,6 +2048,9 @@ public final class SuperpowerManager implements Listener {
         pdc.remove(keyXrayActiveUntil);
         pdc.remove(keyXrayCooldownUntil);
         pdc.remove(keyTimeStopCooldownUntil);
+        pdc.remove(keyPhoenixCooldownUntil);
+        pdc.remove(keyVoidstepCooldownUntil);
+        pdc.remove(keyVoidstepVeilUntil);
         pdc.remove(keyShadowCooldownUntil);
         pdc.remove(keyShadowActiveUntil);
         pdc.remove(keyDruidBuffCooldownUntil);
@@ -1748,9 +2063,21 @@ public final class SuperpowerManager implements Listener {
         removeLikelyPowerPotion(player, PotionEffectType.SPEED, 1);
         removeLikelyPowerPotion(player, PotionEffectType.SPEED, 2);
         removeLikelyPowerPotion(player, PotionEffectType.HASTE, 2);
+        removeLikelyPowerPotion(player, PotionEffectType.HASTE, 1);
         removeLikelyPowerPotion(player, PotionEffectType.STRENGTH, 1);
+        removeLikelyPowerPotion(player, PotionEffectType.STRENGTH, 0);
         removeLikelyPowerPotion(player, PotionEffectType.HEALTH_BOOST, 4);
         removeLikelyPowerPotion(player, PotionEffectType.REGENERATION, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.FIRE_RESISTANCE, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.RESISTANCE, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.SLOWNESS, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.WATER_BREATHING, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.CONDUIT_POWER, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.DOLPHINS_GRACE, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.NIGHT_VISION, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.SLOW_FALLING, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.INVISIBILITY, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.ABSORPTION, 0);
 
         var maxHealth = player.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH);
         if (maxHealth != null && player.getHealth() > maxHealth.getValue()) {
@@ -1874,6 +2201,47 @@ public final class SuperpowerManager implements Listener {
         world.playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 1.0f, 0.85f);
     }
 
+    private boolean tryPhoenixRebirth(Player player, EntityDamageEvent.DamageCause cause) {
+        long now = System.currentTimeMillis();
+        long cooldownUntil = phoenixCooldownUntil(player);
+        if (cooldownUntil > now) {
+            return false;
+        }
+
+        setPhoenixCooldownUntil(player, now + (PHOENIX_COOLDOWN_SECONDS * 1000L));
+        var maxHealth = player.getAttribute(Attribute.MAX_HEALTH);
+        double healthCap = maxHealth == null ? 20.0 : maxHealth.getValue();
+        player.setHealth(Math.min(healthCap, PHOENIX_RECOVERY_HEALTH));
+        player.setFireTicks(0);
+        applyPotion(player, PotionEffectType.REGENERATION, 8 * 20, 2);
+        applyPotion(player, PotionEffectType.FIRE_RESISTANCE, 30 * 20, 0);
+        applyPotion(player, PotionEffectType.ABSORPTION, 8 * 20, 1);
+
+        if (cause == EntityDamageEvent.DamageCause.VOID) {
+            Location rescue = safeRespawnLikeLocation(player);
+            if (rescue != null) {
+                player.teleportAsync(rescue);
+            }
+        }
+
+        World world = player.getWorld();
+        Location center = player.getLocation().clone().add(0.0, 1.0, 0.0);
+        world.spawnParticle(Particle.FLAME, center, 80, 1.2, 0.8, 1.2, 0.05);
+        world.spawnParticle(Particle.LAVA, center, 18, 0.75, 0.55, 0.75, 0.02);
+        world.playSound(player.getLocation(), Sound.ITEM_FIRECHARGE_USE, 1.0f, 0.65f);
+        world.playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 0.65f, 1.35f);
+
+        for (Entity nearby : world.getNearbyEntities(player.getLocation(), PHOENIX_BURST_RADIUS, PHOENIX_BURST_RADIUS, PHOENIX_BURST_RADIUS)) {
+            if (!(nearby instanceof LivingEntity living) || isFriendlyTo(player, nearby)) {
+                continue;
+            }
+            living.setFireTicks(Math.max(living.getFireTicks(), 80));
+            living.damage(PHOENIX_BURST_DAMAGE, player);
+        }
+        player.sendMessage(MessageUtil.success("Your Ashen Soul pulls you back from death."));
+        return true;
+    }
+
     private Location safeRespawnLikeLocation(Player player) {
         Location bed = player.getRespawnLocation();
         if (bed != null) {
@@ -1897,6 +2265,23 @@ public final class SuperpowerManager implements Listener {
         return player.getPersistentDataContainer().getOrDefault(keyDruidBuffCooldownUntil, PersistentDataType.LONG, 0L);
     }
 
+    private long phoenixCooldownUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keyPhoenixCooldownUntil, PersistentDataType.LONG, 0L);
+    }
+
+    private long voidstepCooldownUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keyVoidstepCooldownUntil, PersistentDataType.LONG, 0L);
+    }
+
+    private long voidstepVeilUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keyVoidstepVeilUntil, PersistentDataType.LONG, 0L);
+    }
+
+    private boolean isVoidwalkerNightVisionEnabled(Player player) {
+        Byte raw = player.getPersistentDataContainer().get(keyVoidwalkerNightVisionEnabled, PersistentDataType.BYTE);
+        return raw == null || raw != 0;
+    }
+
     private void setShadowCooldownUntil(Player player, long value) {
         PersistentDataContainer pdc = player.getPersistentDataContainer();
         if (value <= 0L) {
@@ -1913,6 +2298,37 @@ public final class SuperpowerManager implements Listener {
             return;
         }
         pdc.set(keyShadowActiveUntil, PersistentDataType.LONG, value);
+    }
+
+    private void setPhoenixCooldownUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keyPhoenixCooldownUntil);
+            return;
+        }
+        pdc.set(keyPhoenixCooldownUntil, PersistentDataType.LONG, value);
+    }
+
+    private void setVoidstepCooldownUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keyVoidstepCooldownUntil);
+            return;
+        }
+        pdc.set(keyVoidstepCooldownUntil, PersistentDataType.LONG, value);
+    }
+
+    private void setVoidstepVeilUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keyVoidstepVeilUntil);
+            return;
+        }
+        pdc.set(keyVoidstepVeilUntil, PersistentDataType.LONG, value);
+    }
+
+    private void setVoidwalkerNightVisionEnabled(Player player, boolean enabled) {
+        player.getPersistentDataContainer().set(keyVoidwalkerNightVisionEnabled, PersistentDataType.BYTE, (byte) (enabled ? 1 : 0));
     }
 
     private void setDruidBuffCooldownUntil(Player player, long value) {
@@ -1998,6 +2414,27 @@ public final class SuperpowerManager implements Listener {
         }
     }
 
+    private void applyPassiveNightVision(Player player) {
+        player.addPotionEffect(new PotionEffect(PotionEffectType.NIGHT_VISION, PASSIVE_NIGHT_VISION_TICKS, 0, true, false, false));
+    }
+
+    private void removePassiveNightVision(Player player) {
+        PotionEffect current = player.getPotionEffect(PotionEffectType.NIGHT_VISION);
+        if (current != null && current.getAmplifier() == 0 && current.getDuration() <= PASSIVE_NIGHT_VISION_TICKS + 40) {
+            player.removePotionEffect(PotionEffectType.NIGHT_VISION);
+        }
+    }
+
+    private void removeWatermanWaterBuffs(Player player) {
+        removeLikelyPowerPotion(player, PotionEffectType.CONDUIT_POWER, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.DOLPHINS_GRACE, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.HASTE, 1);
+        removeLikelyPowerPotion(player, PotionEffectType.SPEED, 1);
+        removeLikelyPowerPotion(player, PotionEffectType.STRENGTH, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.RESISTANCE, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.REGENERATION, 0);
+    }
+
     private int secondsLeft(long future, long now) {
         return Math.max(1, (int) Math.ceil((future - now) / 1000.0));
     }
@@ -2032,9 +2469,28 @@ public final class SuperpowerManager implements Listener {
         for (int slot = 0; slot < inventory.getSize(); slot++) {
             inventory.setItem(slot, fillerPane());
         }
+        inventory.setItem(4, createDruidHeaderIcon());
         for (DruidBlessing blessing : DruidBlessing.values()) {
             inventory.setItem(blessing.slot(), createDruidBlessingIcon(blessing));
         }
+    }
+
+    private ItemStack createDruidHeaderIcon() {
+        ItemStack item = new ItemStack(Material.WRITABLE_BOOK);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        meta.displayName(MM.deserialize("<gradient:#63c74d:#c6ff6b><bold>Druid's Grimoire</bold></gradient>"));
+        meta.lore(List.of(
+            MM.deserialize("<gray>Choose one blessing for yourself and nearby teammates.</gray>"),
+            MM.deserialize("<gray>Only one blessing is cast per use.</gray>"),
+            Component.empty(),
+            MM.deserialize("<gray>Radius: <white>" + DRUID_BUFF_RADIUS + " blocks</white></gray>"),
+            MM.deserialize("<gray>Duration: <white>" + DRUID_BUFF_DURATION_SECONDS + "s</white></gray>")
+        ));
+        item.setItemMeta(meta);
+        return item;
     }
 
     private ItemStack createDruidBlessingIcon(DruidBlessing blessing) {
@@ -2120,6 +2576,92 @@ public final class SuperpowerManager implements Listener {
             targets.add(nearby);
         }
         return targets;
+    }
+
+    private void applySentinelAura(Player player) {
+        if (!player.isSneaking()) {
+            return;
+        }
+
+        double radiusSquared = SENTINEL_AURA_RADIUS * SENTINEL_AURA_RADIUS;
+        applyPotion(player, PotionEffectType.SLOWNESS, 45, 0);
+        for (Player nearby : player.getWorld().getPlayers()) {
+            if (nearby.isDead() || nearby.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            if (nearby.getLocation().distanceSquared(player.getLocation()) > radiusSquared) {
+                continue;
+            }
+            if (!sameTeamOrSelf(player.getUniqueId(), nearby.getUniqueId())) {
+                continue;
+            }
+            applyPotion(nearby, PotionEffectType.RESISTANCE, 60, 0);
+            applyPotion(nearby, PotionEffectType.ABSORPTION, 60, 0);
+        }
+        player.getWorld().spawnParticle(Particle.TOTEM_OF_UNDYING, player.getLocation().clone().add(0.0, 1.0, 0.0), 8, 0.8, 0.35, 0.8, 0.01);
+    }
+
+    private boolean isStandingOnFrostBlock(Player player) {
+        Material below = player.getLocation().clone().subtract(0.0, 0.1, 0.0).getBlock().getType();
+        return switch (below) {
+            case ICE, PACKED_ICE, BLUE_ICE, FROSTED_ICE, SNOW, SNOW_BLOCK, POWDER_SNOW -> true;
+            default -> false;
+        };
+    }
+
+    private boolean isWatermanEmpowered(Player player) {
+        return player.isInWater() || player.isUnderWater();
+    }
+
+    private Location findVoidstepDestination(Player player) {
+        Location origin = player.getLocation();
+        Vector direction = player.getEyeLocation().getDirection();
+        if (direction.lengthSquared() <= 0.0) {
+            return null;
+        }
+        direction.normalize();
+
+        for (double distance = VOIDSTEP_RANGE; distance >= 2.0; distance -= 0.5) {
+            Location target = origin.clone().add(direction.clone().multiply(distance));
+            target.setYaw(origin.getYaw());
+            target.setPitch(origin.getPitch());
+            Location safe = findSafeTravelLocation(target);
+            if (safe == null || safe.getWorld() == null || !safe.getWorld().equals(origin.getWorld())) {
+                continue;
+            }
+            if (safe.distanceSquared(origin) > (VOIDSTEP_RANGE + 3.0) * (VOIDSTEP_RANGE + 3.0)) {
+                continue;
+            }
+            if (isVoidstepPathClear(origin, safe)) {
+                return safe;
+            }
+        }
+        return null;
+    }
+
+    private boolean isVoidstepPathClear(Location origin, Location destination) {
+        if (origin == null || destination == null || origin.getWorld() == null || !origin.getWorld().equals(destination.getWorld())) {
+            return false;
+        }
+
+        Vector start = origin.clone().add(0.0, 1.0, 0.0).toVector();
+        Vector end = destination.clone().add(0.0, 1.0, 0.0).toVector();
+        Vector delta = end.clone().subtract(start);
+        double length = delta.length();
+        if (length <= 0.1) {
+            return true;
+        }
+
+        Vector step = delta.normalize().multiply(0.5);
+        Vector cursor = start.clone();
+        for (double walked = 0.0; walked <= length; walked += 0.5) {
+            Location sample = cursor.toLocation(origin.getWorld());
+            if (!sample.getBlock().isPassable() || !sample.clone().add(0.0, 1.0, 0.0).getBlock().isPassable()) {
+                return false;
+            }
+            cursor.add(step);
+        }
+        return true;
     }
 
     private void useMotherNatureStickAttack(Player player) {
@@ -2583,6 +3125,22 @@ public final class SuperpowerManager implements Listener {
         return plugin.getTeamManager() != null && plugin.getTeamManager().sameTeam(ownerId, targetId);
     }
 
+    private boolean isFriendlyTo(Player owner, Entity target) {
+        if (owner == null || target == null) {
+            return false;
+        }
+        if (owner.getUniqueId().equals(target.getUniqueId())) {
+            return true;
+        }
+        if (target instanceof Player player) {
+            return sameTeamOrSelf(owner.getUniqueId(), player.getUniqueId());
+        }
+        if (target instanceof Tameable tameable && tameable.getOwner() != null) {
+            return sameTeamOrSelf(owner.getUniqueId(), tameable.getOwner().getUniqueId());
+        }
+        return false;
+    }
+
     private Player resolvePlayerDamager(Entity damager) {
         LivingEntity attacker = actualLivingDamager(damager);
         return attacker instanceof Player player ? player : null;
@@ -2658,6 +3216,8 @@ public final class SuperpowerManager implements Listener {
         syncPlayerAttributeModifier(player, Attribute.SCALE, keyGiantScaleModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR, false);
         syncPlayerAttributeModifier(player, Attribute.KNOCKBACK_RESISTANCE, keyGiantKnockbackModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySupermanHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySentinelHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        syncPlayerAttributeModifier(player, Attribute.SUBMERGED_MINING_SPEED, keyWatermanSubmergedMiningModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
     }
 
     private long xrayActiveUntil(Player player) {
@@ -3433,7 +3993,12 @@ public final class SuperpowerManager implements Listener {
             inventory.setItem(slot, fillerPane());
         }
         SuperpowerType[] types = SuperpowerType.values();
-        int[] slots = {10, 11, 12, 13, 14, 15, 19, 20, 21, 22, 23, 24, 28, 29, 30, 31};
+        int[] slots = {
+            10, 11, 12, 13, 14, 15, 16,
+            19, 20, 21, 22, 23, 24, 25,
+            28, 29, 30, 31, 32, 33, 34,
+            37, 38, 39, 40, 41, 42, 43
+        };
         for (int i = 0; i < types.length && i < slots.length; i++) {
             inventory.setItem(slots[i], createPowerInfoIcon(types[i]));
         }
@@ -3578,6 +4143,55 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Sneak while flying to burst forward.</gray>"));
                 lore.add(MM.deserialize("<gray>Cooldown: <white>5 minutes</white>.</gray>"));
             }
+            case WATERMAN -> {
+                lore.add(MM.deserialize("<gray>Can live underwater with <white>no drowning</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Air is constantly restored and Water Breathing is always active.</gray>"));
+                lore.add(MM.deserialize("<gray>Breaks blocks at normal speed while submerged.</gray>"));
+                lore.add(MM.deserialize("<gray>While in water, gains Conduit Power, Dolphin's Grace, Haste II, Speed II, Strength I, Resistance I, and Regeneration I.</gray>"));
+                lore.add(MM.deserialize("<gray>Water-empowered hits deal <white>25%</white> more damage.</gray>"));
+                lore.add(MM.deserialize("<gray>While water-empowered, incoming damage is reduced by <white>25%</white> and attackers are slowed.</gray>"));
+            }
+            case PHOENIX -> {
+                lore.add(MM.deserialize("<gray>Permanent <white>Fire Resistance</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Low health grants <white>Speed I</white> and <white>Regeneration I</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Hits ignite enemies and burning targets take bonus damage.</gray>"));
+                lore.add(MM.deserialize("<gray>Enemies that damage you are scorched while you gain brief Absorption.</gray>"));
+                lore.add(MM.deserialize("<gray>Lethal damage can trigger <white>Rebirth</white>, restoring health and burning nearby enemies.</gray>"));
+                lore.add(MM.deserialize("<gray>Rebirth cooldown: <white>" + (PHOENIX_COOLDOWN_SECONDS / 60) + " minutes</white>.</gray>"));
+            }
+            case VOIDWALKER -> {
+                lore.add(MM.deserialize("<gray>Toggleable <white>Night Vision</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Command: <white>/voidstep</white></gray>"));
+                lore.add(MM.deserialize("<gray>Night vision can be toggled with <white>/voidvision</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Blink up to <white>" + (int) VOIDSTEP_RANGE + " blocks</white> through a clear safe path.</gray>"));
+                lore.add(MM.deserialize("<gray>Voidstep grants a <white>" + VOIDSTEP_VEIL_SECONDS + "s</white> veil with Slow Falling.</gray>"));
+                lore.add(MM.deserialize("<gray>Your first veil attack blinds and weakens the target with bonus damage.</gray>"));
+                lore.add(MM.deserialize("<gray>Endermen refuse to target Voidwalkers.</gray>"));
+                lore.add(MM.deserialize("<gray>Cooldown: <white>" + VOIDSTEP_COOLDOWN_SECONDS + "s</white>.</gray>"));
+            }
+            case SENTINEL -> {
+                lore.add(MM.deserialize("<gray>Grants <white>+2 hearts</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Sneak to project a <white>" + (int) SENTINEL_AURA_RADIUS + " block</white> guard aura.</gray>"));
+                lore.add(MM.deserialize("<gray>You and nearby teammates gain <white>Resistance I</white> and Absorption.</gray>"));
+                lore.add(MM.deserialize("<gray>While braced, incoming damage is reduced and attackers are weakened.</gray>"));
+                lore.add(MM.deserialize("<gray>The caster is slowed while bracing the aura.</gray>"));
+            }
+            case FROSTBORN -> {
+                lore.add(MM.deserialize("<gray>Permanent <white>Water Breathing</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Immune to freezing damage.</gray>"));
+                lore.add(MM.deserialize("<gray>Gain <white>Speed I</white> while standing on snow or ice.</gray>"));
+                lore.add(MM.deserialize("<gray>Damaging enemies chills them with <white>Slowness I</white> and <white>Weakness I</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Chilled targets take <white>15%</white> more Frostborn damage.</gray>"));
+                lore.add(MM.deserialize("<gray>Enemies that damage you are chilled too.</gray>"));
+                lore.add(MM.deserialize("<gray>Chill duration: <white>" + FROSTBORN_CHILL_SECONDS + "s</white>.</gray>"));
+            }
+            case DEADEYE -> {
+                lore.add(MM.deserialize("<gray>Permanent <white>Speed I</white> and <white>Night Vision</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Projectile hits deal <white>20%</white> more damage.</gray>"));
+                lore.add(MM.deserialize("<gray>Sneak while shooting arrows/tridents to fire a faster marked shot.</gray>"));
+                lore.add(MM.deserialize("<gray>Marked shots deal <white>35%</white> more damage and briefly slow targets.</gray>"));
+                lore.add(MM.deserialize("<gray>Targets hit by projectiles glow for <white>" + DEADEYE_GLOW_SECONDS + "s</white>.</gray>"));
+            }
         }
         return lore;
     }
@@ -3589,11 +4203,11 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void applyAncientScrollPresentation(ItemMeta meta) {
-        meta.displayName(MM.deserialize("<gold><bold>Ancient Scroll</bold></gold>"));
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.EPIC, "Ancient Scroll"));
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.PAPER,
-            "CUSTOM",
+            CustomLoreUtil.Rarity.EPIC.label(),
             "SCROLL",
             List.of("<gray>Right-click to reroll your current superpower.</gray>"),
             List.of(CustomLoreUtil.section(
@@ -3612,11 +4226,11 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void applyWardenHeartPresentation(ItemMeta meta) {
-        meta.displayName(MM.deserialize("<dark_aqua><bold>Warden Heart</bold></dark_aqua>"));
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.EPIC, "Warden Heart"));
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.HEART_OF_THE_SEA,
-            "CUSTOM",
+            CustomLoreUtil.Rarity.EPIC.label(),
             "RELIC",
             List.of("<gray>A rare relic pulled from a fallen Warden.</gray>"),
             List.of(CustomLoreUtil.section(
@@ -3634,11 +4248,11 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void applyMotherNatureStickPresentation(ItemMeta meta) {
-        meta.displayName(MM.deserialize("<green><bold>Stick from Mother Nature</bold></green>"));
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.EPIC, "Stick from Mother Nature"));
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.STICK,
-            "CUSTOM",
+            CustomLoreUtil.Rarity.EPIC.label(),
             "NATURE",
             List.of("<gray>Bound to the Florist.</gray>"),
             List.of(
@@ -3665,11 +4279,11 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void applyTheWorldClockPresentation(ItemMeta meta) {
-        meta.displayName(MM.deserialize("<gold><bold>World Clock</bold></gold>"));
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.MYTHIC, "World Clock"));
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.CLOCK,
-            "BOUND",
+            CustomLoreUtil.Rarity.MYTHIC.label(),
             "CLOCK",
             List.of("<gray>Bound to the one who halts the world.</gray>"),
             List.of(CustomLoreUtil.section(
@@ -3689,11 +4303,11 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void applyDruidGrimoirePresentation(ItemMeta meta) {
-        meta.displayName(MM.deserialize("<green><bold>Druid's Grimoire</bold></green>"));
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.EPIC, "Druid's Grimoire"));
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.BOOK,
-            "BOUND",
+            CustomLoreUtil.Rarity.EPIC.label(),
             "GRIMOIRE",
             List.of("<gray>Bound to the keeper of the grove.</gray>"),
             List.of(CustomLoreUtil.section(

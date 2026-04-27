@@ -35,6 +35,8 @@ public final class PlayerCommands {
         registerSuicide(commands, plugin);
         registerShadow(commands, plugin);
         registerXray(commands, plugin);
+        registerVoidstep(commands, plugin);
+        registerVoidVision(commands, plugin);
         registerTravel(commands, plugin);
         registerMonarchSummon(commands, plugin);
         registerBack(commands, plugin);
@@ -208,6 +210,54 @@ public final class PlayerCommands {
         );
     }
 
+    private static void registerVoidstep(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("voidstep")
+                .requires(src -> src.getSender() instanceof Player)
+                .executes(ctx -> {
+                    Player player = (Player) ctx.getSource().getSender();
+                    SuperpowerManager powers = plugin.getSuperpowerManager();
+                    if (powers == null) {
+                        player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+                        return 0;
+                    }
+                    return powers.handleVoidstepCommand(player) ? Command.SINGLE_SUCCESS : 0;
+                })
+                .build(),
+            "Blink forward with Voidwalker",
+            List.of("vstep")
+        );
+    }
+
+    private static void registerVoidVision(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("voidvision")
+                .requires(src -> src.getSender() instanceof Player)
+                .executes(ctx -> {
+                    Player player = (Player) ctx.getSource().getSender();
+                    SuperpowerManager powers = plugin.getSuperpowerManager();
+                    if (powers == null) {
+                        player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+                        return 0;
+                    }
+                    return powers.handleVoidwalkerNightVisionCommand(player) ? Command.SINGLE_SUCCESS : 0;
+                })
+                .then(Commands.literal("toggle")
+                    .executes(ctx -> {
+                        Player player = (Player) ctx.getSource().getSender();
+                        SuperpowerManager powers = plugin.getSuperpowerManager();
+                        if (powers == null) {
+                            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+                            return 0;
+                        }
+                        return powers.handleVoidwalkerNightVisionCommand(player) ? Command.SINGLE_SUCCESS : 0;
+                    }))
+                .build(),
+            "Toggle Voidwalker night vision",
+            List.of("vvision", "voidnv")
+        );
+    }
+
     private static void registerTravel(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("travel")
@@ -322,15 +372,17 @@ public final class PlayerCommands {
         List<String> lines = new ArrayList<>();
         lines.add("<gold><bold>Player Commands</bold></gold>");
         if (player.hasPermission("smpcore.legendary.recipe")) {
-            lines.add("<gray>Use <white>/lrecipe</white> or <white>/lrecipes</white> to view legendary recipes.</gray>");
+            lines.add("<gray>Use <white>/lrecipe</white>, <white>/lrecipes</white>, or <white>/reliquary</white> to open the Reliquary.</gray>");
         }
 
         if (player.hasPermission("smpcore.help")) {
             lines.add("<gray><white>/help</white> - Show this help menu</gray>");
         }
         if (player.hasPermission("smpcore.legendary.recipe")) {
-            lines.add("<gray><white>/lrecipe</white> (<white>/lrecipes</white>) - Open legendary recipe menu</gray>");
+            lines.add("<gray><white>/lrecipe</white> (<white>/reliquary</white>) - Open the Reliquary</gray>");
+            lines.add("<gray><white>/mythics</white> - View Mythic Nexus fusion pairings</gray>");
         }
+        lines.add("<gray><white>/bossrituals</white> - View custom boss summon rituals</gray>");
         if (player.hasPermission("smpcore.enchants")) {
             lines.add("<gray><white>/enchants</white> - View custom enchants</gray>");
         }
@@ -356,6 +408,7 @@ public final class PlayerCommands {
         if (player.hasPermission("smpcore.waystone.use")) {
             lines.add("<gray>Right-click a known waystone sign to open your teleport menu</gray>");
         }
+        lines.add("<gray>Power commands unlock naturally if your hidden power uses them: <white>/shadow</white>, <white>/xray</white>, <white>/voidstep</white>, <white>/voidvision</white>, <white>/travel</white>, <white>/msummon</white>.</gray>");
         if (player.hasPermission("smpcore.backpack.use")) {
             lines.add("<gray>Right-click a <white>Backpack</white> to open portable storage</gray>");
         }
