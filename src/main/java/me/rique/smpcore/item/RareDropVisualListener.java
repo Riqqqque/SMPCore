@@ -6,18 +6,21 @@ import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.legendary.MythicForgeListener;
 import me.rique.smpcore.power.SuperpowerManager;
+import me.rique.smpcore.util.CustomLoreUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
+import org.bukkit.Color;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Particle;
 import org.bukkit.World;
-import org.bukkit.entity.ArmorStand;
+import org.bukkit.entity.Display;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Item;
+import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -185,16 +188,16 @@ public final class RareDropVisualListener implements Listener {
             applyGlow(item, profile.glowColor());
 
             Entity displayEntity = Bukkit.getEntity(entry.getValue());
-            if (!(displayEntity instanceof ArmorStand armorStand) || !armorStand.isValid()) {
+            if (!(displayEntity instanceof TextDisplay display) || !display.isValid()) {
                 hologramsByItem.remove(itemId);
                 ensureRareHologram(item, profile);
                 continue;
             }
 
-            armorStand.teleport(hologramLocation(item));
+            display.teleport(hologramLocation(item));
             Component updatedText = buildRareHologramText(item.getItemStack(), profile);
-            if (!Objects.equals(armorStand.customName(), updatedText)) {
-                armorStand.customName(updatedText);
+            if (!Objects.equals(display.text(), updatedText)) {
+                display.text(updatedText);
             }
         }
     }
@@ -236,8 +239,13 @@ public final class RareDropVisualListener implements Listener {
                 continue;
             }
             UUID itemId = hologramItemId(entity);
+            UUID trackedDisplayId = itemId == null ? null : hologramsByItem.get(itemId);
             Entity itemEntity = itemId == null ? null : Bukkit.getEntity(itemId);
-            if (!(itemEntity instanceof Item item) || !item.isValid() || profileFor(item.getItemStack()) == null) {
+            if (!(entity instanceof TextDisplay)
+                || !(itemEntity instanceof Item item)
+                || !item.isValid()
+                || profileFor(item.getItemStack()) == null
+                || !entity.getUniqueId().equals(trackedDisplayId)) {
                 entity.remove();
                 if (itemId != null) {
                     hologramsByItem.remove(itemId);
@@ -266,26 +274,30 @@ public final class RareDropVisualListener implements Listener {
         }
 
         UUID itemId = itemEntity.getUniqueId();
-        Entity existing = Bukkit.getEntity(hologramsByItem.get(itemId));
-        if (existing instanceof ArmorStand armorStand && armorStand.isValid()) {
-            armorStand.teleport(hologramLocation(itemEntity));
-            armorStand.customName(buildRareHologramText(itemEntity.getItemStack(), profile));
+        UUID existingId = hologramsByItem.get(itemId);
+        Entity existing = existingId == null ? null : Bukkit.getEntity(existingId);
+        if (existing instanceof TextDisplay display && display.isValid()) {
+            display.teleport(hologramLocation(itemEntity));
+            display.text(buildRareHologramText(itemEntity.getItemStack(), profile));
             return;
         }
 
         removeRareHologram(itemId);
-        itemEntity.getWorld().spawn(hologramLocation(itemEntity), ArmorStand.class, armorStand -> {
-            tagRareHologram(armorStand, itemId);
-            armorStand.customName(buildRareHologramText(itemEntity.getItemStack(), profile));
-            armorStand.setCustomNameVisible(true);
-            armorStand.setVisible(false);
-            armorStand.setMarker(true);
-            armorStand.setSmall(true);
-            armorStand.setGravity(false);
-            armorStand.setPersistent(false);
-            armorStand.setInvulnerable(true);
-            armorStand.setSilent(true);
-            hologramsByItem.put(itemId, armorStand.getUniqueId());
+        itemEntity.getWorld().spawn(hologramLocation(itemEntity), TextDisplay.class, display -> {
+            tagRareHologram(display, itemId);
+            display.text(buildRareHologramText(itemEntity.getItemStack(), profile));
+            display.setGravity(false);
+            display.setPersistent(false);
+            display.setInvulnerable(true);
+            display.setAlignment(TextDisplay.TextAlignment.CENTER);
+            display.setBillboard(Display.Billboard.CENTER);
+            display.setSeeThrough(true);
+            display.setShadowed(false);
+            display.setViewRange(HOLOGRAM_VIEW_RANGE);
+            display.setLineWidth(220);
+            display.setTextOpacity((byte) 255);
+            display.setBackgroundColor(Color.fromARGB(96, 8, 8, 16));
+            hologramsByItem.put(itemId, display.getUniqueId());
         });
     }
 
@@ -416,9 +428,15 @@ public final class RareDropVisualListener implements Listener {
         return Bukkit.getScoreboardManager() == null ? null : Bukkit.getScoreboardManager().getMainScoreboard();
     }
 
-    private NamedTextColor colorForKey(String key) {
-        int index = Math.floorMod(key == null ? 0 : key.hashCode(), GLOW_COLORS.length);
-        return GLOW_COLORS[index];
+    private NamedTextColor colorForRarity(String rarityLabel) {
+        return switch (CustomLoreUtil.Rarity.fromLabel(rarityLabel)) {
+            case COMMON -> NamedTextColor.WHITE;
+            case UNCOMMON -> NamedTextColor.GREEN;
+            case RARE -> NamedTextColor.AQUA;
+            case EPIC -> NamedTextColor.LIGHT_PURPLE;
+            case LEGENDARY -> NamedTextColor.GOLD;
+            case MYTHIC -> NamedTextColor.RED;
+        };
     }
 
     private RareDropProfile profileFor(ItemStack item) {
@@ -432,58 +450,76 @@ public final class RareDropVisualListener implements Listener {
         if (legendary != null) {
             String legendaryId = legendary.legendaryId(item);
             if (legendaryId != null) {
-                String subtitle = legendary.isMythicForgeOutputLegendary(legendaryId) ? "MYTHIC" : "LEGENDARY";
-                return new RareDropProfile(displayName, subtitle, colorForKey("legendary:" + legendaryId));
+                String subtitle = legendary.rarityLabelForLegendary(legendaryId);
+                if (subtitle == null || subtitle.isBlank()) {
+                    subtitle = legendary.isMythicForgeOutputLegendary(legendaryId) ? "MYTHIC" : "LEGENDARY";
+                }
+                return new RareDropProfile(displayName, subtitle, colorForRarity(subtitle));
             }
             if (legendary.isEnderBoneItem(item)) {
-                return new RareDropProfile(displayName, "DRAGON RELIC", colorForKey("ender_bone"));
+                return new RareDropProfile(displayName, "EPIC", colorForRarity("EPIC"));
             }
             if (legendary.isOrbOfTheMysticsItem(item)) {
-                return new RareDropProfile(displayName, "MYSTIC RELIC", colorForKey("orb_of_the_mystics"));
+                return new RareDropProfile(displayName, "LEGENDARY", colorForRarity("LEGENDARY"));
             }
         }
 
         BossManager bossManager = plugin.getBossManager();
         if (bossManager != null && bossManager.isDominionCore(item)) {
-            return new RareDropProfile(displayName, "BOSS RELIC", colorForKey("dominion_core"));
+            return new RareDropProfile(displayName, "LEGENDARY", colorForRarity("LEGENDARY"));
         }
 
         MythicForgeListener mythicForge = plugin.getMythicForgeListener();
         if (mythicForge != null) {
             if (mythicForge.isAscendantCoreItem(item)) {
-                return new RareDropProfile(displayName, "FORGE CATALYST", colorForKey("ascendant_core"));
+                return new RareDropProfile(displayName, "LEGENDARY", colorForRarity("LEGENDARY"));
             }
             if (mythicForge.isMythicForgeItemStack(item)) {
-                return new RareDropProfile(displayName, "MYTHIC FORGE", colorForKey("mythic_forge"));
+                return new RareDropProfile(displayName, "MYTHIC", colorForRarity("MYTHIC"));
             }
         }
 
         AwakeningTableListener awakening = plugin.getAwakeningTableListener();
         if (awakening != null) {
             if (awakening.isAwakeningTableCustomItem(item)) {
-                return new RareDropProfile(displayName, "AWAKENING TABLE", colorForKey("awakening_table"));
+                return new RareDropProfile(displayName, "MYTHIC", colorForRarity("MYTHIC"));
             }
             if (awakening.isAwakened(item)) {
-                return new RareDropProfile(displayName, "AWAKENED GEAR", colorForKey("awakened:" + item.getType().name()));
+                return new RareDropProfile(displayName, "MYTHIC", colorForRarity("MYTHIC"));
             }
+        }
+
+        if (plugin.getCustomToolListener() != null) {
+            String toolId = plugin.getCustomToolListener().customToolId(item);
+            if (toolId != null) {
+                return new RareDropProfile(displayName, "RARE", colorForRarity("RARE"));
+            }
+        }
+
+        if (plugin.getBackpackListener() != null && plugin.getBackpackListener().isBackpack(item)) {
+            return new RareDropProfile(displayName, "UNCOMMON", colorForRarity("UNCOMMON"));
+        }
+
+        if (plugin.getSustenanceTalismanListener() != null && plugin.getSustenanceTalismanListener().isTalisman(item)) {
+            return new RareDropProfile(displayName, "EPIC", colorForRarity("EPIC"));
         }
 
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers != null) {
             if (powers.isAncientScroll(item)) {
-                return new RareDropProfile(displayName, "POWER RELIC", colorForKey(SuperpowerManager.ANCIENT_SCROLL_ITEM_ID));
+                return new RareDropProfile(displayName, "EPIC", colorForRarity("EPIC"));
             }
             if (powers.isWardenHeart(item)) {
-                return new RareDropProfile(displayName, "HEART RELIC", colorForKey(SuperpowerManager.WARDEN_HEART_ITEM_ID));
+                return new RareDropProfile(displayName, "EPIC", colorForRarity("EPIC"));
             }
             if (powers.isMotherNatureStick(item)) {
-                return new RareDropProfile(displayName, "DRUIDIC RELIC", colorForKey(SuperpowerManager.MOTHER_NATURE_STICK_ITEM_ID));
+                return new RareDropProfile(displayName, "EPIC", colorForRarity("EPIC"));
             }
             if (powers.isTheWorldClock(item)) {
-                return new RareDropProfile(displayName, "TIME RELIC", colorForKey(SuperpowerManager.THE_WORLD_CLOCK_ITEM_ID));
+                return new RareDropProfile(displayName, "MYTHIC", colorForRarity("MYTHIC"));
             }
             if (powers.isDruidGrimoire(item)) {
-                return new RareDropProfile(displayName, "POWER GRIMOIRE", colorForKey(SuperpowerManager.DRUID_GRIMOIRE_ITEM_ID));
+                return new RareDropProfile(displayName, "EPIC", colorForRarity("EPIC"));
             }
         }
 
@@ -494,6 +530,9 @@ public final class RareDropVisualListener implements Listener {
         ItemMeta meta = item.getItemMeta();
         if (meta != null && meta.hasDisplayName() && meta.displayName() != null) {
             return meta.displayName();
+        }
+        if (meta != null && meta.hasItemName() && meta.itemName() != null) {
+            return meta.itemName();
         }
         return Component.text(prettyMaterial(item.getType()), NamedTextColor.WHITE);
     }

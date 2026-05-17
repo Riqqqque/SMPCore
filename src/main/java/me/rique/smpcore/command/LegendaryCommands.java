@@ -28,6 +28,7 @@ public final class LegendaryCommands {
 
     public static void register(Commands commands, SMPCore plugin) {
         registerRecipeCommand(commands, plugin);
+        registerMythicFusionCommand(commands, plugin);
         registerAdminLegendaryCommand(commands, plugin);
     }
 
@@ -46,8 +47,28 @@ public final class LegendaryCommands {
                     return Command.SINGLE_SUCCESS;
                 })
                 .build(),
-            "Open the legendary recipes GUI",
-            List.of("lrecipes")
+            "Open the Reliquary item GUI",
+            List.of("lrecipes", "reliquary")
+        );
+    }
+
+    private static void registerMythicFusionCommand(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("mythics")
+                .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.legendary.recipe"))
+                .executes(ctx -> {
+                    Player player = (Player) ctx.getSource().getSender();
+                    LegendaryListener legendary = plugin.getLegendaryListener();
+                    if (legendary == null) {
+                        player.sendMessage(MessageUtil.error("Legendary system is not ready yet."));
+                        return 0;
+                    }
+                    legendary.openMythicFusionMenu(player);
+                    return Command.SINGLE_SUCCESS;
+                })
+                .build(),
+            "Open the Mythic Nexus fusion GUI",
+            List.of("mythicfusions", "mythicnexus", "nexus")
         );
     }
 

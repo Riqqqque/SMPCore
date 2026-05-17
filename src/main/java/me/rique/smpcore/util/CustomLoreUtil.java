@@ -60,6 +60,15 @@ public final class CustomLoreUtil {
         return MM.deserialize(raw);
     }
 
+    public static Component displayName(Rarity rarity, String name) {
+        return MM.deserialize(displayNameTag(rarity, name));
+    }
+
+    public static String displayNameTag(Rarity rarity, String name) {
+        Rarity resolved = rarity == null ? Rarity.COMMON : rarity;
+        return "<gradient:" + resolved.gradient() + "><bold>" + name + "</bold></gradient>";
+    }
+
     public static void addSpacer(List<Component> lore) {
         if (lore.isEmpty()) {
             return;
@@ -105,15 +114,54 @@ public final class CustomLoreUtil {
     }
 
     private static String rarityLine(String tierLabel, String itemKind) {
-        String gradient = switch (tierLabel) {
-            case "MYTHIC" -> "#ff4df0:#b56dff";
-            case "CUSTOM" -> "#4deeea:#74ee15";
-            case "ENCHANTED" -> "#7cf7c9:#58d68d";
-            default -> "#ffd166:#f8961e";
-        };
-        return "<gradient:" + gradient + "><bold>" + tierLabel + " " + itemKind + "</bold></gradient>";
+        Rarity rarity = Rarity.fromLabel(tierLabel);
+        return "<gradient:" + rarity.gradient() + "><bold>" + rarity.label() + " " + itemKind + "</bold></gradient>";
     }
 
     public record LoreSection(String label, String title, List<String> bodyLines) {
+    }
+
+    public enum Rarity {
+        COMMON("COMMON", "#cbd5e1:#f8fafc"),
+        UNCOMMON("UNCOMMON", "#74ee15:#22c55e"),
+        RARE("RARE", "#4deeea:#2f80ed"),
+        EPIC("EPIC", "#b56dff:#ff4df0"),
+        LEGENDARY("LEGENDARY", "#ffd166:#f8961e"),
+        MYTHIC("MYTHIC", "#ff4d6d:#8a2be2");
+
+        private final String label;
+        private final String gradient;
+
+        Rarity(String label, String gradient) {
+            this.label = label;
+            this.gradient = gradient;
+        }
+
+        public String label() {
+            return label;
+        }
+
+        public String gradient() {
+            return gradient;
+        }
+
+        public static Rarity fromLabel(String label) {
+            if (label == null || label.isBlank()) {
+                return COMMON;
+            }
+            String normalized = label.trim().toUpperCase(java.util.Locale.ROOT).replace('-', '_').replace(' ', '_');
+            return switch (normalized) {
+                case "MYTHICAL" -> MYTHIC;
+                case "CUSTOM", "BOUND" -> UNCOMMON;
+                case "ENCHANTED" -> RARE;
+                default -> {
+                    try {
+                        yield Rarity.valueOf(normalized);
+                    } catch (IllegalArgumentException ex) {
+                        yield COMMON;
+                    }
+                }
+            };
+        }
     }
 }

@@ -6,6 +6,7 @@ import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.backpack.BackpackListener;
 import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.combat.CombatLogListener;
+import me.rique.smpcore.combat.DamageNumberListener;
 import me.rique.smpcore.crafting.CraftingRulesListener;
 import me.rique.smpcore.command.AdminCommands;
 import me.rique.smpcore.command.BossCommands;
@@ -15,6 +16,7 @@ import me.rique.smpcore.command.LegendaryCommands;
 import me.rique.smpcore.command.PlayerCommands;
 import me.rique.smpcore.command.SMPCoreCommand;
 import me.rique.smpcore.command.SpawnerAdminCommand;
+import me.rique.smpcore.command.SmpStartCommand;
 import me.rique.smpcore.command.TeamCommands;
 import me.rique.smpcore.config.ConfigManager;
 import me.rique.smpcore.database.DatabaseManager;
@@ -35,8 +37,10 @@ import me.rique.smpcore.player.DragonEggListener;
 import me.rique.smpcore.player.JoinListener;
 import me.rique.smpcore.player.PlayerManager;
 import me.rique.smpcore.player.WorldRulesListener;
+import me.rique.smpcore.motd.MotdListener;
 import me.rique.smpcore.spawner.SpawnerListener;
 import me.rique.smpcore.spawner.SpawnerManager;
+import me.rique.smpcore.smp.SmpStartManager;
 import me.rique.smpcore.team.TeamManager;
 import me.rique.smpcore.waystone.WaystoneListener;
 import me.rique.smpcore.waystone.WaystoneManager;
@@ -60,6 +64,7 @@ public final class SMPCore extends JavaPlugin {
     private WaystoneManager waystoneManager;
     private BackpackListener backpackListener;
     private CombatLogListener combatLogListener;
+    private DamageNumberListener damageNumberListener;
     private DeathChestListener deathChestListener;
     private DragonEggListener dragonEggListener;
     private AwakeningTableListener awakeningTableListener;
@@ -78,6 +83,7 @@ public final class SMPCore extends JavaPlugin {
     private VeinMinerListener veinMinerListener;
     private CraftingRulesListener craftingRulesListener;
     private WorldRulesListener worldRulesListener;
+    private SmpStartManager smpStartManager;
 
     @Override
     public void onEnable() {
@@ -121,6 +127,7 @@ public final class SMPCore extends JavaPlugin {
         if (legendaryAltarManager != null) legendaryAltarManager.shutdown();
         if (mythicForgeListener != null) mythicForgeListener.shutdown();
         if (bossManager != null) bossManager.shutdown();
+        if (damageNumberListener != null) damageNumberListener.shutdown();
         if (veinMinerListener != null) veinMinerListener.shutdown();
         if (backpackListener != null) backpackListener.shutdown();
         if (spawnerManager != null) spawnerManager.shutdown();
@@ -137,13 +144,20 @@ public final class SMPCore extends JavaPlugin {
     private void registerListeners() {
         PluginManager pm = getServer().getPluginManager();
         pm.registerEvents(new SpawnerListener(this), this);
+        pm.registerEvents(new MotdListener(this), this);
         craftingRulesListener = new CraftingRulesListener(this);
         pm.registerEvents(craftingRulesListener, this);
         combatLogListener = new CombatLogListener(this);
         pm.registerEvents(combatLogListener, this);
+        damageNumberListener = new DamageNumberListener(this);
+        pm.registerEvents(damageNumberListener, this);
+        damageNumberListener.start();
         worldRulesListener = new WorldRulesListener(this);
         pm.registerEvents(worldRulesListener, this);
         worldRulesListener.applyConfiguredWorldRules();
+        smpStartManager = new SmpStartManager(this);
+        pm.registerEvents(smpStartManager, this);
+        smpStartManager.applyConfiguredState();
         veinMinerListener = new VeinMinerListener(this);
         pm.registerEvents(veinMinerListener, this);
         replenishListener = new ReplenishListener(this);
@@ -206,6 +220,7 @@ public final class SMPCore extends JavaPlugin {
             HomeCommands.register(commands, this);
             PlayerCommands.register(commands, this);
             TeamCommands.register(commands, this);
+            SmpStartCommand.register(commands, this);
 
             AdminCommands.register(commands, this);
             GamemodeCommands.register(commands, this);
@@ -226,6 +241,7 @@ public final class SMPCore extends JavaPlugin {
     public WaystoneManager getWaystoneManager() { return waystoneManager; }
     public BackpackListener getBackpackListener() { return backpackListener; }
     public CombatLogListener getCombatLogListener() { return combatLogListener; }
+    public DamageNumberListener getDamageNumberListener() { return damageNumberListener; }
     public AwakeningTableListener getAwakeningTableListener() { return awakeningTableListener; }
     public LegendaryListener getLegendaryListener() { return legendaryListener; }
     public LegendaryAltarManager getLegendaryAltarManager() { return legendaryAltarManager; }
@@ -242,4 +258,5 @@ public final class SMPCore extends JavaPlugin {
     public VeinMinerListener getVeinMinerListener() { return veinMinerListener; }
     public CraftingRulesListener getCraftingRulesListener() { return craftingRulesListener; }
     public WorldRulesListener getWorldRulesListener() { return worldRulesListener; }
+    public SmpStartManager getSmpStartManager() { return smpStartManager; }
 }

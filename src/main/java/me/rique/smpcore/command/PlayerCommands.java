@@ -398,6 +398,9 @@ public final class PlayerCommands {
         if (player.hasPermission("smpcore.top")) {
             lines.add("<gray><white>/top</white> - Teleport above the highest block</gray>");
         }
+        if (player.hasPermission("smpcore.startsmp")) {
+            lines.add("<gray><white>/startsmp</white> - Expand the world border and start the grace timer</gray>");
+        }
         if (player.hasPermission("smpcore.home")) {
             lines.add("<gray><white>/home [name]</white>, <white>/sethome [name]</white>, <white>/delhome [name]</white>, <white>/homes</white></gray>");
         }

@@ -121,11 +121,11 @@ public final class RewardLanternListener implements Listener {
         if (ownerName != null && !ownerName.isBlank()) {
             pdc.set(keyRewardOwnerName, PersistentDataType.STRING, ownerName);
         }
-        meta.displayName(MM.deserialize("<gradient:#8cf6ff:#ffd166><bold>Reward Soul Lantern</bold></gradient>"));
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.MYTHIC, "Reward Soul Lantern"));
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.SOUL_LANTERN,
-            "CUSTOM",
+            CustomLoreUtil.Rarity.MYTHIC.label(),
             "REWARD",
             List.of(
                 "<gray>Right-click to gain every beneficial effect for <white>5 minutes</white>.</gray>",
@@ -443,7 +443,8 @@ public final class RewardLanternListener implements Listener {
         }
 
         UUID itemId = itemEntity.getUniqueId();
-        Entity existing = Bukkit.getEntity(hologramsByItem.get(itemId));
+        UUID existingId = hologramsByItem.get(itemId);
+        Entity existing = existingId == null ? null : Bukkit.getEntity(existingId);
         if (existing instanceof TextDisplay display && display.isValid()) {
             display.teleport(hologramLocation(itemEntity));
             display.text(buildLanternHologramText(itemEntity.getItemStack()));
@@ -488,10 +489,17 @@ public final class RewardLanternListener implements Listener {
     }
 
     private Component buildLanternHologramText(ItemStack item) {
-        return MM.deserialize(
-            "<gradient:#8cf6ff:#ffd166><bold>Reward Soul Lantern</bold></gradient>\n"
-                + "<gray>Bound to <white>" + ownerName(item) + "</white></gray>"
-        );
+        return displayName(item)
+            .append(Component.newline())
+            .append(MM.deserialize("<gray>Bound to <white>" + ownerName(item) + "</white></gray>"));
+    }
+
+    private Component displayName(ItemStack item) {
+        ItemMeta meta = item == null ? null : item.getItemMeta();
+        if (meta != null && meta.hasDisplayName() && meta.displayName() != null) {
+            return meta.displayName();
+        }
+        return CustomLoreUtil.displayName(CustomLoreUtil.Rarity.MYTHIC, "Reward Soul Lantern");
     }
 
     private void tagLanternHologram(TextDisplay display, UUID itemId) {

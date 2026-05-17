@@ -102,6 +102,7 @@ public final class AdminCommands {
         registerSmeltingTouchBook(commands, plugin);
         registerWiseBook(commands, plugin);
         registerDoubleJumpBook(commands, plugin);
+        registerDashBook(commands, plugin);
         registerSetPower(commands, plugin);
         registerPowerInfo(commands, plugin);
         registerAdminRewardCommand(commands, plugin);
@@ -709,6 +710,46 @@ public final class AdminCommands {
         );
     }
 
+    private static void registerDashBook(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("dashbook")
+                .requires(src -> src.getSender().hasPermission("smpcore.customenchant.admin"))
+                .executes(ctx -> {
+                    if (!(ctx.getSource().getSender() instanceof Player self)) {
+                        ctx.getSource().getSender().sendMessage(MessageUtil.error("Console must specify a target."));
+                        return 0;
+                    }
+                    return giveManagedEnchantBook(
+                        plugin,
+                        ctx.getSource().getSender(),
+                        self,
+                        "Dash",
+                        ManagedEnchantBook.DASH,
+                        1
+                    );
+                })
+                .then(Commands.argument("target", ArgumentTypes.player())
+                    .executes(ctx -> {
+                        List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                            .resolve(ctx.getSource());
+                        if (targets.isEmpty()) {
+                            ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
+                            return 0;
+                        }
+                        return giveManagedEnchantBook(
+                            plugin,
+                            ctx.getSource().getSender(),
+                            targets.get(0),
+                            "Dash",
+                            ManagedEnchantBook.DASH,
+                            1
+                        );
+                    }))
+                .build(),
+            "Give a Dash enchant book"
+        );
+    }
+
     private static void registerPowerInfo(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("powerinfo")
@@ -832,6 +873,7 @@ public final class AdminCommands {
             case SMELTING_TOUCH -> listener.createSmeltingTouchBook();
             case WISE -> listener.createWiseBook(level);
             case DOUBLE_JUMP -> listener.createDoubleJumpBook();
+            case DASH -> listener.createDashBook();
         };
         var leftovers = target.getInventory().addItem(book);
         leftovers.values().forEach(left -> target.getWorld().dropItemNaturally(target.getLocation(), left));
@@ -1390,6 +1432,7 @@ public final class AdminCommands {
         TELEKINESIS,
         SMELTING_TOUCH,
         WISE,
-        DOUBLE_JUMP
+        DOUBLE_JUMP,
+        DASH
     }
 }

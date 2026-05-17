@@ -12,6 +12,7 @@ import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
+import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.Tag;
 import org.bukkit.block.Block;
@@ -36,9 +37,12 @@ import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.event.inventory.PrepareGrindstoneEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerExpChangeEvent;
 import org.bukkit.event.player.PlayerToggleFlightEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.block.Action;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.event.world.LootGenerateEvent;
 import org.bukkit.inventory.AnvilInventory;
 import org.bukkit.inventory.CookingRecipe;
@@ -72,6 +76,7 @@ public final class CustomEnchantListener implements Listener {
     private static final String SMELTING_TOUCH_LORE_LINE = "Smelting Touch I";
     private static final String WISE_LORE_PREFIX = "Wise ";
     private static final String DOUBLE_JUMP_LORE_LINE = "Double Jump I";
+    private static final String DASH_LORE_LINE = "Dash I";
     private static final long TELEKINESIS_MINING_CONTEXT_TTL_MS = 1000L;
 
     private final SMPCore plugin;
@@ -81,10 +86,12 @@ public final class CustomEnchantListener implements Listener {
     private final NamespacedKey keySmeltingTouch;
     private final NamespacedKey keyWise;
     private final NamespacedKey keyDoubleJump;
+    private final NamespacedKey keyDash;
     private final NamespacedKey keyTelekinesisProjectileOwner;
     private final Map<UUID, UUID> telekinesisLootOwners = new ConcurrentHashMap<>();
     private final Map<BlockKey, TelekinesisMiningContext> telekinesisMiningContexts = new ConcurrentHashMap<>();
     private final Map<UUID, Double> wiseXpRemainders = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> dashCooldowns = new ConcurrentHashMap<>();
     private final Map<Material, ItemStack> smeltingResults = new ConcurrentHashMap<>();
     private final java.util.Set<Material> nonSmeltableDrops = ConcurrentHashMap.newKeySet();
     private final java.util.Set<UUID> doubleJumpFlightPlayers = ConcurrentHashMap.newKeySet();
@@ -97,6 +104,7 @@ public final class CustomEnchantListener implements Listener {
         this.keySmeltingTouch = new NamespacedKey(plugin, "smelting_touch_enchant");
         this.keyWise = new NamespacedKey(plugin, "wise_enchant");
         this.keyDoubleJump = new NamespacedKey(plugin, "double_jump_enchant");
+        this.keyDash = new NamespacedKey(plugin, "dash_enchant");
         this.keyTelekinesisProjectileOwner = new NamespacedKey(plugin, "telekinesis_projectile_owner");
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickDoubleJumpFlightPlayers, 1L, 2L);
     }
@@ -119,6 +127,10 @@ public final class CustomEnchantListener implements Listener {
 
     public ItemStack createDoubleJumpBook() {
         return createBook(CustomEnchantEntry.DOUBLE_JUMP, 1);
+    }
+
+    public ItemStack createDashBook() {
+        return createBook(CustomEnchantEntry.DASH, 1);
     }
 
     public boolean hasTelekinesisEnchant(ItemStack item) {
@@ -189,15 +201,28 @@ public final class CustomEnchantListener implements Listener {
     public void openEnchantMenu(Player player) {
         Inventory inventory = Bukkit.createInventory(
             new EnchantMenuHolder(),
-            9,
+            27,
             BedrockCompat.menuTitle(player, ENCHANTS_MENU_TITLE, "Custom Enchants")
         );
-        inventory.setItem(0, createMenuIcon(CustomEnchantEntry.REPLENISH));
-        inventory.setItem(2, createMenuIcon(CustomEnchantEntry.DELICATE));
-        inventory.setItem(4, createMenuIcon(CustomEnchantEntry.TELEKINESIS));
-        inventory.setItem(6, createMenuIcon(CustomEnchantEntry.SMELTING_TOUCH));
-        inventory.setItem(7, createMenuIcon(CustomEnchantEntry.DOUBLE_JUMP));
-        inventory.setItem(8, createMenuIcon(CustomEnchantEntry.WISE));
+        ItemStack filler = createMenuItem(Material.BLACK_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            inventory.setItem(slot, filler);
+        }
+        inventory.setItem(4, createMenuItem(
+            Material.ENCHANTED_BOOK,
+            "<gradient:#00d4ff:#73ff9d><bold>Custom Enchants</bold></gradient>",
+            List.of(
+                "<gray>Special enchants can appear through enchanting, loot,</gray>",
+                "<gray>or be applied with custom enchanted books.</gray>"
+            )
+        ));
+        inventory.setItem(10, createMenuIcon(CustomEnchantEntry.REPLENISH));
+        inventory.setItem(11, createMenuIcon(CustomEnchantEntry.DELICATE));
+        inventory.setItem(12, createMenuIcon(CustomEnchantEntry.TELEKINESIS));
+        inventory.setItem(14, createMenuIcon(CustomEnchantEntry.SMELTING_TOUCH));
+        inventory.setItem(15, createMenuIcon(CustomEnchantEntry.DOUBLE_JUMP));
+        inventory.setItem(16, createMenuIcon(CustomEnchantEntry.WISE));
+        inventory.setItem(22, createMenuIcon(CustomEnchantEntry.DASH));
         player.openInventory(inventory);
     }
 
@@ -452,6 +477,34 @@ public final class CustomEnchantListener implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onDashUse(PlayerInteractEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND) return;
+
+        Action action = event.getAction();
+        boolean rightClick = action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK;
+        boolean sneakingLeftClick = event.getPlayer().isSneaking()
+            && (action == Action.LEFT_CLICK_AIR || action == Action.LEFT_CLICK_BLOCK);
+        if (!rightClick && !sneakingLeftClick) {
+            return;
+        }
+
+        Player player = event.getPlayer();
+        ItemStack item = player.getInventory().getItemInMainHand();
+        if (!hasDash(item)) {
+            return;
+        }
+
+        if (rightClick && action == Action.RIGHT_CLICK_BLOCK && event.getClickedBlock() != null
+            && isDashProtectedInteraction(event.getClickedBlock().getType())
+            && !player.isSneaking()) {
+            return;
+        }
+
+        event.setCancelled(true);
+        useDash(player);
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onDoubleJumpFlight(PlayerToggleFlightEvent event) {
         Player player = event.getPlayer();
@@ -491,7 +544,8 @@ public final class CustomEnchantListener implements Listener {
 
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
-        wiseXpRemainders.remove(event.getPlayer().getUniqueId());
+        UUID playerId = event.getPlayer().getUniqueId();
+        wiseXpRemainders.remove(playerId);
         clearDoubleJumpFlight(event.getPlayer());
     }
 
@@ -513,7 +567,10 @@ public final class CustomEnchantListener implements Listener {
         ItemMeta meta = book.getItemMeta();
         if (meta == null) return book;
 
-        meta.displayName(MM.deserialize(enchant.bookDisplay(appliedLevel)));
+        meta.displayName(CustomLoreUtil.displayName(
+            CustomLoreUtil.Rarity.RARE,
+            enchant.plainDisplay(appliedLevel) + " Book"
+        ));
         meta.lore(buildBookLore(enchant, appliedLevel));
         meta.getPersistentDataContainer().set(keyCustomEnchantBook, PersistentDataType.STRING, enchant.id);
         meta.getPersistentDataContainer().set(keyFor(enchant), PersistentDataType.INTEGER, appliedLevel);
@@ -526,10 +583,26 @@ public final class CustomEnchantListener implements Listener {
         ItemMeta meta = icon.getItemMeta();
         if (meta == null) return icon;
 
-        meta.displayName(MM.deserialize(enchant.menuDisplay));
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.RARE, enchant.plainName()));
         meta.lore(buildMenuLore(enchant));
         icon.setItemMeta(meta);
         return icon;
+    }
+
+    private ItemStack createMenuItem(Material material, String displayName, List<String> loreLines) {
+        ItemStack item = new ItemStack(material);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) return item;
+        meta.displayName(MM.deserialize(displayName));
+        if (!loreLines.isEmpty()) {
+            List<Component> lore = new ArrayList<>();
+            for (String line : loreLines) {
+                lore.add(MM.deserialize(line));
+            }
+            meta.lore(lore);
+        }
+        item.setItemMeta(meta);
+        return item;
     }
 
     private List<Component> buildBookLore(CustomEnchantEntry enchant, int level) {
@@ -537,7 +610,7 @@ public final class CustomEnchantListener implements Listener {
         topLines.add("<gray>Levels: <white>" + enchant.levelDisplay(level) + "</white></gray>");
         return CustomLoreUtil.buildStyledLore(
             Material.ENCHANTED_BOOK,
-            "ENCHANTED",
+            CustomLoreUtil.Rarity.RARE.label(),
             "BOOK",
             topLines,
             List.of(CustomLoreUtil.section(
@@ -554,7 +627,7 @@ public final class CustomEnchantListener implements Listener {
         topLines.add("<gray>Enchant Table: <white>" + (enchant.enchantTableEligible ? "Yes" : "No") + "</white></gray>");
         return CustomLoreUtil.buildStyledLore(
             enchant.icon,
-            "ENCHANTED",
+            CustomLoreUtil.Rarity.RARE.label(),
             "ICON",
             topLines,
             List.of(CustomLoreUtil.section(
@@ -700,6 +773,7 @@ public final class CustomEnchantListener implements Listener {
             case SMELTING_TOUCH -> keySmeltingTouch;
             case WISE -> keyWise;
             case DOUBLE_JUMP -> keyDoubleJump;
+            case DASH -> keyDash;
             default -> throw new IllegalArgumentException("Unsupported managed enchant: " + enchant.id);
         };
     }
@@ -734,6 +808,10 @@ public final class CustomEnchantListener implements Listener {
 
     private boolean hasDoubleJump(ItemStack item) {
         return hasEnchant(item, CustomEnchantEntry.DOUBLE_JUMP);
+    }
+
+    private boolean hasDash(ItemStack item) {
+        return hasEnchant(item, CustomEnchantEntry.DASH);
     }
 
     private boolean hasEnchant(ItemStack item, CustomEnchantEntry enchant) {
@@ -885,6 +963,45 @@ public final class CustomEnchantListener implements Listener {
         player.getWorld().playSound(player.getLocation(), Sound.ENTITY_BREEZE_SHOOT, 0.9f, 1.25f);
     }
 
+    private void useDash(Player player) {
+        UUID playerId = player.getUniqueId();
+        long now = System.currentTimeMillis();
+        Long cooldownUntil = dashCooldowns.get(playerId);
+        if (cooldownUntil != null && cooldownUntil > now) {
+            player.sendMessage(MessageUtil.warn("Dash cooldown: <white>" + secondsLeft(cooldownUntil - now) + "s</white>."));
+            return;
+        }
+        if (cooldownUntil != null) {
+            dashCooldowns.remove(playerId, cooldownUntil);
+        }
+
+        Vector direction = player.getEyeLocation().getDirection();
+        if (direction.lengthSquared() < 0.0001) {
+            direction = player.getLocation().getDirection();
+        }
+        if (direction.lengthSquared() < 0.0001) {
+            return;
+        }
+
+        direction.normalize();
+        Vector velocity = direction.multiply(plugin.getConfigManager().dashEnchantHorizontalBoost);
+        velocity.setY(Math.max(plugin.getConfigManager().dashEnchantVerticalBoost, velocity.getY() * 0.45 + plugin.getConfigManager().dashEnchantVerticalBoost));
+
+        player.setVelocity(velocity);
+        player.setFallDistance(0.0f);
+        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_BREEZE_SHOOT, 1.0f, 1.15f);
+        player.getWorld().spawnParticle(Particle.CLOUD, player.getLocation().add(0.0, 0.35, 0.0), 18, 0.35, 0.15, 0.35, 0.02);
+
+        int cooldownSeconds = plugin.getConfigManager().dashEnchantCooldownSeconds;
+        if (cooldownSeconds > 0) {
+            dashCooldowns.put(playerId, now + (cooldownSeconds * 1000L));
+        }
+    }
+
+    private long secondsLeft(long millis) {
+        return Math.max(1L, (millis + 999L) / 1000L);
+    }
+
     private void clearDoubleJumpFlight(Player player) {
         if (player == null) {
             return;
@@ -972,6 +1089,36 @@ public final class CustomEnchantListener implements Listener {
         return Tag.ITEMS_PICKAXES.isTagged(material)
             || Tag.ITEMS_HOES.isTagged(material)
             || material.name().endsWith("_SWORD");
+    }
+
+    private static boolean isSwordOrAxe(Material material) {
+        return material.name().endsWith("_SWORD") || Tag.ITEMS_AXES.isTagged(material);
+    }
+
+    private boolean isDashProtectedInteraction(Material material) {
+        if (material == null || material == Material.AIR) {
+            return false;
+        }
+        if (Tag.BUTTONS.isTagged(material)
+            || Tag.DOORS.isTagged(material)
+            || Tag.TRAPDOORS.isTagged(material)
+            || Tag.FENCE_GATES.isTagged(material)
+            || Tag.ANVIL.isTagged(material)) {
+            return true;
+        }
+        return switch (material) {
+            case CHEST, TRAPPED_CHEST, BARREL, SHULKER_BOX,
+                 WHITE_SHULKER_BOX, ORANGE_SHULKER_BOX, MAGENTA_SHULKER_BOX, LIGHT_BLUE_SHULKER_BOX,
+                 YELLOW_SHULKER_BOX, LIME_SHULKER_BOX, PINK_SHULKER_BOX, GRAY_SHULKER_BOX,
+                 LIGHT_GRAY_SHULKER_BOX, CYAN_SHULKER_BOX, PURPLE_SHULKER_BOX, BLUE_SHULKER_BOX,
+                 BROWN_SHULKER_BOX, GREEN_SHULKER_BOX, RED_SHULKER_BOX, BLACK_SHULKER_BOX,
+                 CRAFTING_TABLE, FURNACE, BLAST_FURNACE, SMOKER, ENCHANTING_TABLE, ENDER_CHEST,
+                 BREWING_STAND, BEACON, HOPPER, DISPENSER, DROPPER, LECTERN, LOOM,
+                 CARTOGRAPHY_TABLE, FLETCHING_TABLE, GRINDSTONE, SMITHING_TABLE, STONECUTTER,
+                 NOTE_BLOCK, JUKEBOX, LEVER, REPEATER, COMPARATOR, DAYLIGHT_DETECTOR,
+                 RESPAWN_ANCHOR, CAKE, COMPOSTER, BELL, DECORATED_POT -> true;
+            default -> false;
+        };
     }
 
     private String formatPercent(double value) {
@@ -1279,9 +1426,28 @@ public final class CustomEnchantListener implements Listener {
             1,
             1,
             1
+        ),
+        DASH(
+            "dash",
+            "<yellow><bold>Dash</bold></yellow>",
+            "<yellow><bold>Dash Book</bold></yellow>",
+            "Dash",
+            Material.WIND_CHARGE,
+            "I",
+            List.of(
+                "Sword and axe enchant.",
+                "Right-click to burst in the direction you are facing.",
+                "Sneak + left-click also triggers the dash.",
+                "Sneak when clicking interactable blocks to dash instead of opening them."
+            ),
+            CustomEnchantListener::isSwordOrAxe,
+            true,
+            18,
+            1,
+            1
         );
 
-        private static final List<CustomEnchantEntry> MANAGED = List.of(DELICATE, TELEKINESIS, SMELTING_TOUCH, WISE, DOUBLE_JUMP);
+        private static final List<CustomEnchantEntry> MANAGED = List.of(DELICATE, TELEKINESIS, SMELTING_TOUCH, WISE, DOUBLE_JUMP, DASH);
 
         private final String id;
         private final String menuDisplay;
@@ -1372,6 +1538,9 @@ public final class CustomEnchantListener implements Listener {
             if (this == DOUBLE_JUMP) {
                 return DOUBLE_JUMP_LORE_LINE.equalsIgnoreCase(plain);
             }
+            if (this == DASH) {
+                return DASH_LORE_LINE.equalsIgnoreCase(plain);
+            }
             return loreLine(1).equalsIgnoreCase(plain);
         }
 
@@ -1404,6 +1573,15 @@ public final class CustomEnchantListener implements Listener {
                     "Jump again in midair to launch yourself forward.",
                     "Each jump costs " + formatFoodCost(config.doubleJumpHungerCost) + ".",
                     "Found in Ancient City chests at " + formatConfigPercent(config.doubleJumpAncientCityChestChance) + "."
+                );
+            }
+
+            if (this == DASH) {
+                return List.of(
+                    "Sword and axe enchant.",
+                    "Right-click or sneak + left-click to dash forward.",
+                    "Cooldown: " + config.dashEnchantCooldownSeconds + " seconds.",
+                    "Interactable blocks still open normally unless you are sneaking."
                 );
             }
 

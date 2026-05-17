@@ -2,10 +2,13 @@ package me.rique.smpcore.legendary;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.BedrockCompat;
+import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
+import org.bukkit.Color;
+import org.bukkit.World;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -14,7 +17,9 @@ import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.entity.EnderCrystal;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.Display;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -38,10 +43,14 @@ import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 public final class MythicForgeListener implements Listener {
@@ -69,14 +78,20 @@ public final class MythicForgeListener implements Listener {
     private final SMPCore plugin;
     private final NamespacedKey keyMythicForgeItem;
     private final NamespacedKey keyMythicForgeEntity;
+    private final NamespacedKey keyMythicForgeHologram;
+    private final NamespacedKey keyMythicForgeHologramOwner;
     private final NamespacedKey keyAscendantCore;
     private final NamespacedKey mythicForgeRecipeKey;
     private final NamespacedKey ascendantCoreRecipeKey;
+    private final Map<UUID, UUID> forgeHolograms = new HashMap<>();
+    private BukkitTask hologramTask;
 
     public MythicForgeListener(SMPCore plugin) {
         this.plugin = plugin;
         this.keyMythicForgeItem = new NamespacedKey(plugin, "mythic_forge_item");
         this.keyMythicForgeEntity = new NamespacedKey(plugin, "mythic_forge_entity");
+        this.keyMythicForgeHologram = new NamespacedKey(plugin, "mythic_forge_hologram");
+        this.keyMythicForgeHologramOwner = new NamespacedKey(plugin, "mythic_forge_hologram_owner");
         this.keyAscendantCore = new NamespacedKey(plugin, "ascendant_core");
         this.mythicForgeRecipeKey = new NamespacedKey(plugin, "mythic_forge_recipe");
         this.ascendantCoreRecipeKey = new NamespacedKey(plugin, "ascendant_core_recipe");
@@ -95,9 +110,24 @@ public final class MythicForgeListener implements Listener {
                 player.discoverRecipe(ascendantCoreRecipeKey);
             }
         });
+        if (hologramTask == null) {
+            hologramTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncForgeHolograms, 1L, 40L);
+        }
     }
 
     public void shutdown() {
+        if (hologramTask != null) {
+            hologramTask.cancel();
+            hologramTask = null;
+        }
+        for (UUID hologramId : new ArrayList<>(forgeHolograms.values())) {
+            Entity hologram = Bukkit.getEntity(hologramId);
+            if (hologram != null) {
+                hologram.remove();
+            }
+        }
+        forgeHolograms.clear();
+        removeAllKnownForgeHolograms();
     }
 
     public boolean isCustomRecipeItemId(String itemId) {
@@ -134,15 +164,21 @@ public final class MythicForgeListener implements Listener {
         if (meta == null) {
             return item;
         }
-        meta.displayName(MM.deserialize("<gradient:#8a2be2:#ff4df0><bold>Mythic Forge</bold></gradient>"));
-        meta.lore(List.of(
-            MM.deserialize("<gray>Place it to raise a stable fusion nexus.</gray>"),
-            Component.empty(),
-            MM.deserialize("<gold><bold>Use:</bold></gold> <light_purple>Forge Mythics</light_purple>"),
-            MM.deserialize("<gray>Combine <white>2 compatible legendaries</white></gray>"),
-            MM.deserialize("<gray>with an <white>Ascendant Core</white>.</gray>"),
-            MM.deserialize("<gray>Crafted from End relics and voidstone.</gray>"),
-            MM.deserialize("<dark_gray>Right-click a placed forge to begin.</dark_gray>")
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.MYTHIC, "Mythic Forge"));
+        meta.lore(CustomLoreUtil.buildStyledLore(
+            meta,
+            Material.END_CRYSTAL,
+            CustomLoreUtil.Rarity.MYTHIC.label(),
+            "FORGE",
+            List.of("<gray>Place it to raise a stable fusion nexus.</gray>"),
+            List.of(CustomLoreUtil.section(
+                "Use",
+                "Forge Mythics",
+                "<gray>Combine <white>2 compatible legendaries</white></gray>",
+                "<gray>with an <white>Ascendant Core</white>.</gray>",
+                "<gray>Crafted from End relics and voidstone.</gray>",
+                "<dark_gray>Right-click a placed forge to begin.</dark_gray>"
+            ))
         ));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         meta.getPersistentDataContainer().set(keyMythicForgeItem, PersistentDataType.BYTE, (byte) 1);
@@ -156,11 +192,19 @@ public final class MythicForgeListener implements Listener {
         if (meta == null) {
             return item;
         }
-        meta.displayName(MM.deserialize("<gradient:#ffd166:#ff4df0><bold>Ascendant Core</bold></gradient>"));
-        meta.lore(List.of(
-            MM.deserialize("<gray>The catalyst that binds two legends into one myth.</gray>"),
-            MM.deserialize("<gray>Consumed by the <white>Mythic Forge</white> on use.</gray>"),
-            MM.deserialize("<gray>Refined from End relics and a <white>Nether Star</white>.</gray>")
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.LEGENDARY, "Ascendant Core"));
+        meta.lore(CustomLoreUtil.buildStyledLore(
+            meta,
+            Material.AMETHYST_SHARD,
+            CustomLoreUtil.Rarity.LEGENDARY.label(),
+            "CATALYST",
+            List.of("<gray>The catalyst that binds two legends into one myth.</gray>"),
+            List.of(CustomLoreUtil.section(
+                "Use",
+                "Mythic Fusion",
+                "<gray>Consumed by the <white>Mythic Forge</white> on use.</gray>",
+                "<gray>Refined from End relics and a <white>Nether Star</white>.</gray>"
+            ))
         ));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         meta.getPersistentDataContainer().set(keyAscendantCore, PersistentDataType.BYTE, (byte) 1);
@@ -255,18 +299,143 @@ public final class MythicForgeListener implements Listener {
 
         event.setCancelled(true);
         Location spawnLocation = clicked.getLocation().add(0.5, 1.0, 0.5);
-        clicked.getWorld().spawn(spawnLocation, EnderCrystal.class, crystal -> {
-            crystal.setShowingBottom(false);
-            crystal.setInvulnerable(true);
-            crystal.setPersistent(true);
-            crystal.setBeamTarget(null);
-            crystal.getPersistentDataContainer().set(keyMythicForgeEntity, PersistentDataType.BYTE, (byte) 1);
+        EnderCrystal crystal = clicked.getWorld().spawn(spawnLocation, EnderCrystal.class, entity -> {
+            entity.setShowingBottom(false);
+            entity.setInvulnerable(true);
+            entity.setPersistent(true);
+            entity.setBeamTarget(null);
+            entity.getPersistentDataContainer().set(keyMythicForgeEntity, PersistentDataType.BYTE, (byte) 1);
         });
+        ensureForgeHologram(crystal);
+        updateForgeHologram(crystal);
 
         if (event.getPlayer().getGameMode() != org.bukkit.GameMode.CREATIVE) {
             consumeSingleItem(event.getPlayer(), event.getHand(), event.getItem());
         }
         event.getPlayer().playSound(event.getPlayer().getLocation(), Sound.BLOCK_AMETHYST_BLOCK_CHIME, 1.0f, 0.7f);
+    }
+
+    private void syncForgeHolograms() {
+        Set<UUID> liveForges = new HashSet<>();
+        for (World world : Bukkit.getWorlds()) {
+            for (EnderCrystal crystal : world.getEntitiesByClass(EnderCrystal.class)) {
+                if (!isMythicForgeEntity(crystal) || !crystal.isValid()) {
+                    continue;
+                }
+                liveForges.add(crystal.getUniqueId());
+                updateForgeHologram(crystal);
+            }
+        }
+
+        for (UUID forgeId : new ArrayList<>(forgeHolograms.keySet())) {
+            if (!liveForges.contains(forgeId)) {
+                destroyForgeHologram(forgeId);
+            }
+        }
+        removeDuplicateOrphanForgeHolograms(liveForges);
+    }
+
+    private void ensureForgeHologram(EnderCrystal crystal) {
+        UUID forgeId = crystal.getUniqueId();
+        UUID hologramId = forgeHolograms.get(forgeId);
+        Entity existing = hologramId == null ? null : Bukkit.getEntity(hologramId);
+        if (existing instanceof TextDisplay display && display.isValid()) {
+            return;
+        }
+        if (existing != null) {
+            existing.remove();
+        }
+        forgeHolograms.remove(forgeId);
+
+        TextDisplay display = crystal.getWorld().spawn(forgeHologramLocation(crystal), TextDisplay.class, textDisplay -> {
+            textDisplay.setPersistent(false);
+            textDisplay.setGravity(false);
+            textDisplay.setBillboard(Display.Billboard.CENTER);
+            textDisplay.setSeeThrough(true);
+            textDisplay.setShadowed(true);
+            textDisplay.setDefaultBackground(false);
+            textDisplay.setBackgroundColor(Color.fromARGB(45, 34, 0, 54));
+            textDisplay.setTextOpacity((byte) 255);
+            textDisplay.setLineWidth(120);
+            textDisplay.setViewRange(42.0f);
+            textDisplay.setGlowing(true);
+            textDisplay.setGlowColorOverride(Color.fromRGB(190, 80, 255));
+            textDisplay.getPersistentDataContainer().set(keyMythicForgeHologram, PersistentDataType.BYTE, (byte) 1);
+            textDisplay.getPersistentDataContainer().set(keyMythicForgeHologramOwner, PersistentDataType.STRING, forgeId.toString());
+        });
+        forgeHolograms.put(forgeId, display.getUniqueId());
+    }
+
+    private void updateForgeHologram(EnderCrystal crystal) {
+        ensureForgeHologram(crystal);
+        UUID hologramId = forgeHolograms.get(crystal.getUniqueId());
+        Entity existing = hologramId == null ? null : Bukkit.getEntity(hologramId);
+        if (!(existing instanceof TextDisplay display) || !display.isValid()) {
+            return;
+        }
+
+        display.teleport(forgeHologramLocation(crystal));
+        display.text(MM.deserialize(
+            CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.MYTHIC, "Mythic Forge")
+                + "\n<gray>Right-click to fuse relics</gray>"
+        ));
+    }
+
+    private Location forgeHologramLocation(EnderCrystal crystal) {
+        return crystal.getLocation().clone().add(0.0, 2.15, 0.0);
+    }
+
+    private void destroyForgeHologram(UUID forgeId) {
+        UUID hologramId = forgeHolograms.remove(forgeId);
+        Entity hologram = hologramId == null ? null : Bukkit.getEntity(hologramId);
+        if (hologram != null) {
+            hologram.remove();
+        }
+    }
+
+    private void removeDuplicateOrphanForgeHolograms(Set<UUID> liveForges) {
+        for (World world : Bukkit.getWorlds()) {
+            for (TextDisplay display : world.getEntitiesByClass(TextDisplay.class)) {
+                if (!isMythicForgeHologram(display)) {
+                    continue;
+                }
+                UUID ownerId = mythicForgeHologramOwner(display);
+                UUID trackedId = ownerId == null ? null : forgeHolograms.get(ownerId);
+                if (ownerId == null || !liveForges.contains(ownerId) || trackedId == null || !trackedId.equals(display.getUniqueId())) {
+                    display.remove();
+                }
+            }
+        }
+    }
+
+    private void removeAllKnownForgeHolograms() {
+        for (World world : Bukkit.getWorlds()) {
+            for (TextDisplay display : world.getEntitiesByClass(TextDisplay.class)) {
+                if (isMythicForgeHologram(display)) {
+                    display.remove();
+                }
+            }
+        }
+    }
+
+    private boolean isMythicForgeHologram(Entity entity) {
+        if (!(entity instanceof TextDisplay display)) {
+            return false;
+        }
+        Byte tagged = display.getPersistentDataContainer().get(keyMythicForgeHologram, PersistentDataType.BYTE);
+        return tagged != null && tagged == (byte) 1;
+    }
+
+    private UUID mythicForgeHologramOwner(TextDisplay display) {
+        String owner = display.getPersistentDataContainer().get(keyMythicForgeHologramOwner, PersistentDataType.STRING);
+        if (owner == null || owner.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(owner);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -284,6 +453,7 @@ public final class MythicForgeListener implements Listener {
         if (player.isSneaking()
             && player.hasPermission("smpcore.customitem.admin")
             && (hand == null || hand.getType() == Material.AIR)) {
+            destroyForgeHologram(crystal.getUniqueId());
             crystal.remove();
             Map<Integer, ItemStack> leftovers = player.getInventory().addItem(createMythicForgeItem());
             leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
@@ -495,7 +665,8 @@ public final class MythicForgeListener implements Listener {
             "<green><bold>Forge Ready</bold></green>",
             List.of(
                 "<gray>Output:</gray> <white>" + outputName + "</white>",
-                "<gray>Click the result slot to forge it.</gray>"
+                "<gray>Click the result slot to forge it.</gray>",
+                "<dark_gray>Use /mythics to inspect fusion rewards.</dark_gray>"
             )
         );
     }
@@ -510,28 +681,41 @@ public final class MythicForgeListener implements Listener {
             return createGuiItem(Material.BARRIER, "<red>Unavailable</red>", List.of());
         }
 
-        ItemStack preview = legendary.createLegendaryById(recipe.outputId());
-        if (preview == null) {
+        String outputName = legendary.displayNameForLegendary(recipe.outputId());
+        if (outputName == null || outputName.isBlank()) {
             return createGuiItem(Material.BARRIER, "<red>Unavailable</red>", List.of());
         }
 
-        ItemMeta meta = preview.getItemMeta();
-        if (meta != null) {
-            List<Component> lore = meta.lore() == null ? new ArrayList<>() : new ArrayList<>(meta.lore());
-            lore.add(Component.empty());
-            lore.add(MM.deserialize("<gold><bold>Mythic Fusion</bold></gold>"));
-            lore.add(MM.deserialize("<gray>Pair:</gray> <white>" + legendary.displayNameForLegendary(recipe.leftId()) + "</white>"));
-            lore.add(MM.deserialize("<gray>and:</gray> <white>" + legendary.displayNameForLegendary(recipe.rightId()) + "</white>"));
-            lore.add(MM.deserialize("<gray>Catalyst:</gray> <white>Ascendant Core</white>"));
-            if (isAscendantCore(catalyst)) {
-                lore.add(MM.deserialize("<dark_gray>Click to forge</dark_gray>"));
-            } else {
-                lore.add(MM.deserialize("<dark_gray>Add an Ascendant Core first</dark_gray>"));
-            }
-            meta.lore(lore);
-            preview.setItemMeta(meta);
+        LegendaryAltarManager altarManager = plugin.getLegendaryAltarManager();
+        if (altarManager != null && altarManager.isLegendaryClaimed(recipe.outputId())) {
+            return createGuiItem(
+                Material.BARRIER,
+                "<red><bold>Mythic Limit Reached</bold></red>",
+                List.of("<gray><white>" + outputName + "</white> is already at its server limit.</gray>")
+            );
         }
-        return preview;
+
+        if (!isAscendantCore(catalyst)) {
+            return createGuiItem(
+                Material.AMETHYST_SHARD,
+                "<gold><bold>Waiting On Catalyst</bold></gold>",
+                List.of(
+                    "<gray>Aligned Output:</gray> <white>" + outputName + "</white>",
+                    "<gray>Add an <white>Ascendant Core</white> in the center slot.</gray>",
+                    "<dark_gray>Use /mythics to view fusion details.</dark_gray>"
+                )
+            );
+        }
+
+        return createGuiItem(
+            Material.NETHER_STAR,
+            "<gradient:#ff4df0:#ffb000><bold>Forge Mythic</bold></gradient>",
+            List.of(
+                "<gray>Aligned Output:</gray> <white>" + outputName + "</white>",
+                "<gray>Consumes both legendaries and the Ascendant Core.</gray>",
+                "<dark_gray>Click to forge</dark_gray>"
+            )
+        );
     }
 
     private void handleInputSlotClick(InventoryClickEvent event, Inventory top) {

@@ -54,7 +54,7 @@ public final class JoinListener implements Listener {
 
                 if (joinCount == 1) {
                     player.sendMessage(MessageUtil.info(
-                        "Use <white>/help</white> to see player commands, including <white>/lrecipe</white> (<white>/lrecipes</white>)."
+                        "Use <white>/help</white> to see player commands, including <white>/reliquary</white>."
                     ));
                 }
             })

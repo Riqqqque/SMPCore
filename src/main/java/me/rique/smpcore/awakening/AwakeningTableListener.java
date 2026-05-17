@@ -6,6 +6,7 @@ import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.util.BedrockCompat;
+import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -165,14 +166,22 @@ public final class AwakeningTableListener implements Listener {
             return item;
         }
 
-        meta.displayName(MM.deserialize("<gradient:#ff8a5b:#ff3d3d><bold>Awakening Table</bold></gradient>"));
-        meta.lore(List.of(
-            MM.deserialize("<gray>Found in End City treasure.</gray>"),
-            Component.empty(),
-            MM.deserialize("<gold><bold>Use:</bold></gold> <yellow>Awaken Gear</yellow>"),
-            MM.deserialize("<gray>Insert a weapon, tool, or armor piece.</gray>"),
-            MM.deserialize("<gray>Spend a <white>Nether Star</white> to attempt an awakening.</gray>"),
-            MM.deserialize("<gray>Success chance: <white>" + formatPercent(plugin.getConfigManager().awakeningTableSuccessChance) + "</white></gray>")
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.MYTHIC, "Awakening Table"));
+        meta.lore(CustomLoreUtil.buildStyledLore(
+            meta,
+            Material.ENCHANTING_TABLE,
+            CustomLoreUtil.Rarity.MYTHIC.label(),
+            "TABLE",
+            List.of(
+                "<gray>Found in End City treasure.</gray>",
+                "<gray>Success chance: <white>" + formatPercent(plugin.getConfigManager().awakeningTableSuccessChance) + "</white></gray>"
+            ),
+            List.of(CustomLoreUtil.section(
+                "Use",
+                "Awaken Gear",
+                "<gray>Insert a weapon, tool, or armor piece.</gray>",
+                "<gray>Spend a <white>Nether Star</white> to attempt an awakening.</gray>"
+            ))
         ));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         meta.getPersistentDataContainer().set(keyAwakeningTableItem, PersistentDataType.BYTE, (byte) 1);

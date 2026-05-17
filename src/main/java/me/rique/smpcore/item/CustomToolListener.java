@@ -5,7 +5,6 @@ import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -55,7 +54,6 @@ import java.util.concurrent.ThreadLocalRandom;
 
 public final class CustomToolListener implements Listener {
 
-    private static final MiniMessage MM = MiniMessage.miniMessage();
     public static final String ADVANCED_PICKAXE_ID = "advanced_pickaxe";
     public static final String GRAPPLE_HOOK_ID = "grapple_hook";
     private static final String LEGACY_AMETHYST_PICKAXE_ID = "amethyst_pickaxe";
@@ -548,12 +546,12 @@ public final class CustomToolListener implements Listener {
         Component baseDisplayName = null;
         switch (toolId) {
             case ADVANCED_PICKAXE_ID -> {
-                baseDisplayName = MM.deserialize("<aqua><bold>Prospector's Pick</bold></aqua>");
+                baseDisplayName = CustomLoreUtil.displayName(CustomLoreUtil.Rarity.RARE, "Prospector's Pick");
                 meta.displayName(baseDisplayName);
                 meta.lore(CustomLoreUtil.buildStyledLore(
                     meta,
                     material,
-                    "CUSTOM",
+                    CustomLoreUtil.Rarity.RARE.label(),
                     "PICKAXE",
                     List.of("<gray>A tuned pick that coaxes richer veins from stone.</gray>"),
                     List.of(CustomLoreUtil.section(
@@ -568,13 +566,13 @@ public final class CustomToolListener implements Listener {
                 ));
             }
             case GRAPPLE_HOOK_ID -> {
-                baseDisplayName = MM.deserialize("<gold><bold>Skyhook</bold></gold>");
+                baseDisplayName = CustomLoreUtil.displayName(CustomLoreUtil.Rarity.RARE, "Skyhook");
                 int uses = normalizeGrappleHookUses(meta);
                 meta.displayName(baseDisplayName);
                 meta.lore(CustomLoreUtil.buildStyledLore(
                     meta,
                     material,
-                    "CUSTOM",
+                    CustomLoreUtil.Rarity.RARE.label(),
                     "HOOK",
                     List.of("<gray>A reinforced line launcher built for sharp movement.</gray>"),
                     List.of(CustomLoreUtil.section(

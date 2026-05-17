@@ -60,6 +60,15 @@ public final class BossCommands {
             "Custom boss control",
             List.of("boss")
         );
+
+        commands.register(
+            Commands.literal("bossrituals")
+                .requires(src -> src.getSender() instanceof Player)
+                .executes(ctx -> openRitualMenu(plugin, ctx.getSource().getSender()))
+                .build(),
+            "Open the boss ritual guide",
+            List.of("bossritual", "rituals")
+        );
     }
 
     private static int openBossMenu(SMPCore plugin, CommandSender sender) {
@@ -73,6 +82,20 @@ public final class BossCommands {
             return 0;
         }
         bossManager.openBossMenu(player);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int openRitualMenu(SMPCore plugin, CommandSender sender) {
+        BossManager bossManager = plugin.getBossManager();
+        if (bossManager == null) {
+            sender.sendMessage(MessageUtil.error("Boss system is not ready yet."));
+            return 0;
+        }
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(MessageUtil.error("Console cannot open the ritual guide."));
+            return 0;
+        }
+        bossManager.openRitualMenu(player);
         return Command.SINGLE_SUCCESS;
     }
 

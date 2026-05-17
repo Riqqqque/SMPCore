@@ -151,6 +151,7 @@ public final class DatabaseManager {
             CREATE TABLE IF NOT EXISTS teams (
                 name        TEXT PRIMARY KEY COLLATE NOCASE,
                 owner_uuid  TEXT NOT NULL,
+                color       TEXT NOT NULL DEFAULT 'gold',
                 created_at  INTEGER NOT NULL
             )""";
 
@@ -323,6 +324,22 @@ public final class DatabaseManager {
             stmt.executeUpdate(managedItemEvents);
             stmt.executeUpdate(managedItemEventsBySubject);
             stmt.executeUpdate(managedItemEventsByInstance);
+            ensureColumn(conn, "teams", "color", "TEXT NOT NULL DEFAULT 'gold'");
+        }
+    }
+
+    private void ensureColumn(Connection conn, String table, String column, String definition) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("PRAGMA table_info(" + table + ")");
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                if (column.equalsIgnoreCase(rs.getString("name"))) {
+                    return;
+                }
+            }
+        }
+
+        try (Statement stmt = conn.createStatement()) {
+            stmt.executeUpdate("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
         }
     }
 
@@ -664,12 +681,13 @@ public final class DatabaseManager {
         return CompletableFuture.supplyAsync(() -> {
             Map<String, TeamRecord> byName = new LinkedHashMap<>();
             try (Connection conn = connection()) {
-                try (PreparedStatement ps = conn.prepareStatement("SELECT name, owner_uuid FROM teams");
+                try (PreparedStatement ps = conn.prepareStatement("SELECT name, owner_uuid, color FROM teams");
                      ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         String name = rs.getString("name");
                         UUID owner = UUID.fromString(rs.getString("owner_uuid"));
-                        byName.put(name.toLowerCase(Locale.ROOT), new TeamRecord(name, owner, new LinkedHashSet<>()));
+                        String color = rs.getString("color");
+                        byName.put(name.toLowerCase(Locale.ROOT), new TeamRecord(name, owner, color, new LinkedHashSet<>()));
                     }
                 }
 
@@ -693,14 +711,15 @@ public final class DatabaseManager {
         }, executor);
     }
 
-    public CompletableFuture<Boolean> createTeam(String name, UUID ownerUuid) {
+    public CompletableFuture<Boolean> createTeam(String name, UUID ownerUuid, String color) {
         return CompletableFuture.supplyAsync(() -> {
-            String sql = "INSERT INTO teams (name, owner_uuid, created_at) VALUES (?, ?, ?)";
+            String sql = "INSERT INTO teams (name, owner_uuid, color, created_at) VALUES (?, ?, ?, ?)";
             try (Connection conn = connection();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, name);
                 ps.setString(2, ownerUuid.toString());
-                ps.setLong(3, System.currentTimeMillis());
+                ps.setString(3, color == null || color.isBlank() ? "gold" : color);
+                ps.setLong(4, System.currentTimeMillis());
                 ps.executeUpdate();
                 return true;
             } catch (SQLException e) {
@@ -780,6 +799,21 @@ public final class DatabaseManager {
             } catch (SQLException e) {
                 plugin.getLogger().severe("setTeamOwner: " + e.getMessage());
                 throw new RuntimeException("setTeamOwner failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Void> setTeamColor(String teamName, String color) {
+        return CompletableFuture.runAsync(() -> {
+            String sql = "UPDATE teams SET color=? WHERE name=?";
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, color == null || color.isBlank() ? "gold" : color);
+                ps.setString(2, teamName);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("setTeamColor: " + e.getMessage());
+                throw new RuntimeException("setTeamColor failed", e);
             }
         }, executor);
     }
@@ -1433,7 +1467,7 @@ public final class DatabaseManager {
         return "23000".equals(state) || e.getMessage().toLowerCase(Locale.ROOT).contains("constraint");
     }
 
-    public record TeamRecord(String name, UUID ownerUuid, Set<UUID> members) {}
+    public record TeamRecord(String name, UUID ownerUuid, String color, Set<UUID> members) {}
     public record LegendaryClaimedInstanceRecord(String instanceId, String legendaryId, UUID ownerUuid) {}
     public record ManagedItemInstanceRecord(
         String instanceId,
