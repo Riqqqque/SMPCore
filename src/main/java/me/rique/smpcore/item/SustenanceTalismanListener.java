@@ -334,11 +334,11 @@ public final class SustenanceTalismanListener implements Listener {
     }
 
     private void applyTalismanPresentation(ItemMeta meta) {
-        meta.displayName(MM.deserialize("<gold><bold>Talisman of Sustenance</bold></gold>"));
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.EPIC, "Talisman of Sustenance"));
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.TOTEM_OF_UNDYING,
-            "CUSTOM",
+            CustomLoreUtil.Rarity.EPIC.label(),
             "TALISMAN",
             List.of("<gray>Works anywhere in your inventory.</gray>"),
             List.of(CustomLoreUtil.section(

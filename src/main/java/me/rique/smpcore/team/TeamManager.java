@@ -2,25 +2,39 @@ package me.rique.smpcore.team;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.database.DatabaseManager;
+import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
+import io.papermc.paper.registry.RegistryAccess;
+import io.papermc.paper.registry.RegistryKey;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
+import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.persistence.PersistentDataContainer;
+import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.scoreboard.Team;
 
@@ -48,19 +62,33 @@ public final class TeamManager implements Listener {
     private static final int TEAM_VAULT_SIZE = 54;
     private static final String SCOREBOARD_TEAM_PREFIX = "smpct_";
     private static final String TEAMS_LOADING_MESSAGE = "Teams are still loading. Try again in a moment.";
+    private static final int CROWN_MIN_TEAM_MEMBERS = 3;
 
     private final SMPCore plugin;
+    private final NamespacedKey keyTeamCrown;
+    private final NamespacedKey keyTeamCrownOwner;
+    private final NamespacedKey keyTeamCrownTeam;
+    private final Enchantment enchantProtection;
+    private final Enchantment enchantAquaAffinity;
+    private final Enchantment enchantRespiration;
     private final Map<String, TeamData> teamsByKey = new ConcurrentHashMap<>();
     private final Map<UUID, String> teamByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, InviteData> invitesByTarget = new ConcurrentHashMap<>();
     private final Map<String, String> scoreboardIdByTeamKey = new ConcurrentHashMap<>();
     private final Map<String, TeamVaultSession> teamVaultsByKey = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<TeamVaultSession>> vaultLoadingByTeamKey = new ConcurrentHashMap<>();
+    private final Set<UUID> pendingCrownReturns = ConcurrentHashMap.newKeySet();
     private volatile boolean teamsLoaded;
     private volatile boolean teamsLoading;
 
     public TeamManager(SMPCore plugin) {
         this.plugin = plugin;
+        this.keyTeamCrown = new NamespacedKey(plugin, "team_crown");
+        this.keyTeamCrownOwner = new NamespacedKey(plugin, "team_crown_owner");
+        this.keyTeamCrownTeam = new NamespacedKey(plugin, "team_crown_team");
+        this.enchantProtection = requireEnchantment("protection");
+        this.enchantAquaAffinity = requireEnchantment("aqua_affinity");
+        this.enchantRespiration = requireEnchantment("respiration");
     }
 
     public void loadFromDatabaseBlocking() {
@@ -106,7 +134,8 @@ public final class TeamManager implements Listener {
             String key = key(displayName);
             if (key.isEmpty()) continue;
 
-            TeamData data = new TeamData(key, displayName, row.ownerUuid());
+            TeamColor color = TeamColor.fromId(row.color());
+            TeamData data = new TeamData(key, displayName, row.ownerUuid(), color);
             data.members.addAll(row.members());
             if (!data.members.contains(row.ownerUuid())) {
                 data.members.add(row.ownerUuid());
@@ -126,6 +155,7 @@ public final class TeamManager implements Listener {
 
         for (Player online : Bukkit.getOnlinePlayers()) {
             applyTeamTag(online);
+            reconcileCrowns(online);
         }
 
         teamsLoaded = true;
@@ -134,6 +164,50 @@ public final class TeamManager implements Listener {
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         applyTeamTag(event.getPlayer());
+        reconcileCrowns(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onCrownDrop(PlayerDropItemEvent event) {
+        if (!isTeamCrown(event.getItemDrop().getItemStack())) {
+            return;
+        }
+        event.setCancelled(true);
+        event.getPlayer().sendMessage(MessageUtil.warn("Team crowns cannot be dropped."));
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onCrownDeath(PlayerDeathEvent event) {
+        if (event.getKeepInventory()) {
+            return;
+        }
+
+        boolean removed = false;
+        List<ItemStack> drops = event.getDrops();
+        for (int i = drops.size() - 1; i >= 0; i--) {
+            if (!isTeamCrown(drops.get(i))) {
+                continue;
+            }
+            drops.remove(i);
+            removed = true;
+        }
+
+        if (removed) {
+            pendingCrownReturns.add(event.getPlayer().getUniqueId());
+        }
+    }
+
+    @EventHandler
+    public void onCrownRespawn(PlayerRespawnEvent event) {
+        UUID playerId = event.getPlayer().getUniqueId();
+        if (!pendingCrownReturns.remove(playerId)) {
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (event.getPlayer().isOnline()) {
+                reconcileCrowns(event.getPlayer());
+            }
+        });
     }
 
     @EventHandler
@@ -179,6 +253,47 @@ public final class TeamManager implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onCrownInventoryClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+
+        ItemStack hotbar = null;
+        if (event.getHotbarButton() >= 0) {
+            hotbar = player.getInventory().getItem(event.getHotbarButton());
+        }
+
+        if (!isTeamCrown(event.getCurrentItem())
+            && !isTeamCrown(event.getCursor())
+            && !isTeamCrown(hotbar)) {
+            return;
+        }
+
+        if (event.getRawSlot() < 0
+            || event.getAction() == InventoryAction.DROP_ALL_CURSOR
+            || event.getAction() == InventoryAction.DROP_ONE_CURSOR
+            || event.getAction() == InventoryAction.DROP_ALL_SLOT
+            || event.getAction() == InventoryAction.DROP_ONE_SLOT
+            || event.getClick() == ClickType.DROP
+            || event.getClick() == ClickType.CONTROL_DROP) {
+            event.setCancelled(true);
+            player.sendMessage(MessageUtil.warn("Team crowns cannot be dropped."));
+            return;
+        }
+
+        if (event.getView().getTopInventory().getType() == InventoryType.CRAFTING) {
+            return;
+        }
+
+        int topSize = event.getView().getTopInventory().getSize();
+        boolean clickedTop = event.getRawSlot() >= 0 && event.getRawSlot() < topSize;
+        if (clickedTop || event.isShiftClick() || isTeamCrown(event.getCursor()) || isTeamCrown(hotbar)) {
+            event.setCancelled(true);
+            player.sendMessage(MessageUtil.warn("Team crowns cannot be stored in containers."));
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onTeamVaultDrag(InventoryDragEvent event) {
         if (!(event.getView().getTopInventory().getHolder() instanceof TeamVaultHolder)) {
             return;
@@ -191,6 +306,28 @@ public final class TeamManager implements Listener {
         for (int rawSlot : event.getRawSlots()) {
             if (rawSlot < topSize) {
                 event.setCancelled(true);
+                return;
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onCrownInventoryDrag(InventoryDragEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+        if (event.getView().getTopInventory().getType() == InventoryType.CRAFTING) {
+            return;
+        }
+        if (!isTeamCrown(event.getOldCursor())) {
+            return;
+        }
+
+        int topSize = event.getView().getTopInventory().getSize();
+        for (int rawSlot : event.getRawSlots()) {
+            if (rawSlot < topSize) {
+                event.setCancelled(true);
+                player.sendMessage(MessageUtil.warn("Team crowns cannot be stored in containers."));
                 return;
             }
         }
@@ -229,13 +366,20 @@ public final class TeamManager implements Listener {
         teamVaultsByKey.clear();
     }
 
-    public CompletableFuture<String> createTeam(Player creator, String rawName) {
+    public CompletableFuture<String> createTeam(Player creator, String rawName, String rawColor) {
         String unavailable = teamsUnavailableMessage();
         if (unavailable != null) return CompletableFuture.completedFuture(unavailable);
 
         String displayName = normalizeDisplayName(rawName);
         String validationError = validateTeamName(displayName);
         if (validationError != null) return CompletableFuture.completedFuture(validationError);
+        TeamColor color = TeamColor.fromId(rawColor);
+        if (rawColor != null && !rawColor.isBlank() && color == null) {
+            return CompletableFuture.completedFuture("Unknown team color. Use /team colors.");
+        }
+        if (color == null) {
+            color = TeamColor.GOLD;
+        }
 
         UUID creatorId = creator.getUniqueId();
         if (teamByPlayer.containsKey(creatorId)) {
@@ -247,7 +391,8 @@ public final class TeamManager implements Listener {
             return CompletableFuture.completedFuture("That team already exists.");
         }
 
-        return plugin.getDatabase().createTeam(displayName, creatorId)
+        TeamColor finalColor = color;
+        return plugin.getDatabase().createTeam(displayName, creatorId, finalColor.id)
             .handle((created, ex) -> {
                 if (ex != null) {
                     plugin.getLogger().severe("createTeam failed: " + ex.getMessage());
@@ -274,13 +419,14 @@ public final class TeamManager implements Listener {
                         return "Could not create team right now.";
                     }
 
-                    TeamData data = new TeamData(teamKey, displayName, creatorId);
+                    TeamData data = new TeamData(teamKey, displayName, creatorId, finalColor);
                     data.members.add(creatorId);
                     teamsByKey.put(teamKey, data);
                     teamByPlayer.put(creatorId, teamKey);
                     Player online = Bukkit.getPlayer(creatorId);
                     if (online != null && online.isOnline()) {
                         applyTeamTag(online);
+                        reconcileCrowns(online);
                     }
                     return (String) null;
                 });
@@ -349,6 +495,7 @@ public final class TeamManager implements Listener {
                     inviter.sendMessage(MessageUtil.success(
                         "<white>" + target.getName() + "</white> joined <white>" + team.displayName + "</white>."));
                 }
+                reconcileTeamCrowns(team);
                 return (String) null;
             }));
     }
@@ -398,6 +545,7 @@ public final class TeamManager implements Listener {
                     current.members.remove(playerId);
                     teamByPlayer.remove(playerId);
                     applyTeamTag(player);
+                    removeCrownsFromPlayer(player);
 
                     if (current.members.isEmpty()) {
                         discardTeamVault(current.key);
@@ -430,6 +578,7 @@ public final class TeamManager implements Listener {
                             }
                         }
                     }
+                    reconcileTeamCrowns(current);
                     return (String) null;
                 });
             });
@@ -467,6 +616,7 @@ public final class TeamManager implements Listener {
                         Player online = Bukkit.getPlayer(member);
                         if (online != null && online.isOnline()) {
                             applyTeamTag(online);
+                            removeCrownsFromPlayer(online);
                             if (!online.getUniqueId().equals(ownerId)) {
                                 online.sendMessage(MessageUtil.warn("Your team <white>" + current.displayName + "</white> was disbanded."));
                             }
@@ -504,6 +654,7 @@ public final class TeamManager implements Listener {
         return MessageUtil.prefixedRaw(
             "<gold>Team</gold> <white>" + team.displayName + "</white> " +
                 "<gray>| Owner: <white>" + ownerName + "</white> " +
+                "| Color: <" + team.color.id + ">" + team.color.display + "</" + team.color.id + "> " +
                 "| Members: <white>" + team.members.size() + "</white> " +
                 "| List: <white>" + String.join(", ", memberNames) + "</white></gray>"
         );
@@ -616,7 +767,8 @@ public final class TeamManager implements Listener {
     public List<String> teamHelpLines() {
         return List.of(
             "<gold><bold>Team Commands</bold></gold>",
-            "<gray><white>/team create \"name\"</white> - Create a team</gray>",
+            "<gray><white>/team create \"name\" [color]</white> - Create a team</gray>",
+            "<gray><white>/team colors</white> - View team colors</gray>",
             "<gray><white>/team invite <player></white> - Invite a player</gray>",
             "<gray><white>/team accept</white> / <white>/team deny</white> - Handle invites</gray>",
             "<gray><white>/team leave</white> - Leave your team</gray>",
@@ -624,6 +776,19 @@ public final class TeamManager implements Listener {
             "<gray><white>/team info</white> - View your team info</gray>",
             "<gray><white>/tvault</white> (<white>/teamvault</white>) - Open your team storage</gray>"
         );
+    }
+
+    public List<String> teamColorLines() {
+        List<String> lines = new ArrayList<>();
+        lines.add("<gold><bold>Team Colors</bold></gold>");
+        for (TeamColor color : TeamColor.values()) {
+            lines.add("<gray><white>" + color.id + "</white> - <" + color.id + ">" + color.display + "</" + color.id + "></gray>");
+        }
+        return lines;
+    }
+
+    public boolean isTeamColor(String raw) {
+        return TeamColor.fromId(raw) != null;
     }
 
     private TeamData teamOf(UUID playerId) {
@@ -724,7 +889,8 @@ public final class TeamManager implements Listener {
         if (team == null) {
             team = board.registerNewTeam(id);
         }
-        team.prefix(Component.text("[" + data.displayName + "] ", NamedTextColor.GOLD));
+        team.prefix(Component.text("[" + data.displayName + "] ", data.color.textColor));
+        team.color(data.color.textColor);
         team.setOption(Team.Option.NAME_TAG_VISIBILITY, Team.OptionStatus.ALWAYS);
         return team;
     }
@@ -814,6 +980,146 @@ public final class TeamManager implements Listener {
         }
     }
 
+    private void reconcileTeamCrowns(TeamData team) {
+        if (team == null) {
+            return;
+        }
+        for (UUID memberId : team.members) {
+            Player member = Bukkit.getPlayer(memberId);
+            if (member != null && member.isOnline()) {
+                reconcileCrowns(member);
+            }
+        }
+    }
+
+    private void reconcileCrowns(Player player) {
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+
+        TeamData team = teamOf(player.getUniqueId());
+        boolean shouldHaveCrown = team != null
+            && team.owner.equals(player.getUniqueId())
+            && team.members.size() >= CROWN_MIN_TEAM_MEMBERS;
+
+        int validCrowns = 0;
+        ItemStack[] contents = player.getInventory().getStorageContents();
+        for (int i = 0; i < contents.length; i++) {
+            ItemStack item = contents[i];
+            if (!isTeamCrown(item)) {
+                continue;
+            }
+
+            if (!shouldHaveCrown || !isCrownFor(item, player.getUniqueId(), team.key) || validCrowns++ > 0) {
+                contents[i] = null;
+            }
+        }
+        player.getInventory().setStorageContents(contents);
+
+        ItemStack helmet = player.getInventory().getHelmet();
+        if (isTeamCrown(helmet)) {
+            if (!shouldHaveCrown || !isCrownFor(helmet, player.getUniqueId(), team.key) || validCrowns++ > 0) {
+                player.getInventory().setHelmet(null);
+            }
+        }
+
+        if (!shouldHaveCrown || validCrowns > 0) {
+            return;
+        }
+
+        ItemStack crown = createTeamCrown(player, team);
+        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(crown);
+        leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
+        player.sendMessage(MessageUtil.success("Your team reached <white>" + CROWN_MIN_TEAM_MEMBERS + "</white> members. You received your crown."));
+    }
+
+    private void removeCrownsFromPlayer(Player player) {
+        if (player == null) {
+            return;
+        }
+
+        ItemStack[] contents = player.getInventory().getStorageContents();
+        for (int i = 0; i < contents.length; i++) {
+            if (isTeamCrown(contents[i])) {
+                contents[i] = null;
+            }
+        }
+        player.getInventory().setStorageContents(contents);
+        if (isTeamCrown(player.getInventory().getHelmet())) {
+            player.getInventory().setHelmet(null);
+        }
+    }
+
+    private ItemStack createTeamCrown(Player owner, TeamData team) {
+        ItemStack crown = new ItemStack(Material.NETHERITE_HELMET);
+        ItemMeta meta = crown.getItemMeta();
+        if (meta == null) {
+            return crown;
+        }
+
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.LEGENDARY, owner.getName() + "'s Crown"));
+        meta.setUnbreakable(true);
+        meta.addEnchant(enchantProtection, 4, true);
+        meta.addEnchant(enchantAquaAffinity, 1, true);
+        meta.addEnchant(enchantRespiration, 3, true);
+        meta.addItemFlags(ItemFlag.HIDE_UNBREAKABLE);
+        CustomLoreUtil.applyStyledItemFlags(meta);
+        meta.lore(CustomLoreUtil.buildStyledLore(
+            meta,
+            Material.NETHERITE_HELMET,
+            CustomLoreUtil.Rarity.LEGENDARY.label(),
+            "CROWN",
+            List.of(
+                "<gray>Team: <" + team.color.id + ">" + team.displayName + "</" + team.color.id + "></gray>",
+                "<gray>Owner: <white>" + owner.getName() + "</white></gray>",
+                "<gray>Requires <white>" + CROWN_MIN_TEAM_MEMBERS + "</white> team members.</gray>",
+                "<gray>Undroppable</gray>"
+            ),
+            List.of(CustomLoreUtil.section(
+                "Team Relic",
+                "Founder's Crown",
+                "<gray>Awarded to the creator of a team once the team has enough members.</gray>",
+                "<gray>If ownership changes, the crown follows the new owner.</gray>"
+            ))
+        ));
+
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        pdc.set(keyTeamCrown, PersistentDataType.BYTE, (byte) 1);
+        pdc.set(keyTeamCrownOwner, PersistentDataType.STRING, owner.getUniqueId().toString());
+        pdc.set(keyTeamCrownTeam, PersistentDataType.STRING, team.key);
+        crown.setItemMeta(meta);
+        return crown;
+    }
+
+    private boolean isTeamCrown(ItemStack item) {
+        if (item == null || item.getType() != Material.NETHERITE_HELMET) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        Byte tagged = meta.getPersistentDataContainer().get(keyTeamCrown, PersistentDataType.BYTE);
+        return tagged != null && tagged == (byte) 1;
+    }
+
+    private boolean isCrownFor(ItemStack item, UUID ownerId, String teamKey) {
+        ItemMeta meta = item == null ? null : item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        String owner = pdc.get(keyTeamCrownOwner, PersistentDataType.STRING);
+        String team = pdc.get(keyTeamCrownTeam, PersistentDataType.STRING);
+        return ownerId.toString().equals(owner) && teamKey.equals(team);
+    }
+
+    private Enchantment requireEnchantment(String key) {
+        return RegistryAccess.registryAccess()
+            .getRegistry(RegistryKey.ENCHANTMENT)
+            .getOrThrow(NamespacedKey.minecraft(key));
+    }
+
     private <T> CompletableFuture<T> runOnMainThread(java.util.function.Supplier<T> action) {
         if (Bukkit.isPrimaryThread()) {
             try {
@@ -897,13 +1203,57 @@ public final class TeamManager implements Listener {
     private static final class TeamData {
         private final String key;
         private final String displayName;
+        private final TeamColor color;
         private UUID owner;
         private final Set<UUID> members = ConcurrentHashMap.newKeySet();
 
-        private TeamData(String key, String displayName, UUID owner) {
+        private TeamData(String key, String displayName, UUID owner, TeamColor color) {
             this.key = key;
             this.displayName = displayName;
             this.owner = owner;
+            this.color = color == null ? TeamColor.GOLD : color;
+        }
+    }
+
+    private enum TeamColor {
+        BLACK("black", "Black", NamedTextColor.BLACK),
+        DARK_BLUE("dark_blue", "Dark Blue", NamedTextColor.DARK_BLUE),
+        DARK_GREEN("dark_green", "Dark Green", NamedTextColor.DARK_GREEN),
+        DARK_AQUA("dark_aqua", "Dark Aqua", NamedTextColor.DARK_AQUA),
+        DARK_RED("dark_red", "Dark Red", NamedTextColor.DARK_RED),
+        DARK_PURPLE("dark_purple", "Dark Purple", NamedTextColor.DARK_PURPLE),
+        GOLD("gold", "Gold", NamedTextColor.GOLD),
+        GRAY("gray", "Gray", NamedTextColor.GRAY),
+        DARK_GRAY("dark_gray", "Dark Gray", NamedTextColor.DARK_GRAY),
+        BLUE("blue", "Blue", NamedTextColor.BLUE),
+        GREEN("green", "Green", NamedTextColor.GREEN),
+        AQUA("aqua", "Aqua", NamedTextColor.AQUA),
+        RED("red", "Red", NamedTextColor.RED),
+        LIGHT_PURPLE("light_purple", "Light Purple", NamedTextColor.LIGHT_PURPLE),
+        YELLOW("yellow", "Yellow", NamedTextColor.YELLOW),
+        WHITE("white", "White", NamedTextColor.WHITE);
+
+        private final String id;
+        private final String display;
+        private final NamedTextColor textColor;
+
+        TeamColor(String id, String display, NamedTextColor textColor) {
+            this.id = id;
+            this.display = display;
+            this.textColor = textColor;
+        }
+
+        private static TeamColor fromId(String raw) {
+            if (raw == null || raw.isBlank()) {
+                return null;
+            }
+            String normalized = raw.trim().toLowerCase(Locale.ROOT).replace('-', '_').replace(' ', '_');
+            for (TeamColor color : values()) {
+                if (color.id.equals(normalized)) {
+                    return color;
+                }
+            }
+            return null;
         }
     }
 

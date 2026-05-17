@@ -51,7 +51,7 @@ Build outputs:
 ## Useful Commands
 
 - `/smpcore reload`
-- `/lrecipe`
+- `/reliquary` (`/lrecipe`, `/lrecipes`)
 - `/legendary give`
 - `/customitem give`
 - `/itemaudit`

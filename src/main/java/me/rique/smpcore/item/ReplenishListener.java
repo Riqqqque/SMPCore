@@ -1,6 +1,7 @@
 package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -54,12 +55,20 @@ public final class ReplenishListener implements Listener {
         ItemMeta meta = book.getItemMeta();
         if (meta == null) return book;
 
-        meta.displayName(MM.deserialize("<green><bold>Replenish Book</bold></green>"));
-        meta.lore(List.of(
-            MM.deserialize("<dark_gray>Custom Hoe Enchant</dark_gray>"),
-            MM.deserialize("<gray>Apply in an anvil to any hoe.</gray>"),
-            MM.deserialize("<gray>Enchanting hoes at an enchant table can also grant it.</gray>"),
-            MM.deserialize("<gray>Breaking supported crops replants them automatically.</gray>")
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.RARE, "Replenish Book"));
+        meta.lore(CustomLoreUtil.buildStyledLore(
+            meta,
+            Material.ENCHANTED_BOOK,
+            CustomLoreUtil.Rarity.RARE.label(),
+            "BOOK",
+            List.of("<gray>Custom hoe enchant.</gray>"),
+            List.of(CustomLoreUtil.section(
+                "Enchant Effect",
+                "Replenish",
+                "<gray>Apply in an anvil to any hoe.</gray>",
+                "<gray>Enchanting hoes at an enchant table can also grant it.</gray>",
+                "<gray>Breaking supported crops replants them automatically.</gray>"
+            ))
         ));
         meta.getPersistentDataContainer().set(keyReplenishBook, PersistentDataType.BYTE, (byte) 1);
         book.setItemMeta(meta);

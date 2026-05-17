@@ -3,6 +3,7 @@ package me.rique.smpcore.legendary;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.boss.BossManager;
+import me.rique.smpcore.combat.DamageNumberListener;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
 import me.rique.smpcore.power.SuperpowerManager;
@@ -123,9 +124,17 @@ public final class LegendaryListener implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final String BACKPACK_RECIPE_ID = "backpack";
-    private static final int[] CUSTOM_RECIPE_MENU_SLOTS = {31, 36, 37, 38, 39, 40, 41, 42, 43, 44};
+    private static final String MYTHIC_NEXUS_MENU_ID = "mythic_nexus";
+    private static final String RELIQUARY_SECTION_PREFIX = "reliquary_section:";
+    private static final int[] RELIQUARY_CONTENT_SLOTS = {
+        10, 11, 12, 13, 14, 15, 16,
+        19, 20, 21, 22, 23, 24, 25,
+        28, 29, 30, 31, 32, 33, 34,
+        37, 38, 39, 40, 41, 42, 43
+    };
+    private static final int[] MYTHIC_FUSION_MENU_SLOTS = RELIQUARY_CONTENT_SLOTS;
 
-    private static final int LEGENDARY_ITEM_DATA_VERSION = 19;
+    private static final int LEGENDARY_ITEM_DATA_VERSION = 21;
     private static final double ORB_OF_THE_MYSTICS_DROP_CHANCE = 0.10;
     private static final int STARTUP_LEGENDARY_MIGRATION_CHUNKS_PER_TICK = 24;
     private static final int LEGENDARY_ITEM_SCAN_MAX_DEPTH = 2;
@@ -159,33 +168,43 @@ public final class LegendaryListener implements Listener {
     private static final int RHITTA_CRUEL_SUN_FIRE_SECONDS = 5;
     private static final double RHITTA_CRUEL_SUN_RADIUS = 6.0;
     private static final double RHITTA_CRUEL_SUN_TICK_DAMAGE = 1.0;
-    private static final double MIDAS_SWORD_MELEE_DAMAGE = 8.0;
-    private static final int MIDAS_SWORD_BASE_SHARPNESS = 3;
-    private static final int MIDAS_SWORD_MAX_SHARPNESS = 15;
-    private static final double MIDAS_SWORD_HEALTH_BONUS = 10.0;
-    private static final double REAPER_SCYTHE_MELEE_DAMAGE = 10.0;
-    private static final int REAPER_SCYTHE_DRAIN_COOLDOWN = 45;
-    private static final double REAPER_SCYTHE_DRAIN_FRACTION = 0.25;
-    private static final double SHADOW_BLADE_DAMAGE = 10.5;
-    private static final double SHADOW_BLADE_MONARCH_DAMAGE = 12.5;
-    private static final int SHADOW_BLADE_DURATION_SECONDS = 10;
-    private static final int SHADOW_BLADE_SHADOW_DURATION_SECONDS = 30;
-    private static final int SHADOW_BLADE_COOLDOWN = 30;
+    private static final double MIDAS_SWORD_MELEE_DAMAGE = 12.0;
+    private static final int MIDAS_SWORD_BASE_SHARPNESS = 5;
+    private static final int MIDAS_SWORD_MAX_SHARPNESS = 20;
+    private static final double MIDAS_SWORD_HEALTH_BONUS = 16.0;
+    private static final int MIDAS_SWORD_GOLD_NUGGETS = 18;
+    private static final double REAPER_SCYTHE_MELEE_DAMAGE = 14.0;
+    private static final int REAPER_SCYTHE_DRAIN_COOLDOWN = 30;
+    private static final double REAPER_SCYTHE_DRAIN_FRACTION = 0.35;
+    private static final int REAPER_SCYTHE_WITHER_SECONDS = 6;
+    private static final double REAPER_SCYTHE_ABSORPTION_HEALTH = 8.0;
+    private static final double SHADOW_BLADE_DAMAGE = 13.0;
+    private static final double SHADOW_BLADE_MONARCH_DAMAGE = 16.0;
+    private static final int SHADOW_BLADE_DURATION_SECONDS = 20;
+    private static final int SHADOW_BLADE_SHADOW_DURATION_SECONDS = 45;
+    private static final int SHADOW_BLADE_COOLDOWN = 20;
+    private static final double SHADOW_BLADE_BASE_ATTACK_SPEED_BONUS = 0.2;
+    private static final double SHADOW_BLADE_SHADOW_ATTACK_SPEED_BONUS = 1.4;
     private static final int HEADHUNTER_RAGE_MAX = 5;
     private static final int HEADHUNTER_BUFF_SECONDS = 15;
     private static final int HEADHUNTER_COOLDOWN = 120;
     private static final int GOD_CHESTPLATE_COOLDOWN = 240;
     private static final double GOD_CHESTPLATE_HEALTH_BONUS = 10.0;
-    private static final int STRENGTH_SWORD_STAGE_TWO_KILLS = 3;
-    private static final int STRENGTH_SWORD_STAGE_THREE_KILLS = 5;
-    private static final int STRENGTH_SWORD_BEAM_COOLDOWN = 45;
-    private static final int STRENGTH_SWORD_DOMAIN_COOLDOWN = 180;
-    private static final int STRENGTH_SWORD_DOMAIN_SECONDS = 10;
-    private static final double STRENGTH_SWORD_DOMAIN_RADIUS = 10.0;
-    private static final double STRENGTH_SWORD_DOMAIN_HEALTH_BONUS = 10.0;
-    private static final double STRENGTH_SWORD_DOMAIN_ATTACK_SPEED_SCALAR = 0.15;
-    private static final int STRENGTH_SWORD_MAX_DURABILITY = 4096;
+    private static final int STRENGTH_SWORD_STAGE_TWO_KILLS = 2;
+    private static final int STRENGTH_SWORD_STAGE_THREE_KILLS = 4;
+    private static final int STRENGTH_SWORD_BEAM_COOLDOWN = 25;
+    private static final double STRENGTH_SWORD_BEAM_TRUE_DAMAGE = 16.0;
+    private static final int STRENGTH_SWORD_DOMAIN_COOLDOWN = 90;
+    private static final int STRENGTH_SWORD_DOMAIN_SECONDS = 18;
+    private static final double STRENGTH_SWORD_DOMAIN_RADIUS = 12.0;
+    private static final double STRENGTH_SWORD_DOMAIN_HEALTH_BONUS = 16.0;
+    private static final double STRENGTH_SWORD_DOMAIN_ATTACK_SPEED_SCALAR = 0.35;
+    private static final int STRENGTH_SWORD_MAX_DURABILITY = 8192;
     private static final int STRENGTH_SWORD_REPAIR_XP_COST = 12;
+    private static final int DASH_MACE_COOLDOWN = 15;
+    private static final double DASH_MACE_HORIZONTAL = 2.10;
+    private static final double DASH_MACE_VERTICAL = 0.52;
+    private static final double STRENGTH_MACE_DAMAGE_BONUS = 9.0;
     private static final double FARADAY_PLAYER_SCAN_RANGE = 5000.0;
     private static final int FARADAY_SCAN_MAX_USES = 15;
     private static final int LIFE_STEALER_MAX_STACKS = 3;
@@ -254,8 +273,8 @@ public final class LegendaryListener implements Listener {
     private static final double LIFE_STEALER_HIT_HEAL = 1.0;
     private static final int LIFE_STEALER_BUFF_SECONDS = 60;
     private static final Color WITHER_BLADE_PARTICLE_COLOR = Color.fromRGB(18, 18, 18);
-    private static final String GUI_TITLE_RECIPES = "<gradient:#FEE440:#00BBF9><bold>Legendary Recipes</bold></gradient>";
-    private static final String GUI_TITLE_PREFIX_RECIPE = "<gradient:#A0E7E5:#B4F8C8><bold>Recipe:</bold></gradient> ";
+    private static final String GUI_TITLE_RECIPES = "<gradient:#FEE440:#00BBF9><bold>Reliquary</bold></gradient>";
+    private static final String GUI_TITLE_PREFIX_RECIPE = "<gradient:#A0E7E5:#B4F8C8><bold>Reliquary:</bold></gradient> ";
 
     private final SMPCore plugin;
 
@@ -337,6 +356,7 @@ public final class LegendaryListener implements Listener {
     private final Map<UUID, Long> godChestplateCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> strengthSwordBeamCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> strengthSwordDomainCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> dashMaceCd = new ConcurrentHashMap<>();
 
     private final Map<UUID, ChronoState> chronoStates = new ConcurrentHashMap<>();
     private final Map<UUID, FrostScytheFreezeState> frostScytheFrozen = new ConcurrentHashMap<>();
@@ -738,6 +758,32 @@ public final class LegendaryListener implements Listener {
         }
         if (event.getClickedInventory() != top) return;
 
+        if (top.getHolder() instanceof ReliquaryMenuHolder holder) {
+            event.setCancelled(true);
+
+            if (holder.section() != null && event.getSlot() == 49) {
+                openRecipeMenu(player);
+                return;
+            }
+
+            ItemStack clicked = event.getCurrentItem();
+            if (clicked == null || clicked.getType() == Material.AIR) return;
+
+            String recipeId = readMenuLegendaryId(clicked);
+            if (recipeId == null) return;
+
+            if (recipeId.startsWith(RELIQUARY_SECTION_PREFIX)) {
+                ReliquarySection section = ReliquarySection.fromId(recipeId.substring(RELIQUARY_SECTION_PREFIX.length()));
+                if (section != null) {
+                    openReliquarySectionMenu(player, section);
+                }
+                return;
+            }
+
+            openReliquaryEntry(player, recipeId);
+            return;
+        }
+
         if (top.getHolder() instanceof RecipeMenuHolder holder) {
             event.setCancelled(true);
 
@@ -747,38 +793,7 @@ public final class LegendaryListener implements Listener {
             if (holder.type() == null) {
                 String recipeId = readMenuLegendaryId(clicked);
                 if (recipeId == null) return;
-                if (BACKPACK_RECIPE_ID.equals(recipeId)) {
-                    openBackpackRecipeDetails(player);
-                    return;
-                }
-                if (SuperpowerManager.ANCIENT_SCROLL_ITEM_ID.equals(recipeId)) {
-                    openAncientScrollRecipeDetails(player);
-                    return;
-                }
-                if (MythicForgeListener.MYTHIC_FORGE_ITEM_ID.equals(recipeId)) {
-                    openMythicForgeRecipeDetails(player);
-                    return;
-                }
-                if (MythicForgeListener.ASCENDANT_CORE_ITEM_ID.equals(recipeId)) {
-                    openAscendantCoreRecipeDetails(player);
-                    return;
-                }
-                if (SustenanceTalismanListener.ITEM_ID.equals(recipeId)) {
-                    openSustenanceTalismanRecipeDetails(player);
-                    return;
-                }
-                if (plugin.getCustomToolListener() != null && plugin.getCustomToolListener().isCustomToolId(recipeId)) {
-                    openCustomToolRecipeDetails(player, recipeId);
-                    return;
-                }
-                if (LegendaryType.FARADAYS_MAGNET.id.equals(recipeId)) {
-                    openFaradaysMagnetRecipeDetails(player);
-                    return;
-                }
-
-                LegendaryType type = LegendaryType.fromId(recipeId);
-                if (type == null) return;
-                openRecipeDetails(player, type);
+                openReliquaryEntry(player, recipeId);
                 return;
             }
 
@@ -850,7 +865,19 @@ public final class LegendaryListener implements Listener {
                 ));
                 return;
             }
+            if (event.getSlot() == 40) {
+                openMythicFusionMenu(player);
+                return;
+            }
             if (event.getSlot() == 45) {
+                openRecipeMenu(player);
+            }
+            return;
+        }
+
+        if (top.getHolder() instanceof MythicFusionMenuHolder) {
+            event.setCancelled(true);
+            if (event.getSlot() == 49) {
                 openRecipeMenu(player);
             }
             return;
@@ -906,12 +933,14 @@ public final class LegendaryListener implements Listener {
             queueWitherBladeLoreRefresh(player);
         }
         Inventory top = event.getView().getTopInventory();
-        if (top.getHolder() instanceof RecipeMenuHolder
+        if (top.getHolder() instanceof ReliquaryMenuHolder
+            || top.getHolder() instanceof RecipeMenuHolder
             || top.getHolder() instanceof AncientScrollRecipeHolder
             || top.getHolder() instanceof AscendantCoreRecipeHolder
             || top.getHolder() instanceof BackpackRecipeHolder
             || top.getHolder() instanceof TalismanRecipeHolder
             || top.getHolder() instanceof MythicForgeRecipeHolder
+            || top.getHolder() instanceof MythicFusionMenuHolder
             || top.getHolder() instanceof CustomToolRecipeHolder
             || top.getHolder() instanceof FaradaysMagnetRecipeHolder) {
             event.setCancelled(true);
@@ -951,9 +980,76 @@ public final class LegendaryListener implements Listener {
 
     public void openRecipeMenu(Player player) {
         Inventory inv = Bukkit.createInventory(
-            new RecipeMenuHolder(null),
-            45,
-            BedrockCompat.menuTitle(player, MM.deserialize(GUI_TITLE_RECIPES), "Legendary Recipes")
+            new ReliquaryMenuHolder(null),
+            54,
+            BedrockCompat.menuTitle(player, MM.deserialize(GUI_TITLE_RECIPES), "Reliquary")
+        );
+
+        decorateReliquaryInventory(inv);
+        inv.setItem(4, createGuiItem(
+            Material.ENCHANTED_BOOK,
+            "<gradient:#ffe066:#72f7ff><bold>Reliquary</bold></gradient>",
+            List.of(
+                "<gray>Recipes and relic knowledge are sorted by category.</gray>",
+                "<gray>Pick a wing below, then choose the item you want to inspect.</gray>"
+            )
+        ));
+        inv.setItem(20, createReliquarySectionItem(player, ReliquarySection.LEGENDARIES));
+        inv.setItem(22, createReliquarySectionItem(player, ReliquarySection.MYTHICS));
+        inv.setItem(24, createReliquarySectionItem(player, ReliquarySection.TOOLS));
+        inv.setItem(31, createReliquarySectionItem(player, ReliquarySection.UTILITY));
+
+        player.openInventory(inv);
+    }
+
+    private void openReliquarySectionMenu(Player player, ReliquarySection section) {
+        Inventory inv = Bukkit.createInventory(
+            new ReliquaryMenuHolder(section),
+            54,
+            BedrockCompat.menuTitle(player, MM.deserialize(section.title), section.plainTitle)
+        );
+
+        decorateReliquaryInventory(inv);
+        List<String> headerLore = new ArrayList<>(section.lore);
+        headerLore.add("<dark_gray> ");
+        headerLore.add("<gray>Entries: <white>" + reliquaryEntries(player, section).size() + "</white></gray>");
+        inv.setItem(4, createGuiItem(section.icon, section.title, headerLore));
+
+        List<CustomRecipeEntry> entries = reliquaryEntries(player, section);
+        for (int i = 0; i < entries.size() && i < RELIQUARY_CONTENT_SLOTS.length; i++) {
+            CustomRecipeEntry entry = entries.get(i);
+            ItemStack icon = entry.icon().clone();
+            tagMenuLegendaryId(icon, entry.id());
+            inv.setItem(RELIQUARY_CONTENT_SLOTS[i], icon);
+        }
+
+        if (entries.isEmpty()) {
+            inv.setItem(22, createGuiItem(
+                Material.BARRIER,
+                "<red><bold>No Entries Ready</bold></red>",
+                List.of("<gray>This category has no available recipes right now.</gray>")
+            ));
+        }
+
+        inv.setItem(49, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary hub</gray>")));
+        player.openInventory(inv);
+    }
+
+    public void openMythicFusionMenu(Player player) {
+        MythicForgeListener forge = plugin.getMythicForgeListener();
+        if (forge == null) {
+            player.sendMessage(MessageUtil.error("Mythic fusion recipes are not ready yet."));
+            return;
+        }
+
+        Inventory inv = Bukkit.createInventory(
+            new MythicFusionMenuHolder(),
+            54,
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize("<gradient:#ff4df0:#ffb000><bold>Mythic Nexus</bold></gradient>"),
+                "Mythic Nexus"
+            )
         );
 
         ItemStack filler = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
@@ -961,27 +1057,123 @@ public final class LegendaryListener implements Listener {
             inv.setItem(i, filler);
         }
 
-        int[] slots = {
-            10, 11, 12, 13, 14, 15, 16,
-            19, 20, 21, 22, 23, 24, 25,
-            28, 29, 30, 32, 33, 34
-        };
-        List<LegendaryType> types = craftableLegendaryTypes();
-        for (int i = 0; i < types.size() && i < slots.length; i++) {
-            LegendaryType type = types.get(i);
-            ItemStack icon = createPreviewItem(player, type);
-            tagMenuLegendaryId(icon, type.id);
-            inv.setItem(slots[i], icon);
+        inv.setItem(4, createGuiItem(
+            Material.NETHER_STAR,
+            "<gradient:#ff4df0:#ffb000><bold>Mythic Nexus</bold></gradient>",
+            List.of(
+                "<gray>These are the top-tier fusions made at a placed</gray>",
+                "<gray><white>Mythic Forge</white> using <white>2 legendaries</white> and an <white>Ascendant Core</white>.</gray>",
+                "<dark_gray>The forge station only crafts. This menu shows the rewards.</dark_gray>"
+            )
+        ));
+
+        int index = 0;
+        for (MythicForgeListener.FusionRecipeView recipe : forge.fusionRecipes()) {
+            if (index >= MYTHIC_FUSION_MENU_SLOTS.length) {
+                break;
+            }
+            inv.setItem(MYTHIC_FUSION_MENU_SLOTS[index++], createFusionRecipePreview(recipe));
         }
 
-        List<CustomRecipeEntry> customRecipes = customRecipeEntries(player);
-        for (int i = 0; i < customRecipes.size() && i < CUSTOM_RECIPE_MENU_SLOTS.length; i++) {
-            CustomRecipeEntry recipe = customRecipes.get(i);
-            tagMenuLegendaryId(recipe.icon(), recipe.id());
-            inv.setItem(CUSTOM_RECIPE_MENU_SLOTS[i], recipe.icon());
-        }
-
+        inv.setItem(49, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
+    }
+
+    private void openReliquaryEntry(Player player, String recipeId) {
+        if (BACKPACK_RECIPE_ID.equals(recipeId)) {
+            openBackpackRecipeDetails(player);
+            return;
+        }
+        if (MYTHIC_NEXUS_MENU_ID.equals(recipeId)) {
+            openMythicFusionMenu(player);
+            return;
+        }
+        if (SuperpowerManager.ANCIENT_SCROLL_ITEM_ID.equals(recipeId)) {
+            openAncientScrollRecipeDetails(player);
+            return;
+        }
+        if (MythicForgeListener.MYTHIC_FORGE_ITEM_ID.equals(recipeId)) {
+            openMythicForgeRecipeDetails(player);
+            return;
+        }
+        if (MythicForgeListener.ASCENDANT_CORE_ITEM_ID.equals(recipeId)) {
+            openAscendantCoreRecipeDetails(player);
+            return;
+        }
+        if (SustenanceTalismanListener.ITEM_ID.equals(recipeId)) {
+            openSustenanceTalismanRecipeDetails(player);
+            return;
+        }
+        if (plugin.getCustomToolListener() != null && plugin.getCustomToolListener().isCustomToolId(recipeId)) {
+            openCustomToolRecipeDetails(player, recipeId);
+            return;
+        }
+        if (LegendaryType.FARADAYS_MAGNET.id.equals(recipeId)) {
+            openFaradaysMagnetRecipeDetails(player);
+            return;
+        }
+
+        LegendaryType type = LegendaryType.fromId(recipeId);
+        if (type != null) {
+            openRecipeDetails(player, type);
+        }
+    }
+
+    private void decorateReliquaryInventory(Inventory inv) {
+        ItemStack filler = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        ItemStack accent = createGuiItem(Material.PURPLE_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        for (int i = 0; i < inv.getSize(); i++) {
+            inv.setItem(i, filler);
+        }
+        for (int slot : List.of(0, 1, 7, 8, 9, 17, 36, 44, 45, 46, 52, 53)) {
+            inv.setItem(slot, accent);
+        }
+    }
+
+    private ItemStack createReliquarySectionItem(Player player, ReliquarySection section) {
+        List<String> lore = new ArrayList<>(section.lore);
+        lore.add("<dark_gray> ");
+        lore.add("<gray>Entries: <white>" + reliquaryEntries(player, section).size() + "</white></gray>");
+        lore.add("<dark_gray>" + BedrockCompat.menuActionWord(player) + " to open</dark_gray>");
+        ItemStack item = createGuiItem(section.icon, section.title, lore);
+        tagMenuLegendaryId(item, RELIQUARY_SECTION_PREFIX + section.id);
+        return item;
+    }
+
+    private List<CustomRecipeEntry> reliquaryEntries(Player player, ReliquarySection section) {
+        List<CustomRecipeEntry> entries = new ArrayList<>();
+        switch (section) {
+            case LEGENDARIES -> {
+                for (LegendaryType type : craftableLegendaryTypes()) {
+                    entries.add(new CustomRecipeEntry(type.id, createPreviewItem(player, type)));
+                }
+            }
+            case MYTHICS -> {
+                if (plugin.getMythicForgeListener() != null) {
+                    entries.add(new CustomRecipeEntry(MYTHIC_NEXUS_MENU_ID, createMythicNexusPreview(player)));
+                    entries.add(new CustomRecipeEntry(MythicForgeListener.MYTHIC_FORGE_ITEM_ID, createMythicForgePreview(player)));
+                    entries.add(new CustomRecipeEntry(MythicForgeListener.ASCENDANT_CORE_ITEM_ID, createAscendantCorePreview(player)));
+                }
+            }
+            case TOOLS -> {
+                entries.add(new CustomRecipeEntry(BACKPACK_RECIPE_ID, appendRecipeMenuHint(player, createBackpackRecipeDisplayItem())));
+                if (plugin.getCustomToolListener() != null) {
+                    for (String toolId : plugin.getCustomToolListener().craftableToolIds()) {
+                        entries.add(new CustomRecipeEntry(toolId, createCustomToolPreview(player, toolId)));
+                    }
+                }
+                entries.add(new CustomRecipeEntry(LegendaryType.FARADAYS_MAGNET.id, createFaradaysMagnetPreview(player)));
+            }
+            case UTILITY -> {
+                if (plugin.getSuperpowerManager() != null) {
+                    entries.add(new CustomRecipeEntry(SuperpowerManager.ANCIENT_SCROLL_ITEM_ID, createAncientScrollPreview(player)));
+                }
+                if (plugin.getSustenanceTalismanListener() != null) {
+                    entries.add(new CustomRecipeEntry(SustenanceTalismanListener.ITEM_ID, createSustenanceTalismanPreview(player)));
+                }
+            }
+        }
+        return entries;
     }
 
     public List<String> legendaryIds() {
@@ -1032,6 +1224,11 @@ public final class LegendaryListener implements Listener {
         LegendaryType type = LegendaryType.fromId(normalizeLegendaryId(id));
         if (type == null) return null;
         return PLAIN.serialize(MM.deserialize(type.display)).trim();
+    }
+
+    public String rarityLabelForLegendary(String id) {
+        LegendaryType type = LegendaryType.fromId(normalizeLegendaryId(id));
+        return type == null ? null : type.rarity.label();
     }
 
     public String legendaryId(ItemStack item) {
@@ -1259,6 +1456,11 @@ public final class LegendaryListener implements Listener {
                 useWitherBlade(player, hand);
                 player.getInventory().setItemInMainHand(hand);
             }
+            case DASH_MACE -> {
+                if (!right) return;
+                event.setCancelled(true);
+                useDashMace(player);
+            }
             case WAR_PICK -> {
                 if (!right || !player.isSneaking()) return;
                 event.setCancelled(true);
@@ -1266,6 +1468,9 @@ public final class LegendaryListener implements Listener {
                 player.getInventory().setItemInMainHand(hand);
             }
             case THORS_HAMMER -> {
+                // passive/other event driven
+            }
+            case STRENGTH_MACE, HARD_HITTER -> {
                 // passive/other event driven
             }
         }
@@ -1349,6 +1554,10 @@ public final class LegendaryListener implements Listener {
                 event.setCancelled(true);
                 useWitherBlade(player, hand);
                 player.getInventory().setItemInMainHand(hand);
+            }
+            case DASH_MACE -> {
+                event.setCancelled(true);
+                useDashMace(player);
             }
             case WAR_PICK -> {
                 if (!player.isSneaking()) return;
@@ -1499,7 +1708,7 @@ public final class LegendaryListener implements Listener {
         }
         LegendaryType killerWeapon = typeOf(killer.getInventory().getItemInMainHand());
         if (killerWeapon == LegendaryType.MIDAS_SWORD) {
-            event.getDrops().add(new ItemStack(Material.GOLD_NUGGET, 9));
+            event.getDrops().add(new ItemStack(Material.GOLD_NUGGET, MIDAS_SWORD_GOLD_NUGGETS));
             if (event.getEntity() instanceof Player) {
                 levelMidasSword(killer.getInventory().getItemInMainHand(), true);
             }
@@ -1605,6 +1814,8 @@ public final class LegendaryListener implements Listener {
             refreshLifeStealerLore(attacker);
         } else if (held == LegendaryType.STRENGTH_SWORD) {
             applyStrengthSwordStageHit(attacker, victim);
+        } else if (held == LegendaryType.STRENGTH_MACE) {
+            event.setDamage(event.getDamage() + STRENGTH_MACE_DAMAGE_BONUS);
         }
 
         if (held == LegendaryType.THORS_HAMMER) {
@@ -1723,7 +1934,7 @@ public final class LegendaryListener implements Listener {
 
         inv.setItem(16, createDisplayLegendaryItem(type, true));
         inv.setItem(RECIPE_TRADE_SLOT, createTradeButton(player, type));
-        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to item list</gray>")));
+        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
 
@@ -1733,7 +1944,7 @@ public final class LegendaryListener implements Listener {
             27,
             BedrockCompat.menuTitle(
                 player,
-                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + "<gold><bold>Backpack</bold></gold>"),
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.UNCOMMON, "Backpack")),
                 "Recipe: Backpack"
             )
         );
@@ -1763,8 +1974,13 @@ public final class LegendaryListener implements Listener {
 
         inv.setItem(16, createBackpackRecipeDisplayItem());
         boolean canTrade = plugin.getBackpackListener() != null && plugin.getBackpackListener().canTradeBackpack(player);
-        inv.setItem(RECIPE_TRADE_SLOT, createTradeButton(player, "<gold><bold>Backpack</bold></gold>", backpackIngredients, canTrade));
-        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to item list</gray>")));
+        inv.setItem(RECIPE_TRADE_SLOT, createTradeButton(
+            player,
+            CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.UNCOMMON, "Backpack"),
+            backpackIngredients,
+            canTrade
+        ));
+        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
 
@@ -1779,7 +1995,7 @@ public final class LegendaryListener implements Listener {
             27,
             BedrockCompat.menuTitle(
                 player,
-                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + "<gold><bold>Ancient Scroll</bold></gold>"),
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.EPIC, "Ancient Scroll")),
                 "Recipe: Ancient Scroll"
             )
         );
@@ -1805,7 +2021,7 @@ public final class LegendaryListener implements Listener {
                 "<gray>Use the exact total item counts shown here.</gray>"
             )
         ));
-        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to item list</gray>")));
+        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
 
@@ -1821,7 +2037,7 @@ public final class LegendaryListener implements Listener {
             27,
             BedrockCompat.menuTitle(
                 player,
-                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + "<gradient:#ffd166:#ff4df0><bold>Ascendant Core</bold></gradient>"),
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.LEGENDARY, "Ascendant Core")),
                 "Recipe: Ascendant Core"
             )
         );
@@ -1850,7 +2066,7 @@ public final class LegendaryListener implements Listener {
                 "<gray>Use it as the catalyst in a <white>Mythic Forge</white>.</gray>"
             )
         ));
-        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to item list</gray>")));
+        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
 
@@ -1866,7 +2082,7 @@ public final class LegendaryListener implements Listener {
             54,
             BedrockCompat.menuTitle(
                 player,
-                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + "<gradient:#8a2be2:#ff4df0><bold>Mythic Forge</bold></gradient>"),
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.MYTHIC, "Mythic Forge")),
                 "Recipe: Mythic Forge"
             )
         );
@@ -1905,17 +2121,16 @@ public final class LegendaryListener implements Listener {
                 "<gray><white>1 Ascendant Core</white>.</gray>"
             )
         ));
+        inv.setItem(40, createGuiItem(
+            Material.NETHER_STAR,
+            "<gradient:#ff4df0:#ffb000><bold>Mythic Nexus</bold></gradient>",
+            List.of(
+                "<gray>Fusion rewards live in their own menu now.</gray>",
+                "<gray>Use <white>/mythics</white> or click here to view every pairing.</gray>"
+            )
+        ));
 
-        int[] outputSlots = {38, 40, 42, 44};
-        int index = 0;
-        for (MythicForgeListener.FusionRecipeView recipe : forge.fusionRecipes()) {
-            if (index >= outputSlots.length) {
-                break;
-            }
-            inv.setItem(outputSlots[index++], createFusionRecipePreview(recipe));
-        }
-
-        inv.setItem(45, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to item list</gray>")));
+        inv.setItem(45, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
 
@@ -1959,7 +2174,7 @@ public final class LegendaryListener implements Listener {
             27,
             BedrockCompat.menuTitle(
                 player,
-                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + "<aqua><bold>" + displayName + "</bold></aqua>"),
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + CustomLoreUtil.displayNameTag(customToolRarity(toolId), displayName)),
                 "Recipe: " + displayName
             )
         );
@@ -1985,7 +2200,7 @@ public final class LegendaryListener implements Listener {
             "<gold><bold>Craft In Table</bold></gold>",
             List.of("<gray>This is a normal crafting recipe.</gray>", "<gray>Use the shown ingredients in a crafting table.</gray>")
         ));
-        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to item list</gray>")));
+        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
 
@@ -1995,7 +2210,7 @@ public final class LegendaryListener implements Listener {
             27,
             BedrockCompat.menuTitle(
                 player,
-                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + "<gold><bold>Faraday's Magnet</bold></gold>"),
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + LegendaryType.FARADAYS_MAGNET.display),
                 "Recipe: Faraday's Magnet"
             )
         );
@@ -2021,7 +2236,7 @@ public final class LegendaryListener implements Listener {
             "<gold><bold>Craft In Table</bold></gold>",
             List.of("<gray>This is a normal crafting recipe.</gray>", "<gray>Use the shown ingredients in a crafting table.</gray>")
         ));
-        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to item list</gray>")));
+        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
 
@@ -2036,7 +2251,7 @@ public final class LegendaryListener implements Listener {
             27,
             BedrockCompat.menuTitle(
                 player,
-                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + "<gold><bold>Talisman of Sustenance</bold></gold>"),
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.EPIC, "Talisman of Sustenance")),
                 "Recipe: Talisman of Sustenance"
             )
         );
@@ -2069,7 +2284,7 @@ public final class LegendaryListener implements Listener {
                 "<gray>Use the exact total item counts shown here.</gray>"
             )
         ));
-        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to item list</gray>")));
+        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
 
@@ -2083,6 +2298,25 @@ public final class LegendaryListener implements Listener {
         }
 
         return appendRecipeMenuHint(player, plugin.getCustomToolListener().createRecipePreview(toolId));
+    }
+
+    private ItemStack createMythicNexusPreview(Player player) {
+        return createGuiItem(
+            Material.NETHER_STAR,
+            "<gradient:#ff4df0:#ffb000><bold>Mythic Nexus</bold></gradient>",
+            List.of(
+                "<gray>View every Mythic Forge fusion pairing.</gray>",
+                "<gray>Use <white>/mythics</white> to open it directly.</gray>",
+                "<dark_gray>" + BedrockCompat.menuActionWord(player) + " to view fusions</dark_gray>"
+            )
+        );
+    }
+
+    private CustomLoreUtil.Rarity customToolRarity(String toolId) {
+        return switch (toolId) {
+            case CustomToolListener.ADVANCED_PICKAXE_ID, CustomToolListener.GRAPPLE_HOOK_ID -> CustomLoreUtil.Rarity.RARE;
+            default -> CustomLoreUtil.Rarity.COMMON;
+        };
     }
 
     private ItemStack createFaradaysMagnetPreview(Player player) {
@@ -2131,34 +2365,6 @@ public final class LegendaryListener implements Listener {
         }
         item.setItemMeta(meta);
         return item;
-    }
-
-    private List<CustomRecipeEntry> customRecipeEntries(Player player) {
-        List<CustomRecipeEntry> entries = new ArrayList<>();
-        entries.add(new CustomRecipeEntry(BACKPACK_RECIPE_ID, appendRecipeMenuHint(player, createBackpackRecipeDisplayItem())));
-
-        if (plugin.getSuperpowerManager() != null) {
-            entries.add(new CustomRecipeEntry(SuperpowerManager.ANCIENT_SCROLL_ITEM_ID, createAncientScrollPreview(player)));
-        }
-
-        if (plugin.getMythicForgeListener() != null) {
-            entries.add(new CustomRecipeEntry(MythicForgeListener.MYTHIC_FORGE_ITEM_ID, createMythicForgePreview(player)));
-            entries.add(new CustomRecipeEntry(MythicForgeListener.ASCENDANT_CORE_ITEM_ID, createAscendantCorePreview(player)));
-        }
-
-        if (plugin.getCustomToolListener() != null) {
-            for (String toolId : plugin.getCustomToolListener().craftableToolIds()) {
-                entries.add(new CustomRecipeEntry(toolId, createCustomToolPreview(player, toolId)));
-            }
-        }
-
-        entries.add(new CustomRecipeEntry(LegendaryType.FARADAYS_MAGNET.id, createFaradaysMagnetPreview(player)));
-
-        if (plugin.getSustenanceTalismanListener() != null) {
-            entries.add(new CustomRecipeEntry(SustenanceTalismanListener.ITEM_ID, createSustenanceTalismanPreview(player)));
-        }
-
-        return entries;
     }
 
     private ItemStack[] faradaysMagnetRecipeMatrix() {
@@ -2220,15 +2426,24 @@ public final class LegendaryListener implements Listener {
     }
 
     private ItemStack createBackpackRecipeDisplayItem() {
-        ItemStack item = new ItemStack(Material.CHEST_MINECART);
+        ItemStack item = new ItemStack(Material.FLOWER_POT);
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return item;
 
         meta.setItemModel(null);
-        meta.displayName(MM.deserialize("<gold><bold>Backpack</bold></gold>"));
-        meta.lore(List.of(
-            MM.deserialize("<dark_gray>Portable Storage</dark_gray>"),
-            MM.deserialize("<gray>Right-click to open.</gray>")
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.UNCOMMON, "Backpack"));
+        meta.lore(CustomLoreUtil.buildStyledLore(
+            meta,
+            Material.FLOWER_POT,
+            CustomLoreUtil.Rarity.UNCOMMON.label(),
+            "STORAGE",
+            List.of("<gray>Portable storage.</gray>"),
+            List.of(CustomLoreUtil.section(
+                "Use",
+                "Pocket Vault",
+                "<gray>Right-click to open.</gray>",
+                "<gray>Holds items safely in its own saved storage.</gray>"
+            ))
         ));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         item.setItemMeta(meta);
@@ -3380,6 +3595,11 @@ public final class LegendaryListener implements Listener {
             plugin.getCombatLogListener().tagPlayers(attacker, victim);
         }
 
+        DamageNumberListener damageNumbers = plugin.getDamageNumberListener();
+        if (damageNumbers != null) {
+            damageNumbers.showTrueDamage(target, damage);
+        }
+
         double nextHealth = Math.max(0.0, target.getHealth() - damage);
         if (nextHealth <= 0.0) {
             target.setHealth(0.0);
@@ -3635,7 +3855,7 @@ public final class LegendaryListener implements Listener {
         setCooldown(strengthSwordBeamCd, playerId, STRENGTH_SWORD_BEAM_COOLDOWN);
         damageStrengthSwordAbilityUse(player, 1);
 
-        if (target != null && applyWardenBladeTrueDamage(player, target, 8.0)) {
+        if (target != null && applyWardenBladeTrueDamage(player, target, STRENGTH_SWORD_BEAM_TRUE_DAMAGE)) {
             world.spawnParticle(Particle.DUST, target.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.25, 0.45, 0.25, 0.0, new Particle.DustOptions(Color.fromRGB(255, 60, 80), 1.2f));
         }
     }
@@ -3934,6 +4154,28 @@ public final class LegendaryListener implements Listener {
         skull.getPersistentDataContainer().set(keyWitherBladeSkullTag, PersistentDataType.BYTE, (byte) 1);
         player.getWorld().playSound(player.getLocation(), Sound.ENTITY_WITHER_SHOOT, 1.0f, 1.0f);
         sendWitherBladeActionBar(player, state);
+    }
+
+    private void useDashMace(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (onCooldown(dashMaceCd, playerId)) {
+            player.sendMessage(MessageUtil.warn("Dash Mace cooldown: <white>" + secondsLeft(dashMaceCd, playerId) + "s</white>."));
+            return;
+        }
+
+        Vector direction = player.getEyeLocation().getDirection();
+        if (direction.lengthSquared() < 0.0001) {
+            return;
+        }
+        direction.normalize();
+
+        Vector velocity = direction.multiply(DASH_MACE_HORIZONTAL);
+        velocity.setY(Math.max(DASH_MACE_VERTICAL, velocity.getY() * 0.45 + DASH_MACE_VERTICAL));
+        player.setVelocity(velocity);
+        player.setFallDistance(0.0f);
+        player.getWorld().spawnParticle(Particle.CLOUD, player.getLocation().add(0.0, 0.35, 0.0), 26, 0.45, 0.2, 0.45, 0.03);
+        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_BREEZE_SHOOT, 1.1f, 0.9f);
+        setCooldown(dashMaceCd, playerId, DASH_MACE_COOLDOWN);
     }
 
     private double witherBladeBonusDamage(Player player) {
@@ -4384,7 +4626,7 @@ public final class LegendaryListener implements Listener {
     }
 
     private void levelMidasSword(ItemStack sword, boolean playerKill) {
-        if (typeOf(sword) != LegendaryType.MIDAS_SWORD || !playerKill || ThreadLocalRandom.current().nextDouble() > 0.50) {
+        if (typeOf(sword) != LegendaryType.MIDAS_SWORD || !playerKill) {
             return;
         }
 
@@ -4439,6 +4681,11 @@ public final class LegendaryListener implements Listener {
         if (applyWardenBladeTrueDamage(attacker, victim, drainDamage)) {
             copyBeneficialPotionEffects(victim, attacker);
             healLivingEntity(attacker, drainDamage);
+            victim.addPotionEffect(new PotionEffect(PotionEffectType.WITHER, REAPER_SCYTHE_WITHER_SECONDS * 20, 1, false, true, true));
+            applyPotionIfStrongerOrLonger(attacker, PotionEffectType.REGENERATION, 8 * 20, 1);
+            if (attacker.getAbsorptionAmount() < REAPER_SCYTHE_ABSORPTION_HEALTH) {
+                attacker.setAbsorptionAmount(REAPER_SCYTHE_ABSORPTION_HEALTH);
+            }
             World world = attacker.getWorld();
             Location hit = victim.getLocation().clone().add(0.0, 1.0, 0.0);
             world.spawnParticle(Particle.SOUL, hit, 20, 0.25, 0.45, 0.25, 0.02);
@@ -4470,7 +4717,8 @@ public final class LegendaryListener implements Listener {
             return;
         }
 
-        targetPlayer.addPotionEffect(new PotionEffect(PotionEffectType.WEAKNESS, 5 * 20, 0, false, true, true));
+        targetPlayer.addPotionEffect(new PotionEffect(PotionEffectType.WEAKNESS, 5 * 20, 1, false, true, true));
+        targetPlayer.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 5 * 20, 0, false, true, true));
     }
 
     private void addHeadhunterRage(Player player, boolean attacking) {
@@ -4720,14 +4968,17 @@ public final class LegendaryListener implements Listener {
     }
 
     private void syncShadowBladeAttackSpeed(Player player) {
-        boolean active = typeOf(player.getInventory().getItemInMainHand()) == LegendaryType.SHADOW_BLADE
+        boolean holdingShadowBlade = typeOf(player.getInventory().getItemInMainHand()) == LegendaryType.SHADOW_BLADE;
+        boolean shadowPower = holdingShadowBlade
             && plugin.getSuperpowerManager() != null
             && plugin.getSuperpowerManager().hasPower(player, me.rique.smpcore.power.SuperpowerType.SHADOW);
         syncPlayerAttributeModifier(
             player,
             Attribute.ATTACK_SPEED,
             keyShadowBladeAttackSpeedModifier,
-            active ? 0.9 : 0.0,
+            holdingShadowBlade
+                ? (shadowPower ? SHADOW_BLADE_SHADOW_ATTACK_SPEED_BONUS : SHADOW_BLADE_BASE_ATTACK_SPEED_BONUS)
+                : 0.0,
             AttributeModifier.Operation.ADD_NUMBER
         );
     }
@@ -4788,7 +5039,7 @@ public final class LegendaryListener implements Listener {
             AttributeModifier.Operation.ADD_SCALAR
         );
         if (inside) {
-            applyPotionIfStrongerOrLonger(player, PotionEffectType.STRENGTH, 30, 1);
+            applyPotionIfStrongerOrLonger(player, PotionEffectType.STRENGTH, 30, 2);
         }
     }
 
@@ -5015,6 +5266,7 @@ public final class LegendaryListener implements Listener {
         cleanupExpiredCooldownMap(godChestplateCd, now);
         cleanupExpiredCooldownMap(strengthSwordBeamCd, now);
         cleanupExpiredCooldownMap(strengthSwordDomainCd, now);
+        cleanupExpiredCooldownMap(dashMaceCd, now);
         cleanupExpiredCooldownMap(blinkDaggerStunnedUntil, now);
         cleanupExpiredCooldownMap(shadowBladeActiveUntil, now);
         rhittaBurns.entrySet().removeIf(entry -> entry.getValue() == null || entry.getValue().expiresAt() <= now);
@@ -5292,11 +5544,11 @@ public final class LegendaryListener implements Listener {
     }
 
     private void applyEnderBonePresentation(ItemMeta meta) {
-        meta.displayName(MM.deserialize("<dark_purple><bold>Ender Bone</bold></dark_purple>"));
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.EPIC, "Ender Bone"));
         meta.setItemModel(null);
         meta.lore(CustomLoreUtil.buildStyledLore(
             Material.BONE,
-            "LEGENDARY",
+            CustomLoreUtil.Rarity.EPIC.label(),
             "TROPHY",
             List.of("<gray>Dropped by the Ender Dragon.</gray>"),
             List.of()
@@ -5311,7 +5563,7 @@ public final class LegendaryListener implements Listener {
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return false;
         String displayName = meta.hasDisplayName() ? PLAIN.serialize(meta.displayName()).trim() : "";
-        if ("Ender Bone".equals(displayName) && meta.hasLore()) return false;
+        if ("Ender Bone".equals(displayName) && hasLoreText(meta, "EPIC TROPHY")) return false;
 
         applyEnderBonePresentation(meta);
         item.setItemMeta(meta);
@@ -5319,11 +5571,11 @@ public final class LegendaryListener implements Listener {
     }
 
     private void applyOrbOfTheMysticsPresentation(ItemMeta meta) {
-        meta.displayName(MM.deserialize("<light_purple><bold>Orb of the Mystics</bold></light_purple>"));
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.LEGENDARY, "Orb of the Mystics"));
         meta.setItemModel(null);
         meta.lore(CustomLoreUtil.buildStyledLore(
             Material.ENDER_EYE,
-            "MYTHIC",
+            CustomLoreUtil.Rarity.LEGENDARY.label(),
             "ORB",
             List.of(
                 "<gray>Right-click to summon a legendary altar.</gray>",
@@ -5351,11 +5603,23 @@ public final class LegendaryListener implements Listener {
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
         boolean missingInstance = !pdc.has(keyOrbOfTheMysticsInstance, PersistentDataType.STRING);
         String displayName = meta.hasDisplayName() ? PLAIN.serialize(meta.displayName()).trim() : "";
-        if ("Orb of the Mystics".equals(displayName) && meta.hasLore() && !missingInstance) return false;
+        if ("Orb of the Mystics".equals(displayName) && hasLoreText(meta, "LEGENDARY ORB") && !missingInstance) return false;
 
         applyOrbOfTheMysticsPresentation(meta);
         item.setItemMeta(meta);
         return true;
+    }
+
+    private boolean hasLoreText(ItemMeta meta, String text) {
+        if (meta == null || text == null || text.isBlank() || !meta.hasLore() || meta.lore() == null) {
+            return false;
+        }
+        for (Component line : meta.lore()) {
+            if (PLAIN.serialize(line).contains(text)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void useOrbOfTheMystics(Player player) {
@@ -5417,7 +5681,7 @@ public final class LegendaryListener implements Listener {
         List<String> topLines,
         CustomLoreUtil.LoreSection... sections
     ) {
-        return CustomLoreUtil.buildStyledLore(meta, material, "LEGENDARY", itemKind, topLines, List.of(sections));
+        return CustomLoreUtil.buildStyledLore(meta, material, rarityLabelForMeta(meta, "LEGENDARY"), itemKind, topLines, List.of(sections));
     }
 
     private List<Component> buildMythicLore(
@@ -5427,7 +5691,16 @@ public final class LegendaryListener implements Listener {
         List<String> topLines,
         CustomLoreUtil.LoreSection... sections
     ) {
-        return CustomLoreUtil.buildStyledLore(meta, material, "MYTHIC", itemKind, topLines, List.of(sections));
+        return CustomLoreUtil.buildStyledLore(meta, material, rarityLabelForMeta(meta, "MYTHIC"), itemKind, topLines, List.of(sections));
+    }
+
+    private String rarityLabelForMeta(ItemMeta meta, String fallback) {
+        if (meta == null) {
+            return fallback;
+        }
+        String id = meta.getPersistentDataContainer().get(keyLegendary, PersistentDataType.STRING);
+        LegendaryType type = LegendaryType.fromId(id);
+        return type == null ? fallback : type.rarity.label();
     }
 
     private List<Component> buildEnderbowLore(ItemMeta meta, boolean teleportForm) {
@@ -5513,7 +5786,7 @@ public final class LegendaryListener implements Listener {
         return CustomLoreUtil.buildStyledLore(
             meta,
             Material.NETHERITE_SWORD,
-            "MYTHICAL",
+            rarityLabelForMeta(meta, CustomLoreUtil.Rarity.MYTHIC.label()),
             "BLADE",
             List.of(
                 "<gray>Hit Damage: <white>" + formatDamageNumber(WARDEN_BLADE_MELEE_DAMAGE) + "</white></gray>",
@@ -5622,38 +5895,38 @@ public final class LegendaryListener implements Listener {
             List.of(
                 "<gray>Hit Damage: <white>" + formatDamageNumber(MIDAS_SWORD_MELEE_DAMAGE) + "</white></gray>",
                 "<gray>Current Sharpness: <white>" + sharpnessLevel + "</white>/<white>" + MIDAS_SWORD_MAX_SHARPNESS + "</white></gray>",
-                "<gray>Main-hand Blessing: <white>+5 hearts</white></gray>"
+                "<gray>Main-hand Blessing: <white>+" + formatDamageNumber(MIDAS_SWORD_HEALTH_BONUS / 2.0) + " hearts</white></gray>"
             ),
             CustomLoreUtil.section(
                 "Passive",
                 "Golden Tribute",
-                "<gray>Kills spill <white>9 gold nuggets</white>.</gray>",
+                "<gray>Kills spill <white>" + MIDAS_SWORD_GOLD_NUGGETS + " gold nuggets</white>.</gray>",
                 "<gray>Piglins remain neutral while you hold the blade.</gray>"
             ),
             CustomLoreUtil.section(
                 "Passive",
                 "Midas Hunger",
-                "<gray>Player kills have a <white>50%</white> chance to raise the sword by <white>+1 Sharpness</white>.</gray>",
+                "<gray>Every player kill raises the sword by <white>+1 Sharpness</white>.</gray>",
                 "<gray>Caps at <white>Sharpness " + MIDAS_SWORD_MAX_SHARPNESS + "</white>.</gray>"
             )
         );
     }
 
     private List<Component> buildReaperScytheLore(ItemMeta meta) {
-        return buildLegendaryLore(
+        return buildMythicLore(
             meta,
             Material.NETHERITE_HOE,
             "SCYTHE",
             List.of(
                 "<gray>Hit Damage: <white>" + formatDamageNumber(REAPER_SCYTHE_MELEE_DAMAGE) + "</white></gray>",
-                "<gray>Attack Speed: <white>1</white></gray>",
+                "<gray>Attack Speed: <white>1</white> | Rend: <white>" + Math.round(REAPER_SCYTHE_DRAIN_FRACTION * 100.0) + "% current health</white></gray>",
                 "<gray>Soul Rend Cooldown: <white>" + REAPER_SCYTHE_DRAIN_COOLDOWN + "s</white></gray>"
             ),
             CustomLoreUtil.section(
                 "Passive",
                 "Soul Rend",
-                "<gray>Your next ready hit drains <white>25%</white> of the target's current health.</gray>",
-                "<gray>You heal for the health drained and steal their positive potion effects.</gray>"
+                "<gray>Your next ready hit drains the target, heals you, and steals positive potion effects.</gray>",
+                "<gray>The target is afflicted with <white>Wither II</white> while you gain <white>Regeneration II</white> and absorption.</gray>"
             )
         );
     }
@@ -5666,8 +5939,8 @@ public final class LegendaryListener implements Listener {
             && plugin.getSuperpowerManager() != null
             && plugin.getSuperpowerManager().hasPower(holder, me.rique.smpcore.power.SuperpowerType.SHADOW);
         double damage = monarch ? SHADOW_BLADE_MONARCH_DAMAGE : SHADOW_BLADE_DAMAGE;
-        double attackSpeed = shadow ? 2.5 : 1.6;
-        return buildLegendaryLore(
+        double attackSpeed = shadow ? 3.0 : 1.8;
+        return buildMythicLore(
             meta,
             Material.DIAMOND_SWORD,
             "BLADE",
@@ -5758,20 +6031,23 @@ public final class LegendaryListener implements Listener {
                 "Stage I",
                 "Curse Mark",
                 "<gray>Unlocks after <white>1 unique player kill</white>.</gray>",
-                "<gray>Hits on players apply <white>Weakness I</white> for <white>5s</white>.</gray>"
+                "<gray>Hits on players apply <white>Weakness II</white> and <white>Slowness I</white> for <white>5s</white>.</gray>"
             ),
             CustomLoreUtil.section(
                 "Stage II",
                 "Crimson Beam",
                 "<gray>Unlocks after <white>" + STRENGTH_SWORD_STAGE_TWO_KILLS + " unique player kills</white>.</gray>",
-                "<gray><white>Shift + Left-click</white> to fire a crimson warden beam for <white>4 hearts true damage</white>.</gray>"
+                "<gray><white>Shift + Left-click</white> to fire a crimson warden beam for <white>"
+                    + formatDamageNumber(STRENGTH_SWORD_BEAM_TRUE_DAMAGE / 2.0) + " hearts true damage</white>.</gray>"
             ),
             CustomLoreUtil.section(
                 "Stage III",
                 "Dominion",
                 "<gray>Unlocks after <white>" + STRENGTH_SWORD_STAGE_THREE_KILLS + " unique player kills</white>.</gray>",
                 "<gray><white>Right-click</white> to open a <white>" + STRENGTH_SWORD_DOMAIN_RADIUS + " block</white> domain for <white>" + STRENGTH_SWORD_DOMAIN_SECONDS + "s</white>.</gray>",
-                "<gray>Inside it, the user gains <white>+5 hearts</white>, <white>Strength II</white>, and <white>15% faster attack speed</white>.</gray>"
+                "<gray>Inside it, the user gains <white>+"
+                    + formatDamageNumber(STRENGTH_SWORD_DOMAIN_HEALTH_BONUS / 2.0)
+                    + " hearts</white>, <white>Strength III</white>, and <white>35% faster attack speed</white>.</gray>"
             ),
             CustomLoreUtil.section(
                 "Limit",
@@ -7015,9 +7291,9 @@ public final class LegendaryListener implements Listener {
             }
             case STRENGTH_SWORD -> {
                 setEnchantLevel(meta, enchantUnbreaking, 3);
-                setEnchantLevel(meta, enchantSharpness, 5);
+                setEnchantLevel(meta, enchantSharpness, 7);
                 setEnchantLevel(meta, enchantFireAspect, 2);
-                setEnchantLevel(meta, enchantLooting, 3);
+                setEnchantLevel(meta, enchantLooting, 4);
                 meta.removeEnchant(enchantMending);
                 meta.lore(buildStrengthSwordLore(meta, strengthSwordVictimCount(meta)));
             }
@@ -7098,6 +7374,36 @@ public final class LegendaryListener implements Listener {
                     "<gray>Every hit calls lightning on the target.</gray>",
                     "<gray>Deals normal bonus hit damage only.</gray>",
                     "<gray>Does not bypass armor or Totems.</gray>"
+                )
+            ));
+            case DASH_MACE -> meta.lore(buildLegendaryLore(
+                meta,
+                Material.MACE,
+                "MACE",
+                List.of(
+                    "<gray>Dash Cooldown: <white>" + DASH_MACE_COOLDOWN + "s</white></gray>",
+                    "<gray>Unbreakable</gray>"
+                ),
+                CustomLoreUtil.section(
+                    "Item Ability",
+                    "Meteor Dash",
+                    "<gray><white>Right-click</white> to rocket in the direction you are facing.</gray>",
+                    "<gray>Launches harder than the Dash enchant but has its own cooldown.</gray>"
+                )
+            ));
+            case STRENGTH_MACE -> meta.lore(buildLegendaryLore(
+                meta,
+                Material.MACE,
+                "MACE",
+                List.of(
+                    "<gray>Smash Bonus: <red>+" + formatDamageNumber(STRENGTH_MACE_DAMAGE_BONUS) + "</red> damage</gray>",
+                    "<gray>Unbreakable</gray>"
+                ),
+                CustomLoreUtil.section(
+                    "Passive",
+                    "Titan Force",
+                    "<gray>Every hit lands with the bonus damage of <white>Strength III</white>.</gray>",
+                    "<gray>This stacks with normal mace mechanics.</gray>"
                 )
             ));
             case HARD_HITTER -> {
@@ -7242,6 +7548,10 @@ public final class LegendaryListener implements Listener {
                 e(Material.NETHERITE_SWORD, 1), e(Material.GHAST_TEAR, 12), e(Material.FERMENTED_SPIDER_EYE, 8), e(Material.REDSTONE_BLOCK, 8), e(Material.GOLDEN_APPLE, 4))),
             new LegendaryRecipe(LegendaryType.THORS_HAMMER, ingredients(
                 e(Material.MACE, 1), e(Material.LIGHTNING_ROD, 12), e(Material.NETHERITE_INGOT, 2), e(Material.WIND_CHARGE, 12))),
+            new LegendaryRecipe(LegendaryType.DASH_MACE, ingredients(
+                e(Material.MACE, 1), e(Material.BREEZE_ROD, 4), e(Material.WIND_CHARGE, 16), e(Material.FEATHER, 16), e(Material.DIAMOND, 16))),
+            new LegendaryRecipe(LegendaryType.STRENGTH_MACE, ingredients(
+                e(Material.MACE, 1), e(Material.BLAZE_POWDER, 16), e(Material.NETHERITE_INGOT, 2), e(Material.DIAMOND_BLOCK, 2), e(Material.GOLDEN_APPLE, 8))),
             new LegendaryRecipe(LegendaryType.HARD_HITTER, ingredients(
                 e(Material.BREEZE_ROD, 1), e(Material.HEAVY_CORE, 1), e(Material.IRON_INGOT, 3), e(Material.DIAMOND, 32)))
         );
@@ -7276,7 +7586,7 @@ public final class LegendaryListener implements Listener {
     }
 
     private void discoverLegendaryRecipes(Player player) {
-        // custom items are traded through /lrecipe instead of the vanilla recipe book
+        // custom items are traded through the Reliquary instead of the vanilla recipe book
     }
 
     private boolean isLegendaryRecipe(Recipe recipe) {
@@ -7314,12 +7624,14 @@ public final class LegendaryListener implements Listener {
     }
 
     private boolean isReadOnlyLegendaryMenu(Inventory inventory) {
-        return inventory.getHolder() instanceof RecipeMenuHolder
+        return inventory.getHolder() instanceof ReliquaryMenuHolder
+            || inventory.getHolder() instanceof RecipeMenuHolder
             || inventory.getHolder() instanceof AncientScrollRecipeHolder
             || inventory.getHolder() instanceof AscendantCoreRecipeHolder
             || inventory.getHolder() instanceof BackpackRecipeHolder
             || inventory.getHolder() instanceof TalismanRecipeHolder
             || inventory.getHolder() instanceof MythicForgeRecipeHolder
+            || inventory.getHolder() instanceof MythicFusionMenuHolder
             || inventory.getHolder() instanceof CustomToolRecipeHolder
             || inventory.getHolder() instanceof FaradaysMagnetRecipeHolder;
     }
@@ -7395,8 +7707,8 @@ public final class LegendaryListener implements Listener {
         clearCustomCraftState(inv);
         player.updateInventory();
         player.sendMessage(MessageUtil.info(
-            "Use <white>/lrecipe</white> to view custom recipes. Legendary items are crafted at the altar."
-        ));
+                "Use <white>/reliquary</white> to view custom recipes. Legendary items are crafted at the altar."
+            ));
         return true;
     }
 
@@ -7513,6 +7825,79 @@ public final class LegendaryListener implements Listener {
         }
     }
 
+    private enum ReliquarySection {
+        LEGENDARIES(
+            "legendaries",
+            "Reliquary: Legendaries",
+            Material.NETHER_STAR,
+            "<gradient:#ffd56a:#ff6f3c><bold>Legendary Relics</bold></gradient>",
+            List.of(
+                "<gray>Altar-crafted weapons, armor, and rare combat relics.</gray>",
+                "<gray>These obey the one-per-server legendary rules.</gray>"
+            )
+        ),
+        MYTHICS(
+            "mythics",
+            "Reliquary: Mythics",
+            Material.END_CRYSTAL,
+            "<gradient:#ff4df0:#ffb000><bold>Mythic Works</bold></gradient>",
+            List.of(
+                "<gray>Forge stations, catalysts, and Mythic Nexus fusions.</gray>",
+                "<gray>This is where the endgame upgrades live.</gray>"
+            )
+        ),
+        TOOLS(
+            "tools",
+            "Reliquary: Tools",
+            Material.NETHERITE_PICKAXE,
+            "<gradient:#72f7ff:#4dff88><bold>Tools & Gear</bold></gradient>",
+            List.of(
+                "<gray>Craftable utility gear, backpacks, magnets, and custom tools.</gray>",
+                "<gray>Mostly normal crafting table recipes.</gray>"
+            )
+        ),
+        UTILITY(
+            "utility",
+            "Reliquary: Utility",
+            Material.AMETHYST_SHARD,
+            "<gradient:#c77dff:#ff7ad9><bold>Utility Relics</bold></gradient>",
+            List.of(
+                "<gray>Support items that change powers, survival, or progression.</gray>",
+                "<gray>Good place to check non-weapon custom recipes.</gray>"
+            )
+        );
+
+        private final String id;
+        private final String plainTitle;
+        private final Material icon;
+        private final String title;
+        private final List<String> lore;
+
+        ReliquarySection(String id, String plainTitle, Material icon, String title, List<String> lore) {
+            this.id = id;
+            this.plainTitle = plainTitle;
+            this.icon = icon;
+            this.title = title;
+            this.lore = lore;
+        }
+
+        private static ReliquarySection fromId(String id) {
+            for (ReliquarySection section : values()) {
+                if (section.id.equals(id)) {
+                    return section;
+                }
+            }
+            return null;
+        }
+    }
+
+    private record ReliquaryMenuHolder(ReliquarySection section) implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
     private record RecipeMenuHolder(LegendaryType type) implements InventoryHolder {
         @Override
         public Inventory getInventory() {
@@ -7562,6 +7947,13 @@ public final class LegendaryListener implements Listener {
         }
     }
 
+    private record MythicFusionMenuHolder() implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
     private record CustomToolRecipeHolder(String toolId) implements InventoryHolder {
         @Override
         public Inventory getInventory() {
@@ -7573,32 +7965,34 @@ public final class LegendaryListener implements Listener {
     }
 
     private enum LegendaryType {
-        ENDER_SWORD("ender_sword", Material.NETHERITE_SWORD, "<dark_purple><bold>Riftreaver</bold></dark_purple>"),
-        ENDERBOW("enderbow", Material.BOW, "<gold><bold>Riftbow</bold></gold>"),
-        CHRONO_SWORD("chrono_sword", Material.DIAMOND_SWORD, "<gold><bold>Hourglass Blade</bold></gold>"),
-        HARPOON_LAUNCHER("harpoon_launcher", Material.CROSSBOW, "<gold><bold>Leviathan Launcher</bold></gold>"),
-        HYPNOSIS_STAFF("hypnosis_staff", Material.BLAZE_ROD, "<gold><bold>Siren's Cane</bold></gold>"),
-        EMERALD_BLADE("emerald_blade", Material.DIAMOND_SWORD, "<gold><bold>Verdant Fang</bold></gold>"),
-        BLINK_DAGGER("blink_dagger", Material.IRON_SWORD, "<yellow><bold>Blink Dagger</bold></yellow>"),
-        WARDEN_BLADE("warden_blade", Material.NETHERITE_SWORD, "<dark_aqua><bold>Warden Blade</bold></dark_aqua>"),
-        TRIDENT_OF_PERCY("trident_of_percy", Material.TRIDENT, "<aqua><bold>Trident of Percy</bold></aqua>"),
-        WAR_PICK("war_pick", Material.DIAMOND_PICKAXE, "<gold><bold>Siegebreaker Pick</bold></gold>"),
-        FARADAYS_MAGNET("faradays_magnet", Material.RECOVERY_COMPASS, "<gold><bold>Faraday's Magnet</bold></gold>"),
-        WIND_CHARGE_CANNON("wind_charge_cannon", Material.PRISMARINE_SHARD, "<gold><bold>Tempest Cannon</bold></gold>"),
-        FROST_SCYTHE("frost_scythe", Material.DIAMOND_HOE, "<aqua><bold>Frost Scythe</bold></aqua>"),
-        DIVINE_AXE_RHITTA("divine_axe_rhitta", Material.NETHERITE_AXE, "<gradient:#ffd166:#f77f00><bold>Divine Axe Rhitta</bold></gradient>"),
-        MIDAS_SWORD("midas_sword", Material.GOLDEN_SWORD, "<gold><bold>Gilded Sovereign</bold></gold>"),
-        REAPERS_SCYTHE("reapers_scythe", Material.NETHERITE_HOE, "<dark_gray><bold>Soulrender</bold></dark_gray>"),
-        SHADOW_BLADE("shadow_blade", Material.DIAMOND_SWORD, "<dark_purple><bold>Nightfall</bold></dark_purple>"),
-        HEADHUNTERS_CHESTPIECE("headhunters_chestpiece", Material.DIAMOND_CHESTPLATE, "<red><bold>Headhunter's Harness</bold></red>"),
-        GOD_CHESTPLATE("god_chestplate", Material.DIAMOND_CHESTPLATE, "<white><bold>Aegis of the Undying</bold></white>"),
-        STRENGTH_SWORD("strength_sword", Material.NETHERITE_SWORD, "<gradient:#ff4d6d:#c9184a><bold>Crimson Dominion</bold></gradient>"),
-        EXECUTIONER_BLADE("executioner_blade", Material.NETHERITE_SWORD, "<red><bold>Executioner Blade</bold></red>"),
-        HERMES_BOOTS("hermes_boots", Material.DIAMOND_BOOTS, "<gold><bold>Hermes Boots</bold></gold>"),
-        WITHER_BLADE("wither_blade", Material.NETHERITE_SWORD, "<dark_gray><bold>Wither Blade</bold></dark_gray>"),
-        LIFE_STEALER("life_stealer", Material.NETHERITE_SWORD, "<light_purple><bold>Life Stealer</bold></light_purple>"),
-        THORS_HAMMER("thors_hammer", Material.MACE, "<gold><bold>Mjolnir</bold></gold>"),
-        HARD_HITTER("hard_hitter", Material.MACE, "<gold><bold>Titanbreaker</bold></gold>");
+        ENDER_SWORD("ender_sword", Material.NETHERITE_SWORD, "Riftreaver", CustomLoreUtil.Rarity.MYTHIC),
+        ENDERBOW("enderbow", Material.BOW, "Riftbow", CustomLoreUtil.Rarity.EPIC),
+        CHRONO_SWORD("chrono_sword", Material.DIAMOND_SWORD, "Hourglass Blade", CustomLoreUtil.Rarity.MYTHIC),
+        HARPOON_LAUNCHER("harpoon_launcher", Material.CROSSBOW, "Leviathan Launcher", CustomLoreUtil.Rarity.EPIC),
+        HYPNOSIS_STAFF("hypnosis_staff", Material.BLAZE_ROD, "Siren's Cane", CustomLoreUtil.Rarity.LEGENDARY),
+        EMERALD_BLADE("emerald_blade", Material.DIAMOND_SWORD, "Verdant Fang", CustomLoreUtil.Rarity.LEGENDARY),
+        BLINK_DAGGER("blink_dagger", Material.IRON_SWORD, "Blink Dagger", CustomLoreUtil.Rarity.EPIC),
+        WARDEN_BLADE("warden_blade", Material.NETHERITE_SWORD, "Warden Blade", CustomLoreUtil.Rarity.MYTHIC),
+        TRIDENT_OF_PERCY("trident_of_percy", Material.TRIDENT, "Trident of Percy", CustomLoreUtil.Rarity.LEGENDARY),
+        WAR_PICK("war_pick", Material.DIAMOND_PICKAXE, "Siegebreaker Pick", CustomLoreUtil.Rarity.LEGENDARY),
+        FARADAYS_MAGNET("faradays_magnet", Material.RECOVERY_COMPASS, "Faraday's Magnet", CustomLoreUtil.Rarity.RARE),
+        WIND_CHARGE_CANNON("wind_charge_cannon", Material.PRISMARINE_SHARD, "Tempest Cannon", CustomLoreUtil.Rarity.EPIC),
+        FROST_SCYTHE("frost_scythe", Material.DIAMOND_HOE, "Frost Scythe", CustomLoreUtil.Rarity.LEGENDARY),
+        DIVINE_AXE_RHITTA("divine_axe_rhitta", Material.NETHERITE_AXE, "Divine Axe Rhitta", CustomLoreUtil.Rarity.LEGENDARY),
+        MIDAS_SWORD("midas_sword", Material.GOLDEN_SWORD, "Gilded Sovereign", CustomLoreUtil.Rarity.MYTHIC),
+        REAPERS_SCYTHE("reapers_scythe", Material.NETHERITE_HOE, "Soulrender", CustomLoreUtil.Rarity.MYTHIC),
+        SHADOW_BLADE("shadow_blade", Material.DIAMOND_SWORD, "Nightfall", CustomLoreUtil.Rarity.MYTHIC),
+        HEADHUNTERS_CHESTPIECE("headhunters_chestpiece", Material.DIAMOND_CHESTPLATE, "Headhunter's Harness", CustomLoreUtil.Rarity.LEGENDARY),
+        GOD_CHESTPLATE("god_chestplate", Material.DIAMOND_CHESTPLATE, "Aegis of the Undying", CustomLoreUtil.Rarity.MYTHIC),
+        STRENGTH_SWORD("strength_sword", Material.NETHERITE_SWORD, "Crimson Dominion", CustomLoreUtil.Rarity.MYTHIC),
+        EXECUTIONER_BLADE("executioner_blade", Material.NETHERITE_SWORD, "Executioner Blade", CustomLoreUtil.Rarity.LEGENDARY),
+        HERMES_BOOTS("hermes_boots", Material.DIAMOND_BOOTS, "Hermes Boots", CustomLoreUtil.Rarity.LEGENDARY),
+        WITHER_BLADE("wither_blade", Material.NETHERITE_SWORD, "Wither Blade", CustomLoreUtil.Rarity.LEGENDARY),
+        LIFE_STEALER("life_stealer", Material.NETHERITE_SWORD, "Life Stealer", CustomLoreUtil.Rarity.MYTHIC),
+        THORS_HAMMER("thors_hammer", Material.MACE, "Mjolnir", CustomLoreUtil.Rarity.LEGENDARY),
+        DASH_MACE("dash_mace", Material.MACE, "Meteorbreaker", CustomLoreUtil.Rarity.LEGENDARY),
+        STRENGTH_MACE("strength_mace", Material.MACE, "Colossus Maul", CustomLoreUtil.Rarity.LEGENDARY),
+        HARD_HITTER("hard_hitter", Material.MACE, "Titanbreaker", CustomLoreUtil.Rarity.EPIC);
 
         private static final Map<String, LegendaryType> BY_ID = new HashMap<>();
         static {
@@ -7608,11 +8002,13 @@ public final class LegendaryListener implements Listener {
         private final String id;
         private final Material material;
         private final String display;
+        private final CustomLoreUtil.Rarity rarity;
 
-        LegendaryType(String id, Material material, String display) {
+        LegendaryType(String id, Material material, String plainName, CustomLoreUtil.Rarity rarity) {
             this.id = id;
             this.material = material;
-            this.display = display;
+            this.rarity = rarity;
+            this.display = CustomLoreUtil.displayNameTag(rarity, plainName);
         }
 
         public static LegendaryType fromId(String id) { return BY_ID.get(id); }

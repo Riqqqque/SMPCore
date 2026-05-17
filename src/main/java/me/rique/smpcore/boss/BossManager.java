@@ -2,6 +2,7 @@ package me.rique.smpcore.boss;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.BedrockCompat;
+import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -36,13 +37,16 @@ import org.bukkit.entity.Zombie;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityCombustEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.EntityShootBowEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
@@ -78,13 +82,19 @@ public final class BossManager implements Listener {
     public static final String DOMINION_CORE_ITEM_ID = "dominion_core";
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final Component MENU_TITLE = MM.deserialize("<gradient:#ff5e5b:#ff914d><bold>Boss Control</bold></gradient>");
+    private static final Component RITUAL_MENU_TITLE = MM.deserialize("<gradient:#f97316:#dc2626><bold>Boss Rituals</bold></gradient>");
     private static final int[] BOSS_SLOTS = {
         10, 11, 12, 13, 14, 15, 16,
         19, 20, 21, 22, 23, 24, 25,
         28, 29, 30, 31, 32, 33, 34
     };
+    private static final int[] RITUAL_SLOTS = {
+        10, 12, 14, 16,
+        28, 30, 32, 34
+    };
     private static final String SCOREBOARD_TAG = "smpcore_custom_boss";
     private static final long ORPHAN_MINION_CLEANUP_INTERVAL_MS = 30_000L;
+    private static final int HOLOGRAM_TELEPORT_DURATION_TICKS = 8;
 
     private final SMPCore plugin;
     private final NamespacedKey keyBossId;
@@ -101,6 +111,8 @@ public final class BossManager implements Listener {
     private final Map<String, Set<UUID>> trackedByBossId = new ConcurrentHashMap<>();
     private final Map<UUID, BossBar> bossBars = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> holograms = new ConcurrentHashMap<>();
+    private final Map<UUID, BossArena> bossArenas = new ConcurrentHashMap<>();
+    private final Set<String> pendingRituals = ConcurrentHashMap.newKeySet();
     private BukkitTask heartbeatTask;
     private long nextOrphanMinionCleanupAt;
 
@@ -138,6 +150,8 @@ public final class BossManager implements Listener {
         destroyAllBossVisuals();
         trackedBosses.clear();
         trackedByBossId.clear();
+        bossArenas.clear();
+        pendingRituals.clear();
     }
 
     public List<String> bossIds() {
@@ -185,11 +199,19 @@ public final class BossManager implements Listener {
             return item;
         }
 
-        meta.displayName(MM.deserialize("<gradient:#ef4444:#f97316><bold>Dominion Core</bold></gradient>"));
-        meta.lore(List.of(
-            MM.deserialize("<gray>A pulsing shard torn from a fallen dominion warden.</gray>"),
-            MM.deserialize("<gray>Use it in an <white>Anvil</white> with <white>Crimson Dominion</white></gray>"),
-            MM.deserialize("<gray>to fully restore the blade's durability.</gray>")
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.LEGENDARY, "Dominion Core"));
+        meta.lore(CustomLoreUtil.buildStyledLore(
+            meta,
+            Material.ECHO_SHARD,
+            CustomLoreUtil.Rarity.LEGENDARY.label(),
+            "RELIC",
+            List.of("<gray>A pulsing shard torn from a fallen dominion warden.</gray>"),
+            List.of(CustomLoreUtil.section(
+                "Use",
+                "Dominion Repair",
+                "<gray>Use it in an <white>Anvil</white> with <white>Crimson Dominion</white>.</gray>",
+                "<gray>Fully restores the blade's durability.</gray>"
+            ))
         ));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         meta.getPersistentDataContainer().set(keyDominionCoreItem, PersistentDataType.BYTE, (byte) 1);
@@ -245,6 +267,35 @@ public final class BossManager implements Listener {
         player.openInventory(inventory);
     }
 
+    public void openRitualMenu(Player player) {
+        Inventory inventory = Bukkit.createInventory(
+            new BossRitualMenuHolder(),
+            54,
+            BedrockCompat.menuTitle(player, RITUAL_MENU_TITLE, "Boss Rituals")
+        );
+        ItemStack filler = menuItem(Material.BLACK_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            inventory.setItem(slot, filler);
+        }
+
+        inventory.setItem(4, menuItem(
+            Material.WRITABLE_BOOK,
+            "<gradient:#facc15:#f97316><bold>Ritual Codex</bold></gradient>",
+            List.of(
+                "<gray>Each boss has its own shrine pattern.</gray>",
+                "<gray>Build the pattern, then right-click the focus block</gray>",
+                "<gray>or any shrine block with the listed catalyst.</gray>",
+                "<dark_gray>Rituals refund the catalyst if the shrine breaks before completion.</dark_gray>"
+            )
+        ));
+
+        BossType[] types = BossType.values();
+        for (int i = 0; i < types.length && i < RITUAL_SLOTS.length; i++) {
+            inventory.setItem(RITUAL_SLOTS[i], createRitualEntryItem(types[i]));
+        }
+        player.openInventory(inventory);
+    }
+
     public BossActionResult spawnBoss(Player player, String requestedBossId) {
         BossType type = BossType.fromId(normalizeBossId(requestedBossId));
         if (type == null) {
@@ -258,6 +309,10 @@ public final class BossManager implements Listener {
     }
 
     public BossActionResult spawnBoss(BossType type, Location location) {
+        return spawnBoss(type, location, null, false);
+    }
+
+    private BossActionResult spawnBoss(BossType type, Location location, Player summoner, boolean fromRitual) {
         if (type == null) {
             return new BossActionResult(false, "Unknown boss.");
         }
@@ -296,6 +351,15 @@ public final class BossManager implements Listener {
         );
         trackRecord(record);
         plugin.getDatabase().saveBossRecord(record);
+        try {
+            startBossArena(spawned, type);
+            playBossSpawnBurst(spawned, type, fromRitual);
+            if (summoner != null) {
+                spawned.getWorld().playSound(spawned.getLocation(), type.ritual().arrivalSound(), 1.35f, 0.72f);
+            }
+        } catch (RuntimeException ex) {
+            plugin.getLogger().warning("Boss spawn visuals failed for " + type.id() + ": " + ex.getMessage());
+        }
 
         return new BossActionResult(
             true,
@@ -392,6 +456,7 @@ public final class BossManager implements Listener {
             updateBossBar(living, type);
             updateBossHologram(living, type);
             tickBossBehavior(living, type);
+            tickBossArena(living, type);
         }
 
         maybeCleanupOrphanBossMinions();
@@ -577,6 +642,49 @@ public final class BossManager implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBossRitualMenuClick(InventoryClickEvent event) {
+        if (!(event.getView().getTopInventory().getHolder() instanceof BossRitualMenuHolder)) {
+            return;
+        }
+        event.setCancelled(true);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBossRitualMenuDrag(InventoryDragEvent event) {
+        if (!(event.getView().getTopInventory().getHolder() instanceof BossRitualMenuHolder)) {
+            return;
+        }
+        int topSize = event.getView().getTopInventory().getSize();
+        for (int rawSlot : event.getRawSlots()) {
+            if (rawSlot < topSize) {
+                event.setCancelled(true);
+                return;
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBossRitualInteract(PlayerInteractEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND || event.getAction() != Action.RIGHT_CLICK_BLOCK) {
+            return;
+        }
+        if (event.getClickedBlock() == null || event.getItem() == null || event.getItem().getType() == Material.AIR) {
+            return;
+        }
+
+        RitualMatch match = ritualMatchFor(event.getClickedBlock(), event.getItem());
+        if (match == null) {
+            sendRitualHint(event.getPlayer(), event.getClickedBlock(), event.getItem());
+            return;
+        }
+
+        event.setCancelled(true);
+        event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
+        event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
+        beginBossRitual(event.getPlayer(), match.type(), match.focus(), event.getItem());
+    }
+
     private BossType bossTypeForSlot(int rawSlot) {
         BossType[] types = BossType.values();
         for (int i = 0; i < types.length && i < BOSS_SLOTS.length; i++) {
@@ -585,6 +693,549 @@ public final class BossManager implements Listener {
             }
         }
         return null;
+    }
+
+    private BossType ritualTypeFor(Block focus, ItemStack catalyst) {
+        Material catalystType = catalyst.getType();
+        Material focusType = focus.getType();
+        for (BossType type : BossType.values()) {
+            BossRitual ritual = type.ritual();
+            if (ritual.catalyst() == catalystType && ritual.focusBlock() == focusType) {
+                return type;
+            }
+        }
+        return null;
+    }
+
+    private RitualMatch ritualMatchFor(Block clicked, ItemStack catalyst) {
+        BossType directType = ritualTypeFor(clicked, catalyst);
+        if (directType != null) {
+            return new RitualMatch(directType, clicked);
+        }
+
+        Material catalystType = catalyst.getType();
+        RitualMatch closest = null;
+        double closestDistance = Double.MAX_VALUE;
+        for (BossType type : BossType.values()) {
+            BossRitual ritual = type.ritual();
+            if (ritual.catalyst() != catalystType) {
+                continue;
+            }
+            for (Block focus : nearbyFocusBlocks(clicked, ritual.focusBlock())) {
+                double distance = clicked.getLocation().distanceSquared(focus.getLocation());
+                if (distance < closestDistance) {
+                    closest = new RitualMatch(type, focus);
+                    closestDistance = distance;
+                }
+            }
+        }
+        return closest;
+    }
+
+    private List<Block> nearbyFocusBlocks(Block clicked, Material focusMaterial) {
+        List<Block> matches = new ArrayList<>();
+        World world = clicked.getWorld();
+        int baseX = clicked.getX();
+        int baseY = clicked.getY();
+        int baseZ = clicked.getZ();
+        for (int x = -2; x <= 2; x++) {
+            for (int y = -2; y <= 2; y++) {
+                for (int z = -2; z <= 2; z++) {
+                    Block candidate = world.getBlockAt(baseX + x, baseY + y, baseZ + z);
+                    if (candidate.getType() == focusMaterial) {
+                        matches.add(candidate);
+                    }
+                }
+            }
+        }
+        return matches;
+    }
+
+    private void sendRitualHint(Player player, Block clicked, ItemStack catalyst) {
+        BossType focusType = ritualFocusType(clicked);
+        if (focusType != null) {
+            BossRitual ritual = focusType.ritual();
+            if (ritual.catalyst() != catalyst.getType()) {
+                player.sendMessage(MessageUtil.warn("That is the <white>" + ritual.name() + "</white> focus, but it needs <white>"
+                    + prettyBossName(ritual.catalyst().name()) + "</white> as the catalyst."));
+                player.sendMessage(MessageUtil.info("Use <white>/bossrituals</white> if you need the shrine steps."));
+            }
+            return;
+        }
+
+        RitualMatch nearby = nearbyRitualFocus(clicked);
+        if (nearby == null || (!isKnownRitualCatalyst(catalyst.getType()) && !isRitualComponent(nearby.type(), clicked.getType()))) {
+            return;
+        }
+
+        BossRitual ritual = nearby.type().ritual();
+        if (ritual.catalyst() != catalyst.getType()) {
+            player.sendMessage(MessageUtil.warn("That looks like part of <white>" + ritual.name() + "</white>, but it needs <white>"
+                + prettyBossName(ritual.catalyst().name()) + "</white> as the catalyst."));
+        } else {
+            player.sendMessage(MessageUtil.warn("That looks like part of <white>" + ritual.name() + "</white>. Right-click the focus block or any shrine block near it."));
+        }
+        player.sendMessage(MessageUtil.prefixedRaw("<gray>Focus block: <white>"
+            + nearby.focus().getX() + " " + nearby.focus().getY() + " " + nearby.focus().getZ()
+            + "</white> <dark_gray>(" + prettyBossName(ritual.focusBlock().name()) + ")</dark_gray></gray>"));
+        player.sendMessage(MessageUtil.info("Use <white>/bossrituals</white> if you need the full pattern."));
+    }
+
+    private BossType ritualFocusType(Block block) {
+        Material material = block.getType();
+        for (BossType type : BossType.values()) {
+            if (type.ritual().focusBlock() == material) {
+                return type;
+            }
+        }
+        return null;
+    }
+
+    private RitualMatch nearbyRitualFocus(Block clicked) {
+        RitualMatch closest = null;
+        double closestDistance = Double.MAX_VALUE;
+        for (BossType type : BossType.values()) {
+            for (Block focus : nearbyFocusBlocks(clicked, type.ritual().focusBlock())) {
+                double distance = clicked.getLocation().distanceSquared(focus.getLocation());
+                if (distance < closestDistance) {
+                    closest = new RitualMatch(type, focus);
+                    closestDistance = distance;
+                }
+            }
+        }
+        return closest;
+    }
+
+    private boolean isKnownRitualCatalyst(Material material) {
+        for (BossType type : BossType.values()) {
+            if (type.ritual().catalyst() == material) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isRitualComponent(BossType type, Material material) {
+        return switch (type) {
+            case YULE_THE_MINION -> material == Material.BELL
+                || material == Material.SOUL_SAND
+                || material == Material.GOLD_BLOCK;
+            case KAEL_THE_ASHEN -> material == Material.SOUL_CAMPFIRE
+                || material == Material.BONE_BLOCK;
+            case VESPER_THE_WIDOW_QUEEN -> material == Material.COBWEB
+                || material == Material.MOSS_BLOCK
+                || material == Material.BLACK_CANDLE;
+            case VORALITH_THE_CRIMSON_WARDEN -> material == Material.SCULK_SHRIEKER
+                || material == Material.SCULK
+                || material == Material.SCULK_SENSOR
+                || material == Material.CALIBRATED_SCULK_SENSOR
+                || material == Material.SCULK_VEIN
+                || material == Material.REINFORCED_DEEPSLATE
+                || material == Material.SCULK_CATALYST
+                || material == Material.REDSTONE_BLOCK
+                || material == Material.SOUL_LANTERN;
+        };
+    }
+
+    private void beginBossRitual(Player player, BossType type, Block focus, ItemStack catalyst) {
+        BossRitual ritual = type.ritual();
+        List<String> problems = ritualProblems(type, focus);
+        if (!problems.isEmpty()) {
+            player.sendMessage(MessageUtil.error("The <white>" + ritual.name() + "</white> is not complete."));
+            for (String problem : problems) {
+                player.sendMessage(MessageUtil.prefixedRaw("<gray>- " + problem + "</gray>"));
+            }
+            player.sendMessage(MessageUtil.info("Use <white>/bossrituals</white> if you need the shrine steps."));
+            return;
+        }
+
+        String ritualKey = ritualKey(type, focus.getLocation());
+        if (!pendingRituals.add(ritualKey)) {
+            player.sendMessage(MessageUtil.warn("That ritual is already waking up."));
+            return;
+        }
+
+        Location seed = focus.getLocation().add(0.5, 1.0, 0.5);
+        Location spawnLocation = findSafeBossSpawnLocation(seed, type);
+        if (spawnLocation == null) {
+            pendingRituals.remove(ritualKey);
+            player.sendMessage(MessageUtil.error("The ritual needs clear space above the focus block."));
+            return;
+        }
+
+        ItemStack refund = catalyst.clone();
+        refund.setAmount(1);
+        boolean consumed = consumeRitualCatalyst(player, catalyst);
+        Location center = focus.getLocation().add(0.5, 0.75, 0.5);
+        consumeRitualShrine(type, focus);
+        announceRitualStart(player, type, center);
+        playRitualWarmup(type, center);
+
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            try {
+                if (!focus.getWorld().isChunkLoaded(focus.getChunk().getX(), focus.getChunk().getZ())) {
+                    if (consumed) {
+                        refundRitualCatalyst(player, center, refund);
+                    }
+                    return;
+                }
+
+                BossActionResult result;
+                try {
+                    result = spawnBoss(type, spawnLocation, player, true);
+                } catch (RuntimeException ex) {
+                    plugin.getLogger().warning("Boss ritual spawn failed after shrine cleanup: " + ex.getMessage());
+                    result = new BossActionResult(false, "The ritual failed while the boss was forming.");
+                }
+                if (!result.success()) {
+                    if (consumed) {
+                        refundRitualCatalyst(player, center, refund);
+                    }
+                }
+                if (player.isOnline()) {
+                    player.sendMessage(result.success() ? MessageUtil.success(result.message()) : MessageUtil.error(result.message()));
+                }
+            } finally {
+                pendingRituals.remove(ritualKey);
+            }
+        }, ritual.warmupTicks());
+    }
+
+    private String ritualKey(BossType type, Location location) {
+        return type.id() + "|" + location.getWorld().getUID() + "|"
+            + location.getBlockX() + "|" + location.getBlockY() + "|" + location.getBlockZ();
+    }
+
+    private boolean consumeRitualCatalyst(Player player, ItemStack item) {
+        if (player.getGameMode() == org.bukkit.GameMode.CREATIVE) {
+            return false;
+        }
+        if (item.getAmount() <= 1) {
+            player.getInventory().setItemInMainHand(null);
+        } else {
+            item.setAmount(item.getAmount() - 1);
+        }
+        return true;
+    }
+
+    private void refundRitualCatalyst(Player player, Location fallback, ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) {
+            return;
+        }
+        if (player.isOnline()) {
+            Map<Integer, ItemStack> leftovers = player.getInventory().addItem(item);
+            leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
+            return;
+        }
+        World world = fallback.getWorld();
+        if (world != null) {
+            world.dropItemNaturally(fallback, item);
+        }
+    }
+
+    private void consumeRitualShrine(BossType type, Block focus) {
+        Set<Block> blocks = ritualFootprintBlocks(type, focus);
+        World world = focus.getWorld();
+        Location center = focus.getLocation().add(0.5, 0.8, 0.5);
+        for (Block block : blocks) {
+            if (block.getType() == Material.AIR) {
+                continue;
+            }
+            Location blockCenter = block.getLocation().add(0.5, 0.5, 0.5);
+            world.spawnParticle(Particle.BLOCK, blockCenter, 12, 0.22, 0.22, 0.22, 0.02, block.getBlockData());
+            world.spawnParticle(Particle.DUST, blockCenter, 5, 0.18, 0.18, 0.18, 0.0, new Particle.DustOptions(type.ritual().color(), 0.85f));
+            block.setType(Material.AIR, true);
+        }
+        world.spawnParticle(Particle.REVERSE_PORTAL, center, 70, 1.0, 0.8, 1.0, 0.18);
+        world.spawnParticle(Particle.DUST, center, 42, 0.85, 0.55, 0.85, 0.0, new Particle.DustOptions(type.ritual().color(), 1.35f));
+        world.playSound(center, Sound.BLOCK_BEACON_DEACTIVATE, 1.25f, 0.65f);
+    }
+
+    private Set<Block> ritualFootprintBlocks(BossType type, Block focus) {
+        Set<Block> blocks = ritualBlocks(type, focus);
+        for (int x = -2; x <= 2; x++) {
+            for (int y = -1; y <= 1; y++) {
+                for (int z = -2; z <= 2; z++) {
+                    Block block = focus.getRelative(x, y, z);
+                    if (isRitualComponent(type, block.getType())) {
+                        blocks.add(block);
+                    }
+                }
+            }
+        }
+        return blocks;
+    }
+
+    private Set<Block> ritualBlocks(BossType type, Block focus) {
+        Set<Block> blocks = new LinkedHashSet<>();
+        blocks.add(focus);
+        switch (type) {
+            case YULE_THE_MINION -> {
+                Block base = focus.getRelative(BlockFace.DOWN);
+                blocks.add(base);
+                addCardinalBlocks(blocks, base);
+            }
+            case KAEL_THE_ASHEN -> {
+                Block base = focus.getRelative(BlockFace.DOWN);
+                blocks.add(base);
+                addCardinalBlocks(blocks, base);
+            }
+            case VESPER_THE_WIDOW_QUEEN -> {
+                blocks.add(focus.getRelative(BlockFace.DOWN));
+                addCardinalBlocks(blocks, focus);
+            }
+            case VORALITH_THE_CRIMSON_WARDEN -> {
+                blocks.add(focus.getRelative(BlockFace.DOWN));
+                blocks.add(focus.getRelative(BlockFace.NORTH));
+                blocks.add(focus.getRelative(BlockFace.SOUTH));
+                blocks.add(focus.getRelative(BlockFace.EAST));
+                blocks.add(focus.getRelative(BlockFace.WEST));
+                addCornerBlocks(blocks, focus);
+            }
+        }
+        return blocks;
+    }
+
+    private void addCardinalBlocks(Set<Block> blocks, Block center) {
+        for (BlockFace face : List.of(BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST)) {
+            blocks.add(center.getRelative(face));
+        }
+    }
+
+    private void addCornerBlocks(Set<Block> blocks, Block center) {
+        int[][] offsets = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
+        for (int[] offset : offsets) {
+            blocks.add(center.getRelative(offset[0], 0, offset[1]));
+        }
+    }
+
+    private List<String> ritualProblems(BossType type, Block focus) {
+        BossRitual ritual = type.ritual();
+        List<String> problems = new ArrayList<>();
+        if (focus.getType() != ritual.focusBlock()) {
+            problems.add("Focus block must be <white>" + prettyBossName(ritual.focusBlock().name()) + "</white>.");
+            return problems;
+        }
+
+        switch (type) {
+            case YULE_THE_MINION -> {
+                requireRelative(problems, focus, BlockFace.DOWN, Material.SOUL_SAND, "Soul Sand beneath the bell");
+                requireCardinals(problems, focus.getRelative(BlockFace.DOWN), Material.GOLD_BLOCK, "Gold Blocks around the Soul Sand base");
+            }
+            case KAEL_THE_ASHEN -> {
+                requireRelative(problems, focus, BlockFace.DOWN, Material.BONE_BLOCK, "Bone Block beneath the soul campfire");
+                requireCardinals(problems, focus.getRelative(BlockFace.DOWN), Material.BONE_BLOCK, "Bone Blocks around the center Bone Block");
+            }
+            case VESPER_THE_WIDOW_QUEEN -> {
+                requireRelative(problems, focus, BlockFace.DOWN, Material.MOSS_BLOCK, "Moss Block beneath the web");
+                requireCardinals(problems, focus, Material.BLACK_CANDLE, "Black Candles on all four sides");
+            }
+            case VORALITH_THE_CRIMSON_WARDEN -> {
+                requireRelative(problems, focus, BlockFace.DOWN, Material.REINFORCED_DEEPSLATE, "Reinforced Deepslate beneath the shrieker");
+                requireRelative(problems, focus, BlockFace.NORTH, Material.SCULK_CATALYST, "Sculk Catalysts north and south");
+                requireRelative(problems, focus, BlockFace.SOUTH, Material.SCULK_CATALYST, "Sculk Catalysts north and south");
+                requireRelative(problems, focus, BlockFace.EAST, Material.REDSTONE_BLOCK, "Redstone Blocks east and west");
+                requireRelative(problems, focus, BlockFace.WEST, Material.REDSTONE_BLOCK, "Redstone Blocks east and west");
+                requireCorners(problems, focus, Material.SOUL_LANTERN, "Soul Lanterns on the four corners");
+            }
+        }
+        return problems;
+    }
+
+    private void requireRelative(List<String> problems, Block focus, BlockFace face, Material material, String label) {
+        if (focus.getRelative(face).getType() != material && !problems.contains(label)) {
+            problems.add(label);
+        }
+    }
+
+    private void requireCardinals(List<String> problems, Block focus, Material material, String label) {
+        for (BlockFace face : List.of(BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST)) {
+            if (focus.getRelative(face).getType() != material) {
+                problems.add(label);
+                return;
+            }
+        }
+    }
+
+    private void requireCorners(List<String> problems, Block focus, Material material, String label) {
+        int[][] offsets = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
+        for (int[] offset : offsets) {
+            if (focus.getRelative(offset[0], 0, offset[1]).getType() != material) {
+                problems.add(label);
+                return;
+            }
+        }
+    }
+
+    private void announceRitualStart(Player player, BossType type, Location center) {
+        String message = "<gold><white>" + player.getName() + "</white> began <white>"
+            + type.ritual().name() + "</white> for " + type.displayName() + "<gold>.</gold>";
+        for (Player viewer : center.getWorld().getPlayers()) {
+            if (viewer.getLocation().distanceSquared(center) <= 64.0 * 64.0) {
+                viewer.sendMessage(MessageUtil.prefixedRaw(message));
+            }
+        }
+        center.getWorld().playSound(center, type.ritual().startSound(), 1.25f, 0.75f);
+    }
+
+    private void playRitualWarmup(BossType type, Location center) {
+        BossRitual ritual = type.ritual();
+        int pulses = Math.max(3, (int) (ritual.warmupTicks() / 8));
+        for (int i = 0; i <= pulses; i++) {
+            int pulse = i;
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                if (center.getWorld() == null) {
+                    return;
+                }
+                double progress = Math.min(1.0, pulse / (double) pulses);
+                spawnRitualRing(center, 1.2 + (progress * 2.2), ritual.color(), 36, 0.10 + progress * 0.65);
+                center.getWorld().spawnParticle(ritual.primaryParticle(), center, 18 + pulse * 2, 0.35, 0.45, 0.35, 0.02);
+                center.getWorld().spawnParticle(Particle.ENCHANT, center.clone().add(0.0, 0.5 + progress, 0.0), 12, 0.45, 0.25, 0.45, 0.18);
+                playBossSpecificRitualPulse(type, center, progress, pulse);
+                center.getWorld().playSound(center, ritual.pulseSound(), 0.85f, 0.65f + (float) progress * 0.55f);
+            }, i * 8L);
+        }
+    }
+
+    private void playRitualFizzle(BossType type, Location center) {
+        World world = center.getWorld();
+        if (world == null) {
+            return;
+        }
+        world.spawnParticle(Particle.SMOKE, center, 40, 0.75, 0.55, 0.75, 0.04);
+        world.spawnParticle(Particle.DUST, center, 18, 0.55, 0.35, 0.55, 0.0, new Particle.DustOptions(type.ritual().color(), 0.9f));
+        world.playSound(center, Sound.BLOCK_FIRE_EXTINGUISH, 1.0f, 0.65f);
+    }
+
+    private void playBossSpawnBurst(LivingEntity entity, BossType type, boolean fromRitual) {
+        Location center = entity.getLocation().clone().add(0.0, Math.min(1.4, entity.getHeight() * 0.65), 0.0);
+        BossRitual ritual = type.ritual();
+        World world = entity.getWorld();
+        world.spawnParticle(Particle.FLASH, center, 1, 0.0, 0.0, 0.0, 0.0);
+        world.spawnParticle(ritual.primaryParticle(), center, fromRitual ? 90 : 42, 1.1, 0.85, 1.1, 0.04);
+        world.spawnParticle(Particle.DUST, center, fromRitual ? 70 : 28, 1.2, 0.75, 1.2, 0.0, new Particle.DustOptions(ritual.color(), fromRitual ? 1.55f : 1.1f));
+        spawnRitualRing(center, fromRitual ? 4.8 : 2.6, ritual.color(), fromRitual ? 72 : 36, 0.15);
+        playBossSpecificSpawnBurst(type, center, fromRitual);
+        world.playSound(center, ritual.arrivalSound(), fromRitual ? 1.8f : 1.1f, fromRitual ? 0.65f : 0.9f);
+    }
+
+    private void spawnRitualRing(Location center, double radius, Color color, int points, double yOffset) {
+        World world = center.getWorld();
+        if (world == null) {
+            return;
+        }
+        Particle.DustOptions dust = new Particle.DustOptions(color, 1.15f);
+        for (int i = 0; i < points; i++) {
+            double angle = (Math.PI * 2.0 * i) / points;
+            Location point = center.clone().add(Math.cos(angle) * radius, yOffset, Math.sin(angle) * radius);
+            world.spawnParticle(Particle.DUST, point, 1, 0.0, 0.0, 0.0, 0.0, dust);
+        }
+    }
+
+    private void playBossSpecificRitualPulse(BossType type, Location center, double progress, int pulse) {
+        World world = center.getWorld();
+        if (world == null) {
+            return;
+        }
+
+        Location raised = center.clone().add(0.0, 0.35 + progress * 1.25, 0.0);
+        switch (type) {
+            case YULE_THE_MINION -> {
+                world.spawnParticle(Particle.ANGRY_VILLAGER, raised, 5 + pulse, 0.42, 0.22, 0.42, 0.01);
+                world.spawnParticle(Particle.CRIT, raised, 8, 0.35, 0.18, 0.35, 0.03);
+                spawnRitualRing(center, 0.85 + progress * 1.7, Color.fromRGB(255, 174, 66), 24, 0.30 + progress * 0.55);
+                if (pulse % 2 == 0) {
+                    world.playSound(center, Sound.BLOCK_BELL_USE, 0.45f, 1.45f);
+                }
+            }
+            case KAEL_THE_ASHEN -> {
+                world.spawnParticle(Particle.ASH, raised, 26, 0.85, 0.28, 0.85, 0.02);
+                world.spawnParticle(Particle.SOUL_FIRE_FLAME, raised, 8 + pulse, 0.38, 0.20, 0.38, 0.02);
+                spawnRitualRing(center, 0.65 + progress * 2.0, Color.fromRGB(170, 190, 210), 28, 0.18 + progress * 0.75);
+            }
+            case VESPER_THE_WIDOW_QUEEN -> {
+                world.spawnParticle(Particle.SPORE_BLOSSOM_AIR, raised, 18, 0.95, 0.30, 0.95, 0.03);
+                world.spawnParticle(Particle.WITCH, raised, 10, 0.62, 0.18, 0.62, 0.02);
+                if (pulse % 2 == 1) {
+                    world.spawnParticle(Particle.SQUID_INK, center.clone().add(0.0, 0.45, 0.0), 10, 0.70, 0.14, 0.70, 0.01);
+                }
+            }
+            case VORALITH_THE_CRIMSON_WARDEN -> {
+                world.spawnParticle(Particle.SCULK_SOUL, raised, 18 + pulse * 2, 0.62, 0.38, 0.62, 0.03);
+                world.spawnParticle(Particle.ELECTRIC_SPARK, raised, 8, 0.45, 0.20, 0.45, 0.05);
+                spawnRitualRing(center, 1.0 + progress * 2.4, Color.fromRGB(210, 35, 65), 36, 0.25 + progress * 0.9);
+                if (pulse % 3 == 0) {
+                    world.playSound(center, Sound.ENTITY_WARDEN_HEARTBEAT, 1.0f, 0.65f + (float) progress * 0.25f);
+                }
+            }
+        }
+    }
+
+    private void playBossSpecificSpawnBurst(BossType type, Location center, boolean fromRitual) {
+        World world = center.getWorld();
+        if (world == null) {
+            return;
+        }
+
+        switch (type) {
+            case YULE_THE_MINION -> {
+                world.spawnParticle(Particle.CRIT, center, fromRitual ? 34 : 16, 1.35, 1.0, 1.35, 0.08);
+                world.spawnParticle(Particle.ANGRY_VILLAGER, center.clone().add(0.0, 1.0, 0.0), fromRitual ? 28 : 12, 0.85, 0.45, 0.85, 0.02);
+                world.playSound(center, Sound.ENTITY_ZOMBIE_VILLAGER_CONVERTED, 1.25f, 0.7f);
+                scheduleSpawnHelix(center, Color.fromRGB(255, 184, 77), Color.fromRGB(190, 40, 28), Particle.CRIT, 2.2, 3.2, 18, 2);
+            }
+            case KAEL_THE_ASHEN -> {
+                world.spawnParticle(Particle.ASH, center, fromRitual ? 90 : 38, 1.5, 0.95, 1.5, 0.05);
+                world.spawnParticle(Particle.SOUL_FIRE_FLAME, center, fromRitual ? 54 : 24, 1.0, 0.75, 1.0, 0.04);
+                world.playSound(center, Sound.ENTITY_WITHER_SPAWN, 1.0f, 1.55f);
+                scheduleSpawnHelix(center, Color.fromRGB(185, 205, 225), Color.fromRGB(80, 120, 150), Particle.SOUL_FIRE_FLAME, 2.5, 3.4, 20, 3);
+            }
+            case VESPER_THE_WIDOW_QUEEN -> {
+                world.spawnParticle(Particle.WITCH, center, fromRitual ? 70 : 30, 1.35, 0.8, 1.35, 0.06);
+                world.spawnParticle(Particle.SPORE_BLOSSOM_AIR, center.clone().add(0.0, 0.75, 0.0), fromRitual ? 90 : 36, 1.6, 0.55, 1.6, 0.05);
+                world.playSound(center, Sound.ENTITY_SPIDER_DEATH, 1.15f, 0.55f);
+                scheduleSpawnHelix(center, Color.fromRGB(45, 220, 95), Color.fromRGB(95, 20, 130), Particle.WITCH, 2.35, 2.8, 18, 4);
+            }
+            case VORALITH_THE_CRIMSON_WARDEN -> {
+                if (fromRitual) {
+                    world.strikeLightningEffect(center);
+                }
+                world.spawnParticle(Particle.SONIC_BOOM, center.clone().add(0.0, 1.1, 0.0), 1, 0.0, 0.0, 0.0, 0.0);
+                world.spawnParticle(Particle.SCULK_SOUL, center, fromRitual ? 120 : 52, 1.7, 1.1, 1.7, 0.06);
+                world.spawnParticle(Particle.ELECTRIC_SPARK, center.clone().add(0.0, 1.0, 0.0), fromRitual ? 64 : 26, 1.2, 0.65, 1.2, 0.08);
+                world.playSound(center, Sound.ENTITY_WARDEN_ROAR, 1.65f, 0.62f);
+                world.playSound(center, Sound.ENTITY_WARDEN_SONIC_CHARGE, 1.25f, 0.78f);
+                scheduleSpawnHelix(center, Color.fromRGB(230, 35, 65), Color.fromRGB(15, 190, 205), Particle.SCULK_SOUL, 3.0, 4.1, 24, 4);
+            }
+        }
+    }
+
+    private void scheduleSpawnHelix(Location center, Color primary, Color secondary, Particle accent, double radius, double height, int ticks, int arms) {
+        for (int tick = 0; tick <= ticks; tick++) {
+            int step = tick;
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                try {
+                    World world = center.getWorld();
+                    if (world == null) {
+                        return;
+                    }
+                    double progress = step / (double) Math.max(1, ticks);
+                    double y = 0.15 + height * progress;
+                    for (int arm = 0; arm < arms; arm++) {
+                        double angle = (progress * Math.PI * 4.0) + ((Math.PI * 2.0 * arm) / arms);
+                        double curl = radius * (1.0 - progress * 0.55);
+                        Location point = center.clone().add(Math.cos(angle) * curl, y, Math.sin(angle) * curl);
+                        Color color = arm % 2 == 0 ? primary : secondary;
+                        world.spawnParticle(Particle.DUST, point, 2, 0.02, 0.02, 0.02, 0.0, new Particle.DustOptions(color, 1.25f));
+                        if (step % 2 == 0) {
+                            world.spawnParticle(accent, point, 1, 0.04, 0.04, 0.04, 0.01);
+                        }
+                    }
+                } catch (RuntimeException ex) {
+                    plugin.getLogger().warning("Boss spawn helix particle failed: " + ex.getMessage());
+                }
+            }, step);
+        }
     }
 
     private ItemStack createOverviewItem() {
@@ -628,7 +1279,28 @@ public final class BossManager implements Listener {
         lore.add("<gray>Health:</gray> <white>" + trimNumber(type.maxHealth()) + "</white>");
         lore.add("<gray>Left-click:</gray> <white>Spawn at your position</white>");
         lore.add("<gray>Right-click:</gray> <white>Despawn all copies</white>");
+        lore.add("<dark_gray>Use /bossrituals to view the survival summon ritual.</dark_gray>");
         return menuItem(type.menuIcon(), type.displayName(), lore);
+    }
+
+    private ItemStack createRitualEntryItem(BossType type) {
+        BossRitual ritual = type.ritual();
+        List<String> lore = new ArrayList<>();
+        lore.add("<gray>" + ritual.name() + "</gray>");
+        lore.add("<gray>Focus:</gray> <white>" + prettyBossName(ritual.focusBlock().name()) + "</white>");
+        lore.add("<gray>Catalyst:</gray> <white>" + prettyBossName(ritual.catalyst().name()) + "</white>");
+        lore.add("<dark_gray> ");
+        lore.add("<gold><bold>Steps</bold></gold>");
+        lore.addAll(ritual.steps());
+        if (ritual.arenaRadius() > 0.0) {
+            lore.add("<dark_gray> ");
+            lore.add("<red>Summons a live arena boundary.</red>");
+        }
+        lore.add("<dark_gray> ");
+        lore.add("<yellow>North/east/south/west are real Minecraft directions.</yellow>");
+        lore.add("<yellow>Use F3 if you need to check which way is north.</yellow>");
+        lore.add("<yellow>Right-click the focus block or nearby shrine block with the catalyst.</yellow>");
+        return menuItem(ritual.icon(), type.displayName(), lore);
     }
 
     private ItemStack menuItem(Material material, String name, List<String> loreLines) {
@@ -767,6 +1439,9 @@ public final class BossManager implements Listener {
             textDisplay.setShadowed(true);
             textDisplay.setDefaultBackground(false);
             textDisplay.setTextOpacity((byte) 255);
+            textDisplay.setTeleportDuration(HOLOGRAM_TELEPORT_DURATION_TICKS);
+            textDisplay.setInterpolationDelay(0);
+            textDisplay.setInterpolationDuration(HOLOGRAM_TELEPORT_DURATION_TICKS);
         });
         holograms.put(entity.getUniqueId(), display.getUniqueId());
     }
@@ -817,7 +1492,14 @@ public final class BossManager implements Listener {
             display = refreshed;
         }
 
-        display.teleport(entity.getLocation().clone().add(0.0, entity.getHeight() + 0.85, 0.0));
+        Location target = entity.getLocation().clone().add(0.0, entity.getHeight() + 0.85, 0.0);
+        if (display.getWorld() != target.getWorld() || display.getLocation().distanceSquared(target) > 25.0) {
+            display.setTeleportDuration(0);
+            display.teleport(target);
+            display.setTeleportDuration(HOLOGRAM_TELEPORT_DURATION_TICKS);
+        } else {
+            display.teleport(target);
+        }
         int phase = bossPhase(entity);
         double maxHealth = Math.max(1.0, entity.getAttribute(Attribute.MAX_HEALTH) == null ? type.maxHealth() : entity.getAttribute(Attribute.MAX_HEALTH).getValue());
         display.text(MM.deserialize(
@@ -828,6 +1510,7 @@ public final class BossManager implements Listener {
     }
 
     private void destroyBossVisuals(UUID bossId) {
+        bossArenas.remove(bossId);
         BossBar bar = bossBars.remove(bossId);
         if (bar != null) {
             bar.removeAll();
@@ -887,6 +1570,86 @@ public final class BossManager implements Listener {
             case KAEL_THE_ASHEN -> tickKaelTheAshen(entity);
             case VESPER_THE_WIDOW_QUEEN -> tickVesperTheWidowQueen(entity);
             case VORALITH_THE_CRIMSON_WARDEN -> tickVoralithTheCrimsonWarden(entity);
+        }
+    }
+
+    private void startBossArena(LivingEntity entity, BossType type) {
+        double radius = type.ritual().arenaRadius();
+        if (radius <= 0.0) {
+            return;
+        }
+        bossArenas.put(entity.getUniqueId(), new BossArena(entity.getLocation().clone(), radius, type.ritual().color()));
+    }
+
+    private void tickBossArena(LivingEntity entity, BossType type) {
+        double radius = type.ritual().arenaRadius();
+        if (radius <= 0.0) {
+            return;
+        }
+        BossArena arena = bossArenas.computeIfAbsent(
+            entity.getUniqueId(),
+            ignored -> new BossArena(entity.getLocation().clone(), radius, type.ritual().color())
+        );
+        if (arena.center().getWorld() == null || entity.getWorld() != arena.center().getWorld()) {
+            bossArenas.put(entity.getUniqueId(), new BossArena(entity.getLocation().clone(), radius, type.ritual().color()));
+            return;
+        }
+
+        drawArenaBoundary(arena);
+        enforceArenaBoundary(entity, arena);
+    }
+
+    private void drawArenaBoundary(BossArena arena) {
+        Location center = arena.center();
+        World world = center.getWorld();
+        if (world == null) {
+            return;
+        }
+
+        Particle.DustOptions dust = new Particle.DustOptions(arena.color(), 1.1f);
+        int points = Math.max(48, (int) Math.round(arena.radius() * 4.0));
+        for (int i = 0; i < points; i++) {
+            double angle = (Math.PI * 2.0 * i) / points;
+            double x = Math.cos(angle) * arena.radius();
+            double z = Math.sin(angle) * arena.radius();
+            for (double y = 0.2; y <= 3.2; y += 1.0) {
+                world.spawnParticle(Particle.DUST, center.clone().add(x, y, z), 1, 0.0, 0.0, 0.0, 0.0, dust);
+            }
+        }
+    }
+
+    private void enforceArenaBoundary(LivingEntity boss, BossArena arena) {
+        Location center = arena.center();
+        World world = center.getWorld();
+        if (world == null) {
+            return;
+        }
+
+        double radiusSquared = arena.radius() * arena.radius();
+        double warningSquared = (arena.radius() + 3.0) * (arena.radius() + 3.0);
+        if (boss.getLocation().distanceSquared(center) > warningSquared) {
+            boss.teleport(center);
+            world.spawnParticle(Particle.DUST, center.clone().add(0.0, 1.0, 0.0), 28, 0.45, 0.55, 0.45, 0.0, new Particle.DustOptions(arena.color(), 1.2f));
+        }
+
+        for (Player player : world.getPlayers()) {
+            if (player.getGameMode() == org.bukkit.GameMode.CREATIVE || player.getGameMode() == org.bukkit.GameMode.SPECTATOR) {
+                continue;
+            }
+            double distanceSquared = player.getLocation().distanceSquared(center);
+            if (distanceSquared <= radiusSquared || distanceSquared > warningSquared) {
+                continue;
+            }
+
+            Vector inward = center.toVector().subtract(player.getLocation().toVector());
+            if (inward.lengthSquared() <= 1.0E-6) {
+                continue;
+            }
+            inward.normalize().multiply(0.75);
+            inward.setY(Math.max(0.18, player.getVelocity().getY()));
+            player.setVelocity(player.getVelocity().add(inward));
+            player.sendActionBar(MM.deserialize("<red>The arena refuses to let you leave.</red>"));
+            world.spawnParticle(Particle.DUST, player.getLocation().clone().add(0.0, 1.0, 0.0), 8, 0.25, 0.35, 0.25, 0.0, new Particle.DustOptions(arena.color(), 0.9f));
         }
     }
 
@@ -1595,6 +2358,33 @@ public final class BossManager implements Listener {
     public record BossActionResult(boolean success, String message) {
     }
 
+    public record BossRitual(
+        String name,
+        Material focusBlock,
+        Material catalyst,
+        Material icon,
+        List<String> steps,
+        long warmupTicks,
+        double arenaRadius,
+        Color color,
+        Particle primaryParticle,
+        Sound startSound,
+        Sound pulseSound,
+        Sound arrivalSound
+    ) {
+        public BossRitual {
+            steps = List.copyOf(steps);
+            warmupTicks = Math.max(20L, warmupTicks);
+            arenaRadius = Math.max(0.0, arenaRadius);
+        }
+    }
+
+    private record BossArena(Location center, double radius, Color color) {
+    }
+
+    private record RitualMatch(BossType type, Block focus) {
+    }
+
     @FunctionalInterface
     public interface BossConfigurer {
         void apply(BossManager manager, LivingEntity entity);
@@ -1619,6 +2409,27 @@ public final class BossManager implements Listener {
                 "<gray>Phase One:</gray> <white>fast melee pressure with steady damage</white>",
                 "<gray>Phase Two:</gray> <white>awakens with Strength and much heavier knockback</white>",
                 "<gray>Every custom boss gets a boss bar and live hologram automatically.</gray>"
+            ),
+            new BossRitual(
+                "Gilded Muster",
+                Material.BELL,
+                Material.GOLDEN_SWORD,
+                Material.GOLDEN_SWORD,
+                List.of(
+                    "<gold><bold>Build Guide</bold></gold>",
+                    "<gray>1. Put <white>Soul Sand</white> on the ground.</gray>",
+                    "<gray>2. Place the <white>Bell</white> directly on top of the Soul Sand.</gray>",
+                    "<gray>3. Put <white>Gold Blocks</white> touching the Soul Sand on north, south, east, and west.</gray>",
+                    "<gray>4. Hold a <white>Golden Sword</white> and right-click the Bell or any shrine block.</gray>",
+                    "<dark_gray>Top-down base layer: Gold / Gold + Soul Sand + Gold / Gold.</dark_gray>"
+                ),
+                48L,
+                0.0,
+                Color.fromRGB(225, 92, 28),
+                Particle.ANGRY_VILLAGER,
+                Sound.BLOCK_BELL_USE,
+                Sound.BLOCK_NOTE_BLOCK_CHIME,
+                Sound.ENTITY_ZOMBIE_VILLAGER_CONVERTED
             ),
             (manager, entity) -> {
                 if (entity instanceof Zombie zombie) {
@@ -1650,6 +2461,27 @@ public final class BossManager implements Listener {
                 "<gray>Phase One:</gray> <white>piercing arrows that sap your strength</white>",
                 "<gray>Phase Two:</gray> <white>faster pace, burning arrows, and stronger control</white>",
                 "<gray>Stay mobile or he will pin fights down from range.</gray>"
+            ),
+            new BossRitual(
+                "Ashen Wake",
+                Material.SOUL_CAMPFIRE,
+                Material.BOW,
+                Material.SOUL_CAMPFIRE,
+                List.of(
+                    "<gold><bold>Build Guide</bold></gold>",
+                    "<gray>1. Put a <white>Bone Block</white> on the ground.</gray>",
+                    "<gray>2. Place a <white>Soul Campfire</white> directly on top of that Bone Block.</gray>",
+                    "<gray>3. Put more <white>Bone Blocks</white> touching the center Bone Block on north, south, east, and west.</gray>",
+                    "<gray>4. Hold a <white>Bow</white> and right-click the Soul Campfire or any shrine block.</gray>",
+                    "<dark_gray>Top-down base layer is a plus sign made of 5 Bone Blocks.</dark_gray>"
+                ),
+                56L,
+                0.0,
+                Color.fromRGB(148, 163, 184),
+                Particle.SOUL_FIRE_FLAME,
+                Sound.BLOCK_SOUL_SAND_STEP,
+                Sound.ENTITY_SKELETON_SHOOT,
+                Sound.ENTITY_WITHER_SPAWN
             ),
             (manager, entity) -> {
                 if (entity instanceof Skeleton skeleton) {
@@ -1683,6 +2515,27 @@ public final class BossManager implements Listener {
                 "<gray>Phase Two:</gray> <white>faster leaps, harsher poison, and a dragging strike</white>",
                 "<gray>Do not let her control the gap or the fight snowballs fast.</gray>"
             ),
+            new BossRitual(
+                "Widow's Bloom",
+                Material.COBWEB,
+                Material.FERMENTED_SPIDER_EYE,
+                Material.COBWEB,
+                List.of(
+                    "<gold><bold>Build Guide</bold></gold>",
+                    "<gray>1. Put a <white>Moss Block</white> on the ground.</gray>",
+                    "<gray>2. Place a <white>Cobweb</white> directly on top of the Moss Block.</gray>",
+                    "<gray>3. Put <white>Black Candles</white> on the same height as the Cobweb, touching it north, south, east, and west.</gray>",
+                    "<gray>4. Hold a <white>Fermented Spider Eye</white> and right-click the Cobweb or any shrine block.</gray>",
+                    "<dark_gray>Top-down top layer is candles around the Cobweb.</dark_gray>"
+                ),
+                60L,
+                0.0,
+                Color.fromRGB(80, 190, 88),
+                Particle.SPORE_BLOSSOM_AIR,
+                Sound.ENTITY_SPIDER_AMBIENT,
+                Sound.BLOCK_NOTE_BLOCK_CHIME,
+                Sound.ENTITY_SPIDER_DEATH
+            ),
             (manager, entity) -> { }
         ),
         VORALITH_THE_CRIMSON_WARDEN(
@@ -1702,6 +2555,32 @@ public final class BossManager implements Listener {
                 "<gray>Phase One:</gray> <white>dominion pulses, darkness, and bruising melee hits</white>",
                 "<gray>Phase Two:</gray> <white>resonance blasts, harder slams, and much heavier punishment</white>",
                 "<gray>Drops a <white>Dominion Core</white> used to repair <white>Crimson Dominion</white>.</gray>"
+            ),
+            new BossRitual(
+                "Crimson Dominion Gate",
+                Material.SCULK_SHRIEKER,
+                Material.ECHO_SHARD,
+                Material.SCULK_SHRIEKER,
+                List.of(
+                    "<gold><bold>Build Guide</bold></gold>",
+                    "<gray>1. Put <white>Reinforced Deepslate</white> on the ground.</gray>",
+                    "<gray>2. Place a <white>Sculk Shrieker</white> directly on top of the Reinforced Deepslate.</gray>",
+                    "<gray>3. Put <white>Sculk Catalysts</white> touching the Shrieker on the north and south sides.</gray>",
+                    "<gray>4. Put <white>Redstone Blocks</white> touching the Shrieker on the east and west sides.</gray>",
+                    "<gray>5. Put <white>Soul Lanterns</white> on all four diagonal corners from the Shrieker.</gray>",
+                    "<gray>6. Hold an <white>Echo Shard</white> and right-click the Shrieker or any shrine block.</gray>",
+                    "<dark_gray>Top layer: Lantern / Catalyst / Lantern</dark_gray>",
+                    "<dark_gray>           Redstone / Shrieker / Redstone</dark_gray>",
+                    "<dark_gray>           Lantern / Catalyst / Lantern</dark_gray>",
+                    "<dark_gray>The deepslate is hidden directly underneath the Shrieker.</dark_gray>"
+                ),
+                80L,
+                18.0,
+                Color.fromRGB(205, 30, 55),
+                Particle.SCULK_SOUL,
+                Sound.BLOCK_SCULK_SHRIEKER_SHRIEK,
+                Sound.ENTITY_WARDEN_HEARTBEAT,
+                Sound.ENTITY_WARDEN_EMERGE
             ),
             (manager, entity) -> {
                 if (entity instanceof Warden warden) {
@@ -1729,6 +2608,7 @@ public final class BossManager implements Listener {
         private final int requiredAirBlocks;
         private final boolean glowing;
         private final List<String> description;
+        private final BossRitual ritual;
         private final BossConfigurer configurer;
 
         BossType(
@@ -1744,6 +2624,7 @@ public final class BossManager implements Listener {
             int requiredAirBlocks,
             boolean glowing,
             List<String> description,
+            BossRitual ritual,
             BossConfigurer configurer
         ) {
             this.id = id;
@@ -1758,6 +2639,7 @@ public final class BossManager implements Listener {
             this.requiredAirBlocks = Math.max(2, requiredAirBlocks);
             this.glowing = glowing;
             this.description = List.copyOf(description);
+            this.ritual = ritual;
             this.configurer = configurer == null ? (manager, entity) -> { } : configurer;
         }
 
@@ -1826,6 +2708,10 @@ public final class BossManager implements Listener {
             return description;
         }
 
+        public BossRitual ritual() {
+            return ritual;
+        }
+
         public BossConfigurer configurer() {
             return configurer;
         }
@@ -1844,6 +2730,13 @@ public final class BossManager implements Listener {
     }
 
     private record BossMenuHolder() implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
+    private record BossRitualMenuHolder() implements InventoryHolder {
         @Override
         public Inventory getInventory() {
             return null;

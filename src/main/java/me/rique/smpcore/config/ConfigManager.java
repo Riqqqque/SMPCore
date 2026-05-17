@@ -16,12 +16,30 @@ public final class ConfigManager {
     private static final String LEGACY_JOIN_FIRST_MESSAGE =
         "<gold><bold>* Welcome to the server, <white>{player}</white>! *</bold></gold> "
             + "<gray>You are player number <yellow>{count}</yellow> to join!</gray>";
+    private static final List<String> DEFAULT_MOTD_LINES = List.of(
+        "<gradient:#00e5ff:#22c55e><bold>SMPCore</bold></gradient> <dark_gray>|</dark_gray> <white>{online}</white><gray>/<white>{max}</white>",
+        "<gray>Custom powers, bosses, relics, and waystones.</gray>"
+    );
 
     private final SMPCore plugin;
 
     public String joinFirst;
     public String joinReturn;
     public String quit;
+    public boolean motdEnabled;
+    public boolean motdLegacyColorCodes;
+    public List<String> motdLines;
+
+    public boolean smpStartEnabled;
+    public String smpStartWorld;
+    public boolean smpStarted;
+    public long smpStartedAt;
+    public double smpPreStartBorderDiameter;
+    public double smpStartedBorderDiameter;
+    public int smpBorderExpandSeconds;
+    public int smpPostStartGraceMinutes;
+    public String smpStartBroadcast;
+    public String smpGraceDenyMessage;
 
     public int combatTagSeconds;
 
@@ -131,6 +149,9 @@ public final class ConfigManager {
     public double doubleJumpVerticalBoost;
     public double doubleJumpForwardBoost;
     public int doubleJumpHungerCost;
+    public int dashEnchantCooldownSeconds;
+    public double dashEnchantHorizontalBoost;
+    public double dashEnchantVerticalBoost;
 
     public boolean advancedPickaxeEnabled;
     public boolean advancedPickaxeDisableBonusWithSilkTouch;
@@ -172,6 +193,95 @@ public final class ConfigManager {
         }
         joinReturn = c.getString("messages.join-return", "<aqua>{player} joined.</aqua>");
         quit = c.getString("messages.quit", "<gray>{player} left.</gray>");
+
+        boolean motdConfigAdded = false;
+        if (!c.contains("motd.enabled")) {
+            c.set("motd.enabled", true);
+            motdConfigAdded = true;
+        }
+        if (!c.contains("motd.legacy-color-codes")) {
+            c.set("motd.legacy-color-codes", true);
+            motdConfigAdded = true;
+        }
+        if (!c.contains("motd.lines")) {
+            c.set("motd.lines", DEFAULT_MOTD_LINES);
+            motdConfigAdded = true;
+        }
+        if (motdConfigAdded) {
+            plugin.saveConfig();
+        }
+
+        motdEnabled = c.getBoolean("motd.enabled", true);
+        motdLegacyColorCodes = c.getBoolean("motd.legacy-color-codes", true);
+        motdLines = c.getStringList("motd.lines");
+        if (motdLines.isEmpty()) {
+            motdLines = DEFAULT_MOTD_LINES;
+        }
+
+        boolean smpStartConfigAdded = false;
+        if (!c.contains("smp-start.enabled")) {
+            c.set("smp-start.enabled", true);
+            smpStartConfigAdded = true;
+        }
+        if (!c.contains("smp-start.world")) {
+            c.set("smp-start.world", c.getString("spawn.world", "world"));
+            smpStartConfigAdded = true;
+        }
+        if (!c.contains("smp-start.started")) {
+            c.set("smp-start.started", false);
+            smpStartConfigAdded = true;
+        }
+        if (!c.contains("smp-start.started-at")) {
+            c.set("smp-start.started-at", 0L);
+            smpStartConfigAdded = true;
+        }
+        if (!c.contains("smp-start.pre-start-border-diameter")) {
+            c.set("smp-start.pre-start-border-diameter", 75.0);
+            smpStartConfigAdded = true;
+        }
+        if (!c.contains("smp-start.started-border-diameter")) {
+            c.set("smp-start.started-border-diameter", 10000.0);
+            smpStartConfigAdded = true;
+        }
+        if (!c.contains("smp-start.border-expand-seconds")) {
+            c.set("smp-start.border-expand-seconds", 0);
+            smpStartConfigAdded = true;
+        }
+        if (!c.contains("smp-start.post-start-grace-minutes")) {
+            c.set("smp-start.post-start-grace-minutes", 60);
+            smpStartConfigAdded = true;
+        }
+        if (!c.contains("smp-start.start-broadcast")) {
+            c.set("smp-start.start-broadcast", "<gold><bold>The SMP has started!</bold></gold> <gray>The world border is now <white>{border}</white> blocks wide. PvP unlocks in <white>{grace}</white>.</gray>");
+            smpStartConfigAdded = true;
+        }
+        if (!c.contains("smp-start.grace-deny-message")) {
+            c.set("smp-start.grace-deny-message", "<yellow>PvP is protected for <white>{time}</white>.</yellow>");
+            smpStartConfigAdded = true;
+        }
+        if (smpStartConfigAdded) {
+            plugin.saveConfig();
+        }
+
+        smpStartEnabled = c.getBoolean("smp-start.enabled", true);
+        smpStartWorld = c.getString("smp-start.world", c.getString("spawn.world", "world"));
+        if (smpStartWorld == null || smpStartWorld.isBlank()) {
+            smpStartWorld = "world";
+        }
+        smpStarted = c.getBoolean("smp-start.started", false);
+        smpStartedAt = Math.max(0L, c.getLong("smp-start.started-at", 0L));
+        smpPreStartBorderDiameter = clamp(c.getDouble("smp-start.pre-start-border-diameter", 75.0), 1.0, 60_000_000.0);
+        smpStartedBorderDiameter = clamp(c.getDouble("smp-start.started-border-diameter", 10000.0), 1.0, 60_000_000.0);
+        smpBorderExpandSeconds = clamp(c.getInt("smp-start.border-expand-seconds", 0), 0, 86_400);
+        smpPostStartGraceMinutes = clamp(c.getInt("smp-start.post-start-grace-minutes", 60), 0, 7 * 24 * 60);
+        smpStartBroadcast = c.getString(
+            "smp-start.start-broadcast",
+            "<gold><bold>The SMP has started!</bold></gold> <gray>The world border is now <white>{border}</white> blocks wide. PvP unlocks in <white>{grace}</white>.</gray>"
+        );
+        smpGraceDenyMessage = c.getString(
+            "smp-start.grace-deny-message",
+            "<yellow>PvP is protected for <white>{time}</white>.</yellow>"
+        );
 
         combatTagSeconds = clamp(c.getInt("combat.tag-seconds", 45), 45, 60);
 
@@ -311,6 +421,9 @@ public final class ConfigManager {
         doubleJumpVerticalBoost = clamp(c.getDouble("custom-enchants.double-jump.vertical-boost", 0.82), 0.1, 3.0);
         doubleJumpForwardBoost = clamp(c.getDouble("custom-enchants.double-jump.forward-boost", 0.75), 0.0, 3.0);
         doubleJumpHungerCost = clamp(c.getInt("custom-enchants.double-jump.hunger-cost", 4), 0, 20);
+        dashEnchantCooldownSeconds = clamp(c.getInt("custom-enchants.dash.cooldown-seconds", 15), 0, 3600);
+        dashEnchantHorizontalBoost = clamp(c.getDouble("custom-enchants.dash.horizontal-boost", 1.85), 0.1, 6.0);
+        dashEnchantVerticalBoost = clamp(c.getDouble("custom-enchants.dash.vertical-boost", 0.42), 0.0, 3.0);
 
         advancedPickaxeEnabled = c.getBoolean("custom-tools.advanced-pickaxe.enabled", true);
         advancedPickaxeDisableBonusWithSilkTouch = c.getBoolean(

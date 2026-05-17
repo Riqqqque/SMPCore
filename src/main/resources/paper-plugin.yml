@@ -46,7 +46,7 @@ permissions:
     description: Use /help
     default: true
   smpcore.legendary.recipe:
-    description: Use /lrecipe or /lrecipes
+    description: Use /lrecipe, /reliquary, and /mythics item menus
     default: true
   smpcore.team:
     description: Use /team and /tvault commands
@@ -125,6 +125,12 @@ permissions:
   smpcore.setspawn:
     description: Use /setspawn
     default: op
+  smpcore.startsmp:
+    description: Use /startsmp
+    default: op
+  smpcore.startsmp.reset:
+    description: Reset the SMP start border and grace state
+    default: op
   smpcore.announce:
     description: Use /announce
     default: op
@@ -144,7 +150,7 @@ permissions:
     description: Use /replenishbook
     default: op
   smpcore.customenchant.admin:
-    description: Use /delicatebook, /telekinesisbook, /smeltingtouchbook, /wisebook, and /doublejumpbook
+    description: Use /delicatebook, /telekinesisbook, /smeltingtouchbook, /wisebook, /doublejumpbook, and /dashbook
     default: op
   smpcore.customitem.admin:
     description: Use /customitem give

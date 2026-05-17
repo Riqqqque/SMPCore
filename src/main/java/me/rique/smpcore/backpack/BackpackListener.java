@@ -1,6 +1,7 @@
 package me.rique.smpcore.backpack;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -647,17 +648,26 @@ public final class BackpackListener implements Listener {
         event.setCancelled(true);
         clearCustomCraftState(inv);
         player.updateInventory();
-        player.sendMessage(MessageUtil.info("Use <white>/lrecipe</white> to trade materials for a backpack."));
+        player.sendMessage(MessageUtil.info("Use <white>/reliquary</white> to trade materials for a backpack."));
         return true;
     }
 
     private void applyBackpackPresentation(ItemMeta meta) {
         meta.setItemModel(null);
         meta.setMaxStackSize(1);
-        meta.displayName(MM.deserialize("<gold><bold>Backpack</bold></gold>"));
-        meta.lore(List.of(
-            MM.deserialize("<dark_gray>Portable Storage</dark_gray>"),
-            MM.deserialize("<gray>Right-click to open.</gray>")
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.UNCOMMON, "Backpack"));
+        meta.lore(CustomLoreUtil.buildStyledLore(
+            meta,
+            Material.FLOWER_POT,
+            CustomLoreUtil.Rarity.UNCOMMON.label(),
+            "STORAGE",
+            List.of("<gray>Portable storage.</gray>"),
+            List.of(CustomLoreUtil.section(
+                "Use",
+                "Pocket Vault",
+                "<gray>Right-click to open.</gray>",
+                "<gray>Holds items safely in its own saved storage.</gray>"
+            ))
         ));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
     }

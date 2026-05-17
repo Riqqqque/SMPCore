@@ -9,6 +9,29 @@ messages:
   join-return: "<aqua>> <white>{player}</white> has joined the server.</aqua>"
   quit: "<gray>< <white>{player}</white> has left the server.</gray>"
 
+motd:
+  enabled: true
+  # Supports MiniMessage tags like <gradient:#00e5ff:#22c55e>Text</gradient>.
+  # If legacy-color-codes is true, old color codes like &a, &l, &r, &#00ff99, and vanilla section codes also work.
+  # Placeholders: {online}, {max}, {host}, {newline}
+  legacy-color-codes: true
+  lines:
+    - "<gradient:#00e5ff:#22c55e><bold>Ethereal SMP</bold></gradient> &8| &f{online}&7/&f{max}"
+    - "&7Custom powers, bosses, relics, and waystones."
+
+smp-start:
+  enabled: true
+  world: "world"
+  # While false, the configured world stays inside a tiny border and PvP is blocked.
+  started: false
+  started-at: 0
+  pre-start-border-diameter: 75.0
+  started-border-diameter: 10000.0
+  border-expand-seconds: 0
+  post-start-grace-minutes: 60
+  start-broadcast: "<gold><bold>The SMP has started!</bold></gold> <gray>The world border is now <white>{border}</white> blocks wide. PvP unlocks in <white>{grace}</white>.</gray>"
+  grace-deny-message: "<yellow>PvP is protected for <white>{time}</white>.</yellow>"
+
 combat:
   tag-seconds: 45
 
@@ -223,6 +246,10 @@ custom-enchants:
     vertical-boost: 0.82
     forward-boost: 0.75
     hunger-cost: 4
+  dash:
+    cooldown-seconds: 15
+    horizontal-boost: 1.85
+    vertical-boost: 0.42
 
 custom-tools:
   advanced-pickaxe:

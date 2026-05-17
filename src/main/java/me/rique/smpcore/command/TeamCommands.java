@@ -11,6 +11,7 @@ import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
+import java.util.Locale;
 import java.util.List;
 
 @SuppressWarnings("UnstableApiUsage")
@@ -27,19 +28,20 @@ public final class TeamCommands {
                     sendHelp(player, plugin.getTeamManager());
                     return Command.SINGLE_SUCCESS;
                 })
+                .then(Commands.literal("colors")
+                    .executes(ctx -> {
+                        Player player = (Player) ctx.getSource().getSender();
+                        for (String line : plugin.getTeamManager().teamColorLines()) {
+                            player.sendMessage(MessageUtil.prefixedRaw(line));
+                        }
+                        return Command.SINGLE_SUCCESS;
+                    }))
                 .then(Commands.literal("create")
                     .then(Commands.argument("name", StringArgumentType.greedyString())
                         .executes(ctx -> {
                             Player player = (Player) ctx.getSource().getSender();
-                            String name = StringArgumentType.getString(ctx, "name");
-                            String shown = name.trim();
-                            if (shown.length() >= 2) {
-                                if ((shown.startsWith("\"") && shown.endsWith("\"")) || (shown.startsWith("'") && shown.endsWith("'"))) {
-                                    shown = shown.substring(1, shown.length() - 1).trim();
-                                }
-                            }
-                            String finalShown = shown;
-                            plugin.getTeamManager().createTeam(player, name)
+                            TeamCreateInput input = parseCreateInput(StringArgumentType.getString(ctx, "name"), plugin.getTeamManager());
+                            plugin.getTeamManager().createTeam(player, input.name(), input.color())
                                 .thenAccept(error ->
                                     Bukkit.getScheduler().runTask(plugin, () -> {
                                         if (!player.isOnline()) return;
@@ -47,7 +49,8 @@ public final class TeamCommands {
                                             player.sendMessage(MessageUtil.error(error));
                                             return;
                                         }
-                                        player.sendMessage(MessageUtil.success("Team <white>" + finalShown + "</white> created."));
+                                        String colorText = input.color() == null ? "" : " with color <white>" + input.color() + "</white>";
+                                        player.sendMessage(MessageUtil.success("Team <white>" + input.name() + "</white> created" + colorText + "."));
                                     })
                                 )
                                 .exceptionally(ex -> {
@@ -184,4 +187,39 @@ public final class TeamCommands {
             player.sendMessage(MessageUtil.prefixedRaw(line));
         }
     }
+
+    private static TeamCreateInput parseCreateInput(String raw, TeamManager teamManager) {
+        String input = raw == null ? "" : raw.trim();
+        if (input.length() >= 2 && (input.startsWith("\"") || input.startsWith("'"))) {
+            char quote = input.charAt(0);
+            int end = input.indexOf(quote, 1);
+            if (end > 0) {
+                String name = input.substring(1, end).trim();
+                String rest = input.substring(end + 1).trim();
+                String color = rest.isBlank() ? null : rest;
+                return new TeamCreateInput(name, color);
+            }
+        }
+
+        String[] parts = input.split("\\s+");
+        if (parts.length >= 2) {
+            String last = parts[parts.length - 1].toLowerCase(Locale.ROOT);
+            if (teamManager.isTeamColor(last)) {
+                String name = input.substring(0, input.length() - parts[parts.length - 1].length()).trim();
+                return new TeamCreateInput(name, last);
+            }
+        }
+        return new TeamCreateInput(stripWrappingQuotes(input), null);
+    }
+
+    private static String stripWrappingQuotes(String input) {
+        if (input.length() >= 2) {
+            if ((input.startsWith("\"") && input.endsWith("\"")) || (input.startsWith("'") && input.endsWith("'"))) {
+                return input.substring(1, input.length() - 1).trim();
+            }
+        }
+        return input;
+    }
+
+    private record TeamCreateInput(String name, String color) {}
 }
