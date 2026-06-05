@@ -2,9 +2,14 @@ package me.rique.smpcore.player;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.MessageUtil;
+import net.kyori.adventure.title.Title;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
+import org.bukkit.Color;
+import org.bukkit.FireworkEffect;
+import org.bukkit.Sound;
+import org.bukkit.entity.Firework;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -13,6 +18,9 @@ import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.inventory.meta.FireworkMeta;
+
+import java.time.Duration;
 
 /**
  * Handles join/quit messages, home preload, vanish sync, and player upsert.
@@ -53,6 +61,7 @@ public final class JoinListener implements Listener {
                 Bukkit.broadcast(msg);
 
                 if (joinCount == 1) {
+                    playCovenantWelcome(player);
                     player.sendMessage(MessageUtil.info(
                         "Use <white>/help</white> to see player commands, including <white>/reliquary</white>."
                     ));
@@ -92,5 +101,38 @@ public final class JoinListener implements Listener {
             .replace("{count}", Integer.toString(joinCount))
             .replace("<player>", playerName)
             .replace("<count>", Integer.toString(joinCount));
+    }
+
+    private void playCovenantWelcome(Player player) {
+        player.showTitle(Title.title(
+            MM.deserialize("<gradient:#ff4d6d:#facc15><bold>Season of the Covenant</bold></gradient>"),
+            MM.deserialize("<gray>Your oath begins at the border.</gray>"),
+            Title.Times.times(Duration.ofMillis(500), Duration.ofSeconds(4), Duration.ofMillis(900))
+        ));
+        player.playSound(player.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 0.8f);
+        Bukkit.broadcast(MessageUtil.prefixedRaw(
+            "<gradient:#ff4d6d:#facc15><bold>{player}</bold></gradient> <gray>has entered the Season of the Covenant.</gray>",
+            MessageUtil.placeholder("player", player.getName())
+        ));
+
+        for (int i = 0; i < 3; i++) {
+            int delay = i * 14;
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                if (!plugin.isEnabled() || !player.isOnline()) {
+                    return;
+                }
+                Firework firework = player.getWorld().spawn(player.getLocation().add(0.0, 1.0, 0.0), Firework.class);
+                FireworkMeta meta = firework.getFireworkMeta();
+                meta.setPower(1);
+                meta.addEffect(FireworkEffect.builder()
+                    .with(FireworkEffect.Type.BALL_LARGE)
+                    .withColor(Color.fromRGB(255, 77, 109), Color.fromRGB(250, 204, 21))
+                    .withFade(Color.fromRGB(34, 211, 238))
+                    .trail(true)
+                    .flicker(true)
+                    .build());
+                firework.setFireworkMeta(meta);
+            }, delay);
+        }
     }
 }

@@ -29,8 +29,11 @@ smp-start:
   started-border-diameter: 10000.0
   border-expand-seconds: 0
   post-start-grace-minutes: 60
+  lock-plugin-commands-before-start: true
+  lock-block-edits-before-start: true
   start-broadcast: "<gold><bold>The SMP has started!</bold></gold> <gray>The world border is now <white>{border}</white> blocks wide. PvP unlocks in <white>{grace}</white>.</gray>"
   grace-deny-message: "<yellow>PvP is protected for <white>{time}</white>.</yellow>"
+  lockdown-deny-message: "<yellow>The SMP has not started yet. Please wait for <white>/startsmp</white>.</yellow>"
 
 combat:
   tag-seconds: 45
@@ -212,6 +215,13 @@ ender-sword:
 
 frost-scythe:
   ability-cooldown-seconds: 15
+
+bosses:
+  double-drops:
+    enabled: true
+    timezone: "America/Denver"
+    start-hour: 16
+    end-hour: 18
 
 awakening-table:
   enabled: true

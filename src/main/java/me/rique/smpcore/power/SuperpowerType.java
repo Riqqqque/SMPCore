@@ -26,7 +26,13 @@ public enum SuperpowerType {
     VOIDWALKER("Voidwalker", 0.035, Material.ENDER_EYE, "Use /voidstep and /voidvision"),
     SENTINEL("Sentinel", 0.05, Material.IRON_CHESTPLATE, null),
     FROSTBORN("Frostborn", 0.05, Material.BLUE_ICE, null),
-    DEADEYE("Deadeye", 0.05, Material.CROSSBOW, null);
+    DEADEYE("Deadeye", 0.05, Material.CROSSBOW, null),
+    RIFTWARDEN("Riftwarden", 0.035, Material.ENDER_CHEST, null),
+    OATHBOUND("Oathbound", 0.04, Material.BELL, null),
+    RUNESMITH("Runesmith", 0.04, Material.SMITHING_TABLE, null),
+    GRAVEBORN("Graveborn", 0.035, Material.SOUL_LANTERN, null),
+    STORMCALLER("Stormcaller", 0.035, Material.LIGHTNING_ROD, null),
+    BLOODMENDER("Bloodmender", 0.03, Material.REDSTONE, null);
 
     private final String displayName;
     private final double chance;

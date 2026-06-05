@@ -36,6 +36,8 @@ import java.util.Map;
 
 public final class ReplenishListener implements Listener {
 
+    private static final int REPLENISH_ANVIL_COST = 8;
+
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final String REPLENISH_LORE_LINE = "Replenish I";
@@ -87,6 +89,7 @@ public final class ReplenishListener implements Listener {
         }
 
         event.setResult(applyReplenish(left.clone()));
+        configureReplenishAnvil(event);
     }
 
     @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
@@ -116,10 +119,14 @@ public final class ReplenishListener implements Listener {
         if (!canReceiveAnvilResult(player, event)) {
             return;
         }
+        if (!canPayAnvilCost(player)) {
+            return;
+        }
 
         anvil.setItem(0, null);
         anvil.setItem(1, consumeOne(right));
         anvil.setItem(2, null);
+        chargeAnvilCost(player);
         giveAnvilResult(player, event, result.clone());
         player.sendMessage(MessageUtil.success("Applied <white>Replenish I</white> to your hoe."));
     }
@@ -282,6 +289,30 @@ public final class ReplenishListener implements Listener {
             return;
         }
         player.setItemOnCursor(result);
+    }
+
+    private void configureReplenishAnvil(PrepareAnvilEvent event) {
+        if (!(event.getView() instanceof org.bukkit.inventory.view.AnvilView anvilView)) {
+            return;
+        }
+        anvilView.setRepairCost(REPLENISH_ANVIL_COST);
+        anvilView.setRepairItemCountCost(1);
+        anvilView.setMaximumRepairCost(40);
+    }
+
+    private boolean canPayAnvilCost(Player player) {
+        if (player.getGameMode() == GameMode.CREATIVE || player.getLevel() >= REPLENISH_ANVIL_COST) {
+            return true;
+        }
+        player.sendMessage(MessageUtil.warn("You need <white>" + REPLENISH_ANVIL_COST + "</white> XP levels to apply Replenish."));
+        return false;
+    }
+
+    private void chargeAnvilCost(Player player) {
+        if (player.getGameMode() == GameMode.CREATIVE) {
+            return;
+        }
+        player.setLevel(Math.max(0, player.getLevel() - REPLENISH_ANVIL_COST));
     }
 
     private record CropReplantState(BlockData replanted, boolean mature) {}

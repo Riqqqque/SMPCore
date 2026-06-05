@@ -72,7 +72,10 @@ public final class MythicForgeListener implements Listener {
         new FusionRecipeView("emerald_blade", "divine_axe_rhitta", "midas_sword"),
         new FusionRecipeView("wither_blade", "executioner_blade", "reapers_scythe"),
         new FusionRecipeView("blink_dagger", "hypnosis_staff", "shadow_blade"),
-        new FusionRecipeView("hard_hitter", "warden_blade", "strength_sword")
+        new FusionRecipeView("hard_hitter", "warden_blade", "strength_sword"),
+        new FusionRecipeView("ender_sword", "chrono_sword", "paradox_reaver"),
+        new FusionRecipeView("frost_scythe", "trident_of_percy", "tempest_trident"),
+        new FusionRecipeView("thors_hammer", "dash_mace", "stormfall_maul")
     );
 
     private final SMPCore plugin;

@@ -4,6 +4,7 @@ import io.papermc.paper.registry.RegistryAccess;
 import io.papermc.paper.registry.RegistryKey;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.awakening.AwakeningTableListener;
+import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
@@ -87,8 +88,9 @@ import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
-import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.EnchantmentStorageMeta;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.potion.PotionEffect;
@@ -99,6 +101,7 @@ import org.bukkit.util.Vector;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -190,6 +193,25 @@ public final class SuperpowerManager implements Listener {
     private static final double DEADEYE_MARKED_SHOT_VELOCITY_MULTIPLIER = 1.18;
     private static final int DEADEYE_GLOW_SECONDS = 5;
     private static final int DEADEYE_MARKED_SHOT_SLOW_SECONDS = 3;
+    private static final double RIFTWARDEN_BOSS_RADIUS = 18.0;
+    private static final double RIFTWARDEN_BOSS_DAMAGE_MULTIPLIER = 1.18;
+    private static final double RIFTWARDEN_MOB_DAMAGE_MULTIPLIER = 1.08;
+    private static final double RIFTWARDEN_BOSS_DAMAGE_REDUCTION = 0.25;
+    private static final double RIFTWARDEN_MOB_DAMAGE_REDUCTION = 0.15;
+    private static final double OATHBOUND_AURA_RADIUS = 8.0;
+    private static final double RUNESMITH_PRESERVATION_CHANCE = 0.15;
+    private static final double RUNESMITH_SPECIAL_PRESERVATION_CHANCE = 0.25;
+    private static final double RUNESMITH_BOSS_REPAIR_RATIO = 0.10;
+    private static final double GRAVEBORN_KILL_HEAL = 2.0;
+    private static final double GRAVEBORN_PLAYER_KILL_HEAL = 6.0;
+    private static final double GRAVEBORN_UNDEAD_DAMAGE_MULTIPLIER = 1.12;
+    private static final double GRAVEBORN_UNDEAD_DAMAGE_REDUCTION = 0.20;
+    private static final double STORMCALLER_PROC_CHANCE = 0.14;
+    private static final double STORMCALLER_STORM_PROC_CHANCE = 0.24;
+    private static final double STORMCALLER_DAMAGE_BONUS = 2.0;
+    private static final double BLOODMENDER_PLAYER_LEECH_RATIO = 0.12;
+    private static final double BLOODMENDER_MOB_LEECH_RATIO = 0.18;
+    private static final double BLOODMENDER_MAX_LEECH = 2.0;
     private static final int PASSIVE_NIGHT_VISION_TICKS = 600;
     private static final long PORTAL_RECENT_TRAVEL_MS = 2500L;
     private static final long FLORIST_CROUCH_GROWTH_COOLDOWN_MS = 150L;
@@ -906,10 +928,20 @@ public final class SuperpowerManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onEnchanterItemDamage(PlayerItemDamageEvent event) {
-        if (!hasPower(event.getPlayer(), SuperpowerType.ENCHANTER)) {
+        Player player = event.getPlayer();
+        if (hasPower(player, SuperpowerType.ENCHANTER)
+            && ThreadLocalRandom.current().nextDouble() < ENCHANTER_ARCANE_PRESERVATION_CHANCE) {
+            event.setCancelled(true);
             return;
         }
-        if (ThreadLocalRandom.current().nextDouble() < ENCHANTER_ARCANE_PRESERVATION_CHANCE) {
+
+        if (!hasPower(player, SuperpowerType.RUNESMITH)) {
+            return;
+        }
+        double chance = isSpecialCraftedItem(event.getItem())
+            ? RUNESMITH_SPECIAL_PRESERVATION_CHANCE
+            : RUNESMITH_PRESERVATION_CHANCE;
+        if (ThreadLocalRandom.current().nextDouble() < chance) {
             event.setCancelled(true);
         }
     }
@@ -1077,6 +1109,13 @@ public final class SuperpowerManager implements Listener {
             return;
         }
 
+        if (hasPower(player, SuperpowerType.GRAVEBORN)
+            && (event.getCause() == EntityDamageEvent.DamageCause.WITHER
+            || event.getCause() == EntityDamageEvent.DamageCause.POISON)) {
+            event.setCancelled(true);
+            return;
+        }
+
         if (isShadowActive(player) && event.getFinalDamage() > 0.0) {
             deactivateShadow(player, true, false);
         }
@@ -1138,6 +1177,28 @@ public final class SuperpowerManager implements Listener {
                 }
                 victim.getWorld().spawnParticle(Particle.CRIT, victim.getLocation().clone().add(0.0, 1.0, 0.0), markedShot ? 28 : 18, 0.35, 0.35, 0.35, 0.05);
             }
+
+            if (hasPower(attacker, SuperpowerType.RIFTWARDEN)) {
+                if (isCustomBoss(victim)) {
+                    event.setDamage(event.getDamage() * RIFTWARDEN_BOSS_DAMAGE_MULTIPLIER);
+                    victim.getWorld().spawnParticle(Particle.REVERSE_PORTAL, victim.getLocation().clone().add(0.0, 1.0, 0.0), 22, 0.5, 0.45, 0.5, 0.08);
+                } else if (isHostileMob(victim)) {
+                    event.setDamage(event.getDamage() * RIFTWARDEN_MOB_DAMAGE_MULTIPLIER);
+                }
+            }
+
+            if (hasPower(attacker, SuperpowerType.GRAVEBORN) && isUndeadPassiveType(victim.getType())) {
+                event.setDamage(event.getDamage() * GRAVEBORN_UNDEAD_DAMAGE_MULTIPLIER);
+                victim.getWorld().spawnParticle(Particle.SOUL, victim.getLocation().clone().add(0.0, 1.0, 0.0), 10, 0.35, 0.35, 0.35, 0.02);
+            }
+
+            if (hasPower(attacker, SuperpowerType.STORMCALLER) && tryStormcallerStrike(attacker, victim)) {
+                event.setDamage(event.getDamage() + STORMCALLER_DAMAGE_BONUS);
+            }
+
+            if (hasPower(attacker, SuperpowerType.BLOODMENDER)) {
+                applyBloodmenderLeech(attacker, victim, event.getDamage());
+            }
         }
 
         if (!(victim instanceof Player defender) || source.getUniqueId().equals(defender.getUniqueId()) || isFriendlyTo(defender, source)) {
@@ -1172,6 +1233,17 @@ public final class SuperpowerManager implements Listener {
         if (hasPower(defender, SuperpowerType.FROSTBORN) && event.getDamage() > 0.0) {
             applyPotion(source, PotionEffectType.SLOWNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
             source.getWorld().spawnParticle(Particle.CLOUD, source.getLocation().clone().add(0.0, 1.0, 0.0), 10, 0.35, 0.35, 0.35, 0.02);
+        }
+
+        if (hasPower(defender, SuperpowerType.RIFTWARDEN) && event.getDamage() > 0.0 && !(source instanceof Player)) {
+            double reduction = isCustomBoss(source) ? RIFTWARDEN_BOSS_DAMAGE_REDUCTION : RIFTWARDEN_MOB_DAMAGE_REDUCTION;
+            event.setDamage(event.getDamage() * (1.0 - reduction));
+            defender.getWorld().spawnParticle(Particle.PORTAL, defender.getLocation().clone().add(0.0, 1.0, 0.0), 14, 0.45, 0.35, 0.45, 0.05);
+        }
+
+        if (hasPower(defender, SuperpowerType.GRAVEBORN) && event.getDamage() > 0.0 && isUndeadPassiveType(source.getType())) {
+            event.setDamage(event.getDamage() * (1.0 - GRAVEBORN_UNDEAD_DAMAGE_REDUCTION));
+            applyPotion(source, PotionEffectType.WEAKNESS, 60, 0);
         }
     }
 
@@ -1232,6 +1304,25 @@ public final class SuperpowerManager implements Listener {
             storeMonarchMob(killer, entity.getType());
         }
 
+        if (killer != null && hasPower(killer, SuperpowerType.GRAVEBORN)) {
+            double healAmount = entity.getType() == EntityType.PLAYER ? GRAVEBORN_PLAYER_KILL_HEAL : GRAVEBORN_KILL_HEAL;
+            healPlayer(killer, healAmount);
+            applyPotion(killer, PotionEffectType.REGENERATION, 80, 0);
+            killer.getWorld().spawnParticle(Particle.SOUL, killer.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.45, 0.45, 0.45, 0.03);
+        }
+
+        if (killer != null && hasPower(killer, SuperpowerType.RIFTWARDEN) && isCustomBoss(entity)) {
+            applyPotion(killer, PotionEffectType.RESISTANCE, 20 * 20, 1);
+            applyPotion(killer, PotionEffectType.ABSORPTION, 20 * 20, 1);
+            killer.sendMessage(MessageUtil.success("The rift buckles. You gain a brief ward from the fallen boss."));
+        }
+
+        if (killer != null && hasPower(killer, SuperpowerType.RUNESMITH) && isCustomBoss(entity)) {
+            if (repairRunesmithGear(killer)) {
+                killer.sendMessage(MessageUtil.success("Runes in your gear mend themselves from the boss's remains."));
+            }
+        }
+
         UUID mobId = entity.getUniqueId();
         UUID ownerId = monarchOwnerByMob.remove(mobId);
         if (ownerId == null) {
@@ -1262,6 +1353,13 @@ public final class SuperpowerManager implements Listener {
         if (ownerId == null) {
             if (event.getTarget() instanceof Player target
                 && hasPower(target, SuperpowerType.MONARCH)
+                && isUndeadPassiveType(mob.getType())) {
+                event.setCancelled(true);
+                mob.setTarget(null);
+                return;
+            }
+            if (event.getTarget() instanceof Player target
+                && hasPower(target, SuperpowerType.GRAVEBORN)
                 && isUndeadPassiveType(mob.getType())) {
                 event.setCancelled(true);
                 mob.setTarget(null);
@@ -1726,6 +1824,10 @@ public final class SuperpowerManager implements Listener {
     public void onPowerMenuClick(InventoryClickEvent event) {
         if (event.getView().getTopInventory().getHolder() instanceof PowerInfoHolder) {
             event.setCancelled(true);
+            if (event.getRawSlot() == 49 && event.getWhoClicked() instanceof Player player) {
+                player.closeInventory();
+                Bukkit.getScheduler().runTask(plugin, () -> player.performCommand("menu"));
+            }
             return;
         }
         if (event.getView().getTopInventory().getHolder() instanceof DruidGrimoireHolder holder) {
@@ -1942,6 +2044,34 @@ public final class SuperpowerManager implements Listener {
                 applyPassiveNightVision(player);
                 applyPotion(player, PotionEffectType.SPEED, 80, 0);
             }
+            case RIFTWARDEN -> {
+                applyPotion(player, PotionEffectType.SLOW_FALLING, 80, 0);
+                if (player.getWorld().getEnvironment() == World.Environment.THE_END || hasNearbyCustomBoss(player, RIFTWARDEN_BOSS_RADIUS)) {
+                    applyPotion(player, PotionEffectType.RESISTANCE, 80, 0);
+                }
+            }
+            case OATHBOUND -> applyOathboundAura(player);
+            case RUNESMITH -> applyPotion(player, PotionEffectType.HASTE, 80, 0);
+            case GRAVEBORN -> {
+                pacifyNearbyUndead(player);
+                player.removePotionEffect(PotionEffectType.WITHER);
+                player.removePotionEffect(PotionEffectType.POISON);
+                applyPotion(player, PotionEffectType.NIGHT_VISION, 220, 0);
+            }
+            case STORMCALLER -> {
+                applyPotion(player, PotionEffectType.SPEED, 80, 0);
+                if (isStorming(player.getWorld())) {
+                    applyPotion(player, PotionEffectType.HASTE, 80, 1);
+                    applyPotion(player, PotionEffectType.STRENGTH, 80, 0);
+                }
+            }
+            case BLOODMENDER -> {
+                var bloodmenderHealth = player.getAttribute(Attribute.MAX_HEALTH);
+                double healthCap = bloodmenderHealth == null ? 20.0 : bloodmenderHealth.getValue();
+                if (healthCap > 0.0 && player.getHealth() <= healthCap * 0.35) {
+                    applyPotion(player, PotionEffectType.REGENERATION, 60, 0);
+                }
+            }
             default -> {
             }
         }
@@ -2064,6 +2194,7 @@ public final class SuperpowerManager implements Listener {
         removeLikelyPowerPotion(player, PotionEffectType.SPEED, 2);
         removeLikelyPowerPotion(player, PotionEffectType.HASTE, 2);
         removeLikelyPowerPotion(player, PotionEffectType.HASTE, 1);
+        removeLikelyPowerPotion(player, PotionEffectType.HASTE, 0);
         removeLikelyPowerPotion(player, PotionEffectType.STRENGTH, 1);
         removeLikelyPowerPotion(player, PotionEffectType.STRENGTH, 0);
         removeLikelyPowerPotion(player, PotionEffectType.HEALTH_BOOST, 4);
@@ -2599,6 +2730,136 @@ public final class SuperpowerManager implements Listener {
             applyPotion(nearby, PotionEffectType.ABSORPTION, 60, 0);
         }
         player.getWorld().spawnParticle(Particle.TOTEM_OF_UNDYING, player.getLocation().clone().add(0.0, 1.0, 0.0), 8, 0.8, 0.35, 0.8, 0.01);
+    }
+
+    private void applyOathboundAura(Player player) {
+        double radiusSquared = OATHBOUND_AURA_RADIUS * OATHBOUND_AURA_RADIUS;
+        List<Player> allies = new ArrayList<>();
+        allies.add(player);
+        for (Player nearby : player.getWorld().getPlayers()) {
+            if (nearby.equals(player) || nearby.isDead() || nearby.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            if (nearby.getLocation().distanceSquared(player.getLocation()) > radiusSquared) {
+                continue;
+            }
+            if (!sameTeamOrSelf(player.getUniqueId(), nearby.getUniqueId())) {
+                continue;
+            }
+            allies.add(nearby);
+        }
+
+        if (allies.size() <= 1) {
+            return;
+        }
+        for (Player ally : allies) {
+            applyPotion(ally, PotionEffectType.SPEED, 60, 0);
+        }
+        applyPotion(player, PotionEffectType.RESISTANCE, 60, 0);
+        applyPotion(player, PotionEffectType.ABSORPTION, 60, 0);
+        player.getWorld().spawnParticle(Particle.WAX_ON, player.getLocation().clone().add(0.0, 1.0, 0.0), 10, 0.7, 0.4, 0.7, 0.01);
+    }
+
+    private boolean hasNearbyCustomBoss(Player player, double radius) {
+        double radiusSquared = radius * radius;
+        for (Entity entity : player.getWorld().getNearbyEntities(player.getLocation(), radius, radius, radius)) {
+            if (entity.getLocation().distanceSquared(player.getLocation()) <= radiusSquared && isCustomBoss(entity)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isCustomBoss(Entity entity) {
+        BossManager bossManager = plugin.getBossManager();
+        return bossManager != null && bossManager.isCustomBoss(entity);
+    }
+
+    private boolean isHostileMob(LivingEntity entity) {
+        return entity instanceof org.bukkit.entity.Monster;
+    }
+
+    private boolean isStorming(World world) {
+        return world != null && (world.hasStorm() || world.isThundering());
+    }
+
+    private boolean tryStormcallerStrike(Player attacker, LivingEntity victim) {
+        double chance = isStorming(attacker.getWorld()) ? STORMCALLER_STORM_PROC_CHANCE : STORMCALLER_PROC_CHANCE;
+        if (ThreadLocalRandom.current().nextDouble() >= chance) {
+            return false;
+        }
+        Location center = victim.getLocation().clone().add(0.0, 1.0, 0.0);
+        victim.getWorld().strikeLightningEffect(victim.getLocation());
+        victim.getWorld().spawnParticle(Particle.ELECTRIC_SPARK, center, 28, 0.45, 0.55, 0.45, 0.08);
+        victim.getWorld().playSound(victim.getLocation(), Sound.ENTITY_LIGHTNING_BOLT_THUNDER, 0.45f, 1.7f);
+        return true;
+    }
+
+    private void applyBloodmenderLeech(Player attacker, LivingEntity victim, double damage) {
+        if (damage <= 0.0 || attacker.getHealth() <= 0.0) {
+            return;
+        }
+        double ratio = victim instanceof Player ? BLOODMENDER_PLAYER_LEECH_RATIO : BLOODMENDER_MOB_LEECH_RATIO;
+        double healAmount = Math.min(BLOODMENDER_MAX_LEECH, damage * ratio);
+        if (healAmount <= 0.0) {
+            return;
+        }
+        healPlayer(attacker, healAmount);
+        attacker.getWorld().spawnParticle(Particle.DAMAGE_INDICATOR, attacker.getLocation().clone().add(0.0, 1.0, 0.0), 6, 0.25, 0.25, 0.25, 0.02);
+    }
+
+    private void healPlayer(Player player, double amount) {
+        if (player == null || amount <= 0.0 || player.isDead()) {
+            return;
+        }
+        var maxHealth = player.getAttribute(Attribute.MAX_HEALTH);
+        double healthCap = maxHealth == null ? 20.0 : maxHealth.getValue();
+        player.setHealth(Math.min(healthCap, player.getHealth() + amount));
+    }
+
+    private boolean repairRunesmithGear(Player player) {
+        PlayerInventory inventory = player.getInventory();
+        boolean repaired = repairDurableItem(inventory.getItemInMainHand());
+        repaired |= repairDurableItem(inventory.getItemInOffHand());
+        for (ItemStack armor : inventory.getArmorContents()) {
+            repaired |= repairDurableItem(armor);
+        }
+        return repaired;
+    }
+
+    private boolean repairDurableItem(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR || item.getType().getMaxDurability() <= 0) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (!(meta instanceof Damageable damageable) || damageable.getDamage() <= 0) {
+            return false;
+        }
+        int repairAmount = Math.max(1, (int) Math.ceil(item.getType().getMaxDurability() * RUNESMITH_BOSS_REPAIR_RATIO));
+        damageable.setDamage(Math.max(0, damageable.getDamage() - repairAmount));
+        item.setItemMeta(meta);
+        return true;
+    }
+
+    private boolean isSpecialCraftedItem(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) {
+            return false;
+        }
+        if (plugin.getLegendaryListener() != null && plugin.getLegendaryListener().isLegendaryItem(item)) {
+            return true;
+        }
+        if (plugin.getCustomToolListener() != null && plugin.getCustomToolListener().isCustomTool(item)) {
+            return true;
+        }
+        if (plugin.getSeasonRelicManager() != null && plugin.getSeasonRelicManager().isSeasonRelic(item)) {
+            return true;
+        }
+        return isAncientScroll(item)
+            || isWardenHeart(item)
+            || isMotherNatureStick(item)
+            || isTheWorldClock(item)
+            || isDruidGrimoire(item)
+            || isTalisman(item);
     }
 
     private boolean isStandingOnFrostBlock(Player player) {
@@ -3992,17 +4253,22 @@ public final class SuperpowerManager implements Listener {
         for (int slot = 0; slot < inventory.getSize(); slot++) {
             inventory.setItem(slot, fillerPane());
         }
-        SuperpowerType[] types = SuperpowerType.values();
+        List<SuperpowerType> types = new ArrayList<>(List.of(SuperpowerType.values()));
+        types.sort(Comparator
+            .comparingDouble((SuperpowerType type) -> displayChance(type))
+            .reversed()
+            .thenComparing(SuperpowerType::displayName));
         int[] slots = {
             10, 11, 12, 13, 14, 15, 16,
             19, 20, 21, 22, 23, 24, 25,
             28, 29, 30, 31, 32, 33, 34,
             37, 38, 39, 40, 41, 42, 43
         };
-        for (int i = 0; i < types.length && i < slots.length; i++) {
-            inventory.setItem(slots[i], createPowerInfoIcon(types[i]));
+        for (int i = 0; i < types.size() && i < slots.length; i++) {
+            inventory.setItem(slots[i], createPowerInfoIcon(types.get(i)));
         }
         inventory.setItem(4, createCurrentPowerStatusIcon(viewer));
+        inventory.setItem(49, simpleMenuItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to /menu.</gray>")));
     }
 
     private ItemStack fillerPane() {
@@ -4013,6 +4279,18 @@ public final class SuperpowerManager implements Listener {
             pane.setItemMeta(meta);
         }
         return pane;
+    }
+
+    private ItemStack simpleMenuItem(Material material, String name, List<String> lore) {
+        ItemStack item = new ItemStack(material);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        meta.displayName(MM.deserialize(name));
+        meta.lore(lore.stream().map(MM::deserialize).toList());
+        item.setItemMeta(meta);
+        return item;
     }
 
     private ItemStack createPowerInfoIcon(SuperpowerType type) {
@@ -4048,7 +4326,7 @@ public final class SuperpowerManager implements Listener {
 
     private List<Component> powerInfoLore(SuperpowerType type) {
         List<Component> lore = new ArrayList<>();
-        lore.add(MM.deserialize("<gray>Chance: <white>" + formatPercent(type.chance()) + "</white></gray>"));
+        lore.add(MM.deserialize("<gray>Chance: <white>" + formatPercent(displayChance(type)) + "</white></gray>"));
         lore.add(Component.empty());
         switch (type) {
             case IMMORTALITY -> {
@@ -4191,6 +4469,44 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Sneak while shooting arrows/tridents to fire a faster marked shot.</gray>"));
                 lore.add(MM.deserialize("<gray>Marked shots deal <white>35%</white> more damage and briefly slow targets.</gray>"));
                 lore.add(MM.deserialize("<gray>Targets hit by projectiles glow for <white>" + DEADEYE_GLOW_SECONDS + "s</white>.</gray>"));
+            }
+            case RIFTWARDEN -> {
+                lore.add(MM.deserialize("<gray>Built for boss fights and dangerous mobs.</gray>"));
+                lore.add(MM.deserialize("<gray>Deals <white>18%</white> more damage to custom bosses.</gray>"));
+                lore.add(MM.deserialize("<gray>Deals <white>8%</white> more damage to hostile mobs.</gray>"));
+                lore.add(MM.deserialize("<gray>Reduces non-player damage, stronger against bosses.</gray>"));
+                lore.add(MM.deserialize("<gray>Gains Slow Falling and Resistance near bosses or in the End.</gray>"));
+            }
+            case OATHBOUND -> {
+                lore.add(MM.deserialize("<gray>Wakes up around nearby teammates.</gray>"));
+                lore.add(MM.deserialize("<gray>You and teammates within <white>" + (int) OATHBOUND_AURA_RADIUS + " blocks</white> gain Speed I.</gray>"));
+                lore.add(MM.deserialize("<gray>The Oathbound caster also gains Resistance I and Absorption.</gray>"));
+                lore.add(MM.deserialize("<gray>Only works with real team members, so multiple Oathbound players stack naturally without duping inventory effects.</gray>"));
+            }
+            case RUNESMITH -> {
+                lore.add(MM.deserialize("<gray>Permanent <white>Haste I</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Gear has a <white>15%</white> chance to ignore durability loss.</gray>"));
+                lore.add(MM.deserialize("<gray>Custom, legendary, and season gear preserve durability at <white>25%</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Killing a custom boss repairs held gear and armor by <white>10%</white> durability.</gray>"));
+            }
+            case GRAVEBORN -> {
+                lore.add(MM.deserialize("<gray>Immune to poison and wither damage.</gray>"));
+                lore.add(MM.deserialize("<gray>Undead mobs refuse to target the Graveborn.</gray>"));
+                lore.add(MM.deserialize("<gray>Deals extra damage to undead and takes less from them.</gray>"));
+                lore.add(MM.deserialize("<gray>Kills restore health, with player kills restoring more.</gray>"));
+                lore.add(MM.deserialize("<gray>Permanent Night Vision keeps caves readable without a command.</gray>"));
+            }
+            case STORMCALLER -> {
+                lore.add(MM.deserialize("<gray>Permanent <white>Speed I</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Rain or thunder grants <white>Haste II</white> and <white>Strength I</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Hits can call a visual lightning strike for bonus damage.</gray>"));
+                lore.add(MM.deserialize("<gray>Lightning chance is higher during storms.</gray>"));
+            }
+            case BLOODMENDER -> {
+                lore.add(MM.deserialize("<gray>Damaging enemies heals a portion of the damage dealt.</gray>"));
+                lore.add(MM.deserialize("<gray>Healing is stronger against mobs and capped per hit.</gray>"));
+                lore.add(MM.deserialize("<gray>Kills pair well with boss waves and PvP cleanup without making the player immortal.</gray>"));
+                lore.add(MM.deserialize("<gray>Low health grants brief Regeneration I.</gray>"));
             }
         }
         return lore;
@@ -4353,6 +4669,17 @@ public final class SuperpowerManager implements Listener {
             return Long.toString(Math.round(percent)) + "%";
         }
         return String.format(Locale.US, "%.2f%%", percent);
+    }
+
+    private double displayChance(SuperpowerType type) {
+        if (type == null) {
+            return 0.0;
+        }
+        double total = 0.0;
+        for (SuperpowerType candidate : SuperpowerType.values()) {
+            total += candidate.chance();
+        }
+        return total <= 0.0 ? 0.0 : type.chance() / total;
     }
 
     private SuperpowerType randomDifferentPower(SuperpowerType currentPower, boolean excludeHuman) {

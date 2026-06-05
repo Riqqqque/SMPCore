@@ -5,12 +5,14 @@ import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.backpack.BackpackListener;
 import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.database.DatabaseManager;
+import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.RewardLanternListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
 import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.legendary.MythicForgeListener;
 import me.rique.smpcore.power.SuperpowerManager;
+import me.rique.smpcore.season.SeasonRelicManager;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
@@ -48,11 +50,13 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 public final class ItemAuditManager implements Listener {
 
+    private static final String STAFF_PERMISSION = "smpcore.staff";
     private static final long SCAN_INTERVAL_TICKS = 20L * 90L;
     private static final long ANOMALY_COOLDOWN_MS = 5L * 60L * 1000L;
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
@@ -65,6 +69,7 @@ public final class ItemAuditManager implements Listener {
     private final Map<String, Long> anomalyCooldowns = new ConcurrentHashMap<>();
     private final Map<UUID, Deque<PendingAcquisition>> pendingAcquisitions = new ConcurrentHashMap<>();
     private BukkitTask scanTask;
+    private volatile boolean auditStateLoaded;
 
     public ItemAuditManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -73,14 +78,31 @@ public final class ItemAuditManager implements Listener {
     }
 
     public void start() {
-        try {
-            for (var record : plugin.getDatabase().loadManagedItemInstances().join()) {
-                knownInstances.put(record.instanceId(), KnownInstanceState.from(record));
+        plugin.getDatabase().loadManagedItemInstances().whenComplete((records, throwable) -> {
+            if (!plugin.isEnabled()) {
+                return;
             }
-        } catch (Exception ex) {
-            plugin.getLogger().severe("Failed to load item audit state: " + ex.getMessage());
+            Bukkit.getScheduler().runTask(plugin, () -> finishInitialLoad(records, throwable));
+        });
+    }
+
+    private void finishInitialLoad(List<DatabaseManager.ManagedItemInstanceRecord> records, Throwable throwable) {
+        if (throwable != null) {
+            Throwable root = throwable instanceof CompletionException && throwable.getCause() != null
+                ? throwable.getCause()
+                : throwable;
+            plugin.getLogger().severe("Failed to load item audit state: " + root.getMessage());
+            plugin.getLogger().severe("Item audit scans are disabled until the next successful restart.");
+            return;
         }
 
+        if (records != null) {
+            for (var record : records) {
+                knownInstances.putIfAbsent(record.instanceId(), KnownInstanceState.from(record));
+            }
+        }
+
+        auditStateLoaded = true;
         Bukkit.getScheduler().runTask(plugin, this::scanOnlinePlayers);
         scanTask = Bukkit.getScheduler().runTaskTimer(plugin, this::scanOnlinePlayers, 100L, SCAN_INTERVAL_TICKS);
     }
@@ -90,6 +112,7 @@ public final class ItemAuditManager implements Listener {
             scanTask.cancel();
             scanTask = null;
         }
+        auditStateLoaded = false;
         pendingAcquisitions.clear();
         anomalyCooldowns.clear();
     }
@@ -98,7 +121,23 @@ public final class ItemAuditManager implements Listener {
         if (player == null) {
             return;
         }
-        Bukkit.getScheduler().runTask(plugin, () -> auditPlayer(player, "scheduled"));
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (auditStateLoaded) {
+                auditPlayer(player, "scheduled");
+            }
+        });
+    }
+
+    public void auditSharedInventory(Player observer, Inventory inventory, String scope) {
+        if (!auditStateLoaded || observer == null || !observer.isOnline() || inventory == null) {
+            return;
+        }
+
+        Map<String, List<String>> seenInstanceLocations = new LinkedHashMap<>();
+        Map<String, Integer> legendaryCounts = new LinkedHashMap<>();
+        String safeScope = scope == null || scope.isBlank() ? "shared_storage" : scope;
+        scanInventory(observer, inventory, safeScope, seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true, false);
+        finishAudit(observer, "shared_storage", seenInstanceLocations, legendaryCounts);
     }
 
     public void recordKnownAcquisition(Player subject, ItemStack item, CommandSender actor, String method, String details) {
@@ -134,6 +173,9 @@ public final class ItemAuditManager implements Listener {
         options.add("custom:mythic_forge");
         options.add("custom:reward_soul_lantern");
         options.add("custom:talisman_of_sustenance");
+        options.add("custom_enchant:kingslayer");
+        options.add("custom_enchant:soul_siphon");
+        options.add("custom_enchant:echoing");
 
         CustomToolListener tools = plugin.getCustomToolListener();
         if (tools != null) {
@@ -149,6 +191,13 @@ public final class ItemAuditManager implements Listener {
         options.add("relic:" + MythicForgeListener.ASCENDANT_CORE_ITEM_ID);
         options.add("relic:" + SuperpowerManager.WARDEN_HEART_ITEM_ID);
         options.add("relic:" + BossManager.DOMINION_CORE_ITEM_ID);
+
+        SeasonRelicManager season = plugin.getSeasonRelicManager();
+        if (season != null) {
+            for (String relicId : season.relicIds()) {
+                options.add("season:" + relicId);
+            }
+        }
         return List.copyOf(options);
     }
 
@@ -294,6 +343,23 @@ public final class ItemAuditManager implements Listener {
             return;
         }
 
+        if (!descriptor.instanceTracked()) {
+            persistEvent(new DatabaseManager.ManagedItemEventRecord(
+                0L,
+                System.currentTimeMillis(),
+                "",
+                descriptor.itemKey(),
+                subject.getUniqueId(),
+                subject.getName(),
+                actorUuid,
+                actorName,
+                "acquired",
+                method,
+                details
+            ));
+            return;
+        }
+
         String instanceId = ensureTrackedIdentity(item, descriptor);
         long now = System.currentTimeMillis();
         KnownInstanceState state = new KnownInstanceState(
@@ -326,23 +392,34 @@ public final class ItemAuditManager implements Listener {
     }
 
     private void scanOnlinePlayers() {
+        if (!auditStateLoaded) {
+            return;
+        }
         for (Player player : Bukkit.getOnlinePlayers()) {
             auditPlayer(player, "scheduled");
         }
     }
 
     private void auditPlayer(Player player, String reason) {
-        if (player == null || !player.isOnline()) {
+        if (!auditStateLoaded || player == null || !player.isOnline()) {
             return;
         }
 
         Map<String, List<String>> seenInstanceLocations = new LinkedHashMap<>();
         Map<String, Integer> legendaryCounts = new LinkedHashMap<>();
 
-        scanInventory(player, player.getInventory(), "inventory", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true);
-        scanInventory(player, player.getEnderChest(), "ender_chest", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true);
-        scanItem(player, player.getItemOnCursor(), "cursor", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true);
+        scanInventory(player, player.getInventory(), "inventory", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true, true);
+        scanInventory(player, player.getEnderChest(), "ender_chest", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true, true);
+        scanItem(player, player.getItemOnCursor(), "cursor", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true, true);
+        finishAudit(player, reason, seenInstanceLocations, legendaryCounts);
+    }
 
+    private void finishAudit(
+        Player player,
+        String reason,
+        Map<String, List<String>> seenInstanceLocations,
+        Map<String, Integer> legendaryCounts
+    ) {
         for (Map.Entry<String, List<String>> entry : seenInstanceLocations.entrySet()) {
             if (entry.getValue().size() <= 1) {
                 continue;
@@ -365,7 +442,8 @@ public final class ItemAuditManager implements Listener {
                 entry.getKey(),
                 "multiple_copies_held",
                 reason,
-                "Holding " + entry.getValue() + " copies of " + entry.getKey()
+                (reason != null && reason.startsWith("shared_storage") ? "Storage contains " : "Holding ")
+                    + entry.getValue() + " copies of " + entry.getKey()
             );
         }
     }
@@ -377,14 +455,15 @@ public final class ItemAuditManager implements Listener {
         Map<String, List<String>> seenInstanceLocations,
         Map<String, Integer> legendaryCounts,
         Set<String> backpackTrail,
-        boolean canMutateIdentity
+        boolean canMutateIdentity,
+        boolean updateOwner
     ) {
         if (inventory == null) {
             return;
         }
         ItemStack[] contents = inventory.getContents();
         for (int slot = 0; slot < contents.length; slot++) {
-            scanItem(owner, contents[slot], scope + "[" + slot + "]", seenInstanceLocations, legendaryCounts, backpackTrail, canMutateIdentity);
+            scanItem(owner, contents[slot], scope + "[" + slot + "]", seenInstanceLocations, legendaryCounts, backpackTrail, canMutateIdentity, updateOwner);
         }
     }
 
@@ -395,7 +474,8 @@ public final class ItemAuditManager implements Listener {
         Map<String, List<String>> seenInstanceLocations,
         Map<String, Integer> legendaryCounts,
         Set<String> backpackTrail,
-        boolean canMutateIdentity
+        boolean canMutateIdentity,
+        boolean updateOwner
     ) {
         ManagedItemDescriptor descriptor = describe(item);
         if (descriptor == null) {
@@ -436,7 +516,7 @@ public final class ItemAuditManager implements Listener {
         }
 
         KnownInstanceState state = knownInstances.get(instanceId);
-        PendingAcquisition pending = state == null ? consumePending(owner, descriptor.itemKey()) : null;
+        PendingAcquisition pending = state == null && updateOwner ? consumePending(owner, descriptor.itemKey()) : null;
         long now = System.currentTimeMillis();
         if (state == null) {
             String method = pending == null ? "unknown" : pending.method();
@@ -448,10 +528,10 @@ public final class ItemAuditManager implements Listener {
                 descriptor.itemKey(),
                 now,
                 method,
-                owner.getUniqueId(),
-                owner.getName(),
-                owner.getUniqueId(),
-                owner.getName(),
+                updateOwner ? owner.getUniqueId() : null,
+                updateOwner ? owner.getName() : "Shared Storage",
+                updateOwner ? owner.getUniqueId() : null,
+                updateOwner ? owner.getName() : "Shared Storage",
                 now,
                 now
             );
@@ -470,7 +550,15 @@ public final class ItemAuditManager implements Listener {
                 method,
                 details
             ));
-        } else if (!Objects.equals(state.currentOwnerUuid, owner.getUniqueId())) {
+            if (pending == null) {
+                notifyStaffAnomaly(
+                    owner,
+                    descriptor.itemKey(),
+                    "unknown_origin",
+                    "First seen in " + location + " with no known acquisition path."
+                );
+            }
+        } else if (updateOwner && !Objects.equals(state.currentOwnerUuid, owner.getUniqueId())) {
             String previousOwnerName = state.currentOwnerName;
             state.currentOwnerUuid = owner.getUniqueId();
             state.currentOwnerName = owner.getName();
@@ -489,6 +577,12 @@ public final class ItemAuditManager implements Listener {
                 "unknown_transfer",
                 "Seen in " + location + " after belonging to " + safeName(previousOwnerName)
             ));
+            notifyStaffAnomaly(
+                owner,
+                descriptor.itemKey(),
+                "unknown_transfer",
+                "Seen in " + location + " after belonging to " + safeName(previousOwnerName)
+            );
         } else {
             state.lastSeenAt = now;
         }
@@ -508,7 +602,7 @@ public final class ItemAuditManager implements Listener {
         try {
             List<ItemStack> contents = backpacks.auditContents(owner, item);
             for (int i = 0; i < contents.size(); i++) {
-                scanItem(owner, contents.get(i), location + "/backpack[" + i + "]", seenInstanceLocations, legendaryCounts, backpackTrail, false);
+                scanItem(owner, contents.get(i), location + "/backpack[" + i + "]", seenInstanceLocations, legendaryCounts, backpackTrail, false, updateOwner);
             }
         } finally {
             backpackTrail.remove(backpackId);
@@ -539,6 +633,15 @@ public final class ItemAuditManager implements Listener {
         BackpackListener backpacks = plugin.getBackpackListener();
         if (backpacks != null && backpacks.isBackpack(item)) {
             return new ManagedItemDescriptor("custom:backpack", "Backpack", true);
+        }
+
+        CustomEnchantListener enchants = plugin.getCustomEnchantListener();
+        if (enchants != null) {
+            String enchantId = enchants.customEnchantBookId(item);
+            if (enchantId != null) {
+                String displayName = enchants.customEnchantBookDisplayName(item);
+                return new ManagedItemDescriptor("custom_enchant:" + enchantId, defaultDisplay(displayName, enchantId), true);
+            }
         }
 
         CustomToolListener tools = plugin.getCustomToolListener();
@@ -598,6 +701,16 @@ public final class ItemAuditManager implements Listener {
             return new ManagedItemDescriptor("relic:" + BossManager.DOMINION_CORE_ITEM_ID, "Dominion Core", false);
         }
 
+        SeasonRelicManager season = plugin.getSeasonRelicManager();
+        if (season != null) {
+            String relicId = season.relicId(item);
+            if (relicId != null) {
+                String displayName = season.displayNameFor(relicId);
+                boolean trackedInstance = !season.isMaterialRelicId(relicId);
+                return new ManagedItemDescriptor("season:" + relicId, defaultDisplay(displayName, relicId), trackedInstance);
+            }
+        }
+
         return null;
     }
 
@@ -609,6 +722,7 @@ public final class ItemAuditManager implements Listener {
             return;
         }
         anomalyCooldowns.put(dedupeKey, now);
+        notifyStaffAnomaly(subject, itemKey, eventType, details);
         persistEvent(new DatabaseManager.ManagedItemEventRecord(
             0L,
             now,
@@ -622,6 +736,33 @@ public final class ItemAuditManager implements Listener {
             method,
             details
         ));
+    }
+
+    private void notifyStaffAnomaly(Player subject, String itemKey, String eventType, String details) {
+        if (subject == null || itemKey == null || itemKey.isBlank()) {
+            return;
+        }
+
+        String location = subject.getWorld().getName()
+            + " "
+            + subject.getLocation().getBlockX()
+            + ","
+            + subject.getLocation().getBlockY()
+            + ","
+            + subject.getLocation().getBlockZ();
+        String message = "<red><bold>Audit Alert</bold></red> "
+            + "<gray><white>" + escape(subject.getName()) + "</white> has suspicious custom item activity.</gray> "
+            + "<gray>Type:</gray> <yellow>" + escape(eventType) + "</yellow> "
+            + "<gray>Item:</gray> <white>" + escape(itemKey) + "</white> "
+            + "<gray>At:</gray> <white>" + escape(location) + "</white>"
+            + (details == null || details.isBlank() ? "" : " <dark_gray>- " + escape(details) + "</dark_gray>")
+            + " <gray>Use <white>/itemaudit " + escape(subject.getName()) + " " + escape(itemKey) + "</white>.</gray>";
+
+        for (Player staff : Bukkit.getOnlinePlayers()) {
+            if (staff.isOp() || staff.hasPermission(STAFF_PERMISSION)) {
+                staff.sendMessage(me.rique.smpcore.util.MessageUtil.prefixedRaw(message));
+            }
+        }
     }
 
     private void rememberPending(Player player, String itemKey, String method, String details) {

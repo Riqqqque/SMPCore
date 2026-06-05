@@ -1,6 +1,7 @@
 package me.rique.smpcore.boss;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.database.DatabaseManager;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
@@ -9,6 +10,7 @@ import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.Chunk;
+import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -40,11 +42,16 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityCombustEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.entity.EntityRegainHealthEvent;
 import org.bukkit.event.entity.EntityShootBowEvent;
+import org.bukkit.event.entity.EntityTeleportEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.EntityEquipment;
@@ -57,20 +64,26 @@ import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
+import org.bukkit.projectiles.ProjectileSource;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.Vector;
 
+import java.time.DateTimeException;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -95,6 +108,11 @@ public final class BossManager implements Listener {
     private static final String SCOREBOARD_TAG = "smpcore_custom_boss";
     private static final long ORPHAN_MINION_CLEANUP_INTERVAL_MS = 30_000L;
     private static final int HOLOGRAM_TELEPORT_DURATION_TICKS = 8;
+    private static final double BOSS_SCALE_HEALTH_PER_EXTRA_PLAYER = 0.35;
+    private static final double BOSS_SCALE_DAMAGE_PER_EXTRA_PLAYER = 0.08;
+    private static final int BOSS_SCALE_MAX_EXTRA_PLAYERS = 4;
+    private static final long BOSS_FAILURE_GRACE_MS = 3_000L;
+    private static final ZoneId DEFAULT_DOUBLE_DROP_ZONE = ZoneId.of("America/Denver");
 
     private final SMPCore plugin;
     private final NamespacedKey keyBossId;
@@ -105,6 +123,8 @@ public final class BossManager implements Listener {
     private final NamespacedKey keyBossSecondaryCooldown;
     private final NamespacedKey keyBossMinionMarker;
     private final NamespacedKey keyBossMinionOwner;
+    private final NamespacedKey keyBossScaledPlayerCount;
+    private final NamespacedKey keyBossArenaHazardCooldown;
     private final NamespacedKey keyDominionCoreItem;
 
     private final Map<UUID, BossRecord> trackedBosses = new ConcurrentHashMap<>();
@@ -112,6 +132,8 @@ public final class BossManager implements Listener {
     private final Map<UUID, BossBar> bossBars = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> holograms = new ConcurrentHashMap<>();
     private final Map<UUID, BossArena> bossArenas = new ConcurrentHashMap<>();
+    private final Map<UUID, BossFightState> bossFightStates = new ConcurrentHashMap<>();
+    private final Set<UUID> allowedBossTeleports = ConcurrentHashMap.newKeySet();
     private final Set<String> pendingRituals = ConcurrentHashMap.newKeySet();
     private BukkitTask heartbeatTask;
     private long nextOrphanMinionCleanupAt;
@@ -126,23 +148,36 @@ public final class BossManager implements Listener {
         this.keyBossSecondaryCooldown = new NamespacedKey(plugin, "boss_secondary_cd");
         this.keyBossMinionMarker = new NamespacedKey(plugin, "boss_minion_marker");
         this.keyBossMinionOwner = new NamespacedKey(plugin, "boss_minion_owner");
+        this.keyBossScaledPlayerCount = new NamespacedKey(plugin, "boss_scaled_player_count");
+        this.keyBossArenaHazardCooldown = new NamespacedKey(plugin, "boss_arena_hazard_cd");
         this.keyDominionCoreItem = new NamespacedKey(plugin, DOMINION_CORE_ITEM_ID);
     }
 
     public void start() {
-        try {
-            List<BossRecord> loaded = plugin.getDatabase().loadAllBosses().join();
-            trackedBosses.clear();
-            trackedByBossId.clear();
+        plugin.getDatabase().loadAllBosses().whenComplete((loaded, throwable) -> {
+            if (!plugin.isEnabled()) {
+                return;
+            }
+            Bukkit.getScheduler().runTask(plugin, () -> finishBossRecordLoad(loaded, throwable));
+        });
+        startHeartbeat();
+    }
+
+    private void finishBossRecordLoad(List<BossRecord> loaded, Throwable throwable) {
+        if (throwable != null) {
+            Throwable root = throwable instanceof CompletionException && throwable.getCause() != null
+                ? throwable.getCause()
+                : throwable;
+            plugin.getLogger().severe("Failed to load custom boss records: " + root.getMessage());
+            return;
+        }
+
+        if (loaded != null) {
             for (BossRecord record : loaded) {
                 trackRecord(record);
             }
-        } catch (Exception ex) {
-            plugin.getLogger().severe("Failed to load custom boss records: " + ex.getMessage());
         }
-
         reconcileLoadedBosses();
-        startHeartbeat();
     }
 
     public void shutdown() {
@@ -151,6 +186,8 @@ public final class BossManager implements Listener {
         trackedBosses.clear();
         trackedByBossId.clear();
         bossArenas.clear();
+        bossFightStates.clear();
+        allowedBossTeleports.clear();
         pendingRituals.clear();
     }
 
@@ -245,6 +282,7 @@ public final class BossManager implements Listener {
         }
 
         inventory.setItem(4, createOverviewItem());
+        inventory.setItem(45, menuItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to /menu.</gray>")));
         inventory.setItem(49, createClearAllItem());
         inventory.setItem(53, createRefreshItem());
 
@@ -285,9 +323,10 @@ public final class BossManager implements Listener {
                 "<gray>Each boss has its own shrine pattern.</gray>",
                 "<gray>Build the pattern, then right-click the focus block</gray>",
                 "<gray>or any shrine block with the listed catalyst.</gray>",
-                "<dark_gray>Rituals refund the catalyst if the shrine breaks before completion.</dark_gray>"
+                "<dark_gray>The shrine is consumed on use. Catalysts refund only if the boss fails to form.</dark_gray>"
             )
         ));
+        inventory.setItem(49, menuItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to /menu.</gray>")));
 
         BossType[] types = BossType.values();
         for (int i = 0; i < types.length && i < RITUAL_SLOTS.length; i++) {
@@ -300,6 +339,10 @@ public final class BossManager implements Listener {
         BossType type = BossType.fromId(normalizeBossId(requestedBossId));
         if (type == null) {
             return new BossActionResult(false, "Unknown boss.");
+        }
+        String restriction = spawnRestrictionMessage(type, player.getWorld());
+        if (restriction != null) {
+            return new BossActionResult(false, restriction);
         }
         Location spawnLocation = findBossSpawnLocation(player, type);
         if (spawnLocation == null) {
@@ -322,6 +365,10 @@ public final class BossManager implements Listener {
         World world = location == null ? null : location.getWorld();
         if (world == null) {
             return new BossActionResult(false, "Spawn location is invalid.");
+        }
+        String restriction = spawnRestrictionMessage(type, world);
+        if (restriction != null) {
+            return new BossActionResult(false, restriction);
         }
 
         LivingEntity spawned;
@@ -390,6 +437,10 @@ public final class BossManager implements Listener {
         return new BossActionResult(true, "Removed <white>" + removed + "</white> active custom boss" + (removed == 1 ? "" : "es") + ".");
     }
 
+    public boolean isCustomBoss(Entity entity) {
+        return bossRecord(entity) != null;
+    }
+
     public List<String> statusLines() {
         reconcileLoadedBosses();
         List<String> lines = new ArrayList<>();
@@ -451,12 +502,22 @@ public final class BossManager implements Listener {
                 plugin.getDatabase().deleteBossRecord(record.entityUuid());
                 continue;
             }
+            if (!isAllowedBossWorld(type, living.getWorld())) {
+                plugin.getLogger().warning("Removed " + type.id() + " from invalid world " + living.getWorld().getName() + ".");
+                destroyBossVisuals(record.entityUuid());
+                living.remove();
+                untrackRecord(record.entityUuid());
+                plugin.getDatabase().deleteBossRecord(record.entityUuid());
+                continue;
+            }
 
             ensureBossVisuals(living, type);
+            updateBossScaling(living, type);
             updateBossBar(living, type);
             updateBossHologram(living, type);
             tickBossBehavior(living, type);
             tickBossArena(living, type);
+            tickBossFailure(record, living, type);
         }
 
         maybeCleanupOrphanBossMinions();
@@ -482,21 +543,32 @@ public final class BossManager implements Listener {
         BossRecord record = bossRecord(entity);
         if (record != null) {
             BossType type = BossType.fromId(record.bossId());
-            if (type == BossType.VORALITH_THE_CRIMSON_WARDEN) {
-                Player killer = event.getEntity().getKiller();
-                ItemStack coreDrop = createDominionCoreItem();
-                if (killer != null && plugin.getItemAuditManager() != null) {
-                    plugin.getItemAuditManager().recordKnownAcquisition(
-                        killer,
-                        coreDrop,
-                        "boss_drop",
-                        "Dropped from Voralith the Crimson Warden."
-                    );
-                }
-                event.getDrops().clear();
-                event.getDrops().add(coreDrop);
-                event.setDroppedExp(Math.max(event.getDroppedExp(), 80));
+            Player killer = event.getEntity().getKiller();
+            event.getDrops().clear();
+            BossFightState state = bossFightStates.get(record.entityUuid());
+            if (killer == null) {
+                killer = topOnlineParticipant(state);
             }
+            boolean doubleDrops = isBossDoubleDropsActive();
+            announceBossKill(type, killer, event.getEntity().getLocation(), doubleDrops);
+            if (killer != null && plugin.getLeaderboardManager() != null) {
+                plugin.getLeaderboardManager().recordBossKill(killer, record.bossId());
+            }
+            int dropMultiplier = doubleDrops ? 2 : 1;
+            if (type == BossType.VORALITH_THE_CRIMSON_WARDEN) {
+                ItemStack coreDrop = createDominionCoreItem();
+                addBossDrop(event, killer, coreDrop, dropMultiplier, "Dropped from Voralith the Crimson Warden.");
+            }
+            if (type != null && plugin.getSeasonRelicManager() != null) {
+                for (ItemStack drop : plugin.getSeasonRelicManager().createBossDrops(type.id())) {
+                    if (drop == null || drop.getType().isAir()) {
+                        continue;
+                    }
+                    addBossDrop(event, killer, drop, dropMultiplier, "Dropped from " + type.plainDisplayName() + ".");
+                }
+            }
+            event.setDroppedExp(Math.max(event.getDroppedExp(), bossExperience(type)));
+            finishBossFight(record, type, true, doubleDrops, event.getEntity().getLocation());
             despawnBossMinions(record.entityUuid());
             destroyBossVisuals(record.entityUuid());
             untrackRecord(record.entityUuid());
@@ -513,6 +585,122 @@ public final class BossManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBossCombust(EntityCombustEvent event) {
         if (bossRecord(event.getEntity()) != null) {
+            event.setCancelled(true);
+        }
+    }
+
+    private void announceBossKill(BossType type, Player killer, Location location, boolean doubleDrops) {
+        if (type == null) {
+            return;
+        }
+        String killerName = killer == null ? "Someone" : killer.getName();
+        String bonus = doubleDrops ? " <gold><bold>Double drops are active.</bold></gold>" : "";
+        Bukkit.broadcast(MessageUtil.prefixedRaw(
+            "<gradient:#ff4d6d:#facc15><bold>" + killerName + "</bold></gradient>"
+                + " <gray>has slain</gray> <red><bold>" + type.plainDisplayName() + "</bold></red><gray>.</gray>" + bonus
+        ));
+        World world = location == null ? null : location.getWorld();
+        if (world != null) {
+            world.playSound(location, Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.1f, 0.8f);
+            world.spawnParticle(Particle.TOTEM_OF_UNDYING, location.clone().add(0.0, 1.2, 0.0), 55, 0.75, 0.9, 0.75, 0.03);
+            world.spawnParticle(Particle.DUST, location.clone().add(0.0, 1.2, 0.0), 34, 0.8, 0.9, 0.8, 0.0, new Particle.DustOptions(type.ritual().color(), 1.4f));
+        }
+    }
+
+    private void addBossDrop(EntityDeathEvent event, Player owner, ItemStack drop, int multiplier, String auditDetails) {
+        for (ItemStack multiplied : multipliedDrops(drop, multiplier)) {
+            if (multiplied == null || multiplied.getType().isAir()) {
+                continue;
+            }
+            if (owner != null && plugin.getItemAuditManager() != null) {
+                plugin.getItemAuditManager().recordKnownAcquisition(
+                    owner,
+                    multiplied,
+                    "boss_drop",
+                    auditDetails
+                );
+            }
+            event.getDrops().add(multiplied);
+        }
+    }
+
+    private List<ItemStack> multipliedDrops(ItemStack source, int multiplier) {
+        if (source == null || source.getType().isAir()) {
+            return List.of();
+        }
+        int total = Math.max(1, source.getAmount()) * Math.max(1, multiplier);
+        int maxStack = Math.max(1, source.getMaxStackSize());
+        List<ItemStack> drops = new ArrayList<>();
+        while (total > 0) {
+            int amount = Math.min(maxStack, total);
+            ItemStack next = source.clone();
+            next.setAmount(amount);
+            drops.add(next);
+            total -= amount;
+        }
+        return drops;
+    }
+
+    private int bossExperience(BossType type) {
+        if (type == null) {
+            return 80;
+        }
+        return switch (type) {
+            case YULE_THE_MINION -> 225;
+            case KAEL_THE_ASHEN -> 300;
+            case VESPER_THE_WIDOW_QUEEN -> 320;
+            case MIREWOOD_THE_ROOT_TYRANT -> 440;
+            case NEREIDA_THE_ABYSS_MOTHER -> 475;
+            case AURELION_THE_RIFT_SERAPH -> 600;
+            case IRON_SAINT -> 700;
+            case VORALITH_THE_CRIMSON_WARDEN -> 950;
+        };
+    }
+
+    private boolean isBossDoubleDropsActive() {
+        if (!plugin.getConfig().getBoolean("bosses.double-drops.enabled", true)) {
+            return false;
+        }
+        ZoneId zone = DEFAULT_DOUBLE_DROP_ZONE;
+        String zoneRaw = plugin.getConfig().getString("bosses.double-drops.timezone", "America/Denver");
+        try {
+            zone = ZoneId.of(zoneRaw == null || zoneRaw.isBlank() ? "America/Denver" : zoneRaw);
+        } catch (DateTimeException ignored) {
+            zone = DEFAULT_DOUBLE_DROP_ZONE;
+        }
+
+        int startHour = Math.max(0, Math.min(23, plugin.getConfig().getInt("bosses.double-drops.start-hour", 16)));
+        int endHour = Math.max(0, Math.min(24, plugin.getConfig().getInt("bosses.double-drops.end-hour", 18)));
+        if (startHour == endHour) {
+            return true;
+        }
+        int currentHour = ZonedDateTime.now(zone).getHour();
+        if (startHour < endHour) {
+            return currentHour >= startHour && currentHour < endHour;
+        }
+        return currentHour >= startHour || currentHour < endHour;
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBossEnvironmentalDamage(EntityDamageEvent event) {
+        BossRecord record = bossRecord(event.getEntity());
+        if (record == null) {
+            return;
+        }
+        if (isEnvironmentalCheeseDamage(event.getCause())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBossTeleport(EntityTeleportEvent event) {
+        BossRecord record = bossRecord(event.getEntity());
+        if (record == null) {
+            return;
+        }
+        BossType type = BossType.fromId(record.bossId());
+        if (type == BossType.AURELION_THE_RIFT_SERAPH
+            && !allowedBossTeleports.contains(record.entityUuid())) {
             event.setCancelled(true);
         }
     }
@@ -554,6 +742,10 @@ public final class BossManager implements Listener {
             return;
         }
 
+        if (target instanceof Player player) {
+            recordBossFightEngagement(record.entityUuid(), player);
+        }
+
         int phase = bossPhase(bossEntity);
         if (type == BossType.YULE_THE_MINION && !projectileHit) {
             spawnYuleAttackParticles(bossEntity, target, phase);
@@ -575,7 +767,72 @@ public final class BossManager implements Listener {
 
         if (type == BossType.VORALITH_THE_CRIMSON_WARDEN && !projectileHit) {
             handleVoralithMeleeHit(bossEntity, target, phase, event);
+            return;
         }
+
+        if (type == BossType.AURELION_THE_RIFT_SERAPH && !projectileHit) {
+            handleAurelionMeleeHit(bossEntity, target, phase, event);
+            return;
+        }
+
+        if (type == BossType.NEREIDA_THE_ABYSS_MOTHER && !projectileHit) {
+            handleNereidaMeleeHit(bossEntity, target, phase, event);
+            return;
+        }
+
+        if (type == BossType.IRON_SAINT && !projectileHit) {
+            handleIronSaintMeleeHit(bossEntity, target, phase, event);
+            return;
+        }
+
+        if (type == BossType.MIREWOOD_THE_ROOT_TYRANT && !projectileHit) {
+            handleMirewoodMeleeHit(bossEntity, target, phase, event);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBossTakenDamage(EntityDamageByEntityEvent event) {
+        BossRecord record = bossRecord(event.getEntity());
+        if (record == null) {
+            return;
+        }
+
+        Player attacker = attackingPlayer(event.getDamager());
+        if (attacker == null) {
+            return;
+        }
+
+        double finalDamage = Math.max(0.0, event.getFinalDamage());
+        if (finalDamage <= 0.0) {
+            recordBossFightEngagement(record.entityUuid(), attacker);
+            return;
+        }
+
+        BossFightState state = fightState(record);
+        state.addDamage(attacker, finalDamage);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBossFightHealing(EntityRegainHealthEvent event) {
+        if (!(event.getEntity() instanceof Player player)) {
+            return;
+        }
+
+        BossFightState state = activeFightStateFor(player);
+        if (state == null) {
+            return;
+        }
+        state.addHealing(player, Math.max(0.0, event.getAmount()));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onBossFightPlayerDeath(PlayerDeathEvent event) {
+        markBossFightLossCheck(event.getEntity());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onBossFightPlayerQuit(PlayerQuitEvent event) {
+        markBossFightLossCheck(event.getPlayer());
     }
 
     @EventHandler
@@ -596,6 +853,12 @@ public final class BossManager implements Listener {
 
         int topSize = event.getView().getTopInventory().getSize();
         if (event.getRawSlot() < 0 || event.getRawSlot() >= topSize) {
+            return;
+        }
+
+        if (event.getRawSlot() == 45) {
+            player.closeInventory();
+            Bukkit.getScheduler().runTask(plugin, () -> player.performCommand("menu"));
             return;
         }
 
@@ -648,6 +911,13 @@ public final class BossManager implements Listener {
             return;
         }
         event.setCancelled(true);
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+        if (event.getRawSlot() == 49) {
+            player.closeInventory();
+            Bukkit.getScheduler().runTask(plugin, () -> player.performCommand("menu"));
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -696,6 +966,9 @@ public final class BossManager implements Listener {
     }
 
     private BossType ritualTypeFor(Block focus, ItemStack catalyst) {
+        if (plugin.getSeasonRelicManager() != null && plugin.getSeasonRelicManager().isSeasonRelic(catalyst)) {
+            return null;
+        }
         Material catalystType = catalyst.getType();
         Material focusType = focus.getType();
         for (BossType type : BossType.values()) {
@@ -708,6 +981,9 @@ public final class BossManager implements Listener {
     }
 
     private RitualMatch ritualMatchFor(Block clicked, ItemStack catalyst) {
+        if (plugin.getSeasonRelicManager() != null && plugin.getSeasonRelicManager().isSeasonRelic(catalyst)) {
+            return null;
+        }
         BossType directType = ritualTypeFor(clicked, catalyst);
         if (directType != null) {
             return new RitualMatch(directType, clicked);
@@ -834,11 +1110,28 @@ public final class BossManager implements Listener {
                 || material == Material.SCULK_CATALYST
                 || material == Material.REDSTONE_BLOCK
                 || material == Material.SOUL_LANTERN;
+            case AURELION_THE_RIFT_SERAPH -> material == Material.END_ROD
+                || material == Material.PURPUR_BLOCK
+                || material == Material.END_STONE_BRICKS;
+            case NEREIDA_THE_ABYSS_MOTHER -> material == Material.CONDUIT
+                || material == Material.PRISMARINE
+                || material == Material.SEA_LANTERN;
+            case IRON_SAINT -> material == Material.ANVIL
+                || material == Material.SMITHING_TABLE
+                || material == Material.IRON_BLOCK;
+            case MIREWOOD_THE_ROOT_TYRANT -> material == Material.MANGROVE_ROOTS
+                || material == Material.MOSS_BLOCK
+                || material == Material.OAK_SAPLING;
         };
     }
 
     private void beginBossRitual(Player player, BossType type, Block focus, ItemStack catalyst) {
         BossRitual ritual = type.ritual();
+        String restriction = spawnRestrictionMessage(type, focus.getWorld());
+        if (restriction != null) {
+            player.sendMessage(MessageUtil.error(restriction));
+            return;
+        }
         List<String> problems = ritualProblems(type, focus);
         if (!problems.isEmpty()) {
             player.sendMessage(MessageUtil.error("The <white>" + ritual.name() + "</white> is not complete."));
@@ -867,15 +1160,22 @@ public final class BossManager implements Listener {
         refund.setAmount(1);
         boolean consumed = consumeRitualCatalyst(player, catalyst);
         Location center = focus.getLocation().add(0.5, 0.75, 0.5);
+        World focusWorld = focus.getWorld();
+        int focusChunkX = focus.getChunk().getX();
+        int focusChunkZ = focus.getChunk().getZ();
         consumeRitualShrine(type, focus);
         announceRitualStart(player, type, center);
         playRitualWarmup(type, center);
 
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             try {
-                if (!focus.getWorld().isChunkLoaded(focus.getChunk().getX(), focus.getChunk().getZ())) {
+                if (focusWorld == null || !focusWorld.isChunkLoaded(focusChunkX, focusChunkZ)) {
                     if (consumed) {
                         refundRitualCatalyst(player, center, refund);
+                    }
+                    plugin.getLogger().warning("Boss ritual for " + type.plainDisplayName() + " fizzled because the shrine chunk unloaded before spawn.");
+                    if (player.isOnline()) {
+                        player.sendMessage(MessageUtil.error("The ritual fizzled because the shrine area unloaded before the boss formed. Your catalyst was returned."));
                     }
                     return;
                 }
@@ -992,6 +1292,26 @@ public final class BossManager implements Listener {
                 blocks.add(focus.getRelative(BlockFace.WEST));
                 addCornerBlocks(blocks, focus);
             }
+            case AURELION_THE_RIFT_SERAPH -> {
+                Block base = focus.getRelative(BlockFace.DOWN);
+                blocks.add(base);
+                addCardinalBlocks(blocks, base);
+            }
+            case NEREIDA_THE_ABYSS_MOTHER -> {
+                Block base = focus.getRelative(BlockFace.DOWN);
+                blocks.add(base);
+                addCardinalBlocks(blocks, base);
+            }
+            case IRON_SAINT -> {
+                Block base = focus.getRelative(BlockFace.DOWN);
+                blocks.add(base);
+                addCardinalBlocks(blocks, base);
+            }
+            case MIREWOOD_THE_ROOT_TYRANT -> {
+                Block base = focus.getRelative(BlockFace.DOWN);
+                blocks.add(base);
+                addCardinalBlocks(blocks, base);
+            }
         }
         return blocks;
     }
@@ -1037,6 +1357,22 @@ public final class BossManager implements Listener {
                 requireRelative(problems, focus, BlockFace.EAST, Material.REDSTONE_BLOCK, "Redstone Blocks east and west");
                 requireRelative(problems, focus, BlockFace.WEST, Material.REDSTONE_BLOCK, "Redstone Blocks east and west");
                 requireCorners(problems, focus, Material.SOUL_LANTERN, "Soul Lanterns on the four corners");
+            }
+            case AURELION_THE_RIFT_SERAPH -> {
+                requireRelative(problems, focus, BlockFace.DOWN, Material.PURPUR_BLOCK, "Purpur Block beneath the End Rod");
+                requireCardinals(problems, focus.getRelative(BlockFace.DOWN), Material.END_STONE_BRICKS, "End Stone Bricks around the Purpur base");
+            }
+            case NEREIDA_THE_ABYSS_MOTHER -> {
+                requireRelative(problems, focus, BlockFace.DOWN, Material.PRISMARINE, "Prismarine beneath the Conduit");
+                requireCardinals(problems, focus.getRelative(BlockFace.DOWN), Material.SEA_LANTERN, "Sea Lanterns around the Prismarine base");
+            }
+            case IRON_SAINT -> {
+                requireRelative(problems, focus, BlockFace.DOWN, Material.SMITHING_TABLE, "Smithing Table beneath the Anvil");
+                requireCardinals(problems, focus.getRelative(BlockFace.DOWN), Material.IRON_BLOCK, "Iron Blocks around the Smithing Table");
+            }
+            case MIREWOOD_THE_ROOT_TYRANT -> {
+                requireRelative(problems, focus, BlockFace.DOWN, Material.MOSS_BLOCK, "Moss Block beneath the Mangrove Roots");
+                requireCardinals(problems, focus.getRelative(BlockFace.DOWN), Material.OAK_SAPLING, "Oak Saplings around the Moss Block");
             }
         }
         return problems;
@@ -1168,6 +1504,28 @@ public final class BossManager implements Listener {
                     world.playSound(center, Sound.ENTITY_WARDEN_HEARTBEAT, 1.0f, 0.65f + (float) progress * 0.25f);
                 }
             }
+            case AURELION_THE_RIFT_SERAPH -> {
+                world.spawnParticle(Particle.PORTAL, raised, 36, 0.95, 0.42, 0.95, 0.35);
+                world.spawnParticle(Particle.REVERSE_PORTAL, raised, 18, 0.55, 0.22, 0.55, 0.08);
+                spawnRitualRing(center, 0.85 + progress * 2.4, Color.fromRGB(185, 100, 255), 36, 0.20 + progress * 0.85);
+            }
+            case NEREIDA_THE_ABYSS_MOTHER -> {
+                world.spawnParticle(Particle.NAUTILUS, raised, 20 + pulse, 0.75, 0.32, 0.75, 0.04);
+                world.spawnParticle(Particle.SPLASH, raised, 18, 0.65, 0.18, 0.65, 0.05);
+                spawnRitualRing(center, 0.75 + progress * 2.1, Color.fromRGB(45, 190, 230), 34, 0.18 + progress * 0.7);
+            }
+            case IRON_SAINT -> {
+                world.spawnParticle(Particle.CRIT, raised, 16 + pulse, 0.65, 0.28, 0.65, 0.04);
+                world.spawnParticle(Particle.DUST, raised, 12, 0.55, 0.24, 0.55, 0.0, new Particle.DustOptions(Color.fromRGB(205, 200, 170), 1.2f));
+                if (pulse % 2 == 0) {
+                    world.playSound(center, Sound.BLOCK_ANVIL_USE, 0.55f, 0.65f);
+                }
+            }
+            case MIREWOOD_THE_ROOT_TYRANT -> {
+                world.spawnParticle(Particle.SPORE_BLOSSOM_AIR, raised, 22, 0.95, 0.36, 0.95, 0.04);
+                world.spawnParticle(Particle.HAPPY_VILLAGER, raised, 8, 0.45, 0.22, 0.45, 0.02);
+                spawnRitualRing(center, 0.80 + progress * 2.0, Color.fromRGB(70, 180, 70), 30, 0.12 + progress * 0.65);
+            }
         }
     }
 
@@ -1206,6 +1564,30 @@ public final class BossManager implements Listener {
                 world.playSound(center, Sound.ENTITY_WARDEN_ROAR, 1.65f, 0.62f);
                 world.playSound(center, Sound.ENTITY_WARDEN_SONIC_CHARGE, 1.25f, 0.78f);
                 scheduleSpawnHelix(center, Color.fromRGB(230, 35, 65), Color.fromRGB(15, 190, 205), Particle.SCULK_SOUL, 3.0, 4.1, 24, 4);
+            }
+            case AURELION_THE_RIFT_SERAPH -> {
+                world.spawnParticle(Particle.PORTAL, center, fromRitual ? 160 : 70, 1.8, 1.2, 1.8, 0.65);
+                world.spawnParticle(Particle.REVERSE_PORTAL, center.clone().add(0.0, 1.1, 0.0), fromRitual ? 80 : 32, 1.2, 0.75, 1.2, 0.12);
+                world.playSound(center, Sound.ENTITY_ENDERMAN_SCREAM, 1.1f, 0.7f);
+                scheduleSpawnHelix(center, Color.fromRGB(190, 110, 255), Color.fromRGB(40, 20, 90), Particle.REVERSE_PORTAL, 2.8, 3.8, 22, 5);
+            }
+            case NEREIDA_THE_ABYSS_MOTHER -> {
+                world.spawnParticle(Particle.NAUTILUS, center, fromRitual ? 120 : 54, 1.5, 0.9, 1.5, 0.08);
+                world.spawnParticle(Particle.SPLASH, center.clone().add(0.0, 0.75, 0.0), fromRitual ? 110 : 40, 1.7, 0.55, 1.7, 0.08);
+                world.playSound(center, Sound.ENTITY_ELDER_GUARDIAN_CURSE, 1.2f, 0.82f);
+                scheduleSpawnHelix(center, Color.fromRGB(40, 210, 240), Color.fromRGB(20, 80, 130), Particle.NAUTILUS, 2.5, 3.1, 20, 4);
+            }
+            case IRON_SAINT -> {
+                world.spawnParticle(Particle.CRIT, center, fromRitual ? 90 : 34, 1.4, 0.75, 1.4, 0.08);
+                world.spawnParticle(Particle.CAMPFIRE_COSY_SMOKE, center.clone().add(0.0, 0.8, 0.0), fromRitual ? 40 : 16, 1.0, 0.45, 1.0, 0.03);
+                world.playSound(center, Sound.BLOCK_ANVIL_LAND, 1.6f, 0.55f);
+                scheduleSpawnHelix(center, Color.fromRGB(210, 210, 190), Color.fromRGB(235, 175, 60), Particle.CRIT, 2.7, 3.5, 22, 3);
+            }
+            case MIREWOOD_THE_ROOT_TYRANT -> {
+                world.spawnParticle(Particle.SPORE_BLOSSOM_AIR, center, fromRitual ? 120 : 46, 1.8, 0.75, 1.8, 0.08);
+                world.spawnParticle(Particle.HAPPY_VILLAGER, center.clone().add(0.0, 1.0, 0.0), fromRitual ? 46 : 18, 1.0, 0.4, 1.0, 0.04);
+                world.playSound(center, Sound.ENTITY_ZOMBIE_VILLAGER_CURE, 1.15f, 0.7f);
+                scheduleSpawnHelix(center, Color.fromRGB(70, 190, 70), Color.fromRGB(120, 75, 30), Particle.SPORE_BLOSSOM_AIR, 2.6, 3.2, 20, 4);
             }
         }
     }
@@ -1277,6 +1659,10 @@ public final class BossManager implements Listener {
         lore.add("<gray>Active:</gray> <white>" + activeCount(type.id()) + "</white>");
         lore.add("<gray>Entity:</gray> <white>" + prettyBossName(type.entityType().name()) + "</white>");
         lore.add("<gray>Health:</gray> <white>" + trimNumber(type.maxHealth()) + "</white>");
+        String worldRestriction = requiredEnvironmentLabel(type);
+        if (worldRestriction != null) {
+            lore.add("<gray>World:</gray> <white>" + worldRestriction + "</white>");
+        }
         lore.add("<gray>Left-click:</gray> <white>Spawn at your position</white>");
         lore.add("<gray>Right-click:</gray> <white>Despawn all copies</white>");
         lore.add("<dark_gray>Use /bossrituals to view the survival summon ritual.</dark_gray>");
@@ -1289,6 +1675,10 @@ public final class BossManager implements Listener {
         lore.add("<gray>" + ritual.name() + "</gray>");
         lore.add("<gray>Focus:</gray> <white>" + prettyBossName(ritual.focusBlock().name()) + "</white>");
         lore.add("<gray>Catalyst:</gray> <white>" + prettyBossName(ritual.catalyst().name()) + "</white>");
+        String worldRestriction = requiredEnvironmentLabel(type);
+        if (worldRestriction != null) {
+            lore.add("<gray>World:</gray> <white>" + worldRestriction + "</white>");
+        }
         lore.add("<dark_gray> ");
         lore.add("<gold><bold>Steps</bold></gold>");
         lore.addAll(ritual.steps());
@@ -1363,6 +1753,111 @@ public final class BossManager implements Listener {
         if (instance != null) {
             instance.setBaseValue(baseValue);
         }
+    }
+
+    private boolean isAllowedBossWorld(BossType type, World world) {
+        World.Environment required = requiredEnvironment(type);
+        return required == null || (world != null && world.getEnvironment() == required);
+    }
+
+    private String spawnRestrictionMessage(BossType type, World world) {
+        World.Environment required = requiredEnvironment(type);
+        if (required == null || (world != null && world.getEnvironment() == required)) {
+            return null;
+        }
+        return "<white>" + type.plainDisplayName() + "</white> can only be spawned in <white>" + environmentDisplayName(required) + "</white>.";
+    }
+
+    private World.Environment requiredEnvironment(BossType type) {
+        return switch (type) {
+            case AURELION_THE_RIFT_SERAPH -> World.Environment.THE_END;
+            default -> null;
+        };
+    }
+
+    private String requiredEnvironmentLabel(BossType type) {
+        World.Environment required = requiredEnvironment(type);
+        return required == null ? null : environmentDisplayName(required) + " only";
+    }
+
+    private String environmentDisplayName(World.Environment environment) {
+        return switch (environment) {
+            case NORMAL -> "the Overworld";
+            case NETHER -> "the Nether";
+            case THE_END -> "the End";
+            case CUSTOM -> "a custom world";
+        };
+    }
+
+    private boolean isEnvironmentalCheeseDamage(EntityDamageEvent.DamageCause cause) {
+        return switch (cause) {
+            case CONTACT, SUFFOCATION, FALL, FIRE, FIRE_TICK, MELTING, LAVA, DROWNING,
+                FALLING_BLOCK, HOT_FLOOR, CAMPFIRE, CRAMMING, DRYOUT, FREEZE -> true;
+            default -> false;
+        };
+    }
+
+    private boolean teleportBoss(LivingEntity boss, Location target) {
+        UUID entityId = boss.getUniqueId();
+        allowedBossTeleports.add(entityId);
+        try {
+            return boss.teleport(target);
+        } finally {
+            allowedBossTeleports.remove(entityId);
+        }
+    }
+
+    private void updateBossScaling(LivingEntity entity, BossType type) {
+        int nearbyPlayers = countScalingPlayers(entity, type);
+        int previousPlayers = entity.getPersistentDataContainer().getOrDefault(keyBossScaledPlayerCount, PersistentDataType.INTEGER, -1);
+        if (nearbyPlayers == previousPlayers) {
+            return;
+        }
+
+        int extraPlayers = Math.min(BOSS_SCALE_MAX_EXTRA_PLAYERS, Math.max(0, nearbyPlayers - 1));
+        double healthScale = 1.0 + (extraPlayers * BOSS_SCALE_HEALTH_PER_EXTRA_PLAYER);
+        double damageScale = 1.0 + (extraPlayers * BOSS_SCALE_DAMAGE_PER_EXTRA_PLAYER);
+
+        AttributeInstance health = entity.getAttribute(Attribute.MAX_HEALTH);
+        double oldMax = health == null ? type.maxHealth() : Math.max(1.0, health.getValue());
+        double healthRatio = Math.max(0.01, Math.min(1.0, entity.getHealth() / oldMax));
+        double scaledMaxHealth = Math.max(type.maxHealth(), type.maxHealth() * healthScale);
+        setAttributeBase(entity, Attribute.MAX_HEALTH, scaledMaxHealth);
+        AttributeInstance updatedHealth = entity.getAttribute(Attribute.MAX_HEALTH);
+        double nextMax = updatedHealth == null ? scaledMaxHealth : Math.max(1.0, updatedHealth.getValue());
+        entity.setHealth(Math.max(1.0, Math.min(nextMax, nextMax * healthRatio)));
+
+        setAttributeBase(entity, Attribute.ATTACK_DAMAGE, type.attackDamage() * damageScale);
+        entity.getPersistentDataContainer().set(keyBossScaledPlayerCount, PersistentDataType.INTEGER, nearbyPlayers);
+
+        if (nearbyPlayers > 1) {
+            entity.getWorld().spawnParticle(Particle.DUST, entity.getLocation().clone().add(0.0, 1.1, 0.0), 18, 0.55, 0.45, 0.55, 0.0, new Particle.DustOptions(type.ritual().color(), 1.0f));
+            if (nearbyPlayers > previousPlayers) {
+                entity.getWorld().playSound(entity.getLocation(), Sound.ENTITY_WITHER_AMBIENT, 0.65f, 0.85f);
+                entity.getWorld().spawnParticle(Particle.SOUL_FIRE_FLAME, entity.getLocation().clone().add(0.0, 1.2, 0.0), 22, 0.55, 0.55, 0.55, 0.02);
+                entity.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 60, 0, false, true, true));
+                entity.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, 60, 0, false, true, true));
+            }
+        }
+    }
+
+    private int countScalingPlayers(LivingEntity entity, BossType type) {
+        double ritualRadius = type.ritual().arenaRadius();
+        double radius = Math.max(28.0, ritualRadius > 0.0 ? ritualRadius + 8.0 : 36.0);
+        double radiusSquared = radius * radius;
+        int count = 0;
+        for (Player player : entity.getWorld().getPlayers()) {
+            if (!player.isValid() || player.isDead()) {
+                continue;
+            }
+            if (player.getGameMode() == org.bukkit.GameMode.CREATIVE || player.getGameMode() == org.bukkit.GameMode.SPECTATOR) {
+                continue;
+            }
+            if (player.getLocation().distanceSquared(entity.getLocation()) <= radiusSquared) {
+                count++;
+            }
+        }
+        return Math.max(1, count);
     }
 
     private void clearBossEquipment(LivingEntity entity) {
@@ -1453,7 +1948,9 @@ public final class BossManager implements Listener {
         }
 
         int phase = bossPhase(entity);
-        bossBar.setTitle(type.plainDisplayName() + " | Phase " + phase);
+        int scaledPlayers = entity.getPersistentDataContainer().getOrDefault(keyBossScaledPlayerCount, PersistentDataType.INTEGER, 1);
+        String rage = scaledPlayers > 1 ? " | Rage +" + Math.min(BOSS_SCALE_MAX_EXTRA_PLAYERS, scaledPlayers - 1) : "";
+        bossBar.setTitle(type.plainDisplayName() + " | Phase " + phase + rage);
         double maxHealth = Math.max(1.0, entity.getAttribute(Attribute.MAX_HEALTH) == null ? type.maxHealth() : entity.getAttribute(Attribute.MAX_HEALTH).getValue());
         bossBar.setProgress(Math.max(0.0, Math.min(1.0, entity.getHealth() / maxHealth)));
         bossBar.setColor(phase >= 2 ? BarColor.PURPLE : BarColor.RED);
@@ -1570,6 +2067,10 @@ public final class BossManager implements Listener {
             case KAEL_THE_ASHEN -> tickKaelTheAshen(entity);
             case VESPER_THE_WIDOW_QUEEN -> tickVesperTheWidowQueen(entity);
             case VORALITH_THE_CRIMSON_WARDEN -> tickVoralithTheCrimsonWarden(entity);
+            case AURELION_THE_RIFT_SERAPH -> tickAurelionTheRiftSeraph(entity);
+            case NEREIDA_THE_ABYSS_MOTHER -> tickNereidaTheAbyssMother(entity);
+            case IRON_SAINT -> tickIronSaint(entity);
+            case MIREWOOD_THE_ROOT_TYRANT -> tickMirewoodTheRootTyrant(entity);
         }
     }
 
@@ -1597,6 +2098,7 @@ public final class BossManager implements Listener {
 
         drawArenaBoundary(arena);
         enforceArenaBoundary(entity, arena);
+        tickArenaHazards(entity, arena);
     }
 
     private void drawArenaBoundary(BossArena arena) {
@@ -1628,7 +2130,7 @@ public final class BossManager implements Listener {
         double radiusSquared = arena.radius() * arena.radius();
         double warningSquared = (arena.radius() + 3.0) * (arena.radius() + 3.0);
         if (boss.getLocation().distanceSquared(center) > warningSquared) {
-            boss.teleport(center);
+            teleportBoss(boss, center);
             world.spawnParticle(Particle.DUST, center.clone().add(0.0, 1.0, 0.0), 28, 0.45, 0.55, 0.45, 0.0, new Particle.DustOptions(arena.color(), 1.2f));
         }
 
@@ -1651,6 +2153,327 @@ public final class BossManager implements Listener {
             player.sendActionBar(MM.deserialize("<red>The arena refuses to let you leave.</red>"));
             world.spawnParticle(Particle.DUST, player.getLocation().clone().add(0.0, 1.0, 0.0), 8, 0.25, 0.35, 0.25, 0.0, new Particle.DustOptions(arena.color(), 0.9f));
         }
+    }
+
+    private void tickArenaHazards(LivingEntity boss, BossArena arena) {
+        long now = System.currentTimeMillis();
+        long nextHazard = boss.getPersistentDataContainer().getOrDefault(keyBossArenaHazardCooldown, PersistentDataType.LONG, 0L);
+        if (nextHazard > now) {
+            return;
+        }
+        boss.getPersistentDataContainer().set(keyBossArenaHazardCooldown, PersistentDataType.LONG, now + 4_000L);
+
+        Location center = arena.center();
+        World world = center.getWorld();
+        if (world == null) {
+            return;
+        }
+
+        double innerSafeRadius = Math.max(4.0, arena.radius() - 4.0);
+        double innerSafeSquared = innerSafeRadius * innerSafeRadius;
+        for (Player player : world.getPlayers()) {
+            if (player.getGameMode() == org.bukkit.GameMode.CREATIVE || player.getGameMode() == org.bukkit.GameMode.SPECTATOR) {
+                continue;
+            }
+            double distanceSquared = player.getLocation().distanceSquared(center);
+            if (distanceSquared > arena.radius() * arena.radius()) {
+                continue;
+            }
+
+            boolean campingRim = distanceSquared > innerSafeSquared;
+            boolean verticalCheese = player.getLocation().getY() > center.getY() + 8.0;
+            if (!campingRim && !verticalCheese) {
+                continue;
+            }
+
+            player.damage(2.0, boss);
+            player.sendActionBar(MM.deserialize("<red>The arena lashes out at unsafe ground.</red>"));
+            world.spawnParticle(Particle.DUST, player.getLocation().clone().add(0.0, 0.8, 0.0), 18, 0.35, 0.45, 0.35, 0.0, new Particle.DustOptions(arena.color(), 1.1f));
+            world.spawnParticle(Particle.SOUL_FIRE_FLAME, player.getLocation().clone().add(0.0, 0.8, 0.0), 8, 0.25, 0.35, 0.25, 0.015);
+        }
+    }
+
+    private void tickBossFailure(BossRecord record, LivingEntity boss, BossType type) {
+        BossFightState state = bossFightStates.get(record.entityUuid());
+        if (state == null || !state.engaged() || state.finished()) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        if (hasEligiblePlayerInFightArea(boss, type)) {
+            state.clearLossCheck();
+            return;
+        }
+
+        if (state.lossCheckAt() <= 0L) {
+            state.scheduleLossCheck(now + BOSS_FAILURE_GRACE_MS);
+            return;
+        }
+        if (now < state.lossCheckAt()) {
+            return;
+        }
+
+        finishBossFight(record, type, false, false, boss.getLocation());
+        announceBossFailure(type, boss.getLocation());
+        despawnBossMinions(record.entityUuid());
+        destroyBossVisuals(record.entityUuid());
+        boss.remove();
+        untrackRecord(record.entityUuid());
+        plugin.getDatabase().deleteBossRecord(record.entityUuid());
+    }
+
+    private boolean hasEligiblePlayerInFightArea(LivingEntity boss, BossType type) {
+        if (boss == null || boss.getWorld() == null) {
+            return false;
+        }
+        for (Player player : boss.getWorld().getPlayers()) {
+            if (!isFightEligiblePlayer(player)) {
+                continue;
+            }
+            if (isPlayerInFightArea(player, boss, type)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isFightEligiblePlayer(Player player) {
+        if (player == null || !player.isOnline() || player.isDead() || !player.isValid()) {
+            return false;
+        }
+        GameMode gameMode = player.getGameMode();
+        return gameMode != GameMode.CREATIVE && gameMode != GameMode.SPECTATOR;
+    }
+
+    private boolean isPlayerInFightArea(Player player, LivingEntity boss, BossType type) {
+        if (player == null || boss == null || player.getWorld() != boss.getWorld()) {
+            return false;
+        }
+
+        BossArena arena = bossArenas.get(boss.getUniqueId());
+        Location center = arena == null ? boss.getLocation() : arena.center();
+        if (center.getWorld() == null || center.getWorld() != player.getWorld()) {
+            return false;
+        }
+        double radius = arena == null
+            ? Math.max(28.0, type == null ? 36.0 : type.ritual().arenaRadius() + 8.0)
+            : arena.radius() + 3.0;
+        return player.getLocation().distanceSquared(center) <= radius * radius;
+    }
+
+    private BossFightState activeFightStateFor(Player player) {
+        if (player == null) {
+            return null;
+        }
+        for (BossRecord record : new ArrayList<>(trackedBosses.values())) {
+            BossFightState state = bossFightStates.get(record.entityUuid());
+            if (state == null || !state.engaged() || state.finished()) {
+                continue;
+            }
+            Entity entity = Bukkit.getEntity(record.entityUuid());
+            BossType type = BossType.fromId(record.bossId());
+            if (!(entity instanceof LivingEntity boss) || type == null) {
+                continue;
+            }
+            if (state.hasParticipant(player.getUniqueId()) || isPlayerInFightArea(player, boss, type)) {
+                return state;
+            }
+        }
+        return null;
+    }
+
+    private void markBossFightLossCheck(Player player) {
+        long checkAt = System.currentTimeMillis() + BOSS_FAILURE_GRACE_MS;
+        for (BossRecord record : new ArrayList<>(trackedBosses.values())) {
+            BossFightState state = bossFightStates.get(record.entityUuid());
+            if (state == null || !state.engaged() || state.finished()) {
+                continue;
+            }
+            Entity entity = Bukkit.getEntity(record.entityUuid());
+            BossType type = BossType.fromId(record.bossId());
+            if (!(entity instanceof LivingEntity boss) || type == null) {
+                continue;
+            }
+            if (state.hasParticipant(player.getUniqueId()) || isPlayerInFightArea(player, boss, type)) {
+                state.scheduleLossCheck(checkAt);
+            }
+        }
+    }
+
+    private BossFightState fightState(BossRecord record) {
+        return bossFightStates.computeIfAbsent(
+            record.entityUuid(),
+            ignored -> new BossFightState(Math.max(1L, record.spawnedAt()))
+        );
+    }
+
+    private void recordBossFightEngagement(UUID bossId, Player player) {
+        if (bossId == null || player == null) {
+            return;
+        }
+        BossRecord record = trackedBosses.get(bossId);
+        BossFightState state = record == null
+            ? bossFightStates.computeIfAbsent(bossId, ignored -> new BossFightState(System.currentTimeMillis()))
+            : fightState(record);
+        state.touch(player);
+    }
+
+    private Player attackingPlayer(Entity damager) {
+        if (damager instanceof Player player) {
+            return player;
+        }
+        if (damager instanceof Projectile projectile) {
+            ProjectileSource source = projectile.getShooter();
+            if (source instanceof Player player) {
+                return player;
+            }
+        }
+        return null;
+    }
+
+    private Player topOnlineParticipant(BossFightState state) {
+        if (state == null) {
+            return null;
+        }
+        for (BossFightParticipant participant : state.sortedParticipants()) {
+            Player player = Bukkit.getPlayer(participant.playerUuid());
+            if (player != null && player.isOnline()) {
+                return player;
+            }
+        }
+        return null;
+    }
+
+    private void finishBossFight(BossRecord record, BossType type, boolean victory, boolean doubleDrops, Location location) {
+        BossFightState state = bossFightStates.get(record.entityUuid());
+        if (state == null || !state.markFinished()) {
+            return;
+        }
+
+        long endedAt = System.currentTimeMillis();
+        List<BossFightParticipant> participants = state.sortedParticipants();
+        broadcastFightLeaderboard(type, victory, participants);
+        sendPersonalFightReports(type, victory, participants);
+        saveBossFightReport(record, type, victory, doubleDrops, endedAt, participants);
+        if (location != null && location.getWorld() != null) {
+            location.getWorld().spawnParticle(victory ? Particle.TOTEM_OF_UNDYING : Particle.ASH, location.clone().add(0.0, 1.2, 0.0), 28, 0.55, 0.6, 0.55, 0.02);
+        }
+    }
+
+    private void saveBossFightReport(BossRecord record, BossType type, boolean victory, boolean doubleDrops, long endedAt, List<BossFightParticipant> participants) {
+        if (participants.isEmpty()) {
+            return;
+        }
+        String fightId = UUID.randomUUID().toString();
+        long startedAt = bossFightStates.getOrDefault(record.entityUuid(), new BossFightState(record.spawnedAt())).startedAt();
+        double totalDamage = participants.stream().mapToDouble(BossFightParticipant::damageDone).sum();
+        double totalHealing = participants.stream().mapToDouble(BossFightParticipant::healingReceived).sum();
+        DatabaseManager.BossFightRecord fight = new DatabaseManager.BossFightRecord(
+            fightId,
+            type == null ? record.bossId() : type.id(),
+            victory ? "victory" : "failure",
+            startedAt,
+            endedAt,
+            Math.max(0L, endedAt - startedAt),
+            doubleDrops,
+            totalDamage,
+            totalHealing
+        );
+
+        List<DatabaseManager.BossFightParticipantRecord> dbParticipants = new ArrayList<>();
+        int rank = 1;
+        for (BossFightParticipant participant : participants) {
+            dbParticipants.add(new DatabaseManager.BossFightParticipantRecord(
+                fightId,
+                participant.playerUuid(),
+                participant.playerName(),
+                participant.damageDone(),
+                participant.healingReceived(),
+                rank
+            ));
+            if (plugin.getLeaderboardManager() != null) {
+                plugin.getLeaderboardManager().recordBossFightParticipant(
+                    participant.playerUuid(),
+                    participant.playerName(),
+                    participant.damageDone()
+                );
+            }
+            rank++;
+        }
+        plugin.getDatabase().saveBossFightReport(fight, dbParticipants);
+    }
+
+    private void broadcastFightLeaderboard(BossType type, boolean victory, List<BossFightParticipant> participants) {
+        String bossName = type == null ? "Unknown Boss" : type.plainDisplayName();
+        Bukkit.broadcast(MessageUtil.prefixedRaw(
+            (victory ? "<gold><bold>Boss Report:</bold></gold> " : "<red><bold>Boss Failed:</bold></red> ")
+                + "<white>" + escapeMiniMessage(bossName) + "</white> "
+                + (victory ? "<gray>was defeated.</gray>" : "<gray>overwhelmed the arena.</gray>")
+        ));
+
+        List<BossFightParticipant> damageParticipants = participants.stream()
+            .filter(participant -> participant.damageDone() > 0.0)
+            .limit(5)
+            .toList();
+        if (damageParticipants.isEmpty()) {
+            Bukkit.broadcast(MessageUtil.prefixedRaw("<dark_gray>No player damage was recorded for this fight.</dark_gray>"));
+            return;
+        }
+
+        int rank = 1;
+        for (BossFightParticipant participant : damageParticipants) {
+            Bukkit.broadcast(MessageUtil.prefixedRaw(
+                "<gold>#" + rank + "</gold> <white>" + escapeMiniMessage(participant.playerName()) + "</white>"
+                    + " <gray>-</gray> <red>" + trimNumber(participant.damageDone()) + " dmg</red>"
+                    + " <dark_gray>|</dark_gray> <green>" + trimNumber(participant.healingReceived()) + " healing received</green>"
+            ));
+            rank++;
+        }
+    }
+
+    private void sendPersonalFightReports(BossType type, boolean victory, List<BossFightParticipant> participants) {
+        String bossName = type == null ? "Unknown Boss" : type.plainDisplayName();
+        int rank = 1;
+        for (BossFightParticipant participant : participants) {
+            Player player = Bukkit.getPlayer(participant.playerUuid());
+            if (player == null || !player.isOnline()) {
+                rank++;
+                continue;
+            }
+            player.sendMessage(MessageUtil.prefixedRaw(
+                "<gradient:#fb7185:#facc15><bold>After Action:</bold></gradient> <white>"
+                    + escapeMiniMessage(bossName) + "</white> <gray>"
+                    + (victory ? "victory" : "failure") + "</gray>"
+            ));
+            player.sendMessage(MessageUtil.prefixedRaw(
+                "<gray>Your rank:</gray> <white>#" + rank + "</white>"
+                    + " <dark_gray>|</dark_gray> <gray>Damage:</gray> <red>" + trimNumber(participant.damageDone()) + "</red>"
+                    + " <dark_gray>|</dark_gray> <gray>Healing received:</gray> <green>" + trimNumber(participant.healingReceived()) + "</green>"
+            ));
+            rank++;
+        }
+    }
+
+    private void announceBossFailure(BossType type, Location location) {
+        if (type == null) {
+            return;
+        }
+        Bukkit.broadcast(MessageUtil.prefixedRaw(
+            "<red><bold>" + type.plainDisplayName() + "</bold></red> <gray>has consumed the arena. The fight is lost.</gray>"
+        ));
+        World world = location == null ? null : location.getWorld();
+        if (world != null) {
+            world.playSound(location, Sound.ENTITY_WITHER_DEATH, 1.0f, 0.55f);
+            world.spawnParticle(Particle.SOUL, location.clone().add(0.0, 1.2, 0.0), 45, 0.9, 0.7, 0.9, 0.05);
+            world.spawnParticle(Particle.SMOKE, location.clone().add(0.0, 1.0, 0.0), 32, 0.7, 0.5, 0.7, 0.04);
+        }
+    }
+
+    private String escapeMiniMessage(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        return raw.replace("\\", "\\\\").replace("<", "\\<");
     }
 
     private void tickYuleTheMinion(LivingEntity entity) {
@@ -2046,6 +2869,191 @@ public final class BossManager implements Listener {
         }
     }
 
+    private void tickAurelionTheRiftSeraph(LivingEntity entity) {
+        double maxHealth = Math.max(1.0, entity.getAttribute(Attribute.MAX_HEALTH) == null ? 1.0 : entity.getAttribute(Attribute.MAX_HEALTH).getValue());
+        if (bossPhase(entity) < 2 && entity.getHealth() <= maxHealth * 0.50) {
+            setBossPhase(entity, 2);
+            entity.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, Integer.MAX_VALUE, 1, false, true, true));
+            entity.getWorld().spawnParticle(Particle.PORTAL, entity.getLocation().clone().add(0.0, 1.0, 0.0), 90, 1.2, 0.9, 1.2, 0.55);
+            entity.getWorld().playSound(entity.getLocation(), Sound.ENTITY_ENDERMAN_SCREAM, 1.1f, 0.65f);
+        }
+
+        LivingEntity target = currentBossTarget(entity);
+        if (target == null || !bossCooldownReady(entity, keyBossSecondaryCooldown)) {
+            return;
+        }
+        double radius = bossPhase(entity) >= 2 ? 9.0 : 7.0;
+        if (entity.getLocation().distanceSquared(target.getLocation()) > radius * radius) {
+            return;
+        }
+        Location center = entity.getLocation().clone().add(0.0, 1.0, 0.0);
+        World world = entity.getWorld();
+        world.spawnParticle(Particle.REVERSE_PORTAL, center, 60, 1.0, 0.45, 1.0, 0.14);
+        world.playSound(center, Sound.ENTITY_ENDERMAN_TELEPORT, 1.0f, 0.72f);
+        for (Entity nearby : entity.getNearbyEntities(radius, 2.8, radius)) {
+            if (!(nearby instanceof LivingEntity victim) || victim.equals(entity) || victim.isDead() || !victim.isValid()) {
+                continue;
+            }
+            Vector pull = entity.getLocation().toVector().subtract(victim.getLocation().toVector());
+            if (pull.lengthSquared() > 1.0E-6) {
+                victim.setVelocity(victim.getVelocity().add(pull.normalize().multiply(bossPhase(entity) >= 2 ? 0.55 : 0.35).setY(0.18)));
+            }
+            victim.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, bossPhase(entity) >= 2 ? 80 : 50, 0, false, true, true));
+        }
+        setBossCooldown(entity, keyBossSecondaryCooldown, bossPhase(entity) >= 2 ? 5200L : 7200L);
+    }
+
+    private void tickNereidaTheAbyssMother(LivingEntity entity) {
+        double maxHealth = Math.max(1.0, entity.getAttribute(Attribute.MAX_HEALTH) == null ? 1.0 : entity.getAttribute(Attribute.MAX_HEALTH).getValue());
+        if (bossPhase(entity) < 2 && entity.getHealth() <= maxHealth * 0.45) {
+            setBossPhase(entity, 2);
+            entity.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, Integer.MAX_VALUE, 0, false, true, true));
+            entity.getWorld().spawnParticle(Particle.NAUTILUS, entity.getLocation().clone().add(0.0, 1.0, 0.0), 72, 1.0, 0.7, 1.0, 0.08);
+            entity.getWorld().playSound(entity.getLocation(), Sound.ENTITY_ELDER_GUARDIAN_CURSE, 1.0f, 0.82f);
+        }
+        if ((entity.isInWater() || entity.isInRain()) && entity.getHealth() < maxHealth) {
+            entity.setHealth(Math.min(maxHealth, entity.getHealth() + (bossPhase(entity) >= 2 ? 1.2 : 0.6)));
+        }
+        LivingEntity target = currentBossTarget(entity);
+        if (target == null || !bossCooldownReady(entity, keyBossSecondaryCooldown)) {
+            return;
+        }
+        if (entity.getLocation().distanceSquared(target.getLocation()) > 10.0 * 10.0) {
+            return;
+        }
+        unleashAbyssWave(entity);
+    }
+
+    private void unleashAbyssWave(LivingEntity entity) {
+        int phase = bossPhase(entity);
+        double radius = phase >= 2 ? 8.0 : 6.0;
+        Location center = entity.getLocation().clone().add(0.0, 0.8, 0.0);
+        World world = entity.getWorld();
+        world.spawnParticle(Particle.SPLASH, center, 80, radius * 0.25, 0.45, radius * 0.25, 0.08);
+        world.spawnParticle(Particle.NAUTILUS, center, 36, radius * 0.18, 0.35, radius * 0.18, 0.04);
+        world.playSound(center, Sound.ENTITY_PLAYER_SPLASH_HIGH_SPEED, 1.1f, 0.72f);
+        for (Entity nearby : entity.getNearbyEntities(radius, 2.5, radius)) {
+            if (!(nearby instanceof LivingEntity target) || target.equals(entity) || target.isDead()) {
+                continue;
+            }
+            target.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, phase >= 2 ? 100 : 70, 1, false, true, true));
+            target.damage(phase >= 2 ? 7.0 : 4.0, entity);
+            Vector away = target.getLocation().toVector().subtract(entity.getLocation().toVector());
+            if (away.lengthSquared() > 1.0E-6) {
+                target.setVelocity(target.getVelocity().add(away.normalize().multiply(0.45).setY(0.16)));
+            }
+        }
+        setBossCooldown(entity, keyBossSecondaryCooldown, phase >= 2 ? 6200L : 8200L);
+    }
+
+    private void tickIronSaint(LivingEntity entity) {
+        double maxHealth = Math.max(1.0, entity.getAttribute(Attribute.MAX_HEALTH) == null ? 1.0 : entity.getAttribute(Attribute.MAX_HEALTH).getValue());
+        if (bossPhase(entity) < 2 && entity.getHealth() <= maxHealth * 0.50) {
+            setBossPhase(entity, 2);
+            entity.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH, Integer.MAX_VALUE, 0, false, true, true));
+            entity.getWorld().spawnParticle(Particle.CRIT, entity.getLocation().clone().add(0.0, 1.2, 0.0), 54, 0.8, 0.6, 0.8, 0.08);
+            entity.getWorld().playSound(entity.getLocation(), Sound.BLOCK_ANVIL_LAND, 1.4f, 0.6f);
+        }
+        LivingEntity target = currentBossTarget(entity);
+        if (target == null || !bossCooldownReady(entity, keyBossSecondaryCooldown)) {
+            return;
+        }
+        if (entity.getLocation().distanceSquared(target.getLocation()) <= 7.0 * 7.0) {
+            unleashIronSlam(entity);
+        }
+    }
+
+    private void unleashIronSlam(LivingEntity entity) {
+        int phase = bossPhase(entity);
+        double radius = phase >= 2 ? 7.0 : 5.0;
+        Location center = entity.getLocation();
+        World world = entity.getWorld();
+        world.spawnParticle(Particle.BLOCK, center.clone().add(0.0, 0.25, 0.0), 55, 1.2, 0.25, 1.2, 0.08, Material.IRON_BLOCK.createBlockData());
+        world.spawnParticle(Particle.CRIT, center.clone().add(0.0, 1.0, 0.0), 32, 0.85, 0.35, 0.85, 0.06);
+        world.playSound(center, Sound.BLOCK_ANVIL_LAND, 1.35f, 0.52f);
+        for (Entity nearby : entity.getNearbyEntities(radius, 2.4, radius)) {
+            if (!(nearby instanceof LivingEntity target) || target.equals(entity) || target.isDead()) {
+                continue;
+            }
+            target.damage(phase >= 2 ? 8.0 : 5.0, entity);
+            target.addPotionEffect(new PotionEffect(PotionEffectType.WEAKNESS, phase >= 2 ? 100 : 60, 0, false, true, true));
+            Vector away = target.getLocation().toVector().subtract(entity.getLocation().toVector());
+            if (away.lengthSquared() > 1.0E-6) {
+                target.setVelocity(target.getVelocity().add(away.normalize().multiply(phase >= 2 ? 0.95 : 0.65).setY(0.30)));
+            }
+        }
+        setBossCooldown(entity, keyBossSecondaryCooldown, phase >= 2 ? 6800L : 9000L);
+    }
+
+    private void tickMirewoodTheRootTyrant(LivingEntity entity) {
+        double maxHealth = Math.max(1.0, entity.getAttribute(Attribute.MAX_HEALTH) == null ? 1.0 : entity.getAttribute(Attribute.MAX_HEALTH).getValue());
+        if (bossPhase(entity) < 2 && entity.getHealth() <= maxHealth * 0.50) {
+            setBossPhase(entity, 2);
+            entity.addPotionEffect(new PotionEffect(PotionEffectType.REGENERATION, Integer.MAX_VALUE, 0, false, true, true));
+            entity.getWorld().spawnParticle(Particle.SPORE_BLOSSOM_AIR, entity.getLocation().clone().add(0.0, 1.0, 0.0), 80, 1.0, 0.7, 1.0, 0.07);
+            entity.getWorld().playSound(entity.getLocation(), Sound.BLOCK_ROOTED_DIRT_PLACE, 1.1f, 0.55f);
+        }
+        LivingEntity target = currentBossTarget(entity);
+        if (target == null || !bossCooldownReady(entity, keyBossSecondaryCooldown)) {
+            return;
+        }
+        if (entity.getLocation().distanceSquared(target.getLocation()) <= 9.0 * 9.0) {
+            unleashRootSnare(entity);
+        }
+    }
+
+    private void unleashRootSnare(LivingEntity entity) {
+        int phase = bossPhase(entity);
+        double radius = phase >= 2 ? 8.0 : 6.0;
+        Location center = entity.getLocation().clone().add(0.0, 0.7, 0.0);
+        World world = entity.getWorld();
+        world.spawnParticle(Particle.SPORE_BLOSSOM_AIR, center, 56, 1.1, 0.35, 1.1, 0.04);
+        world.spawnParticle(Particle.HAPPY_VILLAGER, center, 16, 0.75, 0.28, 0.75, 0.02);
+        world.playSound(center, Sound.BLOCK_ROOTED_DIRT_BREAK, 1.0f, 0.75f);
+        for (Entity nearby : entity.getNearbyEntities(radius, 2.5, radius)) {
+            if (!(nearby instanceof LivingEntity target) || target.equals(entity) || target.isDead()) {
+                continue;
+            }
+            target.damage(phase >= 2 ? 6.0 : 3.5, entity);
+            target.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, phase >= 2 ? 120 : 80, 1, false, true, true));
+            target.addPotionEffect(new PotionEffect(PotionEffectType.MINING_FATIGUE, phase >= 2 ? 80 : 50, 0, false, true, true));
+        }
+        setBossCooldown(entity, keyBossSecondaryCooldown, phase >= 2 ? 6200L : 8500L);
+    }
+
+    private void handleAurelionMeleeHit(LivingEntity attacker, LivingEntity target, int phase, EntityDamageByEntityEvent event) {
+        event.setDamage(event.getDamage() + (phase >= 2 ? 2.0 : 1.0));
+        target.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, phase >= 2 ? 70 : 45, 0, false, true, true));
+        target.getWorld().spawnParticle(Particle.PORTAL, target.getLocation().clone().add(0.0, 1.0, 0.0), 24, 0.35, 0.35, 0.35, 0.25);
+    }
+
+    private void handleNereidaMeleeHit(LivingEntity attacker, LivingEntity target, int phase, EntityDamageByEntityEvent event) {
+        event.setDamage(event.getDamage() + (phase >= 2 ? 2.0 : 1.0));
+        target.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, phase >= 2 ? 80 : 50, 0, false, true, true));
+        target.getWorld().spawnParticle(Particle.SPLASH, target.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.30, 0.35, 0.30, 0.05);
+    }
+
+    private void handleIronSaintMeleeHit(LivingEntity attacker, LivingEntity target, int phase, EntityDamageByEntityEvent event) {
+        event.setDamage(event.getDamage() + (phase >= 2 ? 3.0 : 1.5));
+        Vector away = target.getLocation().toVector().subtract(attacker.getLocation().toVector());
+        if (away.lengthSquared() > 1.0E-6) {
+            target.setVelocity(target.getVelocity().add(away.normalize().multiply(phase >= 2 ? 0.75 : 0.45).setY(0.25)));
+        }
+        target.getWorld().spawnParticle(Particle.CRIT, target.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.28, 0.34, 0.28, 0.06);
+    }
+
+    private void handleMirewoodMeleeHit(LivingEntity attacker, LivingEntity target, int phase, EntityDamageByEntityEvent event) {
+        event.setDamage(event.getDamage() + (phase >= 2 ? 2.0 : 1.0));
+        target.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, phase >= 2 ? 80 : 45, 0, false, true, true));
+        if (phase >= 2) {
+            double maxHealth = attacker.getAttribute(Attribute.MAX_HEALTH) == null
+                ? attacker.getHealth()
+                : attacker.getAttribute(Attribute.MAX_HEALTH).getValue();
+            attacker.setHealth(Math.min(maxHealth, attacker.getHealth() + 2.0));
+        }
+        target.getWorld().spawnParticle(Particle.SPORE_BLOSSOM_AIR, target.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.28, 0.34, 0.28, 0.04);
+    }
+
     private Location findBossSpawnLocation(Player player, BossType type) {
         Block targetBlock = player.getTargetBlockExact(16);
         Location seed = targetBlock != null
@@ -2304,10 +3312,12 @@ public final class BossManager implements Listener {
     private void trackRecord(BossRecord record) {
         trackedBosses.put(record.entityUuid(), record);
         trackedByBossId.computeIfAbsent(record.bossId(), key -> ConcurrentHashMap.newKeySet()).add(record.entityUuid());
+        bossFightStates.computeIfAbsent(record.entityUuid(), ignored -> new BossFightState(Math.max(1L, record.spawnedAt())));
     }
 
     private void untrackRecord(UUID entityUuid) {
         BossRecord removed = trackedBosses.remove(entityUuid);
+        bossFightStates.remove(entityUuid);
         if (removed == null) {
             return;
         }
@@ -2380,6 +3390,127 @@ public final class BossManager implements Listener {
     }
 
     private record BossArena(Location center, double radius, Color color) {
+    }
+
+    private static final class BossFightState {
+        private final long startedAt;
+        private final Map<UUID, BossFightParticipant> participants = new LinkedHashMap<>();
+        private long lossCheckAt;
+        private boolean finished;
+
+        private BossFightState(long startedAt) {
+            this.startedAt = Math.max(1L, startedAt);
+        }
+
+        private long startedAt() {
+            return startedAt;
+        }
+
+        private boolean engaged() {
+            return !participants.isEmpty();
+        }
+
+        private boolean finished() {
+            return finished;
+        }
+
+        private boolean markFinished() {
+            if (finished) {
+                return false;
+            }
+            finished = true;
+            return true;
+        }
+
+        private long lossCheckAt() {
+            return lossCheckAt;
+        }
+
+        private void scheduleLossCheck(long lossCheckAt) {
+            this.lossCheckAt = Math.max(this.lossCheckAt, lossCheckAt);
+        }
+
+        private void clearLossCheck() {
+            lossCheckAt = 0L;
+        }
+
+        private boolean hasParticipant(UUID playerUuid) {
+            return participants.containsKey(playerUuid);
+        }
+
+        private void touch(Player player) {
+            participant(player);
+        }
+
+        private void addDamage(Player player, double amount) {
+            participant(player).addDamage(amount);
+            lossCheckAt = 0L;
+        }
+
+        private void addHealing(Player player, double amount) {
+            participant(player).addHealing(amount);
+            lossCheckAt = 0L;
+        }
+
+        private BossFightParticipant participant(Player player) {
+            return participants.compute(player.getUniqueId(), (uuid, existing) -> {
+                if (existing == null) {
+                    return new BossFightParticipant(player.getUniqueId(), player.getName());
+                }
+                existing.updateName(player.getName());
+                return existing;
+            });
+        }
+
+        private List<BossFightParticipant> sortedParticipants() {
+            return participants.values().stream()
+                .sorted(Comparator
+                    .comparingDouble(BossFightParticipant::damageDone).reversed()
+                    .thenComparing(BossFightParticipant::playerName, String.CASE_INSENSITIVE_ORDER))
+                .toList();
+        }
+    }
+
+    private static final class BossFightParticipant {
+        private final UUID playerUuid;
+        private String playerName;
+        private double damageDone;
+        private double healingReceived;
+
+        private BossFightParticipant(UUID playerUuid, String playerName) {
+            this.playerUuid = playerUuid;
+            this.playerName = playerName == null || playerName.isBlank() ? "Unknown" : playerName;
+        }
+
+        private UUID playerUuid() {
+            return playerUuid;
+        }
+
+        private String playerName() {
+            return playerName == null || playerName.isBlank() ? "Unknown" : playerName;
+        }
+
+        private double damageDone() {
+            return damageDone;
+        }
+
+        private double healingReceived() {
+            return healingReceived;
+        }
+
+        private void updateName(String playerName) {
+            if (playerName != null && !playerName.isBlank()) {
+                this.playerName = playerName;
+            }
+        }
+
+        private void addDamage(double amount) {
+            damageDone += Math.max(0.0, amount);
+        }
+
+        private void addHealing(double amount) {
+            healingReceived += Math.max(0.0, amount);
+        }
     }
 
     private record RitualMatch(BossType type, Block focus) {
@@ -2586,6 +3717,185 @@ public final class BossManager implements Listener {
                 if (entity instanceof Warden warden) {
                     warden.setCanPickupItems(false);
                 }
+            }
+        ),
+        AURELION_THE_RIFT_SERAPH(
+            "aurelion_the_rift_seraph",
+            EntityType.ENDERMAN,
+            Material.ENDER_EYE,
+            "<gradient:#8b5cf6:#f0abfc><bold>Aurelion the Rift Seraph</bold></gradient>",
+            420.0,
+            13.0,
+            0.36,
+            52.0,
+            0.35,
+            3,
+            true,
+            List.of(
+                "<gray>A void-touched seraph that bends distance into a weapon.</gray>",
+                "<gray>Phase One:</gray> <white>teleports, slows, and pulls players through unstable rifts</white>",
+                "<gray>Phase Two:</gray> <white>faster rift pulses and heavier displacement</white>",
+                "<gray>Drops Rift Lenses and rare Void Halos for Covenant recipes.</gray>"
+            ),
+            new BossRitual(
+                "Rift Coronation",
+                Material.END_ROD,
+                Material.ENDER_EYE,
+                Material.END_ROD,
+                List.of(
+                    "<gold><bold>Build Guide</bold></gold>",
+                    "<gray>Only works in <white>the End</white>. The rift will not answer anywhere else.</gray>",
+                    "<gray>1. Put a <white>Purpur Block</white> on the ground.</gray>",
+                    "<gray>2. Place an <white>End Rod</white> directly on top of the Purpur Block.</gray>",
+                    "<gray>3. Put <white>End Stone Bricks</white> touching the Purpur Block north, south, east, and west.</gray>",
+                    "<gray>4. Hold an <white>Eye of Ender</white> and right-click the End Rod or any shrine block.</gray>",
+                    "<dark_gray>Base layer is a plus sign around Purpur. The End Rod is the focus.</dark_gray>"
+                ),
+                72L,
+                16.0,
+                Color.fromRGB(170, 90, 255),
+                Particle.PORTAL,
+                Sound.BLOCK_END_PORTAL_FRAME_FILL,
+                Sound.ENTITY_ENDERMAN_TELEPORT,
+                Sound.BLOCK_END_PORTAL_SPAWN
+            ),
+            (manager, entity) -> { }
+        ),
+        NEREIDA_THE_ABYSS_MOTHER(
+            "nereida_the_abyss_mother",
+            EntityType.DROWNED,
+            Material.HEART_OF_THE_SEA,
+            "<gradient:#38bdf8:#0f766e><bold>Nereida the Abyss Mother</bold></gradient>",
+            380.0,
+            12.0,
+            0.32,
+            44.0,
+            0.45,
+            2,
+            false,
+            List.of(
+                "<gray>A drowned matron that turns rain and water into a battlefield.</gray>",
+                "<gray>Phase One:</gray> <white>slows and drags targets under pressure</white>",
+                "<gray>Phase Two:</gray> <white>surging waves, stronger hits, and regeneration in water</white>",
+                "<gray>Drops Abyssal Pearls and rare Tidehearts.</gray>"
+            ),
+            new BossRitual(
+                "Abyssal Baptism",
+                Material.CONDUIT,
+                Material.HEART_OF_THE_SEA,
+                Material.CONDUIT,
+                List.of(
+                    "<gold><bold>Build Guide</bold></gold>",
+                    "<gray>1. Put a <white>Prismarine</white> block on the ground.</gray>",
+                    "<gray>2. Place a <white>Conduit</white> directly on top of the Prismarine.</gray>",
+                    "<gray>3. Put <white>Sea Lanterns</white> touching the Prismarine north, south, east, and west.</gray>",
+                    "<gray>4. Hold a <white>Heart of the Sea</white> and right-click the Conduit or any shrine block.</gray>",
+                    "<dark_gray>The shrine works on land or underwater.</dark_gray>"
+                ),
+                68L,
+                14.0,
+                Color.fromRGB(35, 180, 220),
+                Particle.NAUTILUS,
+                Sound.BLOCK_CONDUIT_ACTIVATE,
+                Sound.BLOCK_BUBBLE_COLUMN_WHIRLPOOL_INSIDE,
+                Sound.ENTITY_ELDER_GUARDIAN_CURSE
+            ),
+            (manager, entity) -> {
+                manager.equipBossHands(entity, new ItemStack(Material.TRIDENT), null);
+            }
+        ),
+        IRON_SAINT(
+            "iron_saint",
+            EntityType.IRON_GOLEM,
+            Material.ANVIL,
+            "<gradient:#d1d5db:#facc15><bold>The Iron Saint</bold></gradient>",
+            520.0,
+            16.0,
+            0.25,
+            42.0,
+            0.80,
+            4,
+            false,
+            List.of(
+                "<gray>A slow cathedral of iron, built to punish greedy spacing.</gray>",
+                "<gray>Phase One:</gray> <white>heavy melee and crushing knockback</white>",
+                "<gray>Phase Two:</gray> <white>slam pulses that weaken nearby players</white>",
+                "<gray>Drops Titan Gears and rare Saint Alloy.</gray>"
+            ),
+            new BossRitual(
+                "Iron Litany",
+                Material.ANVIL,
+                Material.IRON_BLOCK,
+                Material.ANVIL,
+                List.of(
+                    "<gold><bold>Build Guide</bold></gold>",
+                    "<gray>1. Put a <white>Smithing Table</white> on the ground.</gray>",
+                    "<gray>2. Place an <white>Anvil</white> directly on top of the Smithing Table.</gray>",
+                    "<gray>3. Put <white>Iron Blocks</white> touching the Smithing Table north, south, east, and west.</gray>",
+                    "<gray>4. Hold an <white>Iron Block</white> and right-click the Anvil or any shrine block.</gray>",
+                    "<dark_gray>Bring real armor. The Saint does not negotiate.</dark_gray>"
+                ),
+                76L,
+                17.0,
+                Color.fromRGB(190, 190, 170),
+                Particle.CRIT,
+                Sound.BLOCK_ANVIL_LAND,
+                Sound.BLOCK_ANVIL_USE,
+                Sound.ENTITY_IRON_GOLEM_REPAIR
+            ),
+            (manager, entity) -> { }
+        ),
+        MIREWOOD_THE_ROOT_TYRANT(
+            "mirewood_the_root_tyrant",
+            EntityType.HUSK,
+            Material.MANGROVE_ROOTS,
+            "<gradient:#16a34a:#854d0e><bold>Mirewood the Root Tyrant</bold></gradient>",
+            400.0,
+            12.0,
+            0.30,
+            40.0,
+            0.55,
+            2,
+            false,
+            List.of(
+                "<gray>An old root wearing a corpse as a crown.</gray>",
+                "<gray>Phase One:</gray> <white>roots and slows players that let it close distance</white>",
+                "<gray>Phase Two:</gray> <white>regenerates and grows harsher root pulses</white>",
+                "<gray>Drops Living Bark and rare Verdant Hearts.</gray>"
+            ),
+            new BossRitual(
+                "Root Tyrant's Wake",
+                Material.MANGROVE_ROOTS,
+                Material.SPORE_BLOSSOM,
+                Material.MANGROVE_ROOTS,
+                List.of(
+                    "<gold><bold>Build Guide</bold></gold>",
+                    "<gray>1. Put a <white>Moss Block</white> on the ground.</gray>",
+                    "<gray>2. Place <white>Mangrove Roots</white> directly on top of the Moss Block.</gray>",
+                    "<gray>3. Put <white>Oak Saplings</white> touching the Moss Block north, south, east, and west.</gray>",
+                    "<gray>4. Hold a <white>Spore Blossom</white> and right-click the Mangrove Roots or any shrine block.</gray>",
+                    "<dark_gray>The roots vanish on success. If they remain, the pattern is wrong.</dark_gray>"
+                ),
+                70L,
+                15.0,
+                Color.fromRGB(60, 175, 75),
+                Particle.SPORE_BLOSSOM_AIR,
+                Sound.BLOCK_ROOTED_DIRT_BREAK,
+                Sound.BLOCK_AZALEA_LEAVES_PLACE,
+                Sound.ENTITY_ZOMBIE_VILLAGER_CURE
+            ),
+            (manager, entity) -> {
+                if (entity instanceof Zombie zombie) {
+                    zombie.setAdult();
+                    zombie.setConversionTime(-1);
+                }
+                manager.equipBossArmor(
+                    entity,
+                    new ItemStack(Material.MOSS_BLOCK),
+                    new ItemStack(Material.LEATHER_CHESTPLATE),
+                    new ItemStack(Material.LEATHER_LEGGINGS),
+                    new ItemStack(Material.LEATHER_BOOTS)
+                );
             }
         );
 
