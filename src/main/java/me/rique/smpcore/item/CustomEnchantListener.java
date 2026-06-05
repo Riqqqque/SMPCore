@@ -15,6 +15,7 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.Tag;
+import org.bukkit.attribute.Attribute;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.data.Ageable;
@@ -30,6 +31,7 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockDropItemEvent;
 import org.bukkit.event.enchantment.EnchantItemEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.EntityShootBowEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
@@ -39,6 +41,8 @@ import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.event.inventory.PrepareGrindstoneEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerExpChangeEvent;
+import org.bukkit.event.player.PlayerItemDamageEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerToggleFlightEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.block.Action;
@@ -50,11 +54,15 @@ import org.bukkit.inventory.GrindstoneInventory;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.RecipeChoice;
+import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.loot.LootTable;
 import org.bukkit.loot.LootTables;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
 import org.bukkit.util.Vector;
 
 import java.util.ArrayList;
@@ -77,21 +85,41 @@ public final class CustomEnchantListener implements Listener {
     private static final String WISE_LORE_PREFIX = "Wise ";
     private static final String DOUBLE_JUMP_LORE_LINE = "Double Jump I";
     private static final String DASH_LORE_LINE = "Dash I";
+    private static final String FROSTBITE_LORE_PREFIX = "Frostbite ";
+    private static final String HARVESTING_LORE_PREFIX = "Harvesting ";
+    private static final String BULWARK_LORE_PREFIX = "Bulwark ";
+    private static final String REINFORCED_LORE_PREFIX = "Reinforced ";
+    private static final String KINGSLAYER_LORE_LINE = "Kingslayer I";
+    private static final String SOUL_SIPHON_LORE_LINE = "Soul Siphon I";
+    private static final String ECHOING_LORE_LINE = "Echoing I";
     private static final long TELEKINESIS_MINING_CONTEXT_TTL_MS = 1000L;
+    private static final int CUSTOM_ENCHANT_ANVIL_BASE_COST = 6;
+    private static final int CUSTOM_ENCHANT_ANVIL_LEVEL_COST = 3;
 
     private final SMPCore plugin;
     private final NamespacedKey keyCustomEnchantBook;
+    private final NamespacedKey keyEnchantMenuId;
     private final NamespacedKey keyDelicate;
     private final NamespacedKey keyTelekinesis;
     private final NamespacedKey keySmeltingTouch;
     private final NamespacedKey keyWise;
     private final NamespacedKey keyDoubleJump;
     private final NamespacedKey keyDash;
+    private final NamespacedKey keyFrostbite;
+    private final NamespacedKey keyHarvesting;
+    private final NamespacedKey keyBulwark;
+    private final NamespacedKey keyReinforced;
+    private final NamespacedKey keyKingslayer;
+    private final NamespacedKey keySoulSiphon;
+    private final NamespacedKey keyEchoing;
+    private final NamespacedKey keyDashCooldownUntil;
     private final NamespacedKey keyTelekinesisProjectileOwner;
+    private final NamespacedKey keyKingslayerRecipe;
+    private final NamespacedKey keySoulSiphonRecipe;
+    private final NamespacedKey keyEchoingRecipe;
     private final Map<UUID, UUID> telekinesisLootOwners = new ConcurrentHashMap<>();
     private final Map<BlockKey, TelekinesisMiningContext> telekinesisMiningContexts = new ConcurrentHashMap<>();
     private final Map<UUID, Double> wiseXpRemainders = new ConcurrentHashMap<>();
-    private final Map<UUID, Long> dashCooldowns = new ConcurrentHashMap<>();
     private final Map<Material, ItemStack> smeltingResults = new ConcurrentHashMap<>();
     private final java.util.Set<Material> nonSmeltableDrops = ConcurrentHashMap.newKeySet();
     private final java.util.Set<UUID> doubleJumpFlightPlayers = ConcurrentHashMap.newKeySet();
@@ -99,13 +127,25 @@ public final class CustomEnchantListener implements Listener {
     public CustomEnchantListener(SMPCore plugin) {
         this.plugin = plugin;
         this.keyCustomEnchantBook = new NamespacedKey(plugin, "custom_enchant_book");
+        this.keyEnchantMenuId = new NamespacedKey(plugin, "custom_enchant_menu_id");
         this.keyDelicate = new NamespacedKey(plugin, "delicate_enchant");
         this.keyTelekinesis = new NamespacedKey(plugin, "telekinesis_enchant");
         this.keySmeltingTouch = new NamespacedKey(plugin, "smelting_touch_enchant");
         this.keyWise = new NamespacedKey(plugin, "wise_enchant");
         this.keyDoubleJump = new NamespacedKey(plugin, "double_jump_enchant");
         this.keyDash = new NamespacedKey(plugin, "dash_enchant");
+        this.keyFrostbite = new NamespacedKey(plugin, "frostbite_enchant");
+        this.keyHarvesting = new NamespacedKey(plugin, "harvesting_enchant");
+        this.keyBulwark = new NamespacedKey(plugin, "bulwark_enchant");
+        this.keyReinforced = new NamespacedKey(plugin, "reinforced_enchant");
+        this.keyKingslayer = new NamespacedKey(plugin, "kingslayer_enchant");
+        this.keySoulSiphon = new NamespacedKey(plugin, "soul_siphon_enchant");
+        this.keyEchoing = new NamespacedKey(plugin, "echoing_enchant");
+        this.keyDashCooldownUntil = new NamespacedKey(plugin, "dash_cooldown_until");
         this.keyTelekinesisProjectileOwner = new NamespacedKey(plugin, "telekinesis_projectile_owner");
+        this.keyKingslayerRecipe = new NamespacedKey(plugin, "kingslayer_book");
+        this.keySoulSiphonRecipe = new NamespacedKey(plugin, "soul_siphon_book");
+        this.keyEchoingRecipe = new NamespacedKey(plugin, "echoing_book");
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickDoubleJumpFlightPlayers, 1L, 2L);
     }
 
@@ -133,12 +173,86 @@ public final class CustomEnchantListener implements Listener {
         return createBook(CustomEnchantEntry.DASH, 1);
     }
 
+    public ItemStack createKingslayerBook() {
+        return createBook(CustomEnchantEntry.KINGSLAYER, 1);
+    }
+
+    public ItemStack createSoulSiphonBook() {
+        return createBook(CustomEnchantEntry.SOUL_SIPHON, 1);
+    }
+
+    public ItemStack createEchoingBook() {
+        return createBook(CustomEnchantEntry.ECHOING, 1);
+    }
+
+    public void registerCraftOnlyRecipes() {
+        registerCraftOnlyRecipe(
+            keyKingslayerRecipe,
+            createKingslayerBook(),
+            List.of(
+                "CBC",
+                "BEB",
+                "SWS"
+            ),
+            Map.of(
+                'C', exactRelicChoice("crimson_rib"),
+                'B', new RecipeChoice.MaterialChoice(Material.BLAZE_ROD),
+                'E', new RecipeChoice.MaterialChoice(Material.BOOK),
+                'S', exactRelicChoice("sculk_heart"),
+                'W', new RecipeChoice.MaterialChoice(Material.NETHER_STAR)
+            )
+        );
+        registerCraftOnlyRecipe(
+            keySoulSiphonRecipe,
+            createSoulSiphonBook(),
+            List.of(
+                "VGV",
+                "CEC",
+                "SAS"
+            ),
+            Map.of(
+                'V', exactRelicChoice("verdant_heart"),
+                'G', new RecipeChoice.MaterialChoice(Material.GHAST_TEAR),
+                'C', exactRelicChoice("crimson_rib"),
+                'E', new RecipeChoice.MaterialChoice(Material.BOOK),
+                'S', new RecipeChoice.MaterialChoice(Material.SOUL_SAND),
+                'A', new RecipeChoice.MaterialChoice(Material.GOLDEN_APPLE)
+            )
+        );
+        registerCraftOnlyRecipe(
+            keyEchoingRecipe,
+            createEchoingBook(),
+            List.of(
+                "TET",
+                "AEA",
+                "SLS"
+            ),
+            Map.of(
+                'T', exactRelicChoice("titan_gear"),
+                'E', new RecipeChoice.MaterialChoice(Material.ECHO_SHARD),
+                'A', new RecipeChoice.MaterialChoice(Material.AMETHYST_SHARD),
+                'S', exactRelicChoice("sculk_heart"),
+                'L', new RecipeChoice.MaterialChoice(Material.BOOK)
+            )
+        );
+    }
+
     public boolean hasTelekinesisEnchant(ItemStack item) {
         return hasTelekinesis(item);
     }
 
     public boolean hasSmeltingTouchEnchant(ItemStack item) {
         return hasSmeltingTouch(item);
+    }
+
+    public String customEnchantBookId(ItemStack item) {
+        BookEnchantData enchant = bookEnchant(item);
+        return enchant == null ? null : enchant.enchant().id;
+    }
+
+    public String customEnchantBookDisplayName(ItemStack item) {
+        BookEnchantData enchant = bookEnchant(item);
+        return enchant == null ? null : enchant.enchant().plainDisplay(enchant.level()) + " Book";
     }
 
     public void deliverTelekinesisDrops(Player player, Collection<ItemStack> drops, Location origin) {
@@ -201,7 +315,7 @@ public final class CustomEnchantListener implements Listener {
     public void openEnchantMenu(Player player) {
         Inventory inventory = Bukkit.createInventory(
             new EnchantMenuHolder(),
-            27,
+            45,
             BedrockCompat.menuTitle(player, ENCHANTS_MENU_TITLE, "Custom Enchants")
         );
         ItemStack filler = createMenuItem(Material.BLACK_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
@@ -216,13 +330,12 @@ public final class CustomEnchantListener implements Listener {
                 "<gray>or be applied with custom enchanted books.</gray>"
             )
         ));
-        inventory.setItem(10, createMenuIcon(CustomEnchantEntry.REPLENISH));
-        inventory.setItem(11, createMenuIcon(CustomEnchantEntry.DELICATE));
-        inventory.setItem(12, createMenuIcon(CustomEnchantEntry.TELEKINESIS));
-        inventory.setItem(14, createMenuIcon(CustomEnchantEntry.SMELTING_TOUCH));
-        inventory.setItem(15, createMenuIcon(CustomEnchantEntry.DOUBLE_JUMP));
-        inventory.setItem(16, createMenuIcon(CustomEnchantEntry.WISE));
-        inventory.setItem(22, createMenuIcon(CustomEnchantEntry.DASH));
+        int[] slots = {10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25};
+        List<CustomEnchantEntry> entries = CustomEnchantEntry.MENU_ENTRIES;
+        for (int i = 0; i < slots.length && i < entries.size(); i++) {
+            inventory.setItem(slots[i], createMenuIcon(entries.get(i)));
+        }
+        inventory.setItem(40, createMenuItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to /menu.</gray>")));
         player.openInventory(inventory);
     }
 
@@ -254,6 +367,7 @@ public final class CustomEnchantListener implements Listener {
         }
 
         event.setResult(applyEnchant(left.clone(), enchant.enchant(), enchant.level()));
+        configureCustomEnchantAnvil(event, enchant);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -276,10 +390,15 @@ public final class CustomEnchantListener implements Listener {
         if (!canReceiveAnvilResult(player, event)) {
             return;
         }
+        int xpCost = customEnchantAnvilCost(enchant);
+        if (!canPayAnvilCost(player, xpCost)) {
+            return;
+        }
 
         anvil.setItem(0, null);
         anvil.setItem(1, consumeOne(right));
         anvil.setItem(2, null);
+        chargeAnvilCost(player, xpCost);
         giveAnvilResult(player, event, result);
         player.sendMessage(MessageUtil.success(
             "Applied <white>" + enchant.enchant().plainDisplay(enchant.level()) + "</white> to your item."
@@ -440,6 +559,107 @@ public final class CustomEnchantListener implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onCombatEnchantDamage(EntityDamageByEntityEvent event) {
+        if (!(event.getEntity() instanceof LivingEntity victim)) return;
+
+        if (!(event.getDamager() instanceof Player attacker)) return;
+        if (attacker.equals(victim)) return;
+        if (victim instanceof Player target && sameTeam(attacker, target)) return;
+
+        ItemStack weapon = attacker.getInventory().getItemInMainHand();
+        int frostbiteLevel = storedEnchantLevel(weapon, CustomEnchantEntry.FROSTBITE);
+        if (frostbiteLevel > 0 && ThreadLocalRandom.current().nextDouble() < 0.12D + (frostbiteLevel * 0.08D)) {
+            victim.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 60, Math.min(1, frostbiteLevel - 1), false, true, true));
+            victim.getWorld().spawnParticle(Particle.SNOWFLAKE, victim.getLocation().add(0.0, 1.0, 0.0), 14, 0.35, 0.45, 0.35, 0.02);
+        }
+
+        if (storedEnchantLevel(weapon, CustomEnchantEntry.KINGSLAYER) > 0 && isCustomBoss(victim)) {
+            event.setDamage(event.getDamage() * 1.18D);
+            victim.getWorld().spawnParticle(Particle.CRIT, victim.getLocation().add(0.0, 1.0, 0.0), 18, 0.35, 0.35, 0.35, 0.1);
+        }
+
+        if (storedEnchantLevel(weapon, CustomEnchantEntry.ECHOING) > 0 && ThreadLocalRandom.current().nextDouble() < 0.25D) {
+            victim.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING, 80, 0, false, true, true));
+            victim.addPotionEffect(new PotionEffect(PotionEffectType.WEAKNESS, 50, 0, false, true, true));
+            Vector push = victim.getLocation().toVector().subtract(attacker.getLocation().toVector());
+            if (push.lengthSquared() > 0.0001D) {
+                push.normalize().multiply(0.35D).setY(0.18D);
+                victim.setVelocity(victim.getVelocity().add(push));
+            }
+            victim.getWorld().spawnParticle(Particle.SONIC_BOOM, victim.getLocation().add(0.0, 1.0, 0.0), 1, 0.0, 0.0, 0.0, 0.0);
+            victim.getWorld().playSound(victim.getLocation(), Sound.ENTITY_WARDEN_SONIC_BOOM, 0.5f, 1.65f);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onSoulSiphonHeal(EntityDamageByEntityEvent event) {
+        if (!(event.getEntity() instanceof LivingEntity victim)) return;
+
+        if (!(event.getDamager() instanceof Player attacker)) return;
+        if (attacker.equals(victim) || attacker.isDead()) return;
+        if (victim instanceof Player target && sameTeam(attacker, target)) return;
+
+        ItemStack weapon = attacker.getInventory().getItemInMainHand();
+        if (storedEnchantLevel(weapon, CustomEnchantEntry.SOUL_SIPHON) <= 0) return;
+
+        double heal = Math.min(victim instanceof Player ? 1.2D : 2.0D, event.getFinalDamage() * 0.10D);
+        if (heal <= 0.0D) return;
+
+        attacker.setHealth(Math.min(maxHealth(attacker), attacker.getHealth() + heal));
+        attacker.getWorld().spawnParticle(Particle.DAMAGE_INDICATOR, attacker.getLocation().add(0.0, 1.0, 0.0), 6, 0.25, 0.35, 0.25, 0.02);
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onBulwarkDamage(EntityDamageEvent event) {
+        if (!(event.getEntity() instanceof Player player)) return;
+        if (event.getCause() == EntityDamageEvent.DamageCause.VOID || event.getCause() == EntityDamageEvent.DamageCause.SUICIDE) {
+            return;
+        }
+
+        int level = 0;
+        for (ItemStack armor : player.getInventory().getArmorContents()) {
+            level += storedEnchantLevel(armor, CustomEnchantEntry.BULWARK);
+        }
+        if (level <= 0) return;
+
+        double reduction = Math.min(0.30D, level * 0.025D);
+        event.setDamage(event.getDamage() * (1.0D - reduction));
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onReinforcedItemDamage(PlayerItemDamageEvent event) {
+        int level = storedEnchantLevel(event.getItem(), CustomEnchantEntry.REINFORCED);
+        if (level <= 0) return;
+        if (ThreadLocalRandom.current().nextDouble() >= level * 0.08D) return;
+
+        event.setCancelled(true);
+        event.getPlayer().getWorld().spawnParticle(Particle.WAX_ON, event.getPlayer().getLocation().add(0.0, 1.0, 0.0), 4, 0.25, 0.35, 0.25, 0.01);
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onHarvestingDrops(BlockDropItemEvent event) {
+        Player player = event.getPlayer();
+        if (player == null || player.getGameMode() == GameMode.CREATIVE) return;
+
+        ItemStack tool = player.getInventory().getItemInMainHand();
+        int level = storedEnchantLevel(tool, CustomEnchantEntry.HARVESTING);
+        if (level <= 0 || !isWiseCrop(event.getBlock())) return;
+
+        double chance = Math.min(0.60D, 0.16D * level);
+        if (ThreadLocalRandom.current().nextDouble() >= chance) return;
+
+        for (Item item : event.getItems()) {
+            ItemStack stack = item.getItemStack();
+            if (stack == null || stack.getType().isAir()) continue;
+            if (!isCropDrop(stack.getType())) continue;
+            ItemStack next = stack.clone();
+            next.setAmount(Math.min(stack.getMaxStackSize(), stack.getAmount() + 1));
+            item.setItemStack(next);
+        }
+        event.getBlock().getWorld().spawnParticle(Particle.HAPPY_VILLAGER, event.getBlock().getLocation().add(0.5, 0.8, 0.5), 5, 0.25, 0.25, 0.25, 0.01);
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onWiseCropBreak(BlockBreakEvent event) {
         Player player = event.getPlayer();
         if (player.getGameMode() == GameMode.CREATIVE) return;
@@ -542,6 +762,13 @@ public final class CustomEnchantListener implements Listener {
         event.setLoot(loot);
     }
 
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        event.getPlayer().discoverRecipe(keyKingslayerRecipe);
+        event.getPlayer().discoverRecipe(keySoulSiphonRecipe);
+        event.getPlayer().discoverRecipe(keyEchoingRecipe);
+    }
+
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         UUID playerId = event.getPlayer().getUniqueId();
@@ -551,14 +778,45 @@ public final class CustomEnchantListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onMenuClick(InventoryClickEvent event) {
+        if (event.getView().getTopInventory().getHolder() instanceof EnchantRecipeMenuHolder) {
+            event.setCancelled(true);
+            if (!(event.getWhoClicked() instanceof Player player)) {
+                return;
+            }
+            if (event.getClickedInventory() == null || event.getClickedInventory().getType() == InventoryType.PLAYER) {
+                return;
+            }
+            if (event.getRawSlot() == 40) {
+                openEnchantMenu(player);
+            }
+            return;
+        }
         if (!(event.getView().getTopInventory().getHolder() instanceof EnchantMenuHolder)) return;
         event.setCancelled(true);
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+        if (event.getClickedInventory() == null || event.getClickedInventory().getType() == InventoryType.PLAYER) {
+            return;
+        }
+        if (event.getRawSlot() == 40) {
+            player.closeInventory();
+            Bukkit.getScheduler().runTask(plugin, () -> player.performCommand("menu"));
+            return;
+        }
+
+        CustomEnchantEntry enchant = menuEnchant(event.getCurrentItem());
+        if (enchant != null && hasCraftingRecipe(enchant)) {
+            openEnchantRecipeMenu(player, enchant);
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onMenuDrag(InventoryDragEvent event) {
-        if (!(event.getView().getTopInventory().getHolder() instanceof EnchantMenuHolder)) return;
-        event.setCancelled(true);
+        if (event.getView().getTopInventory().getHolder() instanceof EnchantMenuHolder
+            || event.getView().getTopInventory().getHolder() instanceof EnchantRecipeMenuHolder) {
+            event.setCancelled(true);
+        }
     }
 
     private ItemStack createBook(CustomEnchantEntry enchant, int level) {
@@ -585,6 +843,7 @@ public final class CustomEnchantListener implements Listener {
 
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.RARE, enchant.plainName()));
         meta.lore(buildMenuLore(enchant));
+        meta.getPersistentDataContainer().set(keyEnchantMenuId, PersistentDataType.STRING, enchant.id);
         icon.setItemMeta(meta);
         return icon;
     }
@@ -603,6 +862,38 @@ public final class CustomEnchantListener implements Listener {
         }
         item.setItemMeta(meta);
         return item;
+    }
+
+    private void registerCraftOnlyRecipe(
+        NamespacedKey key,
+        ItemStack result,
+        List<String> shape,
+        Map<Character, RecipeChoice> choices
+    ) {
+        if (result == null || result.getType().isAir()) {
+            return;
+        }
+
+        Bukkit.removeRecipe(key);
+        ShapedRecipe recipe = new ShapedRecipe(key, result);
+        recipe.shape(shape.toArray(String[]::new));
+        for (Map.Entry<Character, RecipeChoice> entry : choices.entrySet()) {
+            if (entry.getValue() != null) {
+                recipe.setIngredient(entry.getKey(), entry.getValue());
+            }
+        }
+        Bukkit.addRecipe(recipe);
+    }
+
+    private RecipeChoice exactRelicChoice(String relicId) {
+        if (plugin.getSeasonRelicManager() == null) {
+            return new RecipeChoice.MaterialChoice(Material.BARRIER);
+        }
+        ItemStack relic = plugin.getSeasonRelicManager().createRelicItem(relicId);
+        if (relic == null || relic.getType().isAir()) {
+            return new RecipeChoice.MaterialChoice(Material.BARRIER);
+        }
+        return new RecipeChoice.ExactChoice(relic);
     }
 
     private List<Component> buildBookLore(CustomEnchantEntry enchant, int level) {
@@ -625,6 +916,10 @@ public final class CustomEnchantListener implements Listener {
         List<String> topLines = new ArrayList<>();
         topLines.add("<gray>Levels: <white>" + enchant.levels + "</white></gray>");
         topLines.add("<gray>Enchant Table: <white>" + (enchant.enchantTableEligible ? "Yes" : "No") + "</white></gray>");
+        if (hasCraftingRecipe(enchant)) {
+            topLines.add("<gray>Craftable Book: <white>Yes</white></gray>");
+            topLines.add("<yellow>Click to view recipe.</yellow>");
+        }
         return CustomLoreUtil.buildStyledLore(
             enchant.icon,
             CustomLoreUtil.Rarity.RARE.label(),
@@ -648,6 +943,141 @@ public final class CustomEnchantListener implements Listener {
             lines.add("<gray>Also obtainable from an <white>enchant table</white>.</gray>");
         }
         return lines.toArray(String[]::new);
+    }
+
+    private void openEnchantRecipeMenu(Player player, CustomEnchantEntry enchant) {
+        Inventory inventory = Bukkit.createInventory(
+            new EnchantRecipeMenuHolder(enchant),
+            45,
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize("<gradient:#00d4ff:#73ff9d><bold>" + enchant.plainName() + " Recipe</bold></gradient>"),
+                enchant.plainName() + " Recipe"
+            )
+        );
+        ItemStack filler = createMenuItem(Material.BLACK_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        ItemStack accent = createMenuItem(Material.CYAN_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            inventory.setItem(slot, filler);
+        }
+        for (int slot : List.of(0, 1, 7, 8, 9, 17, 27, 35, 36, 37, 43, 44)) {
+            inventory.setItem(slot, accent);
+        }
+
+        inventory.setItem(4, createMenuItem(
+            Material.ENCHANTED_BOOK,
+            "<gradient:#00d4ff:#73ff9d><bold>" + enchant.plainName() + " Book</bold></gradient>",
+            List.of(
+                "<gray>Boss-forged custom enchant recipe.</gray>",
+                "<gray>Craft in a normal crafting table.</gray>"
+            )
+        ));
+
+        int[] matrixSlots = {10, 11, 12, 19, 20, 21, 28, 29, 30};
+        ItemStack[] matrix = craftOnlyRecipeMatrix(enchant);
+        for (int i = 0; i < matrixSlots.length && i < matrix.length; i++) {
+            if (matrix[i] != null && !matrix[i].getType().isAir()) {
+                inventory.setItem(matrixSlots[i], matrix[i]);
+            }
+        }
+        inventory.setItem(23, createMenuItem(Material.CRAFTING_TABLE, "<gold><bold>Crafting Table</bold></gold>", List.of(
+            "<gray>Use the exact layout shown.</gray>",
+            "<gray>The book ingredient is a normal <white>Book</white>.</gray>",
+            "<gray>Boss materials must be real Covenant drops.</gray>"
+        )));
+        inventory.setItem(25, createBook(enchant, 1));
+        inventory.setItem(40, createMenuItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to custom enchants.</gray>")));
+        player.openInventory(inventory);
+        player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 0.6f, 1.2f);
+    }
+
+    private ItemStack[] craftOnlyRecipeMatrix(CustomEnchantEntry enchant) {
+        ItemStack[] matrix = new ItemStack[9];
+        switch (enchant) {
+            case KINGSLAYER -> {
+                matrix[0] = relicIngredient("crimson_rib");
+                matrix[1] = ingredient(Material.BLAZE_ROD);
+                matrix[2] = relicIngredient("crimson_rib");
+                matrix[3] = ingredient(Material.BLAZE_ROD);
+                matrix[4] = ingredient(Material.BOOK);
+                matrix[5] = ingredient(Material.BLAZE_ROD);
+                matrix[6] = relicIngredient("sculk_heart");
+                matrix[7] = ingredient(Material.NETHER_STAR);
+                matrix[8] = relicIngredient("sculk_heart");
+            }
+            case SOUL_SIPHON -> {
+                matrix[0] = relicIngredient("verdant_heart");
+                matrix[1] = ingredient(Material.GHAST_TEAR);
+                matrix[2] = relicIngredient("verdant_heart");
+                matrix[3] = relicIngredient("crimson_rib");
+                matrix[4] = ingredient(Material.BOOK);
+                matrix[5] = relicIngredient("crimson_rib");
+                matrix[6] = ingredient(Material.SOUL_SAND);
+                matrix[7] = ingredient(Material.GOLDEN_APPLE);
+                matrix[8] = ingredient(Material.SOUL_SAND);
+            }
+            case ECHOING -> {
+                matrix[0] = relicIngredient("titan_gear");
+                matrix[1] = ingredient(Material.ECHO_SHARD);
+                matrix[2] = relicIngredient("titan_gear");
+                matrix[3] = ingredient(Material.AMETHYST_SHARD);
+                matrix[4] = ingredient(Material.ECHO_SHARD);
+                matrix[5] = ingredient(Material.AMETHYST_SHARD);
+                matrix[6] = relicIngredient("sculk_heart");
+                matrix[7] = ingredient(Material.BOOK);
+                matrix[8] = relicIngredient("sculk_heart");
+            }
+            default -> {
+            }
+        }
+        return matrix;
+    }
+
+    private ItemStack relicIngredient(String relicId) {
+        if (plugin.getSeasonRelicManager() != null) {
+            ItemStack relic = plugin.getSeasonRelicManager().createRelicItem(relicId);
+            if (relic != null && !relic.getType().isAir()) {
+                return relic;
+            }
+        }
+        ItemStack missing = ingredient(Material.BARRIER);
+        ItemMeta meta = missing.getItemMeta();
+        if (meta != null) {
+            meta.displayName(MM.deserialize("<red>Missing Boss Material</red>"));
+            meta.lore(List.of(MM.deserialize("<gray>Relic id: <white>" + relicId + "</white></gray>")));
+            missing.setItemMeta(meta);
+        }
+        return missing;
+    }
+
+    private ItemStack ingredient(Material material) {
+        return new ItemStack(material);
+    }
+
+    private boolean hasCraftingRecipe(CustomEnchantEntry enchant) {
+        return enchant == CustomEnchantEntry.KINGSLAYER
+            || enchant == CustomEnchantEntry.SOUL_SIPHON
+            || enchant == CustomEnchantEntry.ECHOING;
+    }
+
+    private CustomEnchantEntry menuEnchant(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return null;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return null;
+        }
+        String id = meta.getPersistentDataContainer().get(keyEnchantMenuId, PersistentDataType.STRING);
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MENU_ENTRIES) {
+            if (enchant.id.equalsIgnoreCase(id)) {
+                return enchant;
+            }
+        }
+        return null;
     }
 
     private BookEnchantData bookEnchant(ItemStack item) {
@@ -766,6 +1196,40 @@ public final class CustomEnchantListener implements Listener {
         return false;
     }
 
+    private void configureCustomEnchantAnvil(PrepareAnvilEvent event, BookEnchantData enchant) {
+        if (!(event.getView() instanceof org.bukkit.inventory.view.AnvilView anvilView)) {
+            return;
+        }
+
+        int cost = customEnchantAnvilCost(enchant);
+        anvilView.setRepairCost(cost);
+        anvilView.setRepairItemCountCost(1);
+        anvilView.setMaximumRepairCost(Math.max(40, cost));
+    }
+
+    private int customEnchantAnvilCost(BookEnchantData enchant) {
+        int level = Math.max(1, enchant.level());
+        return CUSTOM_ENCHANT_ANVIL_BASE_COST + (level * CUSTOM_ENCHANT_ANVIL_LEVEL_COST);
+    }
+
+    private boolean canPayAnvilCost(Player player, int xpCost) {
+        if (xpCost <= 0 || player.getGameMode() == GameMode.CREATIVE) {
+            return true;
+        }
+        if (player.getLevel() >= xpCost) {
+            return true;
+        }
+        player.sendMessage(MessageUtil.warn("You need <white>" + xpCost + "</white> XP levels to apply that enchant."));
+        return false;
+    }
+
+    private void chargeAnvilCost(Player player, int xpCost) {
+        if (xpCost <= 0 || player.getGameMode() == GameMode.CREATIVE) {
+            return;
+        }
+        player.setLevel(Math.max(0, player.getLevel() - xpCost));
+    }
+
     private NamespacedKey keyFor(CustomEnchantEntry enchant) {
         return switch (enchant) {
             case DELICATE -> keyDelicate;
@@ -774,6 +1238,13 @@ public final class CustomEnchantListener implements Listener {
             case WISE -> keyWise;
             case DOUBLE_JUMP -> keyDoubleJump;
             case DASH -> keyDash;
+            case FROSTBITE -> keyFrostbite;
+            case HARVESTING -> keyHarvesting;
+            case BULWARK -> keyBulwark;
+            case REINFORCED -> keyReinforced;
+            case KINGSLAYER -> keyKingslayer;
+            case SOUL_SIPHON -> keySoulSiphon;
+            case ECHOING -> keyEchoing;
             default -> throw new IllegalArgumentException("Unsupported managed enchant: " + enchant.id);
         };
     }
@@ -832,14 +1303,14 @@ public final class CustomEnchantListener implements Listener {
     }
 
     private int enchantTableLevel(CustomEnchantEntry enchant, int expLevelCost) {
-        if (enchant != CustomEnchantEntry.WISE) {
+        if (enchant.maxLevel() <= 1) {
             return 1;
         }
         if (expLevelCost >= 30) {
-            return 3;
+            return enchant.maxLevel();
         }
         if (expLevelCost >= 20) {
-            return 2;
+            return Math.min(2, enchant.maxLevel());
         }
         return 1;
     }
@@ -964,15 +1435,14 @@ public final class CustomEnchantListener implements Listener {
     }
 
     private void useDash(Player player) {
-        UUID playerId = player.getUniqueId();
         long now = System.currentTimeMillis();
-        Long cooldownUntil = dashCooldowns.get(playerId);
-        if (cooldownUntil != null && cooldownUntil > now) {
+        long cooldownUntil = dashCooldownUntil(player);
+        if (cooldownUntil > now) {
             player.sendMessage(MessageUtil.warn("Dash cooldown: <white>" + secondsLeft(cooldownUntil - now) + "s</white>."));
             return;
         }
-        if (cooldownUntil != null) {
-            dashCooldowns.remove(playerId, cooldownUntil);
+        if (cooldownUntil > 0L) {
+            clearDashCooldown(player);
         }
 
         Vector direction = player.getEyeLocation().getDirection();
@@ -994,8 +1464,24 @@ public final class CustomEnchantListener implements Listener {
 
         int cooldownSeconds = plugin.getConfigManager().dashEnchantCooldownSeconds;
         if (cooldownSeconds > 0) {
-            dashCooldowns.put(playerId, now + (cooldownSeconds * 1000L));
+            setDashCooldownUntil(player, now + (cooldownSeconds * 1000L));
         }
+    }
+
+    private long dashCooldownUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keyDashCooldownUntil, PersistentDataType.LONG, 0L);
+    }
+
+    private void setDashCooldownUntil(Player player, long cooldownUntil) {
+        if (cooldownUntil <= System.currentTimeMillis()) {
+            clearDashCooldown(player);
+            return;
+        }
+        player.getPersistentDataContainer().set(keyDashCooldownUntil, PersistentDataType.LONG, cooldownUntil);
+    }
+
+    private void clearDashCooldown(Player player) {
+        player.getPersistentDataContainer().remove(keyDashCooldownUntil);
     }
 
     private long secondsLeft(long millis) {
@@ -1095,6 +1581,24 @@ public final class CustomEnchantListener implements Listener {
         return material.name().endsWith("_SWORD") || Tag.ITEMS_AXES.isTagged(material);
     }
 
+    private static boolean isMeleeWeapon(Material material) {
+        return material.name().endsWith("_SWORD")
+            || Tag.ITEMS_AXES.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_MACE.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_TRIDENT.isTagged(material);
+    }
+
+    private static boolean isArmor(Material material) {
+        return Tag.ITEMS_ENCHANTABLE_HEAD_ARMOR.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_CHEST_ARMOR.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_LEG_ARMOR.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_FOOT_ARMOR.isTagged(material);
+    }
+
+    private static boolean isToolWeaponOrArmor(Material material) {
+        return isToolOrWeapon(material) || isArmor(material);
+    }
+
     private boolean isDashProtectedInteraction(Material material) {
         if (material == null || material == Material.AIR) {
             return false;
@@ -1117,6 +1621,34 @@ public final class CustomEnchantListener implements Listener {
                  CARTOGRAPHY_TABLE, FLETCHING_TABLE, GRINDSTONE, SMITHING_TABLE, STONECUTTER,
                  NOTE_BLOCK, JUKEBOX, LEVER, REPEATER, COMPARATOR, DAYLIGHT_DETECTOR,
                  RESPAWN_ANCHOR, CAKE, COMPOSTER, BELL, DECORATED_POT -> true;
+            default -> false;
+        };
+    }
+
+    private boolean sameTeam(Player first, Player second) {
+        return first != null
+            && second != null
+            && plugin.getTeamManager() != null
+            && plugin.getTeamManager().sameTeam(first.getUniqueId(), second.getUniqueId());
+    }
+
+    private boolean isCustomBoss(Entity entity) {
+        return entity != null && plugin.getBossManager() != null && plugin.getBossManager().isCustomBoss(entity);
+    }
+
+    private double maxHealth(Player player) {
+        var attribute = player.getAttribute(Attribute.MAX_HEALTH);
+        return attribute == null ? 20.0D : Math.max(1.0D, attribute.getValue());
+    }
+
+    private boolean isCropDrop(Material material) {
+        if (material == null || material.isAir()) {
+            return false;
+        }
+        return switch (material) {
+            case WHEAT, WHEAT_SEEDS, BEETROOT, BEETROOT_SEEDS, CARROT, POTATO, POISONOUS_POTATO,
+                 MELON_SLICE, MELON_SEEDS, PUMPKIN, PUMPKIN_SEEDS, COCOA_BEANS, SWEET_BERRIES,
+                 GLOW_BERRIES, SUGAR_CANE, CACTUS, BAMBOO, KELP, NETHER_WART -> true;
             default -> false;
         };
     }
@@ -1445,9 +1977,163 @@ public final class CustomEnchantListener implements Listener {
             18,
             1,
             1
+        ),
+        FROSTBITE(
+            "frostbite",
+            "<aqua><bold>Frostbite</bold></aqua>",
+            "<aqua><bold>Frostbite Book</bold></aqua>",
+            "Frostbite",
+            Material.BLUE_ICE,
+            "I, II",
+            List.of(
+                "Weapon enchant.",
+                "Hits can briefly slow enemies.",
+                "Higher levels improve the chance and chill strength."
+            ),
+            CustomEnchantListener::isMeleeWeapon,
+            true,
+            14,
+            2,
+            2
+        ),
+        HARVESTING(
+            "harvesting",
+            "<green><bold>Harvesting</bold></green>",
+            "<green><bold>Harvesting Book</bold></green>",
+            "Harvesting",
+            Material.GOLDEN_HOE,
+            "I, II, III",
+            List.of(
+                "Hoe enchant.",
+                "Mature crops have a chance to produce one extra crop drop."
+            ),
+            Tag.ITEMS_HOES::isTagged,
+            true,
+            10,
+            2,
+            3
+        ),
+        BULWARK(
+            "bulwark",
+            "<gray><bold>Bulwark</bold></gray>",
+            "<gray><bold>Bulwark Book</bold></gray>",
+            "Bulwark",
+            Material.SHIELD,
+            "I, II, III",
+            List.of(
+                "Armor enchant.",
+                "Each worn piece slightly reduces incoming damage.",
+                "Caps at 30% total damage reduction."
+            ),
+            CustomEnchantListener::isArmor,
+            true,
+            16,
+            2,
+            3
+        ),
+        REINFORCED(
+            "reinforced",
+            "<yellow><bold>Reinforced</bold></yellow>",
+            "<yellow><bold>Reinforced Book</bold></yellow>",
+            "Reinforced",
+            Material.ANVIL,
+            "I, II, III",
+            List.of(
+                "Gear enchant.",
+                "Items have a chance to ignore durability damage."
+            ),
+            CustomEnchantListener::isToolWeaponOrArmor,
+            true,
+            18,
+            2,
+            3
+        ),
+        KINGSLAYER(
+            "kingslayer",
+            "<red><bold>Kingslayer</bold></red>",
+            "<red><bold>Kingslayer Book</bold></red>",
+            "Kingslayer",
+            Material.NETHERITE_SWORD,
+            "I",
+            List.of(
+                "Boss-forged weapon enchant.",
+                "Deals 18% more damage to custom bosses.",
+                "Craft-only book made with Covenant trophy materials."
+            ),
+            CustomEnchantListener::isMeleeWeapon,
+            false,
+            1,
+            1,
+            1
+        ),
+        SOUL_SIPHON(
+            "soul_siphon",
+            "<dark_red><bold>Soul Siphon</bold></dark_red>",
+            "<dark_red><bold>Soul Siphon Book</bold></dark_red>",
+            "Soul Siphon",
+            Material.GHAST_TEAR,
+            "I",
+            List.of(
+                "Boss-forged weapon enchant.",
+                "Heals a small amount from damage dealt.",
+                "Healing is capped so it stays PvP-safe."
+            ),
+            CustomEnchantListener::isMeleeWeapon,
+            false,
+            1,
+            1,
+            1
+        ),
+        ECHOING(
+            "echoing",
+            "<dark_aqua><bold>Echoing</bold></dark_aqua>",
+            "<dark_aqua><bold>Echoing Book</bold></dark_aqua>",
+            "Echoing",
+            Material.ECHO_SHARD,
+            "I",
+            List.of(
+                "Boss-forged melee enchant.",
+                "Hits can mark, weaken, and lightly knock enemies back.",
+                "Works especially well as boss control."
+            ),
+            CustomEnchantListener::isMeleeWeapon,
+            false,
+            1,
+            1,
+            1
         );
 
-        private static final List<CustomEnchantEntry> MANAGED = List.of(DELICATE, TELEKINESIS, SMELTING_TOUCH, WISE, DOUBLE_JUMP, DASH);
+        private static final List<CustomEnchantEntry> MANAGED = List.of(
+            DELICATE,
+            TELEKINESIS,
+            SMELTING_TOUCH,
+            WISE,
+            DOUBLE_JUMP,
+            DASH,
+            FROSTBITE,
+            HARVESTING,
+            BULWARK,
+            REINFORCED,
+            KINGSLAYER,
+            SOUL_SIPHON,
+            ECHOING
+        );
+        private static final List<CustomEnchantEntry> MENU_ENTRIES = List.of(
+            REPLENISH,
+            DELICATE,
+            TELEKINESIS,
+            SMELTING_TOUCH,
+            WISE,
+            DOUBLE_JUMP,
+            DASH,
+            FROSTBITE,
+            HARVESTING,
+            BULWARK,
+            REINFORCED,
+            KINGSLAYER,
+            SOUL_SIPHON,
+            ECHOING
+        );
 
         private final String id;
         private final String menuDisplay;
@@ -1506,14 +2192,13 @@ public final class CustomEnchantListener implements Listener {
             if (maxLevel <= 1) {
                 return "I";
             }
-            return switch (this) {
-                case WISE -> switch (clampLevel(level)) {
-                    case 1 -> "I";
-                    case 2 -> "II";
-                    case 3 -> "III";
-                    default -> Integer.toString(level);
-                };
-                default -> levels;
+            return switch (clampLevel(level)) {
+                case 1 -> "I";
+                case 2 -> "II";
+                case 3 -> "III";
+                case 4 -> "IV";
+                case 5 -> "V";
+                default -> Integer.toString(level);
             };
         }
 
@@ -1541,6 +2226,27 @@ public final class CustomEnchantListener implements Listener {
             if (this == DASH) {
                 return DASH_LORE_LINE.equalsIgnoreCase(plain);
             }
+            if (this == FROSTBITE) {
+                return plain.startsWith(FROSTBITE_LORE_PREFIX);
+            }
+            if (this == HARVESTING) {
+                return plain.startsWith(HARVESTING_LORE_PREFIX);
+            }
+            if (this == BULWARK) {
+                return plain.startsWith(BULWARK_LORE_PREFIX);
+            }
+            if (this == REINFORCED) {
+                return plain.startsWith(REINFORCED_LORE_PREFIX);
+            }
+            if (this == KINGSLAYER) {
+                return KINGSLAYER_LORE_LINE.equalsIgnoreCase(plain);
+            }
+            if (this == SOUL_SIPHON) {
+                return SOUL_SIPHON_LORE_LINE.equalsIgnoreCase(plain);
+            }
+            if (this == ECHOING) {
+                return ECHOING_LORE_LINE.equalsIgnoreCase(plain);
+            }
             return loreLine(1).equalsIgnoreCase(plain);
         }
 
@@ -1548,15 +2254,15 @@ public final class CustomEnchantListener implements Listener {
             if (maxLevel <= 1) {
                 return bookDisplay;
             }
-            return switch (this) {
-                case WISE -> "<light_purple><bold>Wise " + switch (clampLevel(level)) {
-                    case 1 -> "I";
-                    case 2 -> "II";
-                    case 3 -> "III";
-                    default -> Integer.toString(level);
-                } + " Book</bold></light_purple>";
-                default -> bookDisplay;
+            String color = switch (this) {
+                case WISE -> "light_purple";
+                case FROSTBITE -> "aqua";
+                case HARVESTING -> "green";
+                case BULWARK -> "gray";
+                case REINFORCED -> "yellow";
+                default -> "gold";
             };
+            return "<" + color + "><bold>" + plainName + " " + levelDisplay(level) + " Book</bold></" + color + ">";
         }
 
         private String plainDisplay(int level) {
@@ -1654,6 +2360,13 @@ public final class CustomEnchantListener implements Listener {
     }
 
     private record EnchantMenuHolder() implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
+    private record EnchantRecipeMenuHolder(CustomEnchantEntry enchant) implements InventoryHolder {
         @Override
         public Inventory getInventory() {
             return null;

@@ -481,7 +481,6 @@ public final class LegendaryAltarManager implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onTimeSkip(TimeSkipEvent event) {
         if (!loaded || hasActiveAltar()) return;
-        if (event.getSkipReason() != TimeSkipEvent.SkipReason.NIGHT_SKIP) return;
 
         World world = configuredWorld();
         if (world == null || !world.equals(event.getWorld())) return;
@@ -490,10 +489,26 @@ public final class LegendaryAltarManager implements Listener {
         if (altarRecord.lastRollDay() >= currentDay) return;
 
         long before = world.getTime();
-        long crossed = before + event.getSkipAmount();
-        if (before < plugin.getConfigManager().legendaryAltarRollTimeTicks
-            && crossed >= plugin.getConfigManager().legendaryAltarRollTimeTicks) {
+        long skipAmount = event.getSkipAmount();
+        if (!isNightSkip(event)) return;
+
+        if (crossesAltarRollTime(before, skipAmount)) {
             tryNightlySpawn(true);
+        }
+    }
+
+    private boolean isNightSkip(TimeSkipEvent event) {
+        try {
+            Object reason = event.getClass().getMethod("getSkipReason").invoke(event);
+            return reason instanceof Enum<?> enumReason
+                ? "NIGHT_SKIP".equals(enumReason.name())
+                : "NIGHT_SKIP".equals(String.valueOf(reason));
+        } catch (NoSuchMethodException ex) {
+            // Some 26.1.x server jars do not expose a skip reason. Fall back to the time-crossing check.
+            return true;
+        } catch (ReflectiveOperationException | LinkageError ex) {
+            plugin.getLogger().warning("Could not read time skip reason: " + ex.getMessage());
+            return true;
         }
     }
 
@@ -1095,6 +1110,17 @@ public final class LegendaryAltarManager implements Listener {
             return coordsString(location);
         }
         return altarRecord.x() + ", " + altarRecord.y() + ", " + altarRecord.z();
+    }
+
+    private boolean crossesAltarRollTime(long before, long skipAmount) {
+        if (skipAmount <= 0L) {
+            return false;
+        }
+
+        long rollTime = plugin.getConfigManager().legendaryAltarRollTimeTicks;
+        long normalizedBefore = Math.floorMod(before, 24000L);
+        long normalizedAfter = normalizedBefore + skipAmount;
+        return normalizedBefore < rollTime && normalizedAfter >= rollTime;
     }
 
     private String formatRemaining(long millis) {

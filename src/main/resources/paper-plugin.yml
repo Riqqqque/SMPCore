@@ -45,6 +45,15 @@ permissions:
   smpcore.help:
     description: Use /help
     default: true
+  smpcore.menu:
+    description: Use /menu and /smpmenu
+    default: true
+  smpcore.leaderboard:
+    description: Use /leaderboards, /leaderboard, /lb, and /topstats
+    default: true
+  smpcore.bossbrews:
+    description: Use /bossbrews, /bosspotions, and /brews
+    default: true
   smpcore.legendary.recipe:
     description: Use /lrecipe, /reliquary, and /mythics item menus
     default: true
@@ -65,6 +74,9 @@ permissions:
     default: true
   smpcore.veinminer.use:
     description: Use /veinminer and native vein mining
+    default: true
+  smpcore.wiki:
+    description: Use /wiki, /guide, and /smpwiki
     default: true
 
   # Admin
@@ -131,6 +143,15 @@ permissions:
   smpcore.startsmp.reset:
     description: Reset the SMP start border and grace state
     default: op
+  smpcore.startsmp.lock:
+    description: Re-enable the pre-start SMP spawn barrier and lockdown
+    default: op
+  smpcore.time:
+    description: Use /day and /night
+    default: op
+  smpcore.weather:
+    description: Use /sun and /storm
+    default: op
   smpcore.announce:
     description: Use /announce
     default: op
@@ -139,6 +160,9 @@ permissions:
     default: op
   smpcore.reload:
     description: Use /smpcore reload
+    default: op
+  smpcore.staff:
+    description: Receive staff-only audit and anti-dupe alerts
     default: op
   smpcore.boss.admin:
     description: Use /bosses and custom boss controls

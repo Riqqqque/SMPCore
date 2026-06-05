@@ -378,11 +378,23 @@ public final class PlayerCommands {
         if (player.hasPermission("smpcore.help")) {
             lines.add("<gray><white>/help</white> - Show this help menu</gray>");
         }
+        if (player.hasPermission("smpcore.menu")) {
+            lines.add("<gray><white>/menu</white> - Open the main plugin menu</gray>");
+        }
+        if (player.hasPermission("smpcore.leaderboard")) {
+            lines.add("<gray><white>/leaderboards</white> (<white>/lb</white>) - View kills, deaths, boss damage, and fight reports</gray>");
+        }
         if (player.hasPermission("smpcore.legendary.recipe")) {
             lines.add("<gray><white>/lrecipe</white> (<white>/reliquary</white>) - Open the Reliquary</gray>");
             lines.add("<gray><white>/mythics</white> - View Mythic Nexus fusion pairings</gray>");
         }
         lines.add("<gray><white>/bossrituals</white> - View custom boss summon rituals</gray>");
+        if (player.hasPermission("smpcore.bossbrews")) {
+            lines.add("<gray><white>/bossbrews</white> - View boss-material potion recipes</gray>");
+        }
+        if (player.hasPermission("smpcore.wiki")) {
+            lines.add("<gray><white>/wiki</white> - Open the SMPCore wiki link</gray>");
+        }
         if (player.hasPermission("smpcore.enchants")) {
             lines.add("<gray><white>/enchants</white> - View custom enchants</gray>");
         }
@@ -400,6 +412,15 @@ public final class PlayerCommands {
         }
         if (player.hasPermission("smpcore.startsmp")) {
             lines.add("<gray><white>/startsmp</white> - Expand the world border and start the grace timer</gray>");
+        }
+        if (player.hasPermission("smpcore.startsmp.lock")) {
+            lines.add("<gray><white>/startsmp lock</white> - Re-enable the pre-start spawn barrier and lockdown</gray>");
+        }
+        if (player.hasPermission("smpcore.time")) {
+            lines.add("<gray><white>/day</white>, <white>/night</white> - Change time in your current world</gray>");
+        }
+        if (player.hasPermission("smpcore.weather")) {
+            lines.add("<gray><white>/sun</white>, <white>/storm</white> - Change weather in your current world</gray>");
         }
         if (player.hasPermission("smpcore.home")) {
             lines.add("<gray><white>/home [name]</white>, <white>/sethome [name]</white>, <white>/delhome [name]</white>, <white>/homes</white></gray>");

@@ -106,6 +106,7 @@ public final class DeathChestListener implements Listener {
         }
 
         List<ItemStack> overflow = storeItems(storage, drops);
+        auditDeathChest(player, storage);
         event.getDrops().clear();
         if (!overflow.isEmpty() && !plugin.getConfigManager().deathChestDropOverflowItems) {
             event.getDrops().addAll(cloneDrops(overflow));
@@ -484,6 +485,22 @@ public final class DeathChestListener implements Listener {
             overflow.addAll(cloneDrops(remaining));
         }
         return overflow;
+    }
+
+    private void auditDeathChest(Player player, DeathChestStorage storage) {
+        if (player == null || storage == null || plugin.getItemAuditManager() == null) {
+            return;
+        }
+
+        int chestIndex = 1;
+        for (Inventory inventory : storage.inventories()) {
+            plugin.getItemAuditManager().auditSharedInventory(
+                player,
+                inventory,
+                "death_chest:" + player.getName() + ":" + chestIndex
+            );
+            chestIndex++;
+        }
     }
 
     private List<ItemStack> addToInventory(Inventory inventory, List<ItemStack> items) {

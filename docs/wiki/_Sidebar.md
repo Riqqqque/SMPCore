@@ -1,0 +1,14 @@
+## SMPCore
+
+- [Home](Home)
+- [Getting Started](Getting-Started)
+- [Commands](Commands)
+- [Reliquary and Items](Reliquary-And-Items)
+- [Covenant Armory](Covenant-Armory)
+- [Bosses and Rituals](Bosses-And-Rituals)
+- [Superpowers](Superpowers)
+- [Leaderboards](Leaderboards)
+- [Custom Enchants](Custom-Enchants)
+- [Teams and SMP Start](Teams-And-SMP-Start)
+- [Admin Guide](Admin-Guide)
+- [FAQ](FAQ)

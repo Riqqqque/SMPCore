@@ -7,6 +7,7 @@ import me.rique.smpcore.combat.DamageNumberListener;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
 import me.rique.smpcore.power.SuperpowerManager;
+import me.rique.smpcore.season.SeasonRelicManager;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
@@ -775,6 +776,10 @@ public final class LegendaryListener implements Listener {
             if (recipeId.startsWith(RELIQUARY_SECTION_PREFIX)) {
                 ReliquarySection section = ReliquarySection.fromId(recipeId.substring(RELIQUARY_SECTION_PREFIX.length()));
                 if (section != null) {
+                    if (section == ReliquarySection.SEASON && plugin.getSeasonRelicManager() != null) {
+                        plugin.getSeasonRelicManager().openArmoryMenu(player);
+                        return;
+                    }
                     openReliquarySectionMenu(player, section);
                 }
                 return;
@@ -998,6 +1003,9 @@ public final class LegendaryListener implements Listener {
         inv.setItem(22, createReliquarySectionItem(player, ReliquarySection.MYTHICS));
         inv.setItem(24, createReliquarySectionItem(player, ReliquarySection.TOOLS));
         inv.setItem(31, createReliquarySectionItem(player, ReliquarySection.UTILITY));
+        if (plugin.getSeasonRelicManager() != null) {
+            inv.setItem(13, createReliquarySectionItem(player, ReliquarySection.SEASON));
+        }
 
         player.openInventory(inv);
     }
@@ -1104,6 +1112,11 @@ public final class LegendaryListener implements Listener {
             openSustenanceTalismanRecipeDetails(player);
             return;
         }
+        if (plugin.getSeasonRelicManager() != null
+            && plugin.getSeasonRelicManager().handlesReliquaryEntry(recipeId)) {
+            plugin.getSeasonRelicManager().openReliquaryEntry(player, recipeId);
+            return;
+        }
         if (plugin.getCustomToolListener() != null && plugin.getCustomToolListener().isCustomToolId(recipeId)) {
             openCustomToolRecipeDetails(player, recipeId);
             return;
@@ -1170,6 +1183,11 @@ public final class LegendaryListener implements Listener {
                 }
                 if (plugin.getSustenanceTalismanListener() != null) {
                     entries.add(new CustomRecipeEntry(SustenanceTalismanListener.ITEM_ID, createSustenanceTalismanPreview(player)));
+                }
+            }
+            case SEASON -> {
+                if (plugin.getSeasonRelicManager() != null) {
+                    entries.add(new CustomRecipeEntry(SeasonRelicManager.ARMORY_MENU_ID, plugin.getSeasonRelicManager().createArmoryPreview(player)));
                 }
             }
         }
@@ -1816,6 +1834,36 @@ public final class LegendaryListener implements Listener {
             applyStrengthSwordStageHit(attacker, victim);
         } else if (held == LegendaryType.STRENGTH_MACE) {
             event.setDamage(event.getDamage() + STRENGTH_MACE_DAMAGE_BONUS);
+        } else if (held == LegendaryType.PARADOX_REAVER) {
+            event.setDamage(14.0);
+            victim.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 70, 1, false, true, true));
+            victim.addPotionEffect(new PotionEffect(PotionEffectType.WEAKNESS, 70, 0, false, true, true));
+            victim.getWorld().spawnParticle(Particle.REVERSE_PORTAL, victim.getLocation().add(0.0, 1.0, 0.0), 22, 0.35, 0.45, 0.35, 0.08);
+        } else if (held == LegendaryType.TEMPEST_TRIDENT) {
+            double bonus = (attacker.isInWater() || attacker.isInRain()) ? 9.0 : 7.0;
+            event.setDamage(event.getDamage() + bonus);
+            victim.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 60, 0, false, true, true));
+            if (attacker.isInWater() || attacker.isInRain() || attacker.getWorld().hasStorm()) {
+                victim.getWorld().strikeLightningEffect(victim.getLocation());
+            } else {
+                victim.getWorld().spawnParticle(Particle.SPLASH, victim.getLocation().add(0.0, 1.0, 0.0), 18, 0.35, 0.35, 0.35, 0.05);
+            }
+        } else if (held == LegendaryType.STORMFALL_MAUL) {
+            event.setDamage(event.getDamage() + 6.0);
+            Vector push = victim.getLocation().toVector().subtract(attacker.getLocation().toVector()).setY(0.0);
+            if (push.lengthSquared() > 1.0E-6) {
+                victim.setVelocity(victim.getVelocity().add(push.normalize().multiply(0.75).setY(0.35)));
+            }
+            victim.getWorld().spawnParticle(Particle.SONIC_BOOM, victim.getLocation().add(0.0, 1.0, 0.0), 1, 0.0, 0.0, 0.0, 0.0);
+            for (LivingEntity nearby : victim.getWorld().getNearbyLivingEntities(victim.getLocation(), 4.5)) {
+                if (nearby.equals(victim) || nearby.equals(attacker)) continue;
+                if (nearby instanceof Player player && sameTeamOrSelf(attacker.getUniqueId(), player.getUniqueId())) continue;
+                Vector wave = nearby.getLocation().toVector().subtract(victim.getLocation().toVector()).setY(0.0);
+                if (wave.lengthSquared() > 1.0E-6) {
+                    nearby.setVelocity(nearby.getVelocity().add(wave.normalize().multiply(0.45).setY(0.22)));
+                }
+                nearby.damage(2.0, attacker);
+            }
         }
 
         if (held == LegendaryType.THORS_HAMMER) {
@@ -2314,7 +2362,11 @@ public final class LegendaryListener implements Listener {
 
     private CustomLoreUtil.Rarity customToolRarity(String toolId) {
         return switch (toolId) {
-            case CustomToolListener.ADVANCED_PICKAXE_ID, CustomToolListener.GRAPPLE_HOOK_ID -> CustomLoreUtil.Rarity.RARE;
+            case CustomToolListener.ADVANCED_PICKAXE_ID,
+                 CustomToolListener.GRAPPLE_HOOK_ID,
+                 CustomToolListener.SURVEYORS_LENS_ID -> CustomLoreUtil.Rarity.RARE;
+            case CustomToolListener.SPELUNKER_LANTERN_ID,
+                 CustomToolListener.MENDERS_KIT_ID -> CustomLoreUtil.Rarity.UNCOMMON;
             default -> CustomLoreUtil.Rarity.COMMON;
         };
     }
@@ -6836,7 +6888,13 @@ public final class LegendaryListener implements Listener {
                  BLINK_DAGGER,
                  HYPNOSIS_STAFF,
                  HARD_HITTER,
-                 WARDEN_BLADE -> true;
+                 WARDEN_BLADE,
+                 ENDER_SWORD,
+                 CHRONO_SWORD,
+                 FROST_SCYTHE,
+                 TRIDENT_OF_PERCY,
+                 THORS_HAMMER,
+                 DASH_MACE -> true;
             default -> false;
         };
     }
@@ -6849,7 +6907,10 @@ public final class LegendaryListener implements Listener {
             case MIDAS_SWORD,
                  REAPERS_SCYTHE,
                  SHADOW_BLADE,
-                 STRENGTH_SWORD -> true;
+                 STRENGTH_SWORD,
+                 PARADOX_REAVER,
+                 TEMPEST_TRIDENT,
+                 STORMFALL_MAUL -> true;
             default -> false;
         };
     }
@@ -7278,6 +7339,66 @@ public final class LegendaryListener implements Listener {
             case SHADOW_BLADE -> {
                 meta.removeAttributeModifier(Attribute.ATTACK_DAMAGE);
                 meta.lore(buildShadowBladeLore(meta, null));
+            }
+            case PARADOX_REAVER -> {
+                setEnchantLevel(meta, enchantSharpness, 8);
+                setEnchantLevel(meta, enchantUnbreaking, 4);
+                meta.lore(buildMythicLore(
+                    meta,
+                    Material.NETHERITE_SWORD,
+                    "SWORD",
+                    List.of(
+                        "<gray>Hit Damage: <white>14</white></gray>",
+                        "<gray>Temporal Break: <white>Slowness II</white> and <white>Weakness I</white></gray>"
+                    ),
+                    CustomLoreUtil.section(
+                        "Mythic Fusion",
+                        "Paradox Cut",
+                        "<gray>Forged from <white>Riftreaver</white> and <white>Hourglass Blade</white>.</gray>",
+                        "<gray>Hits tear a brief delay into the target, reducing escape and counterpressure.</gray>"
+                    )
+                ));
+            }
+            case TEMPEST_TRIDENT -> {
+                setEnchantLevel(meta, enchantLoyalty, 4);
+                setEnchantLevel(meta, enchantChanneling, 1);
+                setEnchantLevel(meta, enchantImpaling, 6);
+                meta.lore(buildMythicLore(
+                    meta,
+                    Material.TRIDENT,
+                    "TRIDENT",
+                    List.of(
+                        "<gray>Hit Bonus: <white>+7 damage</white></gray>",
+                        "<gray>Storm Surge: stronger in water or rain</gray>"
+                    ),
+                    CustomLoreUtil.section(
+                        "Mythic Fusion",
+                        "Stormtide",
+                        "<gray>Forged from <white>Frost Scythe</white> and <white>Trident of Percy</white>.</gray>",
+                        "<gray>Rewards water, rain, and boss arenas without deleting PvP counterplay.</gray>"
+                    )
+                ));
+            }
+            case STORMFALL_MAUL -> {
+                setEnchantLevel(meta, enchantDensity, 6);
+                setEnchantLevel(meta, enchantBreach, 4);
+                setEnchantLevel(meta, enchantWindBurst, 2);
+                setEnchantLevel(meta, enchantUnbreaking, 4);
+                meta.lore(buildMythicLore(
+                    meta,
+                    Material.MACE,
+                    "MACE",
+                    List.of(
+                        "<gray>Hit Bonus: <white>+6 damage</white></gray>",
+                        "<gray>Shockwave: knocks enemies back on hit</gray>"
+                    ),
+                    CustomLoreUtil.section(
+                        "Mythic Fusion",
+                        "Stormfall",
+                        "<gray>Forged from <white>Mjolnir</white> and <white>Meteorbreaker</white>.</gray>",
+                        "<gray>A high-risk brawler weapon built for breaking clustered fights.</gray>"
+                    )
+                ));
             }
             case HEADHUNTERS_CHESTPIECE -> {
                 setEnchantLevel(meta, enchantProtection, 3);
@@ -7865,6 +7986,16 @@ public final class LegendaryListener implements Listener {
                 "<gray>Support items that change powers, survival, or progression.</gray>",
                 "<gray>Good place to check non-weapon custom recipes.</gray>"
             )
+        ),
+        SEASON(
+            "season",
+            "Reliquary: Covenant",
+            Material.ECHO_SHARD,
+            "<gradient:#ff4d6d:#facc15><bold>Covenant Armory</bold></gradient>",
+            List.of(
+                "<gray>Boss trophies, weapons, armor sets,</gray>",
+                "<gray>standalone armor, and tactical utility relics.</gray>"
+            )
         );
 
         private final String id;
@@ -7982,6 +8113,9 @@ public final class LegendaryListener implements Listener {
         MIDAS_SWORD("midas_sword", Material.GOLDEN_SWORD, "Gilded Sovereign", CustomLoreUtil.Rarity.MYTHIC),
         REAPERS_SCYTHE("reapers_scythe", Material.NETHERITE_HOE, "Soulrender", CustomLoreUtil.Rarity.MYTHIC),
         SHADOW_BLADE("shadow_blade", Material.DIAMOND_SWORD, "Nightfall", CustomLoreUtil.Rarity.MYTHIC),
+        PARADOX_REAVER("paradox_reaver", Material.NETHERITE_SWORD, "Paradox Reaver", CustomLoreUtil.Rarity.MYTHIC),
+        TEMPEST_TRIDENT("tempest_trident", Material.TRIDENT, "Tempest Trident", CustomLoreUtil.Rarity.MYTHIC),
+        STORMFALL_MAUL("stormfall_maul", Material.MACE, "Stormfall Maul", CustomLoreUtil.Rarity.MYTHIC),
         HEADHUNTERS_CHESTPIECE("headhunters_chestpiece", Material.DIAMOND_CHESTPLATE, "Headhunter's Harness", CustomLoreUtil.Rarity.LEGENDARY),
         GOD_CHESTPLATE("god_chestplate", Material.DIAMOND_CHESTPLATE, "Aegis of the Undying", CustomLoreUtil.Rarity.MYTHIC),
         STRENGTH_SWORD("strength_sword", Material.NETHERITE_SWORD, "Crimson Dominion", CustomLoreUtil.Rarity.MYTHIC),

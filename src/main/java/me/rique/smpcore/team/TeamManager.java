@@ -77,6 +77,7 @@ public final class TeamManager implements Listener {
     private final Map<String, String> scoreboardIdByTeamKey = new ConcurrentHashMap<>();
     private final Map<String, TeamVaultSession> teamVaultsByKey = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<TeamVaultSession>> vaultLoadingByTeamKey = new ConcurrentHashMap<>();
+    private final Map<String, CompletableFuture<Void>> vaultSaveChainsByTeamKey = new ConcurrentHashMap<>();
     private final Set<UUID> pendingCrownReturns = ConcurrentHashMap.newKeySet();
     private volatile boolean teamsLoaded;
     private volatile boolean teamsLoading;
@@ -223,6 +224,7 @@ public final class TeamManager implements Listener {
             return;
         }
 
+        auditTeamVault(event.getPlayer(), session, "quit");
         saveTeamVault(session).exceptionally(ex -> {
             plugin.getLogger().severe("Failed to save team vault for " + session.displayName() + " on quit: " + ex.getMessage());
             return null;
@@ -236,6 +238,9 @@ public final class TeamManager implements Listener {
         TeamVaultSession session = teamVaultsByKey.get(holder.teamKey());
         if (session == null || session.inventory() != event.getInventory()) return;
 
+        if (event.getPlayer() instanceof Player player) {
+            auditTeamVault(player, session, "close");
+        }
         saveTeamVault(session).exceptionally(ex -> {
             plugin.getLogger().severe("Failed to save team vault for " + session.displayName() + ": " + ex.getMessage());
             return null;
@@ -363,6 +368,7 @@ public final class TeamManager implements Listener {
         }
 
         vaultLoadingByTeamKey.clear();
+        vaultSaveChainsByTeamKey.clear();
         teamVaultsByKey.clear();
     }
 
@@ -683,6 +689,7 @@ public final class TeamManager implements Listener {
                     return;
                 }
 
+                auditTeamVault(player, session, "open");
                 player.openInventory(session.inventory());
             })
         ).exceptionally(ex -> {
@@ -863,7 +870,32 @@ public final class TeamManager implements Listener {
     }
 
     private CompletableFuture<Void> saveTeamVault(TeamVaultSession session) {
-        return plugin.getDatabase().saveTeamVault(session.displayName(), serialize(session.inventory().getContents()));
+        byte[] snapshot = serialize(session.inventory().getContents());
+        CompletableFuture<Void> save = vaultSaveChainsByTeamKey.compute(session.teamKey(), (teamKey, previous) -> {
+            CompletableFuture<Void> base = previous == null
+                ? CompletableFuture.completedFuture(null)
+                : previous.handle((ignored, ignoredEx) -> (Void) null);
+
+            return base.thenCompose(ignored -> {
+                if (teamVaultsByKey.get(teamKey) != session) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                return plugin.getDatabase().saveTeamVault(session.displayName(), snapshot);
+            });
+        });
+        save.whenComplete((ignored, ignoredEx) -> vaultSaveChainsByTeamKey.remove(session.teamKey(), save));
+        return save;
+    }
+
+    private void auditTeamVault(Player observer, TeamVaultSession session, String reason) {
+        if (observer == null || session == null || plugin.getItemAuditManager() == null) {
+            return;
+        }
+        plugin.getItemAuditManager().auditSharedInventory(
+            observer,
+            session.inventory(),
+            "team_vault:" + session.displayName() + ":" + reason
+        );
     }
 
     private String teamsUnavailableMessage() {
@@ -1024,13 +1056,46 @@ public final class TeamManager implements Listener {
         }
 
         if (!shouldHaveCrown || validCrowns > 0) {
+            pendingCrownReturns.remove(player.getUniqueId());
             return;
         }
 
         ItemStack crown = createTeamCrown(player, team);
-        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(crown);
-        leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
+        int emptySlot = player.getInventory().firstEmpty();
+        if (emptySlot == -1) {
+            queueCrownRetry(player);
+            return;
+        }
+
+        player.getInventory().setItem(emptySlot, crown);
+        pendingCrownReturns.remove(player.getUniqueId());
         player.sendMessage(MessageUtil.success("Your team reached <white>" + CROWN_MIN_TEAM_MEMBERS + "</white> members. You received your crown."));
+    }
+
+    private void queueCrownRetry(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (pendingCrownReturns.add(playerId)) {
+            player.sendMessage(MessageUtil.warn("Your team crown is waiting. Clear one inventory slot and it will be returned automatically."));
+            scheduleCrownRetry(playerId);
+        }
+    }
+
+    private void scheduleCrownRetry(UUID playerId) {
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            if (!pendingCrownReturns.contains(playerId)) {
+                return;
+            }
+
+            Player player = Bukkit.getPlayer(playerId);
+            if (player == null || !player.isOnline()) {
+                return;
+            }
+
+            reconcileCrowns(player);
+            if (pendingCrownReturns.contains(playerId)) {
+                scheduleCrownRetry(playerId);
+            }
+        }, 20L * 15L);
     }
 
     private void removeCrownsFromPlayer(Player player) {

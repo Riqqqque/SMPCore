@@ -1,6 +1,7 @@
 package me.rique.smpcore.command;
 
 import com.mojang.brigadier.Command;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import io.papermc.paper.command.brigadier.Commands;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.smp.SmpStartManager;
@@ -24,6 +25,15 @@ public final class SmpStartCommand {
                     );
                     return result.success() ? Command.SINGLE_SUCCESS : 0;
                 })
+                .then(Commands.argument("graceMinutes", IntegerArgumentType.integer(0, 10_080))
+                    .executes(ctx -> {
+                        int graceMinutes = IntegerArgumentType.getInteger(ctx, "graceMinutes");
+                        SmpStartManager.StartResult result = plugin.getSmpStartManager().start(ctx.getSource().getSender(), graceMinutes);
+                        ctx.getSource().getSender().sendMessage(
+                            result.success() ? MessageUtil.success(result.message()) : MessageUtil.error(result.message())
+                        );
+                        return result.success() ? Command.SINGLE_SUCCESS : 0;
+                    }))
                 .then(Commands.literal("status")
                     .executes(ctx -> {
                         ctx.getSource().getSender().sendMessage(plugin.getSmpStartManager().statusMessage());
@@ -38,8 +48,26 @@ public final class SmpStartCommand {
                         );
                         return result.success() ? Command.SINGLE_SUCCESS : 0;
                     }))
+                .then(Commands.literal("lock")
+                    .requires(src -> src.getSender().hasPermission("smpcore.startsmp.lock"))
+                    .executes(ctx -> {
+                        SmpStartManager.StartResult result = plugin.getSmpStartManager().lock(ctx.getSource().getSender());
+                        ctx.getSource().getSender().sendMessage(
+                            result.success() ? MessageUtil.success(result.message()) : MessageUtil.error(result.message())
+                        );
+                        return result.success() ? Command.SINGLE_SUCCESS : 0;
+                    }))
+                .then(Commands.literal("barrier")
+                    .requires(src -> src.getSender().hasPermission("smpcore.startsmp.lock"))
+                    .executes(ctx -> {
+                        SmpStartManager.StartResult result = plugin.getSmpStartManager().lock(ctx.getSource().getSender());
+                        ctx.getSource().getSender().sendMessage(
+                            result.success() ? MessageUtil.success(result.message()) : MessageUtil.error(result.message())
+                        );
+                        return result.success() ? Command.SINGLE_SUCCESS : 0;
+                    }))
                 .build(),
-            "Start the SMP border and grace-period flow",
+            "Start or lock the SMP border and grace-period flow",
             List.of("smpstart")
         );
     }

@@ -38,8 +38,11 @@ public final class ConfigManager {
     public double smpStartedBorderDiameter;
     public int smpBorderExpandSeconds;
     public int smpPostStartGraceMinutes;
+    public boolean smpLockPluginCommandsBeforeStart;
+    public boolean smpLockBlockEditsBeforeStart;
     public String smpStartBroadcast;
     public String smpGraceDenyMessage;
+    public String smpLockdownDenyMessage;
 
     public int combatTagSeconds;
 
@@ -251,12 +254,24 @@ public final class ConfigManager {
             c.set("smp-start.post-start-grace-minutes", 60);
             smpStartConfigAdded = true;
         }
+        if (!c.contains("smp-start.lock-plugin-commands-before-start")) {
+            c.set("smp-start.lock-plugin-commands-before-start", true);
+            smpStartConfigAdded = true;
+        }
+        if (!c.contains("smp-start.lock-block-edits-before-start")) {
+            c.set("smp-start.lock-block-edits-before-start", true);
+            smpStartConfigAdded = true;
+        }
         if (!c.contains("smp-start.start-broadcast")) {
             c.set("smp-start.start-broadcast", "<gold><bold>The SMP has started!</bold></gold> <gray>The world border is now <white>{border}</white> blocks wide. PvP unlocks in <white>{grace}</white>.</gray>");
             smpStartConfigAdded = true;
         }
         if (!c.contains("smp-start.grace-deny-message")) {
             c.set("smp-start.grace-deny-message", "<yellow>PvP is protected for <white>{time}</white>.</yellow>");
+            smpStartConfigAdded = true;
+        }
+        if (!c.contains("smp-start.lockdown-deny-message")) {
+            c.set("smp-start.lockdown-deny-message", "<yellow>The SMP has not started yet. Please wait for <white>/startsmp</white>.</yellow>");
             smpStartConfigAdded = true;
         }
         if (smpStartConfigAdded) {
@@ -274,6 +289,8 @@ public final class ConfigManager {
         smpStartedBorderDiameter = clamp(c.getDouble("smp-start.started-border-diameter", 10000.0), 1.0, 60_000_000.0);
         smpBorderExpandSeconds = clamp(c.getInt("smp-start.border-expand-seconds", 0), 0, 86_400);
         smpPostStartGraceMinutes = clamp(c.getInt("smp-start.post-start-grace-minutes", 60), 0, 7 * 24 * 60);
+        smpLockPluginCommandsBeforeStart = c.getBoolean("smp-start.lock-plugin-commands-before-start", true);
+        smpLockBlockEditsBeforeStart = c.getBoolean("smp-start.lock-block-edits-before-start", true);
         smpStartBroadcast = c.getString(
             "smp-start.start-broadcast",
             "<gold><bold>The SMP has started!</bold></gold> <gray>The world border is now <white>{border}</white> blocks wide. PvP unlocks in <white>{grace}</white>.</gray>"
@@ -281,6 +298,10 @@ public final class ConfigManager {
         smpGraceDenyMessage = c.getString(
             "smp-start.grace-deny-message",
             "<yellow>PvP is protected for <white>{time}</white>.</yellow>"
+        );
+        smpLockdownDenyMessage = c.getString(
+            "smp-start.lockdown-deny-message",
+            "<yellow>The SMP has not started yet. Please wait for <white>/startsmp</white>.</yellow>"
         );
 
         combatTagSeconds = clamp(c.getInt("combat.tag-seconds", 45), 45, 60);

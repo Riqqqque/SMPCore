@@ -6,6 +6,7 @@ import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.legendary.MythicForgeListener;
 import me.rique.smpcore.power.SuperpowerManager;
+import me.rique.smpcore.season.SeasonRelicManager;
 import me.rique.smpcore.util.CustomLoreUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -520,6 +521,18 @@ public final class RareDropVisualListener implements Listener {
             }
             if (powers.isDruidGrimoire(item)) {
                 return new RareDropProfile(displayName, "EPIC", colorForRarity("EPIC"));
+            }
+        }
+
+        SeasonRelicManager season = plugin.getSeasonRelicManager();
+        if (season != null) {
+            String relicId = season.relicId(item);
+            if (relicId != null) {
+                String rarity = season.rarityLabelFor(relicId);
+                if (rarity == null || rarity.isBlank()) {
+                    rarity = "RARE";
+                }
+                return new RareDropProfile(displayName, rarity, colorForRarity(rarity));
             }
         }
 

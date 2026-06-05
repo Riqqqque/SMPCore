@@ -5,6 +5,7 @@ Core Paper plugin for Ethereal SMP. SMPCore handles server essentials, custom pr
 ## Features
 
 - Custom legendary, mythic, awakened, and rare items.
+- Covenant Armory season gear with boss-linked weapons, armor sets, utility relics, and trophy materials.
 - Legendary altar, mythic forge, awakening table, and recipe menus.
 - Custom bosses with boss bars, holograms, phases, attacks, and tracked cleanup.
 - Hidden superpower system with admin assignment tools.
@@ -56,6 +57,8 @@ Build outputs:
 - `/customitem give`
 - `/itemaudit`
 - `/bosses`
+- `/bossrituals`
+- `/wiki`
 - `/team`, `/tvault`, `/teamvault`
 - `/powerinfo`, `/setpower`
 - `/admin reward`
@@ -76,6 +79,7 @@ Admin-only commands are protected through permissions in `src/main/resources/pap
 - `src/main/java/me/rique/smpcore` - plugin source
 - `src/main/resources` - plugin config and Paper metadata
 - `src/main/resourcepack` - built-in resource pack source
+- `docs/wiki` - GitHub Wiki source pages
 - `build.gradle.kts` - Gradle build and resource pack task
 
 ## Author

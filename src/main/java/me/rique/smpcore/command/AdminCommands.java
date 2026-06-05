@@ -24,6 +24,7 @@ import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.legendary.MythicForgeListener;
 import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.power.SuperpowerType;
+import me.rique.smpcore.season.SeasonRelicManager;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
@@ -79,7 +80,10 @@ public final class AdminCommands {
         DRUID_GRIMOIRE_ITEM_ID,
         DOMINION_CORE_ITEM_ID,
         CustomToolListener.ADVANCED_PICKAXE_ID,
-        CustomToolListener.GRAPPLE_HOOK_ID
+        CustomToolListener.GRAPPLE_HOOK_ID,
+        CustomToolListener.SPELUNKER_LANTERN_ID,
+        CustomToolListener.SURVEYORS_LENS_ID,
+        CustomToolListener.MENDERS_KIT_ID
     );
 
     private AdminCommands() {}
@@ -945,7 +949,7 @@ public final class AdminCommands {
                 .requires(src -> src.getSender().hasPermission("smpcore.customitem.admin"))
                 .then(Commands.literal("give")
                     .then(Commands.argument("item", StringArgumentType.word())
-                        .suggests((ctx, builder) -> suggestCustomItemIds(builder))
+                        .suggests((ctx, builder) -> suggestCustomItemIds(plugin, builder))
                         .executes(ctx -> {
                             if (!(ctx.getSource().getSender() instanceof Player self)) {
                                 ctx.getSource().getSender().sendMessage(MessageUtil.error("Console must specify a target."));
@@ -989,14 +993,17 @@ public final class AdminCommands {
             case DRUID_GRIMOIRE_ITEM_ID -> createDruidGrimoireAdminItem(plugin, sender);
             case DOMINION_CORE_ITEM_ID -> createDominionCoreAdminItem(plugin, sender);
             case CustomToolListener.ADVANCED_PICKAXE_ID,
-                 CustomToolListener.GRAPPLE_HOOK_ID ->
+                 CustomToolListener.GRAPPLE_HOOK_ID,
+                 CustomToolListener.SPELUNKER_LANTERN_ID,
+                 CustomToolListener.SURVEYORS_LENS_ID,
+                 CustomToolListener.MENDERS_KIT_ID ->
                 createCustomToolAdminItem(plugin, sender, itemId);
-            default -> null;
+            default -> createSeasonRelicAdminItem(plugin, sender, itemId);
         };
         if (item == null) {
-            if (itemId == null || !CUSTOM_ITEM_IDS.contains(itemId)) {
+            if (itemId == null || !customItemCommandOptions(plugin).contains(itemId)) {
                 sender.sendMessage(MessageUtil.error(
-                    "Unknown custom item. Options: <white>" + String.join(", ", customItemCommandOptions()) + "</white>."
+                    "Unknown custom item. Options: <white>" + String.join(", ", customItemCommandOptions(plugin)) + "</white>."
                 ));
             }
             return 0;
@@ -1165,6 +1172,16 @@ public final class AdminCommands {
         );
     }
 
+    private static AdminGiveItem createSeasonRelicAdminItem(SMPCore plugin, CommandSender sender, String itemId) {
+        SeasonRelicManager season = plugin.getSeasonRelicManager();
+        if (season == null || !season.isRelicId(itemId)) {
+            return null;
+        }
+        ItemStack item = season.createRelicItem(itemId);
+        String displayName = season.displayNameFor(itemId);
+        return item == null ? null : new AdminGiveItem(item, displayName == null ? prettyCustomItemName(itemId) : displayName);
+    }
+
     private static int giveItem(SMPCore plugin, CommandSender sender, Player target, ItemStack item, String displayName) {
         ItemAuditManager audit = plugin.getItemAuditManager();
         if (audit != null) {
@@ -1264,8 +1281,8 @@ public final class AdminCommands {
         return Command.SINGLE_SUCCESS;
     }
 
-    private static CompletableFuture<Suggestions> suggestCustomItemIds(SuggestionsBuilder builder) {
-        for (String option : customItemCommandOptions()) {
+    private static CompletableFuture<Suggestions> suggestCustomItemIds(SMPCore plugin, SuggestionsBuilder builder) {
+        for (String option : customItemCommandOptions(plugin)) {
             builder.suggest(option);
         }
         return builder.buildFuture();
@@ -1288,16 +1305,22 @@ public final class AdminCommands {
         return builder.buildFuture();
     }
 
-    private static Set<String> customItemCommandOptions() {
+    private static Set<String> customItemCommandOptions(SMPCore plugin) {
         LinkedHashSet<String> options = new LinkedHashSet<>();
         for (String id : CUSTOM_ITEM_IDS) {
             String displayToken = switch (id) {
                 case CustomToolListener.ADVANCED_PICKAXE_ID -> "prospectors_pick";
                 case CustomToolListener.GRAPPLE_HOOK_ID -> "skyhook";
+                case CustomToolListener.SPELUNKER_LANTERN_ID -> "spelunkers_lantern";
+                case CustomToolListener.SURVEYORS_LENS_ID -> "surveyors_lens";
+                case CustomToolListener.MENDERS_KIT_ID -> "menders_kit";
                 default -> id;
             };
             options.add(displayToken);
             options.add(id);
+        }
+        if (plugin.getSeasonRelicManager() != null) {
+            options.addAll(plugin.getSeasonRelicManager().commandOptions());
         }
         return options;
     }
@@ -1359,6 +1382,9 @@ public final class AdminCommands {
             case "enderbone", "bone" -> ENDER_BONE_ITEM_ID;
             case "magnet", "faraday", "faradays", "faradaysmagnet", "faradays_magnet" -> FARADAYS_MAGNET_ITEM_ID;
             case "grapple", "grapplehook", "grapple_hook", "hook", "skyhook" -> CustomToolListener.GRAPPLE_HOOK_ID;
+            case "lantern", "spelunker", "spelunkers", "spelunker_lantern", "spelunkers_lantern", "spelunkerslantern" -> CustomToolListener.SPELUNKER_LANTERN_ID;
+            case "lens", "surveyor", "surveyors", "surveyor_lens", "surveyors_lens", "surveyorslens", "ore_scanner", "orescanner" -> CustomToolListener.SURVEYORS_LENS_ID;
+            case "mender", "menders", "mender_kit", "menders_kit", "menderskit", "repair_kit", "repairkit" -> CustomToolListener.MENDERS_KIT_ID;
             case "mythicforge", "mythic_forge", "forge" -> MYTHIC_FORGE_ITEM_ID;
             case "mothernature", "mother_nature", "mothernaturestick", "mother_nature_stick", "naturestick" -> MOTHER_NATURE_STICK_ITEM_ID;
             case "orb", "mystic_orb", "orb_of_mystics", "orb_of_the_mystic", "orbofthemystics" -> ORB_OF_THE_MYSTICS_ITEM_ID;

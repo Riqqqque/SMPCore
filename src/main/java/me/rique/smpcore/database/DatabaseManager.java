@@ -301,6 +301,83 @@ public final class DatabaseManager {
             ON managed_item_events(instance_id, logged_at DESC)
             """;
 
+        String leaderboardStats = """
+            CREATE TABLE IF NOT EXISTS leaderboard_stats (
+                player_uuid  TEXT PRIMARY KEY,
+                player_name  TEXT NOT NULL,
+                player_kills INTEGER NOT NULL DEFAULT 0,
+                deaths       INTEGER NOT NULL DEFAULT 0,
+                boss_kills   INTEGER NOT NULL DEFAULT 0,
+                boss_damage  INTEGER NOT NULL DEFAULT 0,
+                boss_fights  INTEGER NOT NULL DEFAULT 0,
+                mob_kills    INTEGER NOT NULL DEFAULT 0,
+                updated_at   INTEGER NOT NULL DEFAULT 0
+            )""";
+
+        String leaderboardPlayerKills = """
+            CREATE INDEX IF NOT EXISTS idx_leaderboard_player_kills
+            ON leaderboard_stats(player_kills DESC)
+            """;
+
+        String leaderboardDeaths = """
+            CREATE INDEX IF NOT EXISTS idx_leaderboard_deaths
+            ON leaderboard_stats(deaths DESC)
+            """;
+
+        String leaderboardBossKills = """
+            CREATE INDEX IF NOT EXISTS idx_leaderboard_boss_kills
+            ON leaderboard_stats(boss_kills DESC)
+            """;
+
+        String leaderboardMobKills = """
+            CREATE INDEX IF NOT EXISTS idx_leaderboard_mob_kills
+            ON leaderboard_stats(mob_kills DESC)
+            """;
+
+        String leaderboardBossDamage = """
+            CREATE INDEX IF NOT EXISTS idx_leaderboard_boss_damage
+            ON leaderboard_stats(boss_damage DESC)
+            """;
+
+        String leaderboardBossFights = """
+            CREATE INDEX IF NOT EXISTS idx_leaderboard_boss_fights
+            ON leaderboard_stats(boss_fights DESC)
+            """;
+
+        String bossFights = """
+            CREATE TABLE IF NOT EXISTS boss_fights (
+                fight_id     TEXT PRIMARY KEY,
+                boss_id      TEXT    NOT NULL COLLATE NOCASE,
+                outcome      TEXT    NOT NULL,
+                started_at   INTEGER NOT NULL,
+                ended_at     INTEGER NOT NULL,
+                duration_ms  INTEGER NOT NULL,
+                double_drops INTEGER NOT NULL DEFAULT 0,
+                total_damage REAL    NOT NULL DEFAULT 0,
+                total_healing REAL   NOT NULL DEFAULT 0
+            )""";
+
+        String bossFightParticipants = """
+            CREATE TABLE IF NOT EXISTS boss_fight_participants (
+                fight_id         TEXT    NOT NULL,
+                player_uuid      TEXT    NOT NULL,
+                player_name      TEXT    NOT NULL,
+                damage_done      REAL    NOT NULL DEFAULT 0,
+                healing_received REAL    NOT NULL DEFAULT 0,
+                rank             INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (fight_id, player_uuid)
+            )""";
+
+        String bossFightParticipantsByPlayer = """
+            CREATE INDEX IF NOT EXISTS idx_boss_fight_participants_player
+            ON boss_fight_participants(player_uuid, fight_id)
+            """;
+
+        String bossFightsByEndedAt = """
+            CREATE INDEX IF NOT EXISTS idx_boss_fights_ended_at
+            ON boss_fights(ended_at DESC)
+            """;
+
         try (Connection conn = connection(); Statement stmt = conn.createStatement()) {
             stmt.executeUpdate(spawners);
             stmt.executeUpdate(homes);
@@ -324,7 +401,20 @@ public final class DatabaseManager {
             stmt.executeUpdate(managedItemEvents);
             stmt.executeUpdate(managedItemEventsBySubject);
             stmt.executeUpdate(managedItemEventsByInstance);
+            stmt.executeUpdate(leaderboardStats);
+            stmt.executeUpdate(leaderboardPlayerKills);
+            stmt.executeUpdate(leaderboardDeaths);
+            stmt.executeUpdate(leaderboardBossKills);
+            stmt.executeUpdate(leaderboardMobKills);
+            stmt.executeUpdate(bossFights);
+            stmt.executeUpdate(bossFightParticipants);
+            stmt.executeUpdate(bossFightParticipantsByPlayer);
+            stmt.executeUpdate(bossFightsByEndedAt);
             ensureColumn(conn, "teams", "color", "TEXT NOT NULL DEFAULT 'gold'");
+            ensureColumn(conn, "leaderboard_stats", "boss_damage", "INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(conn, "leaderboard_stats", "boss_fights", "INTEGER NOT NULL DEFAULT 0");
+            stmt.executeUpdate(leaderboardBossDamage);
+            stmt.executeUpdate(leaderboardBossFights);
         }
     }
 
@@ -1264,7 +1354,7 @@ public final class DatabaseManager {
                 ps.setString(1, record.instanceId());
                 ps.setString(2, record.itemKey());
                 ps.setLong(3, record.createdAt());
-                ps.setString(4, record.createdMethod());
+                ps.setString(4, record.createdMethod() == null || record.createdMethod().isBlank() ? "unknown" : record.createdMethod());
                 setUuid(ps, 5, record.createdByUuid());
                 ps.setString(6, record.createdByName());
                 setUuid(ps, 7, record.currentOwnerUuid());
@@ -1301,7 +1391,7 @@ public final class DatabaseManager {
                 setUuid(ps, 6, record.actorUuid());
                 ps.setString(7, record.actorName());
                 ps.setString(8, record.eventType());
-                ps.setString(9, record.method());
+                ps.setString(9, record.method() == null || record.method().isBlank() ? "unknown" : record.method());
                 ps.setString(10, record.details());
                 ps.executeUpdate();
             } catch (SQLException e) {
@@ -1358,6 +1448,210 @@ public final class DatabaseManager {
             } catch (SQLException e) {
                 plugin.getLogger().severe("loadManagedItemEvents: " + e.getMessage());
                 throw new RuntimeException("loadManagedItemEvents failed", e);
+            }
+            return records;
+        }, executor);
+    }
+
+    public CompletableFuture<Void> incrementLeaderboardStat(UUID playerUuid, String playerName, String statColumn, int amount) {
+        return CompletableFuture.runAsync(() -> {
+            String column = leaderboardColumn(statColumn);
+            if (playerUuid == null || column == null || amount <= 0) {
+                return;
+            }
+
+            String safeName = playerName == null || playerName.isBlank() ? "Unknown" : playerName;
+            String sql = """
+                INSERT INTO leaderboard_stats (player_uuid, player_name, %s, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(player_uuid) DO UPDATE SET
+                    player_name = excluded.player_name,
+                    %s = leaderboard_stats.%s + excluded.%s,
+                    updated_at = excluded.updated_at
+                """.formatted(column, column, column, column);
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, playerUuid.toString());
+                ps.setString(2, safeName);
+                ps.setInt(3, amount);
+                ps.setLong(4, System.currentTimeMillis());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("incrementLeaderboardStat: " + e.getMessage());
+                throw new RuntimeException("incrementLeaderboardStat failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<List<LeaderboardEntry>> loadLeaderboard(String statColumn, int limit) {
+        return CompletableFuture.supplyAsync(() -> {
+            List<LeaderboardEntry> records = new ArrayList<>();
+            String column = leaderboardColumn(statColumn);
+            if (column == null) {
+                return records;
+            }
+
+            String sql = """
+                SELECT player_uuid, player_name, %s AS value
+                FROM leaderboard_stats
+                WHERE %s > 0
+                ORDER BY %s DESC, updated_at ASC
+                LIMIT ?
+                """.formatted(column, column, column);
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setInt(1, Math.max(1, Math.min(100, limit)));
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        records.add(new LeaderboardEntry(
+                            parseUuid(rs.getString("player_uuid")),
+                            rs.getString("player_name"),
+                            rs.getLong("value")
+                        ));
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadLeaderboard: " + e.getMessage());
+                throw new RuntimeException("loadLeaderboard failed", e);
+            }
+            return records;
+        }, executor);
+    }
+
+    private static String leaderboardColumn(String statColumn) {
+        if (statColumn == null) {
+            return null;
+        }
+        return switch (statColumn.toLowerCase(Locale.ROOT)) {
+            case "player_kills", "kills", "pkills" -> "player_kills";
+            case "deaths" -> "deaths";
+            case "boss_kills", "bosses" -> "boss_kills";
+            case "boss_damage", "bossdamage", "damage" -> "boss_damage";
+            case "boss_fights", "bossfights", "fights" -> "boss_fights";
+            case "mob_kills", "mobs" -> "mob_kills";
+            default -> null;
+        };
+    }
+
+    public CompletableFuture<Void> saveBossFightReport(BossFightRecord fight, List<BossFightParticipantRecord> participants) {
+        return CompletableFuture.runAsync(() -> {
+            if (fight == null || fight.fightId() == null || fight.fightId().isBlank()
+                || fight.bossId() == null || fight.bossId().isBlank()) {
+                return;
+            }
+
+            String fightSql = """
+                INSERT INTO boss_fights (
+                    fight_id, boss_id, outcome, started_at, ended_at, duration_ms,
+                    double_drops, total_damage, total_healing
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(fight_id) DO UPDATE SET
+                    boss_id = excluded.boss_id,
+                    outcome = excluded.outcome,
+                    started_at = excluded.started_at,
+                    ended_at = excluded.ended_at,
+                    duration_ms = excluded.duration_ms,
+                    double_drops = excluded.double_drops,
+                    total_damage = excluded.total_damage,
+                    total_healing = excluded.total_healing
+                """;
+            String participantSql = """
+                INSERT INTO boss_fight_participants (
+                    fight_id, player_uuid, player_name, damage_done, healing_received, rank
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(fight_id, player_uuid) DO UPDATE SET
+                    player_name = excluded.player_name,
+                    damage_done = excluded.damage_done,
+                    healing_received = excluded.healing_received,
+                    rank = excluded.rank
+                """;
+
+            try (Connection conn = connection()) {
+                boolean oldAutoCommit = conn.getAutoCommit();
+                conn.setAutoCommit(false);
+                try (PreparedStatement fightPs = conn.prepareStatement(fightSql);
+                     PreparedStatement participantPs = conn.prepareStatement(participantSql)) {
+                    fightPs.setString(1, fight.fightId());
+                    fightPs.setString(2, fight.bossId().trim().toLowerCase(Locale.ROOT));
+                    fightPs.setString(3, fight.outcome() == null || fight.outcome().isBlank() ? "unknown" : fight.outcome());
+                    fightPs.setLong(4, fight.startedAt());
+                    fightPs.setLong(5, fight.endedAt());
+                    fightPs.setLong(6, Math.max(0L, fight.durationMs()));
+                    fightPs.setInt(7, fight.doubleDrops() ? 1 : 0);
+                    fightPs.setDouble(8, Math.max(0.0, fight.totalDamage()));
+                    fightPs.setDouble(9, Math.max(0.0, fight.totalHealing()));
+                    fightPs.executeUpdate();
+
+                    if (participants != null) {
+                        for (BossFightParticipantRecord participant : participants) {
+                            if (participant == null || participant.playerUuid() == null) {
+                                continue;
+                            }
+                            participantPs.setString(1, fight.fightId());
+                            participantPs.setString(2, participant.playerUuid().toString());
+                            participantPs.setString(3, participant.playerName() == null || participant.playerName().isBlank() ? "Unknown" : participant.playerName());
+                            participantPs.setDouble(4, Math.max(0.0, participant.damageDone()));
+                            participantPs.setDouble(5, Math.max(0.0, participant.healingReceived()));
+                            participantPs.setInt(6, Math.max(0, participant.rank()));
+                            participantPs.addBatch();
+                        }
+                        participantPs.executeBatch();
+                    }
+                    conn.commit();
+                } catch (SQLException e) {
+                    conn.rollback();
+                    throw e;
+                } finally {
+                    conn.setAutoCommit(oldAutoCommit);
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("saveBossFightReport: " + e.getMessage());
+                throw new RuntimeException("saveBossFightReport failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<List<BossFightMenuEntry>> loadPlayerBossFightReports(UUID playerUuid, int limit) {
+        return CompletableFuture.supplyAsync(() -> {
+            List<BossFightMenuEntry> records = new ArrayList<>();
+            if (playerUuid == null) {
+                return records;
+            }
+
+            String sql = """
+                SELECT f.fight_id, f.boss_id, f.outcome, f.started_at, f.ended_at, f.duration_ms,
+                       f.double_drops, f.total_damage, f.total_healing,
+                       p.damage_done, p.healing_received, p.rank
+                FROM boss_fight_participants p
+                JOIN boss_fights f ON f.fight_id = p.fight_id
+                WHERE p.player_uuid = ?
+                ORDER BY f.ended_at DESC
+                LIMIT ?
+                """;
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, playerUuid.toString());
+                ps.setInt(2, Math.max(1, Math.min(50, limit)));
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        records.add(new BossFightMenuEntry(
+                            rs.getString("fight_id"),
+                            rs.getString("boss_id"),
+                            rs.getString("outcome"),
+                            rs.getLong("started_at"),
+                            rs.getLong("ended_at"),
+                            rs.getLong("duration_ms"),
+                            rs.getInt("double_drops") == 1,
+                            rs.getDouble("total_damage"),
+                            rs.getDouble("total_healing"),
+                            rs.getDouble("damage_done"),
+                            rs.getDouble("healing_received"),
+                            rs.getInt("rank")
+                        ));
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadPlayerBossFightReports: " + e.getMessage());
+                throw new RuntimeException("loadPlayerBossFightReports failed", e);
             }
             return records;
         }, executor);
@@ -1493,6 +1787,40 @@ public final class DatabaseManager {
         String eventType,
         String method,
         String details
+    ) {}
+    public record LeaderboardEntry(UUID playerUuid, String playerName, long value) {}
+    public record BossFightRecord(
+        String fightId,
+        String bossId,
+        String outcome,
+        long startedAt,
+        long endedAt,
+        long durationMs,
+        boolean doubleDrops,
+        double totalDamage,
+        double totalHealing
+    ) {}
+    public record BossFightParticipantRecord(
+        String fightId,
+        UUID playerUuid,
+        String playerName,
+        double damageDone,
+        double healingReceived,
+        int rank
+    ) {}
+    public record BossFightMenuEntry(
+        String fightId,
+        String bossId,
+        String outcome,
+        long startedAt,
+        long endedAt,
+        long durationMs,
+        boolean doubleDrops,
+        double totalDamage,
+        double totalHealing,
+        double damageDone,
+        double healingReceived,
+        int rank
     ) {}
     public record LegendaryAltarRecord(
         String legendaryId,
