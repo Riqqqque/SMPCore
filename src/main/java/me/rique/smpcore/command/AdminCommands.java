@@ -1209,7 +1209,7 @@ public final class AdminCommands {
                         String rawName = StringArgumentType.getString(ctx, "player");
                         return executeItemAudit(plugin, ctx.getSource().getSender(), rawName, null);
                     })
-                    .then(Commands.argument("item", StringArgumentType.word())
+                    .then(Commands.argument("item", StringArgumentType.greedyString())
                         .suggests((ctx, builder) -> suggestAuditItems(plugin, builder))
                         .executes(ctx -> {
                             String rawName = StringArgumentType.getString(ctx, "player");

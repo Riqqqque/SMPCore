@@ -54,7 +54,6 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
-import org.bukkit.event.world.LootGenerateEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.EquipmentSlotGroup;
 import org.bukkit.inventory.GrindstoneInventory;
@@ -65,8 +64,6 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.SmithingInventory;
 import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.loot.LootTable;
-import org.bukkit.loot.LootTables;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 
@@ -173,7 +170,7 @@ public final class AwakeningTableListener implements Listener {
             CustomLoreUtil.Rarity.MYTHIC.label(),
             "TABLE",
             List.of(
-                "<gray>Found in End City treasure.</gray>",
+                "<gray>Dropped by <white>Aurelion the Rift Seraph</white>.</gray>",
                 "<gray>Success chance: <white>" + formatPercent(plugin.getConfigManager().awakeningTableSuccessChance) + "</white></gray>"
             ),
             List.of(CustomLoreUtil.section(
@@ -232,23 +229,6 @@ public final class AwakeningTableListener implements Listener {
             applyAwakeningAttributeBonuses(meta, material, baseStats);
         }
         applyAwakeningLore(meta, material, awakened, baseStats);
-    }
-
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
-    public void onLootGenerate(LootGenerateEvent event) {
-        if (!plugin.getConfigManager().awakeningTableEnabled) {
-            return;
-        }
-        if (!isEndCityLoot(event.getLootTable())) {
-            return;
-        }
-        if (ThreadLocalRandom.current().nextDouble() >= plugin.getConfigManager().awakeningTableLootChance) {
-            return;
-        }
-
-        List<ItemStack> loot = new ArrayList<>(event.getLoot());
-        loot.add(createAwakeningTableItem());
-        event.setLoot(loot);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -1541,10 +1521,6 @@ public final class AwakeningTableListener implements Listener {
             return false;
         }
         return isMarked(enchantingTable.getPersistentDataContainer(), keyAwakeningTableBlock);
-    }
-
-    private boolean isEndCityLoot(LootTable lootTable) {
-        return lootTable != null && LootTables.END_CITY_TREASURE.getKey().equals(lootTable.getKey());
     }
 
     private boolean isMarked(PersistentDataContainer pdc, NamespacedKey key) {

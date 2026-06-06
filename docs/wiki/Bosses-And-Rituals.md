@@ -51,7 +51,7 @@ Every boss has:
 
 - Enderman boss themed around portals and displacement.
 - Phase 2 increases speed and rift pressure.
-- Drops Rift Lens and rare Void Halo.
+- Drops Rift Lens, rare Void Halo, and has a 50% chance to drop an Awakening Table.
 
 ### Nereida the Abyss Mother
 

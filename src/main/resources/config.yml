@@ -225,7 +225,7 @@ bosses:
 
 awakening-table:
   enabled: true
-  loot-chance: 0.05
+  rift-seraph-drop-chance: 0.50
   success-chance: 0.05
   failure-durability-loss-fraction: 0.50
   destroy-threshold: 0.15

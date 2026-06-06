@@ -85,6 +85,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Central registry and control surface for custom bosses.
@@ -558,6 +559,18 @@ public final class BossManager implements Listener {
             if (type == BossType.VORALITH_THE_CRIMSON_WARDEN) {
                 ItemStack coreDrop = createDominionCoreItem();
                 addBossDrop(event, killer, coreDrop, dropMultiplier, "Dropped from Voralith the Crimson Warden.");
+            }
+            if (type == BossType.AURELION_THE_RIFT_SERAPH
+                && plugin.getAwakeningTableListener() != null
+                && plugin.getConfigManager().awakeningTableEnabled
+                && ThreadLocalRandom.current().nextDouble() < plugin.getConfigManager().awakeningTableRiftSeraphDropChance) {
+                addBossDrop(
+                    event,
+                    killer,
+                    plugin.getAwakeningTableListener().createAwakeningTableItem(),
+                    dropMultiplier,
+                    "Dropped from Aurelion the Rift Seraph."
+                );
             }
             if (type != null && plugin.getSeasonRelicManager() != null) {
                 for (ItemStack drop : plugin.getSeasonRelicManager().createBossDrops(type.id())) {
@@ -3735,7 +3748,7 @@ public final class BossManager implements Listener {
                 "<gray>A void-touched seraph that bends distance into a weapon.</gray>",
                 "<gray>Phase One:</gray> <white>teleports, slows, and pulls players through unstable rifts</white>",
                 "<gray>Phase Two:</gray> <white>faster rift pulses and heavier displacement</white>",
-                "<gray>Drops Rift Lenses and rare Void Halos for Covenant recipes.</gray>"
+                "<gray>Drops Rift Lenses, rare Void Halos, and can drop an Awakening Table.</gray>"
             ),
             new BossRitual(
                 "Rift Coronation",
