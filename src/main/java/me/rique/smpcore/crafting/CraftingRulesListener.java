@@ -3,6 +3,7 @@ package me.rique.smpcore.crafting;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
+import org.bukkit.Keyed;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Player;
@@ -16,8 +17,12 @@ import org.bukkit.event.inventory.PrepareSmithingEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.CraftingInventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.SmithingInventory;
+import org.bukkit.inventory.meta.ItemMeta;
+
+import java.util.Locale;
 
 /**
  * Global crafting rules:
@@ -49,6 +54,11 @@ public final class CraftingRulesListener implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPrepareCraft(PrepareItemCraftEvent event) {
         CraftingInventory inv = event.getInventory();
+        if (shouldBlockProtectedIngredientInVanillaCraft(event)) {
+            inv.setResult(null);
+            return;
+        }
+
         ItemStack result = inv.getResult();
         if (result == null || result.getType() != Material.GOLDEN_APPLE) return;
 
@@ -70,6 +80,10 @@ public final class CraftingRulesListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPrepareSmithing(PrepareSmithingEvent event) {
+        if (event.getInventory() instanceof SmithingInventory smithing && isProtectedCustomItem(smithing.getInputEquipment())) {
+            event.setResult(null);
+            return;
+        }
         if (!plugin.getConfigManager().blockNetheriteArmorUpgrade) return;
         ItemStack result = event.getResult();
         if (result == null || result.getType() == Material.AIR) return;
@@ -118,6 +132,67 @@ public final class CraftingRulesListener implements Listener {
 
     private void discoverGoldenAppleRecipe(Player player) {
         player.discoverRecipe(goldenAppleNuggetRecipeKey);
+    }
+
+    private boolean shouldBlockProtectedIngredientInVanillaCraft(PrepareItemCraftEvent event) {
+        Recipe recipe = event.getRecipe();
+        ItemStack result = event.getInventory().getResult();
+        if ((result == null || result.getType().isAir()) && recipe == null) {
+            return false;
+        }
+        if (!containsProtectedCustomItem(event.getInventory().getMatrix())) {
+            return false;
+        }
+        return recipe == null || isMinecraftRecipe(recipe);
+    }
+
+    private boolean isMinecraftRecipe(Recipe recipe) {
+        if (!(recipe instanceof Keyed keyed)) {
+            return false;
+        }
+        NamespacedKey key = keyed.getKey();
+        return key != null && "minecraft".equals(key.getNamespace());
+    }
+
+    private boolean containsProtectedCustomItem(ItemStack[] contents) {
+        if (contents == null) {
+            return false;
+        }
+        for (ItemStack item : contents) {
+            if (isProtectedCustomItem(item)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isProtectedCustomItem(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return false;
+        }
+        if (hasPluginPersistentData(item)) {
+            return true;
+        }
+        if (plugin.getLegendaryListener() != null
+            && (plugin.getLegendaryListener().isLegendaryItem(item)
+                || plugin.getLegendaryListener().isEnderBoneItem(item)
+                || plugin.getLegendaryListener().isOrbOfTheMysticsItem(item))) {
+            return true;
+        }
+        if (plugin.getBackpackListener() != null && plugin.getBackpackListener().isBackpack(item)) {
+            return true;
+        }
+        return plugin.getCustomToolListener() != null && plugin.getCustomToolListener().isCustomTool(item);
+    }
+
+    private boolean hasPluginPersistentData(ItemStack item) {
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        String namespace = plugin.getName().toLowerCase(Locale.ROOT);
+        return meta.getPersistentDataContainer().getKeys().stream()
+            .anyMatch(key -> namespace.equals(key.getNamespace()));
     }
 
     private static boolean isNetheriteArmor(Material type) {

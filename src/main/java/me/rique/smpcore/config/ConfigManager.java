@@ -127,7 +127,7 @@ public final class ConfigManager {
     public int frostScytheAbilityCooldownSeconds;
 
     public boolean awakeningTableEnabled;
-    public double awakeningTableLootChance;
+    public double awakeningTableRiftSeraphDropChance;
     public double awakeningTableSuccessChance;
     public double awakeningTableFailureDurabilityLossFraction;
     public double awakeningTableDestroyThreshold;
@@ -408,8 +408,21 @@ public final class ConfigManager {
         frostScytheAbilityCooldownSeconds = Math.max(0, c.getInt("frost-scythe.ability-cooldown-seconds", 15));
         enderSwordRequireOpenSky = c.getBoolean("ender-sword.require-open-sky", true);
 
+        boolean awakeningTableConfigChanged = false;
+        if (c.contains("awakening-table.loot-chance")) {
+            c.set("awakening-table.loot-chance", null);
+            awakeningTableConfigChanged = true;
+        }
+        if (!c.contains("awakening-table.rift-seraph-drop-chance")) {
+            c.set("awakening-table.rift-seraph-drop-chance", 0.50);
+            awakeningTableConfigChanged = true;
+        }
+        if (awakeningTableConfigChanged) {
+            plugin.saveConfig();
+        }
+
         awakeningTableEnabled = c.getBoolean("awakening-table.enabled", true);
-        awakeningTableLootChance = clamp(c.getDouble("awakening-table.loot-chance", 0.05), 0.0, 1.0);
+        awakeningTableRiftSeraphDropChance = clamp(c.getDouble("awakening-table.rift-seraph-drop-chance", 0.50), 0.0, 1.0);
         awakeningTableSuccessChance = clamp(c.getDouble("awakening-table.success-chance", 0.05), 0.0, 1.0);
         awakeningTableFailureDurabilityLossFraction = clamp(
             c.getDouble("awakening-table.failure-durability-loss-fraction", 0.50),

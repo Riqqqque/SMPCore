@@ -519,10 +519,15 @@ public final class ItemAuditManager implements Listener {
         PendingAcquisition pending = state == null && updateOwner ? consumePending(owner, descriptor.itemKey()) : null;
         long now = System.currentTimeMillis();
         if (state == null) {
-            String method = pending == null ? "unknown" : pending.method();
-            String details = pending == null
-                ? "First seen in " + location
-                : pending.details() + " at " + location;
+            boolean trustedStaffFirstSeen = pending == null && updateOwner && isTrustedStaff(owner);
+            String method = pending != null
+                ? pending.method()
+                : trustedStaffFirstSeen ? "staff_inventory_seed" : "unknown";
+            String details = pending != null
+                ? pending.details() + " at " + location
+                : trustedStaffFirstSeen
+                    ? "First seen in staff inventory at " + location
+                    : "First seen in " + location;
             KnownInstanceState created = new KnownInstanceState(
                 instanceId,
                 descriptor.itemKey(),
@@ -546,11 +551,11 @@ public final class ItemAuditManager implements Listener {
                 owner.getName(),
                 owner.getUniqueId(),
                 owner.getName(),
-                pending == null ? "unknown_origin" : "acquired",
+                pending != null ? "acquired" : trustedStaffFirstSeen ? "staff_seeded" : "unknown_origin",
                 method,
                 details
             ));
-            if (pending == null) {
+            if (pending == null && !trustedStaffFirstSeen) {
                 notifyStaffAnomaly(
                     owner,
                     descriptor.itemKey(),
@@ -736,6 +741,10 @@ public final class ItemAuditManager implements Listener {
             method,
             details
         ));
+    }
+
+    private boolean isTrustedStaff(Player player) {
+        return player != null && (player.isOp() || player.hasPermission(STAFF_PERMISSION));
     }
 
     private void notifyStaffAnomaly(Player subject, String itemKey, String eventType, String details) {
