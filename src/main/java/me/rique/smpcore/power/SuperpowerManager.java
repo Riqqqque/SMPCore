@@ -872,7 +872,7 @@ public final class SuperpowerManager implements Listener {
                 drops.remove(i);
             }
             if (kept > 0) {
-                pendingFloristStickReturns.merge(player.getUniqueId(), kept, Integer::sum);
+                pendingFloristStickReturns.put(player.getUniqueId(), 1);
             }
         }
         if (hasPower(player, SuperpowerType.THE_WORLD)) {
@@ -930,7 +930,7 @@ public final class SuperpowerManager implements Listener {
             if (!player.isOnline()) {
                 return;
             }
-            for (int i = 0; i < pending; i++) {
+            if (pending > 0) {
                 giveMotherNatureStick(player, true);
             }
             for (int i = 0; i < pendingClocks; i++) {
@@ -1914,8 +1914,11 @@ public final class SuperpowerManager implements Listener {
     private void initializePlayerState(Player player) {
         markVisitedDimension(player, player.getWorld());
         SuperpowerType power = ensurePowerAssigned(player);
-        if (power == SuperpowerType.FLORIST && !hasMotherNatureStick(player)) {
-            giveMotherNatureStick(player, false);
+        if (power == SuperpowerType.FLORIST) {
+            trimExtraMotherNatureSticks(player);
+            if (!hasMotherNatureStick(player)) {
+                giveMotherNatureStick(player, false);
+            }
         }
         if (power == SuperpowerType.THE_WORLD && !hasTheWorldClock(player)) {
             giveTheWorldClock(player, false);
@@ -1997,6 +2000,7 @@ public final class SuperpowerManager implements Listener {
                 if (player.getLocation().getBlock().getLightFromSky() > 0) {
                     applyPotion(player, PotionEffectType.REGENERATION, 60, 0);
                 }
+                trimExtraMotherNatureSticks(player);
                 if (!hasMotherNatureStick(player)) {
                     giveMotherNatureStick(player, false);
                 }
@@ -2178,8 +2182,11 @@ public final class SuperpowerManager implements Listener {
             int rerolls = pdc.getOrDefault(keyPowerRerolls, PersistentDataType.INTEGER, 0);
             pdc.set(keyPowerRerolls, PersistentDataType.INTEGER, rerolls + 1);
         }
-        if (power == SuperpowerType.FLORIST && !hasMotherNatureStick(player)) {
-            giveMotherNatureStick(player, false);
+        if (power == SuperpowerType.FLORIST) {
+            trimExtraMotherNatureSticks(player);
+            if (!hasMotherNatureStick(player)) {
+                giveMotherNatureStick(player, false);
+            }
         }
         if (power == SuperpowerType.THE_WORLD && !hasTheWorldClock(player)) {
             giveTheWorldClock(player, false);
@@ -4040,6 +4047,38 @@ public final class SuperpowerManager implements Listener {
         return isMotherNatureStick(player.getItemOnCursor());
     }
 
+    private void trimExtraMotherNatureSticks(Player player) {
+        boolean kept = false;
+        for (int slot = 0; slot < player.getInventory().getSize(); slot++) {
+            ItemStack item = player.getInventory().getItem(slot);
+            if (!isMotherNatureStick(item)) {
+                continue;
+            }
+            if (!kept) {
+                if (item.getAmount() != 1) {
+                    item.setAmount(1);
+                    player.getInventory().setItem(slot, item);
+                }
+                kept = true;
+                continue;
+            }
+            player.getInventory().setItem(slot, null);
+        }
+
+        ItemStack cursor = player.getItemOnCursor();
+        if (!isMotherNatureStick(cursor)) {
+            return;
+        }
+        if (!kept) {
+            if (cursor.getAmount() != 1) {
+                cursor.setAmount(1);
+                player.setItemOnCursor(cursor);
+            }
+            return;
+        }
+        player.setItemOnCursor(null);
+    }
+
     private boolean hasTheWorldClock(Player player) {
         for (ItemStack item : player.getInventory().getContents()) {
             if (isTheWorldClock(item)) {
@@ -4059,6 +4098,18 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void giveMotherNatureStick(Player player, boolean restored) {
+        trimExtraMotherNatureSticks(player);
+        if (hasMotherNatureStick(player)) {
+            return;
+        }
+        if (player.getInventory().firstEmpty() == -1) {
+            pendingFloristStickReturns.put(player.getUniqueId(), 1);
+            if (restored) {
+                player.sendMessage(MessageUtil.warn("Clear an inventory slot so the Stick from Mother Nature can return."));
+            }
+            return;
+        }
+
         ItemStack stick = createMotherNatureStickItem();
         if (plugin.getItemAuditManager() != null) {
             plugin.getItemAuditManager().recordKnownAcquisition(
@@ -4069,7 +4120,9 @@ public final class SuperpowerManager implements Listener {
             );
         }
         Map<Integer, ItemStack> leftovers = player.getInventory().addItem(stick);
-        leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
+        if (!leftovers.isEmpty()) {
+            pendingFloristStickReturns.put(player.getUniqueId(), 1);
+        }
         if (restored) {
             player.sendMessage(MessageUtil.info("The Stick from Mother Nature returned to you."));
         }

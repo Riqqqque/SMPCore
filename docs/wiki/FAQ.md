@@ -16,6 +16,14 @@ Right-click a spawner to open its modifier guide, or read [Spawners](Spawners). 
 
 Use `/enchants`. Craft-only boss enchant recipes can be clicked there to view their recipe.
 
+## Can custom enchant books be combined?
+
+Yes. Use an anvil. Matching books upgrade like vanilla books, and matching books can upgrade an item that already has the same SMPCore enchant level.
+
+## Can custom-enchanted gear be upgraded to netherite?
+
+Custom-enchanted vanilla gear keeps its SMPCore enchants through smithing. Full custom relics are still blocked from vanilla crafting and smithing so players do not accidentally consume rare items.
+
 ## How do I get Covenant Armory items?
 
 Kill bosses for trophy materials, then craft the items from the Covenant Armory section inside `/reliquary`.
