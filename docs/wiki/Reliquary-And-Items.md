@@ -13,7 +13,7 @@ Open it with:
 
 - `Legendary Relics` - altar-crafted legendary weapons, armor, and combat relics.
 - `Mythic Works` - Mythic Forge, Ascendant Core, and Mythic Nexus fusions.
-- `Tools and Gear` - backpacks, custom tools, magnets, and normal craftable gear.
+- `Tools and Gear` - backpacks, custom tools, salvage stations, magnets, and normal craftable gear.
 - `Utility Relics` - support items such as Ancient Scroll and Talisman of Sustenance.
 - `Covenant Armory` - boss trophy gear, full armor sets, standalone armor, utility relics, and materials.
 
@@ -33,6 +33,7 @@ Each rarity uses a consistent color theme across names, lore, drops, and menu pr
 This section is for normal craftable gear, not Covenant boss weapons.
 
 - `Backpack` - portable storage.
+- `Salvaging Depot` - placeable chest station that recycles vanilla armor, tools, and weapons after 6 seconds. Recipe: 1 iron ingot, 2 redstone, 1 chest, and 1 hopper. It returns about 66% of the base materials, reduced by item damage. Hoppers can insert gear, but custom items and processing items are protected.
 - `Prospector's Pick` - lucky ore mining.
 - `Skyhook` - grappling movement with limited uses.
 - `Spelunker's Lantern` - held cave light with Night Vision and Haste I.

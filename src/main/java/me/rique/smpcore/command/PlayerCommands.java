@@ -37,6 +37,7 @@ public final class PlayerCommands {
         registerXray(commands, plugin);
         registerVoidstep(commands, plugin);
         registerVoidVision(commands, plugin);
+        registerStormcaller(commands, plugin);
         registerTravel(commands, plugin);
         registerMonarchSummon(commands, plugin);
         registerBack(commands, plugin);
@@ -258,6 +259,25 @@ public final class PlayerCommands {
         );
     }
 
+    private static void registerStormcaller(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("stormcaller")
+                .requires(src -> src.getSender() instanceof Player)
+                .executes(ctx -> setStormcallerLightning(plugin, (Player) ctx.getSource().getSender(), null))
+                .then(Commands.literal("toggle")
+                    .executes(ctx -> setStormcallerLightning(plugin, (Player) ctx.getSource().getSender(), null)))
+                .then(Commands.literal("on")
+                    .executes(ctx -> setStormcallerLightning(plugin, (Player) ctx.getSource().getSender(), true)))
+                .then(Commands.literal("off")
+                    .executes(ctx -> setStormcallerLightning(plugin, (Player) ctx.getSource().getSender(), false)))
+                .then(Commands.literal("status")
+                    .executes(ctx -> showStormcallerLightningStatus(plugin, (Player) ctx.getSource().getSender())))
+                .build(),
+            "Toggle Stormcaller lightning strikes",
+            List.of("sclightning", "stormpower")
+        );
+    }
+
     private static void registerTravel(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("travel")
@@ -432,7 +452,7 @@ public final class PlayerCommands {
         if (player.hasPermission("smpcore.waystone.use")) {
             lines.add("<gray>Right-click a known waystone sign to open your teleport menu</gray>");
         }
-        lines.add("<gray>Power commands unlock naturally if your hidden power uses them: <white>/shadow</white>, <white>/xray</white>, <white>/voidstep</white>, <white>/voidvision</white>, <white>/travel</white>, <white>/msummon</white>.</gray>");
+        lines.add("<gray>Power commands unlock naturally if your hidden power uses them: <white>/shadow</white>, <white>/xray</white>, <white>/voidstep</white>, <white>/voidvision</white>, <white>/travel</white>, <white>/msummon</white>, <white>/stormcaller</white>.</gray>");
         if (player.hasPermission("smpcore.backpack.use")) {
             lines.add("<gray>Right-click a <white>Backpack</white> to open portable storage</gray>");
         }
@@ -443,6 +463,24 @@ public final class PlayerCommands {
         for (String line : lines) {
             player.sendMessage(MessageUtil.prefixedRaw(line));
         }
+    }
+
+    private static int setStormcallerLightning(SMPCore plugin, Player player, Boolean enabled) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            return 0;
+        }
+        return powers.handleStormcallerLightningCommand(player, enabled) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static int showStormcallerLightningStatus(SMPCore plugin, Player player) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            return 0;
+        }
+        return powers.handleStormcallerLightningStatusCommand(player) ? Command.SINGLE_SUCCESS : 0;
     }
 
     private static int setVeinMiner(SMPCore plugin, Player player, boolean enabled) {

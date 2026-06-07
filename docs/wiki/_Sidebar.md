@@ -9,6 +9,7 @@
 - [Superpowers](Superpowers)
 - [Leaderboards](Leaderboards)
 - [Custom Enchants](Custom-Enchants)
+- [Spawners](Spawners)
 - [Teams and SMP Start](Teams-And-SMP-Start)
 - [Admin Guide](Admin-Guide)
 - [FAQ](FAQ)

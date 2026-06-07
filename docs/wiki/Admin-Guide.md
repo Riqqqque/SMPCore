@@ -8,6 +8,12 @@
 - `/bosses clearall` removes every tracked custom boss.
 - `/bosses status` prints active boss counts.
 
+## Spawner Control
+
+- `/spawner info` inspects the targeted spawner within 8 blocks.
+- `/spawner reset` resets the targeted spawner to default modifiers.
+- Creative pick-block on custom spawners requires `smpcore.spawner.admin`.
+
 ## Item Control
 
 - `/legendary give <item> [player]` gives legendary items.

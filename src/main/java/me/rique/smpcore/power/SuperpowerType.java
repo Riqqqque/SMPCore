@@ -31,7 +31,7 @@ public enum SuperpowerType {
     OATHBOUND("Oathbound", 0.04, Material.BELL, null),
     RUNESMITH("Runesmith", 0.04, Material.SMITHING_TABLE, null),
     GRAVEBORN("Graveborn", 0.035, Material.SOUL_LANTERN, null),
-    STORMCALLER("Stormcaller", 0.035, Material.LIGHTNING_ROD, null),
+    STORMCALLER("Stormcaller", 0.035, Material.LIGHTNING_ROD, "Use /stormcaller off to quiet your lightning"),
     BLOODMENDER("Bloodmender", 0.03, Material.REDSTONE, null);
 
     private final String displayName;

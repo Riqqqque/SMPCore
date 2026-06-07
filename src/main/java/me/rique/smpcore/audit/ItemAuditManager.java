@@ -8,6 +8,7 @@ import me.rique.smpcore.database.DatabaseManager;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.RewardLanternListener;
+import me.rique.smpcore.item.SalvagingDepotListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
 import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.legendary.MythicForgeListener;
@@ -59,6 +60,8 @@ public final class ItemAuditManager implements Listener {
     private static final String STAFF_PERMISSION = "smpcore.staff";
     private static final long SCAN_INTERVAL_TICKS = 20L * 90L;
     private static final long ANOMALY_COOLDOWN_MS = 5L * 60L * 1000L;
+    private static final long PENDING_ACQUISITION_TTL_MS = 5L * 60L * 1000L;
+    private static final int MAX_PENDING_ACQUISITIONS_PER_PLAYER = 96;
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
         .withZone(ZoneId.systemDefault());
 
@@ -173,6 +176,7 @@ public final class ItemAuditManager implements Listener {
         options.add("custom:mythic_forge");
         options.add("custom:reward_soul_lantern");
         options.add("custom:talisman_of_sustenance");
+        options.add("custom:salvaging_depot");
         options.add("custom_enchant:kingslayer");
         options.add("custom_enchant:soul_siphon");
         options.add("custom_enchant:echoing");
@@ -260,7 +264,15 @@ public final class ItemAuditManager implements Listener {
         if (descriptor == null) {
             return;
         }
-        rememberPending(player, descriptor.itemKey(), "craft", "Craft result click");
+        int craftedAmount = estimateCraftedResultAmount(event);
+        String details = craftedAmount > 1
+            ? "Craft result click x" + craftedAmount
+            : "Craft result click";
+        if (!descriptor.instanceTracked()) {
+            recordKnownAcquisition(player, event.getCurrentItem(), "craft", details);
+            return;
+        }
+        rememberPending(player, descriptor.itemKey(), "craft", details, craftedAmount);
         scheduleAudit(player);
     }
 
@@ -492,13 +504,30 @@ public final class ItemAuditManager implements Listener {
 
         String instanceId = currentInstanceId(item);
         if ((instanceId == null || instanceId.isBlank()) && !canMutateIdentity) {
-            logAnomaly(
-                owner,
-                descriptor.itemKey(),
-                "unknown_origin",
-                "backpack_scan",
-                "Untracked item seen inside stored backpack data at " + location
-            );
+            PendingAcquisition pending = consumePending(owner, descriptor.itemKey());
+            if (pending != null) {
+                persistEvent(new DatabaseManager.ManagedItemEventRecord(
+                    0L,
+                    System.currentTimeMillis(),
+                    "",
+                    descriptor.itemKey(),
+                    owner.getUniqueId(),
+                    owner.getName(),
+                    owner.getUniqueId(),
+                    owner.getName(),
+                    "acquired",
+                    pending.method(),
+                    pending.details() + " before stored backpack scan at " + location
+                ));
+            } else if (!isQuietCraftableFirstSeen(descriptor)) {
+                logAnomaly(
+                    owner,
+                    descriptor.itemKey(),
+                    "unknown_origin",
+                    "backpack_scan",
+                    "Untracked item seen inside stored backpack data at " + location
+                );
+            }
             return;
         }
 
@@ -516,25 +545,31 @@ public final class ItemAuditManager implements Listener {
         }
 
         KnownInstanceState state = knownInstances.get(instanceId);
-        PendingAcquisition pending = state == null && updateOwner ? consumePending(owner, descriptor.itemKey()) : null;
+        PendingAcquisition pending = state == null ? consumePending(owner, descriptor.itemKey()) : null;
         long now = System.currentTimeMillis();
         if (state == null) {
             boolean trustedStaffFirstSeen = pending == null && updateOwner && isTrustedStaff(owner);
+            boolean quietCraftableFirstSeen = pending == null && !trustedStaffFirstSeen && isQuietCraftableFirstSeen(descriptor);
             String method = pending != null
                 ? pending.method()
-                : trustedStaffFirstSeen ? "staff_inventory_seed" : "unknown";
+                : trustedStaffFirstSeen
+                    ? "staff_inventory_seed"
+                    : quietCraftableFirstSeen ? "craftable_first_seen" : "unknown";
             String details = pending != null
                 ? pending.details() + " at " + location
                 : trustedStaffFirstSeen
                     ? "First seen in staff inventory at " + location
+                    : quietCraftableFirstSeen
+                        ? "First seen craftable item at " + location
                     : "First seen in " + location;
+            boolean hasPlayerAcquisitionContext = updateOwner || pending != null || trustedStaffFirstSeen;
             KnownInstanceState created = new KnownInstanceState(
                 instanceId,
                 descriptor.itemKey(),
                 now,
                 method,
-                updateOwner ? owner.getUniqueId() : null,
-                updateOwner ? owner.getName() : "Shared Storage",
+                hasPlayerAcquisitionContext ? owner.getUniqueId() : null,
+                hasPlayerAcquisitionContext ? owner.getName() : "Shared Storage",
                 updateOwner ? owner.getUniqueId() : null,
                 updateOwner ? owner.getName() : "Shared Storage",
                 now,
@@ -551,11 +586,13 @@ public final class ItemAuditManager implements Listener {
                 owner.getName(),
                 owner.getUniqueId(),
                 owner.getName(),
-                pending != null ? "acquired" : trustedStaffFirstSeen ? "staff_seeded" : "unknown_origin",
+                pending != null
+                    ? "acquired"
+                    : trustedStaffFirstSeen ? "staff_seeded" : quietCraftableFirstSeen ? "first_seen_craftable" : "unknown_origin",
                 method,
                 details
             ));
-            if (pending == null && !trustedStaffFirstSeen) {
+            if (pending == null && !trustedStaffFirstSeen && !quietCraftableFirstSeen) {
                 notifyStaffAnomaly(
                     owner,
                     descriptor.itemKey(),
@@ -569,6 +606,7 @@ public final class ItemAuditManager implements Listener {
             state.currentOwnerName = owner.getName();
             state.lastSeenAt = now;
             persistState(state);
+            boolean notifyTransfer = shouldNotifyOwnerTransfer(descriptor);
             persistEvent(new DatabaseManager.ManagedItemEventRecord(
                 0L,
                 now,
@@ -578,16 +616,18 @@ public final class ItemAuditManager implements Listener {
                 owner.getName(),
                 owner.getUniqueId(),
                 owner.getName(),
-                "owner_changed_unknown",
-                "unknown_transfer",
+                notifyTransfer ? "owner_changed_unknown" : "owner_changed",
+                notifyTransfer ? "unknown_transfer" : "inventory_transfer",
                 "Seen in " + location + " after belonging to " + safeName(previousOwnerName)
             ));
-            notifyStaffAnomaly(
-                owner,
-                descriptor.itemKey(),
-                "unknown_transfer",
-                "Seen in " + location + " after belonging to " + safeName(previousOwnerName)
-            );
+            if (notifyTransfer) {
+                notifyStaffAnomaly(
+                    owner,
+                    descriptor.itemKey(),
+                    "unknown_transfer",
+                    "Seen in " + location + " after belonging to " + safeName(previousOwnerName)
+                );
+            }
         } else {
             state.lastSeenAt = now;
         }
@@ -682,6 +722,11 @@ public final class ItemAuditManager implements Listener {
             return new ManagedItemDescriptor("custom:talisman_of_sustenance", "Talisman of Sustenance", true);
         }
 
+        SalvagingDepotListener depot = plugin.getSalvagingDepotListener();
+        if (depot != null && depot.isDepotItem(item)) {
+            return new ManagedItemDescriptor("custom:salvaging_depot", "Salvaging Depot", false);
+        }
+
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers != null) {
             if (powers.isAncientScroll(item)) {
@@ -747,6 +792,33 @@ public final class ItemAuditManager implements Listener {
         return player != null && (player.isOp() || player.hasPermission(STAFF_PERMISSION));
     }
 
+    private boolean isQuietCraftableFirstSeen(ManagedItemDescriptor descriptor) {
+        if (descriptor == null) {
+            return false;
+        }
+        String itemKey = descriptor.itemKey();
+        return itemKey.startsWith("custom_tool:")
+            || itemKey.startsWith("custom_enchant:")
+            || "custom:backpack".equals(itemKey)
+            || "custom:mythic_forge".equals(itemKey)
+            || "custom:talisman_of_sustenance".equals(itemKey)
+            || "custom:salvaging_depot".equals(itemKey)
+            || ("power:" + SuperpowerManager.ANCIENT_SCROLL_ITEM_ID).equals(itemKey);
+    }
+
+    private boolean shouldNotifyOwnerTransfer(ManagedItemDescriptor descriptor) {
+        if (descriptor == null) {
+            return false;
+        }
+        String itemKey = descriptor.itemKey();
+        return itemKey.startsWith("legendary:")
+            || itemKey.startsWith("special:")
+            || itemKey.startsWith("power:")
+            || itemKey.startsWith("season:")
+            || "custom:awakening_table".equals(itemKey)
+            || "custom:reward_soul_lantern".equals(itemKey);
+    }
+
     private void notifyStaffAnomaly(Player subject, String itemKey, String eventType, String details) {
         if (subject == null || itemKey == null || itemKey.isBlank()) {
             return;
@@ -774,23 +846,31 @@ public final class ItemAuditManager implements Listener {
         }
     }
 
-    private void rememberPending(Player player, String itemKey, String method, String details) {
+    private void rememberPending(Player player, String itemKey, String method, String details, int amount) {
         if (player == null || itemKey == null || itemKey.isBlank()) {
             return;
         }
-        pendingAcquisitions.computeIfAbsent(player.getUniqueId(), ignored -> new ArrayDeque<>())
-            .addLast(new PendingAcquisition(itemKey, method, details, System.currentTimeMillis()));
+        int safeAmount = Math.max(1, Math.min(amount, MAX_PENDING_ACQUISITIONS_PER_PLAYER));
+        Deque<PendingAcquisition> queue = pendingAcquisitions.computeIfAbsent(player.getUniqueId(), ignored -> new ArrayDeque<>());
+        prunePending(queue);
+        while (queue.size() + safeAmount > MAX_PENDING_ACQUISITIONS_PER_PLAYER && !queue.isEmpty()) {
+            queue.removeFirst();
+        }
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < safeAmount; i++) {
+            queue.addLast(new PendingAcquisition(itemKey, method, details, now));
+        }
     }
 
     private PendingAcquisition consumePending(Player player, String itemKey) {
+        if (player == null || itemKey == null || itemKey.isBlank()) {
+            return null;
+        }
         Deque<PendingAcquisition> queue = pendingAcquisitions.get(player.getUniqueId());
         if (queue == null || queue.isEmpty()) {
             return null;
         }
-        long cutoff = System.currentTimeMillis() - 10_000L;
-        while (!queue.isEmpty() && queue.peekFirst().createdAt() < cutoff) {
-            queue.removeFirst();
-        }
+        prunePending(queue);
         Iterator<PendingAcquisition> iterator = queue.iterator();
         while (iterator.hasNext()) {
             PendingAcquisition acquisition = iterator.next();
@@ -800,6 +880,33 @@ public final class ItemAuditManager implements Listener {
             }
         }
         return null;
+    }
+
+    private void prunePending(Deque<PendingAcquisition> queue) {
+        long cutoff = System.currentTimeMillis() - PENDING_ACQUISITION_TTL_MS;
+        while (!queue.isEmpty() && queue.peekFirst().createdAt() < cutoff) {
+            queue.removeFirst();
+        }
+    }
+
+    private int estimateCraftedResultAmount(CraftItemEvent event) {
+        ItemStack result = event.getCurrentItem();
+        int resultAmount = result == null || result.getType().isAir() ? 1 : Math.max(1, result.getAmount());
+        if (!event.isShiftClick()) {
+            return resultAmount;
+        }
+
+        int crafts = Integer.MAX_VALUE;
+        for (ItemStack ingredient : event.getInventory().getMatrix()) {
+            if (ingredient == null || ingredient.getType().isAir()) {
+                continue;
+            }
+            crafts = Math.min(crafts, ingredient.getAmount());
+        }
+        if (crafts == Integer.MAX_VALUE) {
+            return resultAmount;
+        }
+        return Math.max(1, Math.min(resultAmount * crafts, MAX_PENDING_ACQUISITIONS_PER_PLAYER));
     }
 
     private String ensureTrackedIdentity(ItemStack item, ManagedItemDescriptor descriptor) {

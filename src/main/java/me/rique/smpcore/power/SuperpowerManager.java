@@ -142,7 +142,7 @@ public final class SuperpowerManager implements Listener {
     private static final int FLORIST_CROUCH_GROWTH_RADIUS = 2;
     private static final int FLORIST_CROUCH_GROWTH_STAGES = 2;
     private static final int DRUID_BUFF_RADIUS = 5;
-    private static final int DRUID_BUFF_DURATION_SECONDS = 180;
+    private static final int DRUID_BUFF_DURATION_SECONDS = 300;
     private static final int DRUID_BUFF_COOLDOWN_SECONDS = 90;
     private static final int IMMORTALITY_REGEN_SECONDS = 10;
     private static final int IMMORTALITY_RESCUE_SECONDS = 4;
@@ -156,8 +156,9 @@ public final class SuperpowerManager implements Listener {
     private static final double MINER_EXTRA_ORE_CHANCE = 0.15;
     private static final double MINER_HEALTH_BONUS = 2.0;
     private static final double GIANT_SCALE_MULTIPLIER = 1.2;
-    private static final double GIANT_HEALTH_BONUS = 6.0;
-    private static final double GIANT_KNOCKBACK_RESISTANCE = 0.20;
+    private static final double GIANT_HEALTH_BONUS = 12.0;
+    private static final double GIANT_KNOCKBACK_RESISTANCE = 0.40;
+    private static final double GIANT_ATTACK_DAMAGE_BONUS = 2.0;
     private static final double SUPERMAN_HEALTH_BONUS = 20.0;
     private static final int SUPERMAN_FLIGHT_SECONDS = 30;
     private static final int SUPERMAN_FLIGHT_COOLDOWN_SECONDS = 5 * 60;
@@ -177,8 +178,10 @@ public final class SuperpowerManager implements Listener {
     private static final double PHOENIX_SEARING_STRIKE_DAMAGE = 1.0;
     private static final double PHOENIX_LOW_HEALTH_RATIO = 0.35;
     private static final int VOIDSTEP_COOLDOWN_SECONDS = 45;
-    private static final double VOIDSTEP_RANGE = 14.0;
+    private static final double VOIDSTEP_RANGE = 25.0;
     private static final int VOIDSTEP_VEIL_SECONDS = 4;
+    private static final int VOIDSTEP_SLOW_FALLING_SECONDS = 7;
+    private static final int VOIDSTEP_INVISIBILITY_SECONDS = 12;
     private static final double VOIDSTEP_AMBUSH_DAMAGE = 3.0;
     private static final double SENTINEL_AURA_RADIUS = 6.0;
     private static final double SENTINEL_HEALTH_BONUS = 4.0;
@@ -300,6 +303,7 @@ public final class SuperpowerManager implements Listener {
     private final NamespacedKey keyGiantHealthModifier;
     private final NamespacedKey keyGiantScaleModifier;
     private final NamespacedKey keyGiantKnockbackModifier;
+    private final NamespacedKey keyGiantAttackDamageModifier;
     private final NamespacedKey keySupermanHealthModifier;
     private final NamespacedKey keySentinelHealthModifier;
     private final NamespacedKey keyWatermanSubmergedMiningModifier;
@@ -316,6 +320,7 @@ public final class SuperpowerManager implements Listener {
     private final NamespacedKey keyShadowCooldownUntil;
     private final NamespacedKey keyShadowActiveUntil;
     private final NamespacedKey keyDruidBuffCooldownUntil;
+    private final NamespacedKey keyStormcallerLightningEnabled;
     private final NamespacedKey keyMonarchSummonOwner;
     private final NamespacedKey keyMonarchSummonTag;
     private final Map<UUID, Integer> pendingFloristStickReturns = new ConcurrentHashMap<>();
@@ -359,6 +364,7 @@ public final class SuperpowerManager implements Listener {
         this.keyGiantHealthModifier = new NamespacedKey(plugin, "superpower_giant_health");
         this.keyGiantScaleModifier = new NamespacedKey(plugin, "superpower_giant_scale");
         this.keyGiantKnockbackModifier = new NamespacedKey(plugin, "superpower_giant_knockback");
+        this.keyGiantAttackDamageModifier = new NamespacedKey(plugin, "superpower_giant_attack_damage");
         this.keySupermanHealthModifier = new NamespacedKey(plugin, "superpower_superman_health");
         this.keySentinelHealthModifier = new NamespacedKey(plugin, "superpower_sentinel_health");
         this.keyWatermanSubmergedMiningModifier = new NamespacedKey(plugin, "superpower_waterman_submerged_mining");
@@ -375,6 +381,7 @@ public final class SuperpowerManager implements Listener {
         this.keyShadowCooldownUntil = new NamespacedKey(plugin, "superpower_shadow_cooldown_until");
         this.keyShadowActiveUntil = new NamespacedKey(plugin, "superpower_shadow_active_until");
         this.keyDruidBuffCooldownUntil = new NamespacedKey(plugin, "superpower_druid_buff_cooldown_until");
+        this.keyStormcallerLightningEnabled = new NamespacedKey(plugin, "superpower_stormcaller_lightning_enabled");
         this.keyMonarchSummonOwner = new NamespacedKey(plugin, "superpower_monarch_owner");
         this.keyMonarchSummonTag = new NamespacedKey(plugin, "superpower_monarch_summon");
     }
@@ -652,8 +659,8 @@ public final class SuperpowerManager implements Listener {
                 return;
             }
             setVoidstepVeilUntil(player, System.currentTimeMillis() + (VOIDSTEP_VEIL_SECONDS * 1000L));
-            applyPotion(player, PotionEffectType.INVISIBILITY, VOIDSTEP_VEIL_SECONDS * 20, 0);
-            applyPotion(player, PotionEffectType.SLOW_FALLING, VOIDSTEP_VEIL_SECONDS * 20, 0);
+            applyPotion(player, PotionEffectType.INVISIBILITY, VOIDSTEP_INVISIBILITY_SECONDS * 20, 0);
+            applyPotion(player, PotionEffectType.SLOW_FALLING, VOIDSTEP_SLOW_FALLING_SECONDS * 20, 0);
             player.getWorld().spawnParticle(Particle.PORTAL, player.getLocation().clone().add(0.0, 1.0, 0.0), 55, 0.45, 0.65, 0.45, 0.08);
             player.getWorld().playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 0.9f, 1.35f);
         }));
@@ -669,12 +676,51 @@ public final class SuperpowerManager implements Listener {
         boolean enabled = !isVoidwalkerNightVisionEnabled(player);
         setVoidwalkerNightVisionEnabled(player, enabled);
         if (enabled) {
-            applyPotion(player, PotionEffectType.NIGHT_VISION, 240, 0);
+            applyPassiveNightVision(player);
             player.sendMessage(MessageUtil.success("Voidwalker night vision <white>enabled</white>."));
         } else {
             removePassiveNightVision(player);
             player.sendMessage(MessageUtil.info("Voidwalker night vision <white>disabled</white>."));
         }
+        return true;
+    }
+
+    public boolean handleStormcallerLightningCommand(Player player, Boolean requestedEnabled) {
+        if (!hasPower(player, SuperpowerType.STORMCALLER)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+
+        boolean enabled = requestedEnabled == null ? !isStormcallerLightningEnabled(player) : requestedEnabled;
+        setStormcallerLightningEnabled(player, enabled);
+        if (enabled) {
+            player.sendMessage(MessageUtil.success("Stormcaller lightning <white>enabled</white>."));
+            player.getWorld().playSound(player.getLocation(), Sound.BLOCK_BEACON_POWER_SELECT, 0.7f, 1.35f);
+            player.getWorld().spawnParticle(
+                Particle.ELECTRIC_SPARK,
+                player.getLocation().clone().add(0.0, 1.0, 0.0),
+                18,
+                0.35,
+                0.45,
+                0.35,
+                0.05
+            );
+        } else {
+            player.sendMessage(MessageUtil.info("Stormcaller lightning <white>disabled</white>. Your storm buffs still work."));
+            player.getWorld().playSound(player.getLocation(), Sound.BLOCK_COPPER_BULB_TURN_OFF, 0.7f, 0.85f);
+        }
+        return true;
+    }
+
+    public boolean handleStormcallerLightningStatusCommand(Player player) {
+        if (!hasPower(player, SuperpowerType.STORMCALLER)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+
+        player.sendMessage(MessageUtil.info(
+            "Stormcaller lightning is <white>" + (isStormcallerLightningEnabled(player) ? "enabled" : "disabled") + "</white>."
+        ));
         return true;
     }
 
@@ -1152,8 +1198,8 @@ public final class SuperpowerManager implements Listener {
                 applyPotion(victim, PotionEffectType.BLINDNESS, 60, 0);
                 applyPotion(victim, PotionEffectType.WEAKNESS, 60, 0);
                 setVoidstepVeilUntil(attacker, 0L);
-                removeLikelyPowerPotion(attacker, PotionEffectType.INVISIBILITY, 0);
-                removeLikelyPowerPotion(attacker, PotionEffectType.SLOW_FALLING, 0);
+                removeLikelyPowerPotion(attacker, PotionEffectType.INVISIBILITY, 0, VOIDSTEP_INVISIBILITY_SECONDS * 20 + 20);
+                removeLikelyPowerPotion(attacker, PotionEffectType.SLOW_FALLING, 0, VOIDSTEP_SLOW_FALLING_SECONDS * 20 + 20);
                 victim.getWorld().spawnParticle(Particle.PORTAL, victim.getLocation().clone().add(0.0, 1.0, 0.0), 35, 0.45, 0.45, 0.45, 0.06);
                 victim.getWorld().playSound(victim.getLocation(), Sound.ENTITY_ENDERMAN_HURT, 0.8f, 0.8f);
             }
@@ -1919,8 +1965,6 @@ public final class SuperpowerManager implements Listener {
             return;
         }
 
-        clearPowerAttributeModifiers(player);
-
         switch (power) {
             case FLASH -> {
                 applyPotion(player, PotionEffectType.SPEED, 80, 2);
@@ -1986,6 +2030,7 @@ public final class SuperpowerManager implements Listener {
                 syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyGiantHealthModifier, GIANT_HEALTH_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
                 syncPlayerAttributeModifier(player, Attribute.SCALE, keyGiantScaleModifier, GIANT_SCALE_MULTIPLIER - 1.0, AttributeModifier.Operation.ADD_SCALAR, true);
                 syncPlayerAttributeModifier(player, Attribute.KNOCKBACK_RESISTANCE, keyGiantKnockbackModifier, GIANT_KNOCKBACK_RESISTANCE, AttributeModifier.Operation.ADD_NUMBER, true);
+                syncPlayerAttributeModifier(player, Attribute.ATTACK_DAMAGE, keyGiantAttackDamageModifier, GIANT_ATTACK_DAMAGE_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
             }
             case SUPERMAN -> {
                 applyPotion(player, PotionEffectType.STRENGTH, 80, 1);
@@ -2045,9 +2090,17 @@ public final class SuperpowerManager implements Listener {
                 applyPotion(player, PotionEffectType.SPEED, 80, 0);
             }
             case RIFTWARDEN -> {
-                applyPotion(player, PotionEffectType.SLOW_FALLING, 80, 0);
-                if (player.getWorld().getEnvironment() == World.Environment.THE_END || hasNearbyCustomBoss(player, RIFTWARDEN_BOSS_RADIUS)) {
+                boolean nearBoss = hasNearbyCustomBoss(player, RIFTWARDEN_BOSS_RADIUS);
+                boolean wardedArea = nearBoss || player.getWorld().getEnvironment() == World.Environment.THE_END;
+                if (nearBoss) {
+                    applyPotion(player, PotionEffectType.SLOW_FALLING, 80, 0);
+                } else {
+                    removeLikelyPowerPotion(player, PotionEffectType.SLOW_FALLING, 0);
+                }
+                if (wardedArea) {
                     applyPotion(player, PotionEffectType.RESISTANCE, 80, 0);
+                } else {
+                    removeLikelyPowerPotion(player, PotionEffectType.RESISTANCE, 0);
                 }
             }
             case OATHBOUND -> applyOathboundAura(player);
@@ -2056,7 +2109,7 @@ public final class SuperpowerManager implements Listener {
                 pacifyNearbyUndead(player);
                 player.removePotionEffect(PotionEffectType.WITHER);
                 player.removePotionEffect(PotionEffectType.POISON);
-                applyPotion(player, PotionEffectType.NIGHT_VISION, 220, 0);
+                applyPassiveNightVision(player);
             }
             case STORMCALLER -> {
                 applyPotion(player, PotionEffectType.SPEED, 80, 0);
@@ -2075,6 +2128,8 @@ public final class SuperpowerManager implements Listener {
             default -> {
             }
         }
+
+        clearInactivePowerAttributeModifiers(player, power);
 
         var maxHealth = player.getAttribute(Attribute.MAX_HEALTH);
         if (maxHealth != null && player.getHealth() > maxHealth.getValue()) {
@@ -2186,6 +2241,7 @@ public final class SuperpowerManager implements Listener {
         pdc.remove(keyDruidBuffCooldownUntil);
         pdc.remove(keySupermanFlightActiveUntil);
         pdc.remove(keySupermanFlightCooldownUntil);
+        pdc.remove(keyStormcallerLightningEnabled);
     }
 
     private void clearLikelyPassivePowerEffects(Player player) {
@@ -2413,6 +2469,11 @@ public final class SuperpowerManager implements Listener {
         return raw == null || raw != 0;
     }
 
+    private boolean isStormcallerLightningEnabled(Player player) {
+        Byte raw = player.getPersistentDataContainer().get(keyStormcallerLightningEnabled, PersistentDataType.BYTE);
+        return raw == null || raw != 0;
+    }
+
     private void setShadowCooldownUntil(Player player, long value) {
         PersistentDataContainer pdc = player.getPersistentDataContainer();
         if (value <= 0L) {
@@ -2460,6 +2521,10 @@ public final class SuperpowerManager implements Listener {
 
     private void setVoidwalkerNightVisionEnabled(Player player, boolean enabled) {
         player.getPersistentDataContainer().set(keyVoidwalkerNightVisionEnabled, PersistentDataType.BYTE, (byte) (enabled ? 1 : 0));
+    }
+
+    private void setStormcallerLightningEnabled(Player player, boolean enabled) {
+        player.getPersistentDataContainer().set(keyStormcallerLightningEnabled, PersistentDataType.BYTE, (byte) (enabled ? 1 : 0));
     }
 
     private void setDruidBuffCooldownUntil(Player player, long value) {
@@ -2539,8 +2604,12 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void removeLikelyPowerPotion(Player player, PotionEffectType type, int amplifier) {
+        removeLikelyPowerPotion(player, type, amplifier, 80);
+    }
+
+    private void removeLikelyPowerPotion(Player player, PotionEffectType type, int amplifier, int maxDurationTicks) {
         PotionEffect current = player.getPotionEffect(type);
-        if (current != null && current.getAmplifier() == amplifier && current.getDuration() <= 80) {
+        if (current != null && current.getAmplifier() == amplifier && current.getDuration() <= maxDurationTicks) {
             player.removePotionEffect(type);
         }
     }
@@ -2784,6 +2853,9 @@ public final class SuperpowerManager implements Listener {
     }
 
     private boolean tryStormcallerStrike(Player attacker, LivingEntity victim) {
+        if (!isStormcallerLightningEnabled(attacker)) {
+            return false;
+        }
         double chance = isStorming(attacker.getWorld()) ? STORMCALLER_STORM_PROC_CHANCE : STORMCALLER_PROC_CHANCE;
         if (ThreadLocalRandom.current().nextDouble() >= chance) {
             return false;
@@ -3461,11 +3533,44 @@ public final class SuperpowerManager implements Listener {
             return;
         }
 
+        AttributeModifier existing = instance.getModifier(key);
+        if (enabled && Math.abs(amount) > 1.0E-9 && existing != null
+            && Math.abs(existing.getAmount() - amount) <= 1.0E-9
+            && existing.getOperation() == operation) {
+            return;
+        }
+
         instance.removeModifier(key);
         if (!enabled || Math.abs(amount) <= 1.0E-9) {
             return;
         }
         instance.addTransientModifier(new AttributeModifier(key, amount, operation));
+    }
+
+    private void clearInactivePowerAttributeModifiers(Player player, SuperpowerType power) {
+        if (power != SuperpowerType.ENCHANTER) {
+            syncPlayerAttributeModifier(player, Attribute.LUCK, keyEnchanterLuckModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+            syncPlayerAttributeModifier(player, Attribute.MOVEMENT_SPEED, keyEnchanterMoveModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR, false);
+            syncPlayerAttributeModifier(player, Attribute.ATTACK_SPEED, keyEnchanterAttackModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR, false);
+        }
+        if (power != SuperpowerType.MINER) {
+            syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyMinerHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        }
+        if (power != SuperpowerType.GIANT) {
+            syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyGiantHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+            syncPlayerAttributeModifier(player, Attribute.SCALE, keyGiantScaleModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR, false);
+            syncPlayerAttributeModifier(player, Attribute.KNOCKBACK_RESISTANCE, keyGiantKnockbackModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+            syncPlayerAttributeModifier(player, Attribute.ATTACK_DAMAGE, keyGiantAttackDamageModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        }
+        if (power != SuperpowerType.SUPERMAN) {
+            syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySupermanHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        }
+        if (power != SuperpowerType.SENTINEL) {
+            syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySentinelHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        }
+        if (power != SuperpowerType.WATERMAN) {
+            syncPlayerAttributeModifier(player, Attribute.SUBMERGED_MINING_SPEED, keyWatermanSubmergedMiningModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        }
     }
 
     private void clearPowerAttributeModifiers(Player player) {
@@ -3476,6 +3581,7 @@ public final class SuperpowerManager implements Listener {
         syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyGiantHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.SCALE, keyGiantScaleModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR, false);
         syncPlayerAttributeModifier(player, Attribute.KNOCKBACK_RESISTANCE, keyGiantKnockbackModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        syncPlayerAttributeModifier(player, Attribute.ATTACK_DAMAGE, keyGiantAttackDamageModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySupermanHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySentinelHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.SUBMERGED_MINING_SPEED, keyWatermanSubmergedMiningModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
@@ -4377,6 +4483,7 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Receives a bound <white>Druid's Grimoire</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Choose one blessing for yourself and nearby teammates within <white>" + DRUID_BUFF_RADIUS + " blocks</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Can grant strength, speed, regeneration, resistance, fire resistance, absorption, or instant health.</gray>"));
+                lore.add(MM.deserialize("<gray>Non-instant blessings last <white>" + (DRUID_BUFF_DURATION_SECONDS / 60) + " minutes</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Only one blessing can be chosen each use.</gray>"));
                 lore.add(MM.deserialize("<gray>Cooldown: <white>" + DRUID_BUFF_COOLDOWN_SECONDS + "s</white>.</gray>"));
             }
@@ -4411,8 +4518,9 @@ public final class SuperpowerManager implements Listener {
             }
             case GIANT -> {
                 lore.add(MM.deserialize("<gray>Scaled to <white>1.2x</white> normal size.</gray>"));
-                lore.add(MM.deserialize("<gray>Grants <white>+3 hearts</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Reduces all incoming knockback by <white>20%</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Grants <white>+6 hearts</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Heavy blows gain <white>+2 attack damage</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Reduces all incoming knockback by <white>40%</white>.</gray>"));
             }
             case SUPERMAN -> {
                 lore.add(MM.deserialize("<gray>Permanent <white>Strength II</white> and <white>Speed I</white>.</gray>"));
@@ -4442,8 +4550,10 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Command: <white>/voidstep</white></gray>"));
                 lore.add(MM.deserialize("<gray>Night vision can be toggled with <white>/voidvision</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Blink up to <white>" + (int) VOIDSTEP_RANGE + " blocks</white> through a clear safe path.</gray>"));
-                lore.add(MM.deserialize("<gray>Voidstep grants a <white>" + VOIDSTEP_VEIL_SECONDS + "s</white> veil with Slow Falling.</gray>"));
+                lore.add(MM.deserialize("<gray>Voidstep grants <white>" + VOIDSTEP_INVISIBILITY_SECONDS + "s</white> of Invisibility.</gray>"));
+                lore.add(MM.deserialize("<gray>Voidstep grants <white>" + VOIDSTEP_SLOW_FALLING_SECONDS + "s</white> of Slow Falling.</gray>"));
                 lore.add(MM.deserialize("<gray>Your first veil attack blinds and weakens the target with bonus damage.</gray>"));
+                lore.add(MM.deserialize("<gray>The veil attack window lasts <white>" + VOIDSTEP_VEIL_SECONDS + "s</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Endermen refuse to target Voidwalkers.</gray>"));
                 lore.add(MM.deserialize("<gray>Cooldown: <white>" + VOIDSTEP_COOLDOWN_SECONDS + "s</white>.</gray>"));
             }
@@ -4475,7 +4585,8 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Deals <white>18%</white> more damage to custom bosses.</gray>"));
                 lore.add(MM.deserialize("<gray>Deals <white>8%</white> more damage to hostile mobs.</gray>"));
                 lore.add(MM.deserialize("<gray>Reduces non-player damage, stronger against bosses.</gray>"));
-                lore.add(MM.deserialize("<gray>Gains Slow Falling and Resistance near bosses or in the End.</gray>"));
+                lore.add(MM.deserialize("<gray>Gains Slow Falling only near custom bosses.</gray>"));
+                lore.add(MM.deserialize("<gray>Gains Resistance near custom bosses or while in the End.</gray>"));
             }
             case OATHBOUND -> {
                 lore.add(MM.deserialize("<gray>Wakes up around nearby teammates.</gray>"));
@@ -4501,6 +4612,7 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Rain or thunder grants <white>Haste II</white> and <white>Strength I</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Hits can call a visual lightning strike for bonus damage.</gray>"));
                 lore.add(MM.deserialize("<gray>Lightning chance is higher during storms.</gray>"));
+                lore.add(MM.deserialize("<gray>Command: <white>/stormcaller on|off</white></gray>"));
             }
             case BLOODMENDER -> {
                 lore.add(MM.deserialize("<gray>Damaging enemies heals a portion of the damage dealt.</gray>"));
