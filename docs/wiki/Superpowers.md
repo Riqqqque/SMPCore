@@ -43,4 +43,4 @@ The `/powerinfo` menu is sorted from most common to rarest.
 - `Stick from Mother Nature` belongs to Verdant.
 - `Druid's Grimoire` belongs to Druid.
 
-Bound power items are preserved through death and stay tied to their owner.
+Bound power items are preserved through death and stay tied to their owner. The Stick from Mother Nature is limited to one per Verdant player and should not be stored as stacks.

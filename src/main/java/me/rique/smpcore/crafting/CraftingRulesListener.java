@@ -1,6 +1,7 @@
 package me.rique.smpcore.crafting;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Keyed;
@@ -84,15 +85,29 @@ public final class CraftingRulesListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPrepareSmithing(PrepareSmithingEvent event) {
-        if (event.getInventory() instanceof SmithingInventory smithing && isProtectedCustomItem(smithing.getInputEquipment())) {
+        ItemStack source = null;
+        boolean preserveCustomEnchants = false;
+        if (event.getInventory() instanceof SmithingInventory smithing) {
+            source = smithing.getInputEquipment();
+            preserveCustomEnchants = isCustomEnchantedVanillaGear(source);
+            if (isProtectedCustomItem(source) && !preserveCustomEnchants) {
+                event.setResult(null);
+                return;
+            }
+        }
+
+        ItemStack result = event.getResult();
+        if (result == null || result.getType() == Material.AIR) return;
+        if (plugin.getConfigManager().blockNetheriteArmorUpgrade && isNetheriteArmor(result.getType())) {
             event.setResult(null);
             return;
         }
-        if (!plugin.getConfigManager().blockNetheriteArmorUpgrade) return;
-        ItemStack result = event.getResult();
-        if (result == null || result.getType() == Material.AIR) return;
-        if (!isNetheriteArmor(result.getType())) return;
-        event.setResult(null);
+        if (!preserveCustomEnchants) return;
+
+        CustomEnchantListener enchants = plugin.getCustomEnchantListener();
+        if (enchants != null) {
+            event.setResult(enchants.preserveManagedEnchants(source, result.clone()));
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -181,6 +196,11 @@ public final class CraftingRulesListener implements Listener {
             }
         }
         return false;
+    }
+
+    private boolean isCustomEnchantedVanillaGear(ItemStack item) {
+        CustomEnchantListener enchants = plugin.getCustomEnchantListener();
+        return enchants != null && enchants.hasOnlyManagedEnchantData(item);
     }
 
     private boolean isProtectedCustomItem(ItemStack item) {

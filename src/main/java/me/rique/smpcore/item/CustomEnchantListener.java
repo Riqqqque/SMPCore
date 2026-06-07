@@ -72,6 +72,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -383,15 +384,16 @@ public final class CustomEnchantListener implements Listener {
     public void onPrepareAnvil(PrepareAnvilEvent event) {
         ItemStack left = event.getInventory().getFirstItem();
         ItemStack right = event.getInventory().getSecondItem();
-        BookEnchantData enchant = bookEnchant(right);
-        if (enchant == null) return;
-        if (!canApply(left, enchant.enchant(), enchant.level())) {
+        if (bookEnchant(right) == null) return;
+
+        CustomEnchantAnvilResult customResult = customEnchantAnvilResult(left, right);
+        if (customResult == null) {
             event.setResult(null);
             return;
         }
 
-        event.setResult(applyEnchant(left.clone(), enchant.enchant(), enchant.level()));
-        configureCustomEnchantAnvil(event, enchant);
+        event.setResult(customResult.result().clone());
+        configureCustomEnchantAnvil(event, customResult);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -404,17 +406,19 @@ public final class CustomEnchantListener implements Listener {
 
         ItemStack left = anvil.getFirstItem();
         ItemStack right = anvil.getSecondItem();
-        BookEnchantData enchant = bookEnchant(right);
-        if (enchant == null || !canApply(left, enchant.enchant(), enchant.level())) return;
+        if (bookEnchant(right) == null) return;
 
-        ItemStack result = applyEnchant(left.clone(), enchant.enchant(), enchant.level());
+        CustomEnchantAnvilResult customResult = customEnchantAnvilResult(left, right);
+        if (customResult == null) return;
+
+        ItemStack result = customResult.result().clone();
         if (result == null || result.getType() == Material.AIR) return;
 
         event.setCancelled(true);
         if (!canReceiveAnvilResult(player, event)) {
             return;
         }
-        int xpCost = customEnchantAnvilCost(enchant);
+        int xpCost = customResult.cost();
         if (!canPayAnvilCost(player, xpCost)) {
             return;
         }
@@ -424,8 +428,9 @@ public final class CustomEnchantListener implements Listener {
         anvil.setItem(2, null);
         chargeAnvilCost(player, xpCost);
         giveAnvilResult(player, event, result);
+        String action = customResult.combinesBooks() ? "Combined" : "Applied";
         player.sendMessage(MessageUtil.success(
-            "Applied <white>" + enchant.enchant().plainDisplay(enchant.level()) + "</white> to your item."
+            action + " <white>" + customResult.enchant().plainDisplay(customResult.level()) + "</white>."
         ));
     }
 
@@ -1225,6 +1230,28 @@ public final class CustomEnchantListener implements Listener {
         return item;
     }
 
+    public ItemStack preserveManagedEnchants(ItemStack source, ItemStack result) {
+        if (source == null || result == null || result.getType().isAir()) {
+            return result;
+        }
+        ItemMeta sourceMeta = source.getItemMeta();
+        ItemMeta resultMeta = result.getItemMeta();
+        if (sourceMeta == null || resultMeta == null) {
+            return result;
+        }
+
+        PersistentDataContainer resultPdc = resultMeta.getPersistentDataContainer();
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            int level = storedEnchantLevel(sourceMeta, enchant);
+            if (level > 0) {
+                resultPdc.set(keyFor(enchant), PersistentDataType.INTEGER, level);
+            }
+        }
+        applyManagedEnchantLore(resultMeta);
+        result.setItemMeta(resultMeta);
+        return result;
+    }
+
     private ItemStack stripManagedEnchants(ItemStack item) {
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return item;
@@ -1275,19 +1302,81 @@ public final class CustomEnchantListener implements Listener {
         return false;
     }
 
-    private void configureCustomEnchantAnvil(PrepareAnvilEvent event, BookEnchantData enchant) {
+    private CustomEnchantAnvilResult customEnchantAnvilResult(ItemStack left, ItemStack right) {
+        BookEnchantData rightEnchant = bookEnchant(right);
+        if (rightEnchant == null) {
+            return null;
+        }
+
+        BookEnchantData leftEnchant = bookEnchant(left);
+        if (leftEnchant != null) {
+            if (leftEnchant.enchant() != rightEnchant.enchant()) {
+                return null;
+            }
+            int level = combinedBookLevel(leftEnchant, rightEnchant);
+            if (level <= leftEnchant.level()) {
+                return null;
+            }
+            ItemStack result = createBook(leftEnchant.enchant(), level);
+            return new CustomEnchantAnvilResult(
+                result,
+                leftEnchant.enchant(),
+                level,
+                customEnchantAnvilCost(leftEnchant.enchant(), level),
+                true
+            );
+        }
+
+        if (left == null || left.getType() == Material.AIR || !rightEnchant.enchant().applicable.test(left.getType())) {
+            return null;
+        }
+
+        int currentLevel = storedEnchantLevel(left, rightEnchant.enchant());
+        int level = targetItemEnchantLevel(currentLevel, rightEnchant);
+        if (level <= currentLevel) {
+            return null;
+        }
+
+        ItemStack result = applyEnchant(left.clone(), rightEnchant.enchant(), level);
+        return new CustomEnchantAnvilResult(
+            result,
+            rightEnchant.enchant(),
+            level,
+            customEnchantAnvilCost(rightEnchant.enchant(), level),
+            false
+        );
+    }
+
+    private int combinedBookLevel(BookEnchantData left, BookEnchantData right) {
+        int max = left.enchant().maxLevel();
+        if (left.level() == right.level() && left.level() < max) {
+            return left.level() + 1;
+        }
+        return left.enchant().clampLevel(Math.max(left.level(), right.level()));
+    }
+
+    private int targetItemEnchantLevel(int currentLevel, BookEnchantData book) {
+        int bookLevel = book.level();
+        int max = book.enchant().maxLevel();
+        if (currentLevel == bookLevel && currentLevel < max) {
+            return currentLevel + 1;
+        }
+        return book.enchant().clampLevel(Math.max(currentLevel, bookLevel));
+    }
+
+    private void configureCustomEnchantAnvil(PrepareAnvilEvent event, CustomEnchantAnvilResult result) {
         if (!(event.getView() instanceof org.bukkit.inventory.view.AnvilView anvilView)) {
             return;
         }
 
-        int cost = customEnchantAnvilCost(enchant);
+        int cost = result.cost();
         anvilView.setRepairCost(cost);
         anvilView.setRepairItemCountCost(1);
         anvilView.setMaximumRepairCost(Math.max(40, cost));
     }
 
-    private int customEnchantAnvilCost(BookEnchantData enchant) {
-        int level = Math.max(1, enchant.level());
+    private int customEnchantAnvilCost(CustomEnchantEntry enchant, int enchantLevel) {
+        int level = Math.max(1, enchant.clampLevel(enchantLevel));
         return CUSTOM_ENCHANT_ANVIL_BASE_COST + (level * CUSTOM_ENCHANT_ANVIL_LEVEL_COST);
     }
 
@@ -1329,12 +1418,45 @@ public final class CustomEnchantListener implements Listener {
         };
     }
 
-    private boolean hasManagedEnchant(ItemStack item) {
+    public boolean hasManagedEnchant(ItemStack item) {
         if (item == null || item.getType() == Material.AIR) {
             return false;
         }
         for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
             if (hasEnchant(item, enchant)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean hasOnlyManagedEnchantData(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        String namespace = plugin.getName().toLowerCase(Locale.ROOT);
+        boolean hasManagedKey = false;
+        for (NamespacedKey key : pdc.getKeys()) {
+            if (!namespace.equals(key.getNamespace())) {
+                continue;
+            }
+            if (!isManagedEnchantKey(key)) {
+                return false;
+            }
+            hasManagedKey = true;
+        }
+        return hasManagedKey;
+    }
+
+    private boolean isManagedEnchantKey(NamespacedKey key) {
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            if (keyFor(enchant).equals(key)) {
                 return true;
             }
         }
@@ -2567,6 +2689,14 @@ public final class CustomEnchantListener implements Listener {
     }
 
     private record BookEnchantData(CustomEnchantEntry enchant, int level) {}
+
+    private record CustomEnchantAnvilResult(
+        ItemStack result,
+        CustomEnchantEntry enchant,
+        int level,
+        int cost,
+        boolean combinesBooks
+    ) {}
 
     private record BlockKey(UUID worldId, int x, int y, int z) {}
 
