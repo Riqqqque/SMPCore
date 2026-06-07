@@ -23,6 +23,7 @@ The easiest way to think about the plugin:
 - [Leaderboards](Leaderboards)
 - [Teams and SMP Start](Teams-And-SMP-Start)
 - [Custom Enchants](Custom-Enchants)
+- [Spawners](Spawners)
 - [Admin Guide](Admin-Guide)
 - [FAQ](FAQ)
 

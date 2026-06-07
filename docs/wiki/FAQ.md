@@ -8,6 +8,14 @@ Use `/reliquary`.
 
 Use `/bossrituals`.
 
+## How do custom spawners work?
+
+Right-click a spawner to open its modifier guide, or read [Spawners](Spawners). Sugar speeds it up, redstone toggles control mode, Eye of Ender enables AI nerfing, and same-type spawners can stack.
+
+## Where do I see custom enchants?
+
+Use `/enchants`. Craft-only boss enchant recipes can be clicked there to view their recipe.
+
 ## How do I get Covenant Armory items?
 
 Kill bosses for trophy materials, then craft the items from the Covenant Armory section inside `/reliquary`.
@@ -23,4 +31,3 @@ Yes. Staff can use `/itemaudit <player> [item]`. Major custom items receive trac
 ## Do cooldowns reset if someone relogs?
 
 Important player cooldowns are stored on the player where needed, including Covenant utility relics.
-

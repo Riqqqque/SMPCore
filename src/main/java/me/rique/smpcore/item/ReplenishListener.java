@@ -96,8 +96,16 @@ public final class ReplenishListener implements Listener {
     public void onEnchantItem(EnchantItemEvent event) {
         ItemStack item = event.getItem();
         if (!isHoe(item) || hasReplenish(item)) return;
-        applyReplenish(item);
-        event.getEnchanter().sendMessage(MessageUtil.success("Your hoe gained <white>Replenish I</white>."));
+        if (event.getEnchantsToAdd().isEmpty()) return;
+
+        Player enchanter = event.getEnchanter();
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!isHoe(item) || hasReplenish(item)) return;
+            applyReplenish(item);
+            if (enchanter.isOnline()) {
+                enchanter.sendMessage(MessageUtil.success("Your hoe gained <white>Replenish I</white>."));
+            }
+        });
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)

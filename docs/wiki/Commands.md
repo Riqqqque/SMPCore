@@ -13,6 +13,7 @@
 - `/team` - team commands.
 - `/tvault`, `/teamvault` - opens team vault storage.
 - `/powerinfo` - opens superpower information.
+- `/stormcaller on|off|toggle|status` - Stormcaller-only lightning strike toggle.
 - `/home`, `/sethome`, `/delhome`, `/homes` - home system.
 - `/spawn` - OP-only spawn command on this server.
 - `/back` - OP-only back command on this server.
@@ -24,6 +25,9 @@
 - `/bosses spawn <boss>` - spawn a boss at your location.
 - `/bosses despawn <boss>` - remove active copies of a specific boss.
 - `/bosses clearall` - remove all tracked custom bosses.
+- `/spawner info` - inspect the spawner you are looking at within 8 blocks.
+- `/spawner reset` - reset modifiers on the spawner you are looking at within 8 blocks.
+- `/spawnermgr` - alias for `/spawner`.
 - `/legendary give <item> [player]` - give legendary items.
 - `/customitem give <item> [player]` - give non-legendary custom items, Covenant items, boss trophies, and utility relics.
 - `/itemaudit <player> [item]` - view custom item origin and anomaly logs.

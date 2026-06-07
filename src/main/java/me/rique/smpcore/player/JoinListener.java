@@ -111,8 +111,7 @@ public final class JoinListener implements Listener {
         ));
         player.playSound(player.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 0.8f);
         Bukkit.broadcast(MessageUtil.prefixedRaw(
-            "<gradient:#ff4d6d:#facc15><bold>{player}</bold></gradient> <gray>has entered the Season of the Covenant.</gray>",
-            MessageUtil.placeholder("player", player.getName())
+            "<gradient:#ff4d6d:#facc15><bold>" + player.getName() + "</bold></gradient> <gray>has entered the Season of the Covenant.</gray>"
         ));
 
         for (int i = 0; i < 3; i++) {

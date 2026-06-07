@@ -34,6 +34,7 @@ import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.RareDropVisualListener;
 import me.rique.smpcore.item.ReplenishListener;
 import me.rique.smpcore.item.RewardLanternListener;
+import me.rique.smpcore.item.SalvagingDepotListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
 import me.rique.smpcore.item.VeinMinerListener;
 import me.rique.smpcore.legendary.LegendaryAltarManager;
@@ -89,6 +90,7 @@ public final class SMPCore extends JavaPlugin {
     private ItemAuditManager itemAuditManager;
     private RareDropVisualListener rareDropVisualListener;
     private RewardLanternListener rewardLanternListener;
+    private SalvagingDepotListener salvagingDepotListener;
     private BossPotionListener bossPotionListener;
     private SustenanceTalismanListener sustenanceTalismanListener;
     private VeinMinerListener veinMinerListener;
@@ -147,6 +149,7 @@ public final class SMPCore extends JavaPlugin {
         if (awakeningTableListener != null) awakeningTableListener.shutdown();
         if (superpowerManager != null) superpowerManager.shutdown();
         if (rewardLanternListener != null) rewardLanternListener.shutdown();
+        if (salvagingDepotListener != null) salvagingDepotListener.shutdown();
         if (bossPotionListener != null) bossPotionListener.shutdown();
         if (rareDropVisualListener != null) rareDropVisualListener.shutdown();
         if (itemAuditManager != null) itemAuditManager.shutdown();
@@ -215,6 +218,9 @@ public final class SMPCore extends JavaPlugin {
         bossManager.start();
         customToolListener = new CustomToolListener(this);
         pm.registerEvents(customToolListener, this);
+        salvagingDepotListener = new SalvagingDepotListener(this);
+        pm.registerEvents(salvagingDepotListener, this);
+        salvagingDepotListener.start();
         awakeningTableListener = new AwakeningTableListener(this);
         pm.registerEvents(awakeningTableListener, this);
         awakeningTableListener.start();
@@ -286,6 +292,7 @@ public final class SMPCore extends JavaPlugin {
     public ItemAuditManager getItemAuditManager() { return itemAuditManager; }
     public RareDropVisualListener getRareDropVisualListener() { return rareDropVisualListener; }
     public RewardLanternListener getRewardLanternListener() { return rewardLanternListener; }
+    public SalvagingDepotListener getSalvagingDepotListener() { return salvagingDepotListener; }
     public BossPotionListener getBossPotionListener() { return bossPotionListener; }
     public SustenanceTalismanListener getSustenanceTalismanListener() { return sustenanceTalismanListener; }
     public VeinMinerListener getVeinMinerListener() { return veinMinerListener; }

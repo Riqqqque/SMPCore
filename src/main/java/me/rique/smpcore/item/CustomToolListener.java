@@ -101,6 +101,7 @@ public final class CustomToolListener implements Listener {
     private static final int SURVEYOR_SCAN_RADIUS = 24;
     private static final long SURVEYOR_SCAN_COOLDOWN_MS = 20_000L;
     private static final double MENDERS_KIT_REPAIR_PERCENT = 0.35;
+    private static final int PASSIVE_NIGHT_VISION_TICKS = 600;
 
     private final SMPCore plugin;
     private final NamespacedKey keyCustomToolId;
@@ -126,7 +127,7 @@ public final class CustomToolListener implements Listener {
         this.surveyorsLensRecipeKey = new NamespacedKey(plugin, "surveyors_lens_recipe");
         this.mendersKitRecipeKey = new NamespacedKey(plugin, "menders_kit_recipe");
         registerRecipes();
-        Bukkit.getScheduler().runTaskTimer(plugin, this::tickHeldGear, 40L, 100L);
+        Bukkit.getScheduler().runTaskTimer(plugin, this::tickHeldGear, 40L, 20L);
 
         Bukkit.getScheduler().runTask(plugin, () -> {
             for (Player player : Bukkit.getOnlinePlayers()) {
@@ -971,7 +972,7 @@ public final class CustomToolListener implements Listener {
             if (!hasHeldCustomTool(player, SPELUNKER_LANTERN_ID)) {
                 continue;
             }
-            player.addPotionEffect(new PotionEffect(PotionEffectType.NIGHT_VISION, 260, 0, true, false, false));
+            player.addPotionEffect(new PotionEffect(PotionEffectType.NIGHT_VISION, PASSIVE_NIGHT_VISION_TICKS, 0, true, false, false));
             player.addPotionEffect(new PotionEffect(PotionEffectType.HASTE, 120, 0, true, false, false));
         }
     }

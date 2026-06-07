@@ -88,6 +88,7 @@ public final class SeasonRelicManager implements Listener {
     private static final int BACK_SLOT = 45;
     private static final int CLOSE_SLOT = 53;
     private static final long PASSIVE_TICKS = 40L;
+    private static final int PASSIVE_NIGHT_VISION_TICKS = 600;
     private static final double TRUE_SIGHT_RADIUS = 48.0;
 
     private final SMPCore plugin;
@@ -666,7 +667,7 @@ public final class SeasonRelicManager implements Listener {
         }
         switch (id) {
             case "crown_of_cinders" -> applyPotion(player, PotionEffectType.FIRE_RESISTANCE, 80, 0);
-            case "graveveil_hood" -> applyPotion(player, PotionEffectType.NIGHT_VISION, 240, 0);
+            case "graveveil_hood" -> applyPotion(player, PotionEffectType.NIGHT_VISION, PASSIVE_NIGHT_VISION_TICKS, 0);
             case "bastion_pauldrons" -> applyPotion(player, PotionEffectType.ABSORPTION, 80, 0);
             case "sculkplate_harness" -> {
                 player.removePotionEffect(PotionEffectType.DARKNESS);
