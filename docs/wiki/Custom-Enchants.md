@@ -10,6 +10,7 @@ Custom enchants use normal gameplay surfaces where possible: enchant table rolls
 - Custom enchant books can be applied in an anvil and consume XP levels.
 - Matching custom enchant books can be combined in an anvil. Two books of the same level upgrade by one level, up to that enchant's max level.
 - A matching custom enchant book can also upgrade an item that already has the same level, up to that enchant's max level.
+- Same-type tools and armor can be combined in an anvil to merge their SMPCore custom enchants when the right-hand item adds something new.
 - Grindstones remove custom enchants safely.
 - Double Jump is loot-only from Ancient City chests by default.
 - Boss-crafted books are made with Covenant boss materials and are shown in `/enchants`.
@@ -98,7 +99,7 @@ Sculk Heart    | Book       | Sculk Heart
 ## Safety Rules
 
 - Custom enchant books apply through anvils and consume XP levels.
-- Custom-enchanted vanilla tools and armor keep their SMPCore enchants when upgraded in a smithing table. Actual custom relics are still blocked from vanilla crafting and smithing.
+- Custom-enchanted vanilla tools and armor, including Replenish hoes, keep their SMPCore enchants when upgraded in a smithing table. Actual custom relics are still blocked from vanilla crafting and smithing.
 - Custom enchants can be removed safely in a grindstone.
 - Dash cooldowns are stored on the player, so relogging does not bypass them.
 - Boss-crafted enchant books require real Covenant boss materials.
