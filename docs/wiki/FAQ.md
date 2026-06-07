@@ -20,9 +20,13 @@ Use `/enchants`. Craft-only boss enchant recipes can be clicked there to view th
 
 Yes. Use an anvil. Matching books upgrade like vanilla books, and matching books can upgrade an item that already has the same SMPCore enchant level.
 
+## Can custom-enchanted items be combined?
+
+Yes. Same-type tools and armor can merge SMPCore custom enchants in an anvil when the right-hand item adds a new custom enchant or upgrades an existing one.
+
 ## Can custom-enchanted gear be upgraded to netherite?
 
-Custom-enchanted vanilla gear keeps its SMPCore enchants through smithing. Full custom relics are still blocked from vanilla crafting and smithing so players do not accidentally consume rare items.
+Custom-enchanted vanilla gear keeps its SMPCore enchants through smithing, including Replenish hoes. Full custom relics are still blocked from vanilla crafting and smithing so players do not accidentally consume rare items.
 
 ## How do I get Covenant Armory items?
 

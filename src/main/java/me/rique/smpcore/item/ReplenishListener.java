@@ -191,11 +191,22 @@ public final class ReplenishListener implements Listener {
         return hoe;
     }
 
-    private boolean hasReplenish(ItemStack item) {
+    public ItemStack preserveReplenish(ItemStack source, ItemStack result) {
+        if (!hasReplenish(source) || result == null || result.getType().isAir() || !isHoe(result)) {
+            return result;
+        }
+        return applyReplenish(result);
+    }
+
+    public boolean hasReplenish(ItemStack item) {
         if (!isHoe(item)) return false;
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return false;
         return meta.getPersistentDataContainer().has(keyReplenishHoe, PersistentDataType.BYTE);
+    }
+
+    public boolean isReplenishEnchantDataKey(NamespacedKey key) {
+        return keyReplenishHoe.equals(key);
     }
 
     private boolean isReplenishBook(ItemStack item) {

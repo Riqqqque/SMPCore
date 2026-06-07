@@ -2,6 +2,7 @@ package me.rique.smpcore.crafting;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.item.CustomEnchantListener;
+import me.rique.smpcore.item.ReplenishListener;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Keyed;
@@ -22,6 +23,7 @@ import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.SmithingInventory;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.persistence.PersistentDataContainer;
 
 import java.util.Locale;
 
@@ -105,9 +107,15 @@ public final class CraftingRulesListener implements Listener {
         if (!preserveCustomEnchants) return;
 
         CustomEnchantListener enchants = plugin.getCustomEnchantListener();
+        ItemStack preserved = result.clone();
         if (enchants != null) {
-            event.setResult(enchants.preserveManagedEnchants(source, result.clone()));
+            preserved = enchants.preserveManagedEnchants(source, preserved);
         }
+        ReplenishListener replenish = plugin.getReplenishListener();
+        if (replenish != null) {
+            preserved = replenish.preserveReplenish(source, preserved);
+        }
+        event.setResult(preserved);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -199,8 +207,34 @@ public final class CraftingRulesListener implements Listener {
     }
 
     private boolean isCustomEnchantedVanillaGear(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+
+        String namespace = plugin.getName().toLowerCase(Locale.ROOT);
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        boolean hasAllowedEnchantData = false;
         CustomEnchantListener enchants = plugin.getCustomEnchantListener();
-        return enchants != null && enchants.hasOnlyManagedEnchantData(item);
+        ReplenishListener replenish = plugin.getReplenishListener();
+        for (NamespacedKey key : pdc.getKeys()) {
+            if (!namespace.equals(key.getNamespace())) {
+                continue;
+            }
+            if (enchants != null && enchants.isManagedEnchantDataKey(key)) {
+                hasAllowedEnchantData = true;
+                continue;
+            }
+            if (replenish != null && replenish.isReplenishEnchantDataKey(key)) {
+                hasAllowedEnchantData = true;
+                continue;
+            }
+            return false;
+        }
+        return hasAllowedEnchantData;
     }
 
     private boolean isProtectedCustomItem(ItemStack item) {
