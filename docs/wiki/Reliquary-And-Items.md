@@ -41,6 +41,10 @@ This section is for normal craftable gear, not Covenant boss weapons.
 - `Mender's Kit` - consumed repair bundle for damaged carried or worn gear.
 - `Faraday's Magnet` - craftable player-location compass with limited uses.
 
+## Extra Survival Recipes
+
+- `Leather from Rotten Flesh` - fill all 9 crafting grid slots with rotten flesh to craft 1 leather. This is a normal shaped recipe, so vanilla crafting tables and autocrafters can use it.
+
 ## PvP Balance Philosophy
 
 Custom items are allowed to feel powerful, but the plugin tries to avoid one-click fight deletion. Strong effects usually have one or more limits:

@@ -27,28 +27,32 @@ import java.util.Locale;
 /**
  * Global crafting rules:
  * - Golden apple uses nuggets instead of ingots.
+ * - 9 Rotten Flesh can be crafted into Leather.
  * - Optional block for netherite armor smithing upgrades.
  */
 public final class CraftingRulesListener implements Listener {
 
     private final SMPCore plugin;
     private final NamespacedKey goldenAppleNuggetRecipeKey;
+    private final NamespacedKey leatherFromRottenFleshRecipeKey;
 
     public CraftingRulesListener(SMPCore plugin) {
         this.plugin = plugin;
         this.goldenAppleNuggetRecipeKey = new NamespacedKey(plugin, "golden_apple_nugget_recipe");
+        this.leatherFromRottenFleshRecipeKey = new NamespacedKey(plugin, "leather_from_rotten_flesh");
         registerGoldenAppleRecipe();
+        registerLeatherRecipe();
 
         Bukkit.getScheduler().runTask(plugin, () -> {
             for (Player player : Bukkit.getOnlinePlayers()) {
-                discoverGoldenAppleRecipe(player);
+                discoverCustomRecipes(player);
             }
         });
     }
 
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
-        discoverGoldenAppleRecipe(event.getPlayer());
+        discoverCustomRecipes(event.getPlayer());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -121,17 +125,30 @@ public final class CraftingRulesListener implements Listener {
         Bukkit.addRecipe(shaped);
     }
 
+    private void registerLeatherRecipe() {
+        Bukkit.removeRecipe(leatherFromRottenFleshRecipeKey);
+
+        ItemStack result = new ItemStack(Material.LEATHER, 1);
+        ShapedRecipe shaped = new ShapedRecipe(leatherFromRottenFleshRecipeKey, result);
+        shaped.shape("RRR", "RRR", "RRR");
+        shaped.setIngredient('R', Material.ROTTEN_FLESH);
+        shaped.setGroup("smpcore_crafting");
+        Bukkit.addRecipe(shaped);
+    }
+
     public void reloadConfig() {
         registerGoldenAppleRecipe();
+        registerLeatherRecipe();
         Bukkit.getScheduler().runTask(plugin, () -> {
             for (Player player : Bukkit.getOnlinePlayers()) {
-                discoverGoldenAppleRecipe(player);
+                discoverCustomRecipes(player);
             }
         });
     }
 
-    private void discoverGoldenAppleRecipe(Player player) {
+    private void discoverCustomRecipes(Player player) {
         player.discoverRecipe(goldenAppleNuggetRecipeKey);
+        player.discoverRecipe(leatherFromRottenFleshRecipeKey);
     }
 
     private boolean shouldBlockProtectedIngredientInVanillaCraft(PrepareItemCraftEvent event) {
