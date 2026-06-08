@@ -31,6 +31,7 @@ import java.util.Locale;
  * Global crafting rules:
  * - Golden apple uses nuggets instead of ingots.
  * - 9 Rotten Flesh can be crafted into Leather.
+ * - Iron, copper, and gold can be crafted into Bells.
  * - Optional block for netherite armor smithing upgrades.
  */
 public final class CraftingRulesListener implements Listener {
@@ -38,13 +39,16 @@ public final class CraftingRulesListener implements Listener {
     private final SMPCore plugin;
     private final NamespacedKey goldenAppleNuggetRecipeKey;
     private final NamespacedKey leatherFromRottenFleshRecipeKey;
+    private final NamespacedKey bellRecipeKey;
 
     public CraftingRulesListener(SMPCore plugin) {
         this.plugin = plugin;
         this.goldenAppleNuggetRecipeKey = new NamespacedKey(plugin, "golden_apple_nugget_recipe");
         this.leatherFromRottenFleshRecipeKey = new NamespacedKey(plugin, "leather_from_rotten_flesh");
+        this.bellRecipeKey = new NamespacedKey(plugin, "bell_recipe");
         registerGoldenAppleRecipe();
         registerLeatherRecipe();
+        registerBellRecipe();
 
         Bukkit.getScheduler().runTask(plugin, () -> {
             for (Player player : Bukkit.getOnlinePlayers()) {
@@ -159,9 +163,23 @@ public final class CraftingRulesListener implements Listener {
         Bukkit.addRecipe(shaped);
     }
 
+    private void registerBellRecipe() {
+        Bukkit.removeRecipe(bellRecipeKey);
+
+        ItemStack result = new ItemStack(Material.BELL, 1);
+        ShapedRecipe shaped = new ShapedRecipe(bellRecipeKey, result);
+        shaped.shape(" I ", "ICI", " G ");
+        shaped.setIngredient('I', Material.IRON_INGOT);
+        shaped.setIngredient('C', Material.COPPER_INGOT);
+        shaped.setIngredient('G', Material.GOLD_INGOT);
+        shaped.setGroup("smpcore_crafting");
+        Bukkit.addRecipe(shaped);
+    }
+
     public void reloadConfig() {
         registerGoldenAppleRecipe();
         registerLeatherRecipe();
+        registerBellRecipe();
         Bukkit.getScheduler().runTask(plugin, () -> {
             for (Player player : Bukkit.getOnlinePlayers()) {
                 discoverCustomRecipes(player);
@@ -172,6 +190,7 @@ public final class CraftingRulesListener implements Listener {
     private void discoverCustomRecipes(Player player) {
         player.discoverRecipe(goldenAppleNuggetRecipeKey);
         player.discoverRecipe(leatherFromRottenFleshRecipeKey);
+        player.discoverRecipe(bellRecipeKey);
     }
 
     private boolean shouldBlockProtectedIngredientInVanillaCraft(PrepareItemCraftEvent event) {

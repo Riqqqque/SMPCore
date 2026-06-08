@@ -44,6 +44,7 @@ This section is for normal craftable gear, not Covenant boss weapons.
 ## Extra Survival Recipes
 
 - `Leather from Rotten Flesh` - fill all 9 crafting grid slots with rotten flesh to craft 1 leather. This is a normal shaped recipe, so vanilla crafting tables and autocrafters can use it.
+- `Bell` - craft with 1 iron ingot on top, iron/copper/iron across the middle, and 1 gold ingot on the bottom. This gives players a normal survival path for Bell-based Reliquary recipes.
 
 ## PvP Balance Philosophy
 
