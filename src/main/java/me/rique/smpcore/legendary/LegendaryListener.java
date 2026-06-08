@@ -13,6 +13,7 @@ import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.season.SeasonRelicManager;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.MessageUtil;
 import io.papermc.paper.registry.RegistryAccess;
 import io.papermc.paper.registry.RegistryKey;
@@ -761,12 +762,6 @@ public final class LegendaryListener implements Listener {
         }
 
         Inventory top = event.getView().getTopInventory();
-        if (BedrockCompat.isBedrockPlayer(player)
-            && isReadOnlyLegendaryMenu(top)
-            && isUnsafeReadOnlyMenuAction(event)) {
-            event.setCancelled(true);
-            return;
-        }
         if (event.getClickedInventory() != top) return;
 
         if (top.getHolder() instanceof ReliquaryMenuHolder holder) {
@@ -836,9 +831,8 @@ public final class LegendaryListener implements Listener {
         if (top.getHolder() instanceof AncientScrollRecipeHolder) {
             event.setCancelled(true);
             if (event.getSlot() == RECIPE_TRADE_SLOT) {
-                player.sendMessage(MessageUtil.info(
-                    "Craft <white>Ancient Scroll</white> in a normal crafting table with the exact total item counts shown."
-                ));
+                craftAncientScrollFromInventory(player);
+                Bukkit.getScheduler().runTask(plugin, () -> openAncientScrollRecipeDetails(player));
                 return;
             }
             if (event.getSlot() == 18) {
@@ -850,9 +844,8 @@ public final class LegendaryListener implements Listener {
         if (top.getHolder() instanceof AscendantCoreRecipeHolder) {
             event.setCancelled(true);
             if (event.getSlot() == RECIPE_TRADE_SLOT) {
-                player.sendMessage(MessageUtil.info(
-                    "Craft <white>Ascendant Core</white> in a normal crafting table, then spend it in the Mythic Forge."
-                ));
+                craftMythicForgeItemFromInventory(player, MythicForgeListener.ASCENDANT_CORE_ITEM_ID);
+                Bukkit.getScheduler().runTask(plugin, () -> openAscendantCoreRecipeDetails(player));
                 return;
             }
             if (event.getSlot() == 18) {
@@ -864,12 +857,8 @@ public final class LegendaryListener implements Listener {
         if (top.getHolder() instanceof CustomToolRecipeHolder holder) {
             event.setCancelled(true);
             if (event.getSlot() == RECIPE_TRADE_SLOT) {
-                String displayName = plugin.getCustomToolListener() == null
-                    ? "this tool"
-                    : plugin.getCustomToolListener().displayNameFor(holder.toolId());
-                player.sendMessage(MessageUtil.info(
-                    "Craft <white>" + displayName + "</white> in a normal crafting table."
-                ));
+                craftCustomToolFromInventory(player, holder.toolId());
+                Bukkit.getScheduler().runTask(plugin, () -> openCustomToolRecipeDetails(player, holder.toolId()));
                 return;
             }
             if (event.getSlot() == 18) {
@@ -881,9 +870,8 @@ public final class LegendaryListener implements Listener {
         if (top.getHolder() instanceof MythicForgeRecipeHolder) {
             event.setCancelled(true);
             if (event.getSlot() == RECIPE_TRADE_SLOT) {
-                player.sendMessage(MessageUtil.info(
-                    "Craft <white>Mythic Forge</white> in a normal crafting table, place it, then combine <white>2 compatible legendaries</white> with an <white>Ascendant Core</white>."
-                ));
+                craftMythicForgeItemFromInventory(player, MythicForgeListener.MYTHIC_FORGE_ITEM_ID);
+                Bukkit.getScheduler().runTask(plugin, () -> openMythicForgeRecipeDetails(player));
                 return;
             }
             if (event.getSlot() == 40) {
@@ -911,9 +899,8 @@ public final class LegendaryListener implements Listener {
         if (top.getHolder() instanceof FaradaysMagnetRecipeHolder) {
             event.setCancelled(true);
             if (event.getSlot() == RECIPE_TRADE_SLOT) {
-                player.sendMessage(MessageUtil.info(
-                    "Craft <white>Faraday's Magnet</white> in a normal crafting table."
-                ));
+                craftFaradaysMagnetFromInventory(player);
+                Bukkit.getScheduler().runTask(plugin, () -> openFaradaysMagnetRecipeDetails(player));
                 return;
             }
             if (event.getSlot() == 18) {
@@ -944,9 +931,8 @@ public final class LegendaryListener implements Listener {
         if (top.getHolder() instanceof TalismanRecipeHolder) {
             event.setCancelled(true);
             if (event.getSlot() == RECIPE_TRADE_SLOT) {
-                player.sendMessage(MessageUtil.info(
-                    "Craft <white>Talisman of Sustenance</white> in a normal crafting table with the exact total item counts shown."
-                ));
+                craftTalismanFromInventory(player);
+                Bukkit.getScheduler().runTask(plugin, () -> openSustenanceTalismanRecipeDetails(player));
                 return;
             }
             if (event.getSlot() == 18) {
@@ -958,9 +944,8 @@ public final class LegendaryListener implements Listener {
         if (top.getHolder() instanceof SalvagingDepotRecipeHolder) {
             event.setCancelled(true);
             if (event.getSlot() == RECIPE_TRADE_SLOT) {
-                player.sendMessage(MessageUtil.info(
-                    "Craft <white>Salvaging Depot</white> in a normal crafting table, then place it as a station."
-                ));
+                craftSalvagingDepotFromInventory(player);
+                Bukkit.getScheduler().runTask(plugin, () -> openSalvagingDepotRecipeDetails(player));
                 return;
             }
             if (event.getSlot() == 18) {
@@ -971,9 +956,8 @@ public final class LegendaryListener implements Listener {
         if (top.getHolder() instanceof XpLecternRecipeHolder) {
             event.setCancelled(true);
             if (event.getSlot() == RECIPE_TRADE_SLOT) {
-                player.sendMessage(MessageUtil.info(
-                    "Craft <white>XP Lectern</white> in a normal crafting table, then place it to store and withdraw levels."
-                ));
+                craftXpLecternFromInventory(player);
+                Bukkit.getScheduler().runTask(plugin, () -> openXpLecternRecipeDetails(player));
                 return;
             }
             if (event.getSlot() == 18) {
@@ -2211,14 +2195,7 @@ public final class LegendaryListener implements Listener {
         }
 
         inv.setItem(16, plugin.getSuperpowerManager().createAncientScrollItem());
-        inv.setItem(RECIPE_TRADE_SLOT, createGuiItem(
-            Material.CRAFTING_TABLE,
-            "<gold><bold>Craft In Table</bold></gold>",
-            List.of(
-                "<gray>This is a custom counted crafting recipe.</gray>",
-                "<gray>Use the exact total item counts shown here.</gray>"
-            )
-        ));
+        inv.setItem(RECIPE_TRADE_SLOT, createInventoryCraftButton("Uses the exact total item counts shown here."));
         inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
@@ -2256,14 +2233,7 @@ public final class LegendaryListener implements Listener {
         }
 
         inv.setItem(16, forge.createAscendantCoreItem());
-        inv.setItem(RECIPE_TRADE_SLOT, createGuiItem(
-            Material.CRAFTING_TABLE,
-            "<gold><bold>Craft In Table</bold></gold>",
-            List.of(
-                "<gray>This is a normal crafting recipe.</gray>",
-                "<gray>Use it as the catalyst in a <white>Mythic Forge</white>.</gray>"
-            )
-        ));
+        inv.setItem(RECIPE_TRADE_SLOT, createInventoryCraftButton("Use it as the catalyst in a <white>Mythic Forge</white>."));
         inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
@@ -2301,15 +2271,7 @@ public final class LegendaryListener implements Listener {
         }
 
         inv.setItem(16, forge.createMythicForgeItem());
-        inv.setItem(RECIPE_TRADE_SLOT, createGuiItem(
-            Material.CRAFTING_TABLE,
-            "<gold><bold>Craft In Table</bold></gold>",
-            List.of(
-                "<gray>This is a normal crafting recipe.</gray>",
-                "<gray>Place it, then combine <white>2 compatible legendaries</white></gray>",
-                "<gray>with an <white>Ascendant Core</white> inside.</gray>"
-            )
-        ));
+        inv.setItem(RECIPE_TRADE_SLOT, createInventoryCraftButton("Place it, then combine <white>2 compatible legendaries</white> with an <white>Ascendant Core</white>."));
         inv.setItem(30, forge.createAscendantCoreItem());
         inv.setItem(31, createGuiItem(
             Material.AMETHYST_CLUSTER,
@@ -2393,11 +2355,7 @@ public final class LegendaryListener implements Listener {
         }
 
         inv.setItem(16, plugin.getCustomToolListener().createRecipePreview(toolId));
-        inv.setItem(RECIPE_TRADE_SLOT, createGuiItem(
-            Material.CRAFTING_TABLE,
-            "<gold><bold>Craft In Table</bold></gold>",
-            List.of("<gray>This is a normal crafting recipe.</gray>", "<gray>Use the shown ingredients in a crafting table.</gray>")
-        ));
+        inv.setItem(RECIPE_TRADE_SLOT, createInventoryCraftButton("Uses the shown vanilla ingredients."));
         inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
@@ -2429,11 +2387,7 @@ public final class LegendaryListener implements Listener {
         }
 
         inv.setItem(16, createFaradaysMagnetItem());
-        inv.setItem(RECIPE_TRADE_SLOT, createGuiItem(
-            Material.CRAFTING_TABLE,
-            "<gold><bold>Craft In Table</bold></gold>",
-            List.of("<gray>This is a normal crafting recipe.</gray>", "<gray>Use the shown ingredients in a crafting table.</gray>")
-        ));
+        inv.setItem(RECIPE_TRADE_SLOT, createInventoryCraftButton("Uses the shown vanilla ingredients."));
         inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
@@ -2474,14 +2428,7 @@ public final class LegendaryListener implements Listener {
         }
 
         inv.setItem(16, plugin.getSustenanceTalismanListener().createTalismanItem());
-        inv.setItem(RECIPE_TRADE_SLOT, createGuiItem(
-            Material.CRAFTING_TABLE,
-            "<gold><bold>Craft In Table</bold></gold>",
-            List.of(
-                "<gray>This is a custom counted crafting recipe.</gray>",
-                "<gray>Use the exact total item counts shown here.</gray>"
-            )
-        ));
+        inv.setItem(RECIPE_TRADE_SLOT, createInventoryCraftButton("Uses the exact total item counts shown here."));
         inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
@@ -2528,15 +2475,7 @@ public final class LegendaryListener implements Listener {
         }
 
         inv.setItem(16, plugin.getSalvagingDepotListener().createDepotItem());
-        inv.setItem(RECIPE_TRADE_SLOT, createGuiItem(
-            Material.CRAFTING_TABLE,
-            "<gold><bold>Craft In Table</bold></gold>",
-            List.of(
-                "<gray>Place it as a station, then insert vanilla gear.</gray>",
-                "<gray>After <white>6 seconds</white>, salvage materials are placed back into the chest.</gray>",
-                "<gray>Hoppers can insert items; processing items cannot be pulled out.</gray>"
-            )
-        ));
+        inv.setItem(RECIPE_TRADE_SLOT, createInventoryCraftButton("Place it as a station, then insert vanilla gear for recycling."));
         inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
@@ -2583,15 +2522,7 @@ public final class LegendaryListener implements Listener {
         }
 
         inv.setItem(16, plugin.getXpLecternListener().createLecternItem());
-        inv.setItem(RECIPE_TRADE_SLOT, createGuiItem(
-            Material.CRAFTING_TABLE,
-            "<gold><bold>Craft In Table</bold></gold>",
-            List.of(
-                "<gray>Place it as a station, then right-click it.</gray>",
-                "<gray>Deposit or withdraw <white>1</white>, <white>5</white>, <white>10</white>, or all levels.</gray>",
-                "<gray>Stored XP stays inside if the lectern is broken.</gray>"
-            )
-        ));
+        inv.setItem(RECIPE_TRADE_SLOT, createInventoryCraftButton("Place it as a station, then right-click it to store XP."));
         inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
@@ -2751,6 +2682,207 @@ public final class LegendaryListener implements Listener {
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         item.setItemMeta(meta);
         return item;
+    }
+
+    private ItemStack createInventoryCraftButton(String description) {
+        return createGuiItem(
+            Material.CRAFTING_TABLE,
+            "<gold><bold>Craft From Inventory</bold></gold>",
+            List.of(
+                "<gray>Click to craft server-side using your inventory.</gray>",
+                "<gray>" + description + "</gray>",
+                "<dark_gray>Java players can still use the normal recipe.</dark_gray>"
+            )
+        );
+    }
+
+    private boolean craftAncientScrollFromInventory(Player player) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Ancient Scroll recipes are not ready yet."));
+            return false;
+        }
+
+        List<InventoryRecipeUtil.Ingredient> ingredients = List.of(
+            InventoryRecipeUtil.plainMaterial(plugin, Material.TOTEM_OF_UNDYING, 1),
+            InventoryRecipeUtil.plainMaterial(plugin, Material.NETHER_STAR, 2),
+            new InventoryRecipeUtil.Ingredient("Warden Heart", 1, powers::isWardenHeart)
+        );
+        return craftInventoryRecipe(
+            player,
+            "Ancient Scroll",
+            ingredients,
+            powers.createAncientScrollItem(),
+            "ancient_scroll_reliquary_craft",
+            "Crafted an Ancient Scroll from the Reliquary."
+        );
+    }
+
+    private boolean craftCustomToolFromInventory(Player player, String toolId) {
+        CustomToolListener tools = plugin.getCustomToolListener();
+        if (tools == null) {
+            player.sendMessage(MessageUtil.error("Custom tool recipes are not ready yet."));
+            return false;
+        }
+
+        String displayName = tools.displayNameFor(toolId);
+        if (displayName == null) {
+            player.sendMessage(MessageUtil.error("Unknown custom tool recipe."));
+            return false;
+        }
+
+        Map<Material, Integer> ingredients = tools.recipeIngredients(toolId);
+        if (ingredients.isEmpty()) {
+            player.sendMessage(MessageUtil.error(displayName + " cannot be crafted from this menu yet."));
+            return false;
+        }
+
+        return craftInventoryRecipe(
+            player,
+            displayName,
+            InventoryRecipeUtil.plainMaterials(plugin, ingredients),
+            tools.createCustomToolForPlayer(toolId, player),
+            "custom_tool_reliquary_craft",
+            "Crafted " + displayName + " from the Reliquary."
+        );
+    }
+
+    private boolean craftMythicForgeItemFromInventory(Player player, String itemId) {
+        MythicForgeListener forge = plugin.getMythicForgeListener();
+        if (forge == null) {
+            player.sendMessage(MessageUtil.error("Mythic forge recipes are not ready yet."));
+            return false;
+        }
+
+        String displayName = forge.displayNameFor(itemId);
+        if (displayName == null) {
+            player.sendMessage(MessageUtil.error("Unknown mythic forge recipe."));
+            return false;
+        }
+
+        Map<Material, Integer> ingredients = forge.recipeIngredients(itemId);
+        if (ingredients.isEmpty()) {
+            player.sendMessage(MessageUtil.error(displayName + " cannot be crafted from this menu yet."));
+            return false;
+        }
+
+        return craftInventoryRecipe(
+            player,
+            displayName,
+            InventoryRecipeUtil.plainMaterials(plugin, ingredients),
+            forge.createCustomItem(itemId),
+            "mythic_forge_reliquary_craft",
+            "Crafted " + displayName + " from the Reliquary."
+        );
+    }
+
+    private boolean craftFaradaysMagnetFromInventory(Player player) {
+        return craftInventoryRecipe(
+            player,
+            "Faraday's Magnet",
+            InventoryRecipeUtil.plainMaterials(plugin, faradaysMagnetIngredients()),
+            createFaradaysMagnetItem(),
+            "faradays_magnet_reliquary_craft",
+            "Crafted Faraday's Magnet from the Reliquary."
+        );
+    }
+
+    private boolean craftTalismanFromInventory(Player player) {
+        SustenanceTalismanListener talisman = plugin.getSustenanceTalismanListener();
+        if (talisman == null) {
+            player.sendMessage(MessageUtil.error("Talisman recipes are not ready yet."));
+            return false;
+        }
+
+        return craftInventoryRecipe(
+            player,
+            "Talisman of Sustenance",
+            InventoryRecipeUtil.plainMaterials(plugin, talisman.recipeIngredients()),
+            talisman.createTalismanItem(),
+            "talisman_reliquary_craft",
+            "Crafted a Talisman of Sustenance from the Reliquary."
+        );
+    }
+
+    private boolean craftSalvagingDepotFromInventory(Player player) {
+        SalvagingDepotListener depot = plugin.getSalvagingDepotListener();
+        if (depot == null) {
+            player.sendMessage(MessageUtil.error("Salvaging Depot recipes are not ready yet."));
+            return false;
+        }
+
+        return craftInventoryRecipe(
+            player,
+            "Salvaging Depot",
+            InventoryRecipeUtil.plainMaterials(plugin, depot.recipeIngredients()),
+            depot.createDepotItem(),
+            "salvaging_depot_reliquary_craft",
+            "Crafted a Salvaging Depot from the Reliquary."
+        );
+    }
+
+    private boolean craftXpLecternFromInventory(Player player) {
+        XpLecternListener lectern = plugin.getXpLecternListener();
+        if (lectern == null) {
+            player.sendMessage(MessageUtil.error("XP Lectern recipes are not ready yet."));
+            return false;
+        }
+
+        return craftInventoryRecipe(
+            player,
+            "XP Lectern",
+            InventoryRecipeUtil.plainMaterials(plugin, lectern.recipeIngredients()),
+            lectern.createLecternItem(),
+            "xp_lectern_reliquary_craft",
+            "Crafted an XP Lectern from the Reliquary."
+        );
+    }
+
+    private boolean craftInventoryRecipe(
+        Player player,
+        String displayName,
+        List<InventoryRecipeUtil.Ingredient> ingredients,
+        ItemStack reward,
+        String auditSource,
+        String auditDetails
+    ) {
+        if (reward == null || reward.getType().isAir()) {
+            player.sendMessage(MessageUtil.error("That recipe is not ready yet."));
+            return false;
+        }
+        for (InventoryRecipeUtil.Ingredient ingredient : ingredients) {
+            int available = InventoryRecipeUtil.countIngredient(player, ingredient);
+            if (available < ingredient.amount()) {
+                player.sendMessage(MessageUtil.error(
+                    "Missing <white>" + (ingredient.amount() - available) + "x " + ingredient.name()
+                        + "</white> <gray>(need <white>" + ingredient.amount()
+                        + "</white>, have <white>" + available + "</white>).</gray>"
+                ));
+                return false;
+            }
+        }
+        if (!InventoryRecipeUtil.removeIngredients(player, ingredients)) {
+            player.sendMessage(MessageUtil.error("Those ingredients changed before the craft finished. Try again."));
+            return false;
+        }
+
+        if (plugin.getItemAuditManager() != null) {
+            plugin.getItemAuditManager().recordKnownAcquisition(player, reward, auditSource, auditDetails);
+        }
+        InventoryRecipeUtil.giveOrDrop(player, reward);
+        player.playSound(player.getLocation(), Sound.BLOCK_SMITHING_TABLE_USE, 0.7f, 1.25f);
+        player.sendMessage(MessageUtil.success("Crafted <white>" + displayName + "</white>."));
+        return true;
+    }
+
+    private Map<Material, Integer> faradaysMagnetIngredients() {
+        Map<Material, Integer> ingredients = new LinkedHashMap<>();
+        ingredients.put(Material.IRON_BLOCK, 4);
+        ingredients.put(Material.REDSTONE_BLOCK, 1);
+        ingredients.put(Material.COPPER_BLOCK, 2);
+        ingredients.put(Material.RECOVERY_COMPASS, 1);
+        ingredients.put(Material.NETHERITE_INGOT, 1);
+        return ingredients;
     }
 
     private ItemStack createBackpackRecipeDisplayItem(boolean upgraded) {
@@ -8127,35 +8259,6 @@ public final class LegendaryListener implements Listener {
             if (isLegendaryIngredient(item)) return true;
         }
         return false;
-    }
-
-    private boolean isReadOnlyLegendaryMenu(Inventory inventory) {
-        return inventory.getHolder() instanceof ReliquaryMenuHolder
-            || inventory.getHolder() instanceof RecipeMenuHolder
-            || inventory.getHolder() instanceof AncientScrollRecipeHolder
-            || inventory.getHolder() instanceof AscendantCoreRecipeHolder
-            || inventory.getHolder() instanceof BackpackRecipeHolder
-            || inventory.getHolder() instanceof TalismanRecipeHolder
-            || inventory.getHolder() instanceof SalvagingDepotRecipeHolder
-            || inventory.getHolder() instanceof XpLecternRecipeHolder
-            || inventory.getHolder() instanceof MythicForgeRecipeHolder
-            || inventory.getHolder() instanceof MythicFusionMenuHolder
-            || inventory.getHolder() instanceof CustomToolRecipeHolder
-            || inventory.getHolder() instanceof FaradaysMagnetRecipeHolder;
-    }
-
-    private boolean isUnsafeReadOnlyMenuAction(InventoryClickEvent event) {
-        if (event.isShiftClick()) {
-            return true;
-        }
-        return switch (event.getClick()) {
-            case NUMBER_KEY, SWAP_OFFHAND, DOUBLE_CLICK, DROP, CONTROL_DROP, CREATIVE, UNKNOWN -> true;
-            default -> switch (event.getAction()) {
-                case MOVE_TO_OTHER_INVENTORY, HOTBAR_SWAP, HOTBAR_MOVE_AND_READD, COLLECT_TO_CURSOR,
-                    CLONE_STACK, DROP_ALL_CURSOR, DROP_ALL_SLOT, DROP_ONE_CURSOR, DROP_ONE_SLOT -> true;
-                default -> false;
-            };
-        };
     }
 
     private boolean isLegendaryIngredient(ItemStack item) {

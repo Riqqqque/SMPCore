@@ -14,6 +14,7 @@ Custom enchants use normal gameplay surfaces where possible: enchant table rolls
 - Grindstones remove custom enchants safely.
 - Double Jump is loot-only from Ancient City chests by default.
 - Boss-crafted books are made with Covenant boss materials and are shown in `/enchants`.
+- Boss-crafted book recipe pages can craft from the player's inventory directly. This keeps the recipe reliable for Bedrock/Geyser players while still allowing Java players to use the shown crafting table layout.
 
 ## Enchant Table Enchants
 

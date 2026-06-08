@@ -154,6 +154,28 @@ public final class MythicForgeListener implements Listener {
         };
     }
 
+    public Map<Material, Integer> recipeIngredients(String itemId) {
+        return switch (itemId) {
+            case MYTHIC_FORGE_ITEM_ID -> Map.of(
+                Material.END_CRYSTAL, 2,
+                Material.ECHO_SHARD, 1,
+                Material.CRYING_OBSIDIAN, 2,
+                Material.NETHER_STAR, 1,
+                Material.LODESTONE, 2,
+                Material.RESPAWN_ANCHOR, 1
+            );
+            case ASCENDANT_CORE_ITEM_ID -> Map.of(
+                Material.ECHO_SHARD, 2,
+                Material.AMETHYST_SHARD, 1,
+                Material.END_CRYSTAL, 2,
+                Material.NETHER_STAR, 1,
+                Material.CRYING_OBSIDIAN, 2,
+                Material.DRAGON_BREATH, 1
+            );
+            default -> Map.of();
+        };
+    }
+
     public ItemStack[] recipeMatrix(String itemId) {
         return switch (itemId) {
             case MYTHIC_FORGE_ITEM_ID -> mythicForgeRecipeMatrix();
