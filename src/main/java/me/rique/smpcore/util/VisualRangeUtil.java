@@ -1,6 +1,7 @@
 package me.rique.smpcore.util;
 
 import org.bukkit.entity.Display;
+import org.bukkit.entity.TextDisplay;
 
 public final class VisualRangeUtil {
 
@@ -12,6 +13,18 @@ public final class VisualRangeUtil {
     public static void applyHologramRange(Display display) {
         if (display != null) {
             display.setViewRange(HOLOGRAM_VIEW_RANGE);
+            if (display instanceof TextDisplay textDisplay) {
+                textDisplay.setSeeThrough(false);
+            }
+        }
+    }
+
+    public static void applyHologramRange(Display display, double requestedRange) {
+        if (display != null) {
+            display.setViewRange(clampHologramViewRange(requestedRange));
+            if (display instanceof TextDisplay textDisplay) {
+                textDisplay.setSeeThrough(false);
+            }
         }
     }
 

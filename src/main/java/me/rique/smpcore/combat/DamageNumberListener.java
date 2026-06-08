@@ -106,7 +106,7 @@ public final class DamageNumberListener implements Listener {
             entity.setBackgroundColor(Color.fromARGB(0, 0, 0, 0));
             entity.setTextOpacity((byte) 255);
             entity.setLineWidth(90);
-            entity.setViewRange(VisualRangeUtil.clampHologramViewRange(style.viewRange()));
+            VisualRangeUtil.applyHologramRange(entity, style.viewRange());
             entity.setBrightness(new Brightness(15, 15));
             entity.setPersistent(false);
             entity.setGravity(false);

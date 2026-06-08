@@ -356,7 +356,7 @@ public final class MythicForgeListener implements Listener {
             textDisplay.setPersistent(false);
             textDisplay.setGravity(false);
             textDisplay.setBillboard(Display.Billboard.CENTER);
-            textDisplay.setSeeThrough(true);
+            textDisplay.setSeeThrough(false);
             textDisplay.setShadowed(true);
             textDisplay.setDefaultBackground(false);
             textDisplay.setBackgroundColor(Color.fromARGB(45, 34, 0, 54));
