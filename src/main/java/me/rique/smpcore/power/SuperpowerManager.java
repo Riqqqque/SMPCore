@@ -228,6 +228,7 @@ public final class SuperpowerManager implements Listener {
     private static final long FLORIST_CROUCH_GROWTH_COOLDOWN_MS = 150L;
     private static final long FLORIST_STICK_RIGHT_CLICK_COOLDOWN_MS = 1250L;
     private static final long FLORIST_STICK_LEFT_CLICK_COOLDOWN_MS = 650L;
+    private static final long BEDROCK_POWER_ITEM_ACTIVATION_DEBOUNCE_MS = 650L;
 
     private static final Set<Material> FLORIST_DOUBLE_CROP_BLOCKS = EnumSet.of(
         Material.WHEAT,
@@ -346,6 +347,7 @@ public final class SuperpowerManager implements Listener {
     private final Map<UUID, Long> floristLeftClickCooldowns = new ConcurrentHashMap<>();
     private final Map<UUID, Long> floristRightClickCooldowns = new ConcurrentHashMap<>();
     private final Map<UUID, Long> supermanBoostCooldowns = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> bedrockPowerItemActivationDebounces = new ConcurrentHashMap<>();
     private final Map<UUID, TimeStopState> activeTimeStops = new ConcurrentHashMap<>();
     private final Map<UUID, FrozenMobState> frozenMobs = new ConcurrentHashMap<>();
     private final Map<UUID, FrozenProjectileState> frozenProjectiles = new ConcurrentHashMap<>();
@@ -445,6 +447,7 @@ public final class SuperpowerManager implements Listener {
         floristLeftClickCooldowns.clear();
         floristRightClickCooldowns.clear();
         supermanBoostCooldowns.clear();
+        bedrockPowerItemActivationDebounces.clear();
     }
 
     public ItemStack createAncientScrollItem() {
@@ -985,6 +988,7 @@ public final class SuperpowerManager implements Listener {
         floristLeftClickCooldowns.remove(playerId);
         floristRightClickCooldowns.remove(playerId);
         supermanBoostCooldowns.remove(playerId);
+        bedrockPowerItemActivationDebounces.remove(playerId);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -1731,7 +1735,8 @@ public final class SuperpowerManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPowerInteract(PlayerInteractEvent event) {
-        if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND) {
+        EquipmentSlot hand = event.getHand();
+        if (hand != EquipmentSlot.HAND && hand != EquipmentSlot.OFF_HAND) {
             return;
         }
 
@@ -1743,21 +1748,40 @@ public final class SuperpowerManager implements Listener {
 
         Player player = event.getPlayer();
         ItemStack item = event.getItem();
-        if (isAncientScroll(item) && (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK)) {
+        if (item == null || item.getType().isAir()) {
+            item = itemInHand(player, hand);
+        }
+        if (isAncientScroll(item) && isPowerItemActivationClick(player, action)) {
+            if (!markPowerItemActivation(player)) {
+                return;
+            }
             event.setCancelled(true);
-            useAncientScroll(player);
+            event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
+            event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
+            useAncientScroll(player, hand);
             return;
         }
-        if (isTheWorldClock(item) && (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK)) {
+        if (isTheWorldClock(item) && isPowerItemActivationClick(player, action)) {
+            if (!markPowerItemActivation(player)) {
+                return;
+            }
             event.setCancelled(true);
+            event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
+            event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
             useTheWorldClock(player);
             return;
         }
-        if (isDruidGrimoire(item) && (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK)) {
+        if (isDruidGrimoire(item) && isPowerItemActivationClick(player, action)) {
+            if (!markPowerItemActivation(player)) {
+                return;
+            }
             event.setCancelled(true);
             event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
             event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
             openDruidGrimoire(player);
+            return;
+        }
+        if (hand != EquipmentSlot.HAND) {
             return;
         }
         if (!isMotherNatureStick(item) || !hasPower(player, SuperpowerType.FLORIST)) {
@@ -1770,6 +1794,34 @@ public final class SuperpowerManager implements Listener {
             return;
         }
         useMotherNatureStickHeal(player);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onBedrockPowerItemSwing(PlayerAnimationEvent event) {
+        if (event.getAnimationType() != PlayerAnimationType.ARM_SWING) {
+            return;
+        }
+        Player player = event.getPlayer();
+        if (!BedrockCompat.isBedrockPlayer(player)) {
+            return;
+        }
+
+        ItemStack item = player.getInventory().getItemInMainHand();
+        if (isAncientScroll(item)) {
+            if (markPowerItemActivation(player)) {
+                useAncientScroll(player, EquipmentSlot.HAND);
+            }
+            return;
+        }
+        if (isTheWorldClock(item)) {
+            if (markPowerItemActivation(player)) {
+                useTheWorldClock(player);
+            }
+            return;
+        }
+        if (isDruidGrimoire(item) && markPowerItemActivation(player)) {
+            openDruidGrimoire(player);
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -2703,7 +2755,29 @@ public final class SuperpowerManager implements Listener {
         return Math.max(1, (int) Math.ceil((future - now) / 1000.0));
     }
 
-    private void useAncientScroll(Player player) {
+    private boolean isPowerItemActivationClick(Player player, Action action) {
+        if (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK) {
+            return true;
+        }
+        return BedrockCompat.isBedrockPlayer(player)
+            && (action == Action.LEFT_CLICK_AIR || action == Action.LEFT_CLICK_BLOCK);
+    }
+
+    private boolean markPowerItemActivation(Player player) {
+        if (!BedrockCompat.isBedrockPlayer(player)) {
+            return true;
+        }
+        long now = System.currentTimeMillis();
+        UUID playerId = player.getUniqueId();
+        long blockedUntil = bedrockPowerItemActivationDebounces.getOrDefault(playerId, 0L);
+        if (blockedUntil > now) {
+            return false;
+        }
+        bedrockPowerItemActivationDebounces.put(playerId, now + BEDROCK_POWER_ITEM_ACTIVATION_DEBOUNCE_MS);
+        return true;
+    }
+
+    private void useAncientScroll(Player player, EquipmentSlot hand) {
         SuperpowerType currentPower = powerOf(player);
         SuperpowerType rerolled = currentPower == null
             ? randomPower(false)
@@ -2714,7 +2788,10 @@ public final class SuperpowerManager implements Listener {
             return;
         }
 
-        consumeHeldItem(player);
+        if (!consumeHeldItem(player, hand, this::isAncientScroll)) {
+            player.sendMessage(MessageUtil.error("Hold the Ancient Scroll you want to use."));
+            return;
+        }
         assignPower(player, rerolled, true, true);
         player.sendMessage(MessageUtil.success("The Ancient Scroll rewrites your fate."));
     }
@@ -4296,17 +4373,33 @@ public final class SuperpowerManager implements Listener {
         return new Vector(x, y, z).normalize();
     }
 
-    private void consumeHeldItem(Player player) {
-        ItemStack mainHand = player.getInventory().getItemInMainHand();
-        if (mainHand == null || mainHand.getType() == Material.AIR) {
-            return;
+    private boolean consumeHeldItem(Player player, EquipmentSlot hand, Predicate<ItemStack> matcher) {
+        ItemStack held = itemInHand(player, hand);
+        if (held == null || held.getType().isAir() || (matcher != null && !matcher.test(held))) {
+            return false;
         }
-        if (mainHand.getAmount() <= 1) {
-            player.getInventory().setItemInMainHand(null);
-            return;
+        if (held.getAmount() <= 1) {
+            setItemInHand(player, hand, null);
+            return true;
         }
-        mainHand.setAmount(mainHand.getAmount() - 1);
-        player.getInventory().setItemInMainHand(mainHand);
+        held.setAmount(held.getAmount() - 1);
+        setItemInHand(player, hand, held);
+        return true;
+    }
+
+    private ItemStack itemInHand(Player player, EquipmentSlot hand) {
+        if (hand == EquipmentSlot.OFF_HAND) {
+            return player.getInventory().getItemInOffHand();
+        }
+        return player.getInventory().getItemInMainHand();
+    }
+
+    private void setItemInHand(Player player, EquipmentSlot hand, ItemStack item) {
+        if (hand == EquipmentSlot.OFF_HAND) {
+            player.getInventory().setItemInOffHand(item);
+        } else {
+            player.getInventory().setItemInMainHand(item);
+        }
     }
 
     private boolean hasMotherNatureStick(Player player) {
@@ -4964,7 +5057,7 @@ public final class SuperpowerManager implements Listener {
             Material.PAPER,
             CustomLoreUtil.Rarity.EPIC.label(),
             "SCROLL",
-            List.of("<gray>Right-click to reroll your current superpower.</gray>"),
+            List.of("<gray>Use or tap to reroll your current superpower.</gray>"),
             List.of(CustomLoreUtil.section(
                 "Use",
                 "Fate Rewrite",

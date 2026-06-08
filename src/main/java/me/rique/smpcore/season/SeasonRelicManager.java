@@ -38,7 +38,10 @@ import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityShootBowEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.player.PlayerAnimationEvent;
+import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.EquipmentSlotGroup;
 import org.bukkit.inventory.Inventory;
@@ -91,6 +94,7 @@ public final class SeasonRelicManager implements Listener {
     private static final long PASSIVE_TICKS = 40L;
     private static final int PASSIVE_NIGHT_VISION_TICKS = 600;
     private static final double TRUE_SIGHT_RADIUS = 48.0;
+    private static final long BEDROCK_RELIC_ACTIVATION_DEBOUNCE_MS = 650L;
 
     private final SMPCore plugin;
     private final NamespacedKey keyRelicId;
@@ -103,6 +107,7 @@ public final class SeasonRelicManager implements Listener {
     private final Map<RelicCategory, List<RelicDefinition>> relicsByCategory;
     private final Map<String, List<RelicDefinition>> armorSets;
     private final Map<UUID, ArmoryBackTarget> menuBackTargets = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<UUID, Long> bedrockRelicActivationDebounces = new java.util.concurrent.ConcurrentHashMap<>();
     private final Set<UUID> trueSightGlowingTargets = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private BukkitTask passiveTask;
 
@@ -130,6 +135,7 @@ public final class SeasonRelicManager implements Listener {
             passiveTask.cancel();
             passiveTask = null;
         }
+        bedrockRelicActivationDebounces.clear();
         clearTrueSightGlow(Set.of());
     }
 
@@ -601,8 +607,35 @@ public final class SeasonRelicManager implements Listener {
         if (definition.activeAbility() == ActiveAbility.NONE) {
             return;
         }
+        if (BedrockCompat.isBedrockPlayer(player) && !markBedrockRelicActivation(player)) {
+            return;
+        }
         event.setCancelled(true);
         activateUtility(player, definition, player.isSneaking());
+    }
+
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onBedrockRelicSwing(PlayerAnimationEvent event) {
+        if (event.getAnimationType() != PlayerAnimationType.ARM_SWING) {
+            return;
+        }
+        Player player = event.getPlayer();
+        if (!BedrockCompat.isBedrockPlayer(player)) {
+            return;
+        }
+        RelicDefinition definition = relics.get(relicId(player.getInventory().getItemInMainHand()));
+        if (definition == null || definition.kind() == RelicKind.MATERIAL || definition.activeAbility() == ActiveAbility.NONE) {
+            return;
+        }
+        if (!markBedrockRelicActivation(player)) {
+            return;
+        }
+        activateUtility(player, definition, player.isSneaking());
+    }
+
+    @EventHandler
+    public void onRelicPlayerQuit(PlayerQuitEvent event) {
+        bedrockRelicActivationDebounces.remove(event.getPlayer().getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -805,6 +838,17 @@ public final class SeasonRelicManager implements Listener {
             }
             return true;
         });
+    }
+
+    private boolean markBedrockRelicActivation(Player player) {
+        long now = System.currentTimeMillis();
+        UUID playerId = player.getUniqueId();
+        long blockedUntil = bedrockRelicActivationDebounces.getOrDefault(playerId, 0L);
+        if (blockedUntil > now) {
+            return false;
+        }
+        bedrockRelicActivationDebounces.put(playerId, now + BEDROCK_RELIC_ACTIVATION_DEBOUNCE_MS);
+        return true;
     }
 
     private void activateUtility(Player player, RelicDefinition definition, boolean sneaking) {
