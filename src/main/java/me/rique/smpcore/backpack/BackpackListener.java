@@ -411,7 +411,7 @@ public final class BackpackListener implements Listener {
     }
 
     public List<ItemStack> auditContents(Player owner, ItemStack backpack) {
-        if (owner == null || !isBackpack(backpack)) {
+        if (!isBackpack(backpack)) {
             return List.of();
         }
 
@@ -425,7 +425,7 @@ public final class BackpackListener implements Listener {
             return List.of();
         }
 
-        OpenBackpackSession openSession = openBackpacks.get(owner.getUniqueId());
+        OpenBackpackSession openSession = owner == null ? null : openBackpacks.get(owner.getUniqueId());
         if (openSession != null && backpackId.equals(openSession.backpackId())) {
             return Arrays.asList(cloneContents(openSession.inventory().getContents()));
         }

@@ -43,6 +43,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -113,10 +114,26 @@ public final class LegendaryAltarManager implements Listener {
             return;
         }
 
-        ClaimedLegendaryInstance next = new ClaimedLegendaryInstance(normalized, ownerId);
+        registerLegendaryInstance(normalized, instanceId, ownerId, null, craftedCurrentAltar);
+    }
+
+    private void registerLegendaryInstance(
+        String legendaryId,
+        String instanceId,
+        java.util.UUID ownerId,
+        String sourceKey,
+        boolean craftedCurrentAltar
+    ) {
+        String normalized = normalizeLegendaryId(legendaryId);
+        String normalizedSource = normalizeSourceKey(sourceKey);
+        if (normalized == null || instanceId == null || instanceId.isBlank()) {
+            return;
+        }
+
+        ClaimedLegendaryInstance next = new ClaimedLegendaryInstance(normalized, ownerId, normalizedSource);
         ClaimedLegendaryInstance previous = claimedLegendaryInstances.put(instanceId, next);
         if (!next.equals(previous)) {
-            plugin.getDatabase().saveClaimedLegendaryInstance(instanceId, normalized, ownerId).exceptionally(throwable -> {
+            plugin.getDatabase().saveClaimedLegendaryInstance(instanceId, normalized, ownerId, normalizedSource).exceptionally(throwable -> {
                 plugin.getLogger().severe("Failed to persist active legendary instance " + instanceId + ": " + throwable.getMessage());
                 return null;
             });
@@ -150,7 +167,9 @@ public final class LegendaryAltarManager implements Listener {
 
         for (Map.Entry<String, ClaimedLegendaryInstance> entry : List.copyOf(claimedLegendaryInstances.entrySet())) {
             ClaimedLegendaryInstance claimedInstance = entry.getValue();
-            if (!ownerId.equals(claimedInstance.ownerId()) || normalizedActiveInstances.containsKey(entry.getKey())) {
+            if (claimedInstance.sourceKey() != null
+                || !ownerId.equals(claimedInstance.ownerId())
+                || normalizedActiveInstances.containsKey(entry.getKey())) {
                 continue;
             }
             if (claimedLegendaryInstances.remove(entry.getKey(), claimedInstance)) {
@@ -163,6 +182,45 @@ public final class LegendaryAltarManager implements Listener {
 
         for (Map.Entry<String, String> entry : normalizedActiveInstances.entrySet()) {
             registerLegendaryInstance(entry.getValue(), entry.getKey(), ownerId, false);
+        }
+    }
+
+    public void syncStoredLegendaryOwnership(String sourceKey, Map<String, String> activeLegendaryInstancesById) {
+        String normalizedSource = normalizeSourceKey(sourceKey);
+        if (normalizedSource == null) {
+            return;
+        }
+
+        Map<String, String> normalizedActiveInstances = new LinkedHashMap<>();
+        if (activeLegendaryInstancesById != null) {
+            for (Map.Entry<String, String> entry : activeLegendaryInstancesById.entrySet()) {
+                String instanceId = entry.getKey();
+                if (instanceId == null || instanceId.isBlank()) {
+                    continue;
+                }
+                String normalizedLegendary = normalizeLegendaryId(entry.getValue());
+                if (normalizedLegendary != null) {
+                    normalizedActiveInstances.put(instanceId.trim(), normalizedLegendary);
+                }
+            }
+        }
+
+        for (Map.Entry<String, ClaimedLegendaryInstance> entry : List.copyOf(claimedLegendaryInstances.entrySet())) {
+            ClaimedLegendaryInstance claimedInstance = entry.getValue();
+            if (!Objects.equals(normalizedSource, claimedInstance.sourceKey())
+                || normalizedActiveInstances.containsKey(entry.getKey())) {
+                continue;
+            }
+            if (claimedLegendaryInstances.remove(entry.getKey(), claimedInstance)) {
+                plugin.getDatabase().deleteClaimedLegendaryInstance(entry.getKey()).exceptionally(throwable -> {
+                    plugin.getLogger().severe("Failed to clear stored legendary instance " + entry.getKey() + ": " + throwable.getMessage());
+                    return null;
+                });
+            }
+        }
+
+        for (Map.Entry<String, String> entry : normalizedActiveInstances.entrySet()) {
+            registerLegendaryInstance(entry.getValue(), entry.getKey(), null, normalizedSource, false);
         }
     }
 
@@ -535,7 +593,10 @@ public final class LegendaryAltarManager implements Listener {
                     for (DatabaseManager.LegendaryClaimedInstanceRecord entry : claimedInstances.values()) {
                         String normalized = normalizeLegendaryId(entry.legendaryId());
                         if (normalized != null) {
-                            claimedLegendaryInstances.put(entry.instanceId(), new ClaimedLegendaryInstance(normalized, entry.ownerUuid()));
+                            claimedLegendaryInstances.put(
+                                entry.instanceId(),
+                                new ClaimedLegendaryInstance(normalized, entry.ownerUuid(), normalizeSourceKey(entry.sourceKey()))
+                            );
                         }
                     }
 
@@ -547,6 +608,9 @@ public final class LegendaryAltarManager implements Listener {
                         }
                     }
                     claimedLegendaryIdsReady = true;
+                    if (plugin.getTeamManager() != null) {
+                        plugin.getTeamManager().resyncAllTeamVaultLegendaryClaims();
+                    }
                 } catch (CompletionException ex) {
                     plugin.getLogger().severe("Failed to load active legendary data: " + ex.getCause().getMessage());
                 }
@@ -1003,6 +1067,14 @@ public final class LegendaryAltarManager implements Listener {
         return normalized.isBlank() ? null : normalized;
     }
 
+    private String normalizeSourceKey(String sourceKey) {
+        if (sourceKey == null || sourceKey.isBlank()) {
+            return null;
+        }
+        String normalized = sourceKey.trim().toLowerCase(Locale.ROOT);
+        return normalized.isBlank() ? null : normalized;
+    }
+
     private Location findSpawnLocation(World world) {
         Location spawn = world.getSpawnLocation();
         ThreadLocalRandom random = ThreadLocalRandom.current();
@@ -1155,6 +1227,6 @@ public final class LegendaryAltarManager implements Listener {
         }
     }
 
-    private record ClaimedLegendaryInstance(String legendaryId, java.util.UUID ownerId) {
+    private record ClaimedLegendaryInstance(String legendaryId, java.util.UUID ownerId, String sourceKey) {
     }
 }

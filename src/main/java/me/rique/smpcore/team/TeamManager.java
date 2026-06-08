@@ -161,6 +161,9 @@ public final class TeamManager implements Listener {
         }
 
         teamsLoaded = true;
+        if (plugin.getLegendaryAltarManager() != null) {
+            resyncAllTeamVaultLegendaryClaims();
+        }
     }
 
     @EventHandler
@@ -226,6 +229,8 @@ public final class TeamManager implements Listener {
         }
 
         auditTeamVault(event.getPlayer(), session, "quit");
+        syncTeamVaultLegendaryClaims(session);
+        syncPlayerLegendaryClaims(event.getPlayer());
         saveTeamVault(session).exceptionally(ex -> {
             plugin.getLogger().severe("Failed to save team vault for " + session.displayName() + " on quit: " + ex.getMessage());
             return null;
@@ -242,6 +247,10 @@ public final class TeamManager implements Listener {
         if (event.getPlayer() instanceof Player player) {
             auditTeamVault(player, session, "close");
         }
+        syncTeamVaultLegendaryClaims(session);
+        if (event.getPlayer() instanceof Player player) {
+            syncPlayerLegendaryClaims(player);
+        }
         saveTeamVault(session).exceptionally(ex -> {
             plugin.getLogger().severe("Failed to save team vault for " + session.displayName() + ": " + ex.getMessage());
             return null;
@@ -250,12 +259,14 @@ public final class TeamManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onTeamVaultClick(InventoryClickEvent event) {
-        if (!(event.getView().getTopInventory().getHolder() instanceof TeamVaultHolder)) {
+        if (!(event.getView().getTopInventory().getHolder() instanceof TeamVaultHolder holder)) {
             return;
         }
         if (event.getAction() == InventoryAction.CLONE_STACK || event.getClick() == ClickType.CREATIVE) {
             event.setCancelled(true);
+            return;
         }
+        scheduleTeamVaultLegendaryClaimSync(holder.teamKey());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -301,20 +312,23 @@ public final class TeamManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onTeamVaultDrag(InventoryDragEvent event) {
-        if (!(event.getView().getTopInventory().getHolder() instanceof TeamVaultHolder)) {
+        if (!(event.getView().getTopInventory().getHolder() instanceof TeamVaultHolder holder)) {
             return;
         }
-        if (!(event.getWhoClicked() instanceof Player player) || player.getGameMode() != GameMode.CREATIVE) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
 
         int topSize = event.getView().getTopInventory().getSize();
-        for (int rawSlot : event.getRawSlots()) {
-            if (rawSlot < topSize) {
-                event.setCancelled(true);
-                return;
+        if (player.getGameMode() == GameMode.CREATIVE) {
+            for (int rawSlot : event.getRawSlots()) {
+                if (rawSlot < topSize) {
+                    event.setCancelled(true);
+                    return;
+                }
             }
         }
+        scheduleTeamVaultLegendaryClaimSync(holder.teamKey());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -356,6 +370,7 @@ public final class TeamManager implements Listener {
     public void shutdown() {
         List<CompletableFuture<Void>> saves = new ArrayList<>();
         for (TeamVaultSession session : teamVaultsByKey.values()) {
+            syncTeamVaultLegendaryClaims(session);
             saves.add(saveTeamVault(session).exceptionally(ex -> {
                 plugin.getLogger().severe("Failed to save team vault for " + session.displayName() + ": " + ex.getMessage());
                 return null;
@@ -549,6 +564,11 @@ public final class TeamManager implements Listener {
                     ? new InviteData(newKey, invite.inviter(), invite.expiresAt())
                     : invite);
                 refreshTeamVisuals(current);
+                loadTeamVault(current).thenAccept(this::syncTeamVaultLegendaryClaims)
+                    .exceptionally(ex -> {
+                        plugin.getLogger().severe("Failed to sync legendary claims after renaming team " + current.displayName + ": " + ex.getMessage());
+                        return null;
+                    });
                 return (String) null;
             }));
     }
@@ -819,6 +839,7 @@ public final class TeamManager implements Listener {
                 }
 
                 auditTeamVault(player, session, "open");
+                syncTeamVaultLegendaryClaims(session);
                 player.openInventory(session.inventory());
             })
         ).exceptionally(ex -> {
@@ -883,6 +904,19 @@ public final class TeamManager implements Listener {
         }
         names.sort(String.CASE_INSENSITIVE_ORDER);
         return names;
+    }
+
+    public void resyncAllTeamVaultLegendaryClaims() {
+        if (!teamsLoaded) {
+            return;
+        }
+        for (TeamData team : List.copyOf(teamsByKey.values())) {
+            loadTeamVault(team).thenAccept(this::syncTeamVaultLegendaryClaims)
+                .exceptionally(ex -> {
+                    plugin.getLogger().severe("Failed to sync legendary claims for team vault " + team.displayName + ": " + ex.getMessage());
+                    return null;
+                });
+        }
     }
 
     public boolean inTeam(UUID playerId) {
@@ -978,6 +1012,7 @@ public final class TeamManager implements Listener {
                             createTeamVaultInventory(current.key, current.displayName, raw)
                         )
                     );
+                    syncTeamVaultLegendaryClaims(loaded);
                     future.complete(loaded);
                 } catch (Throwable t) {
                     future.completeExceptionally(t);
@@ -1029,19 +1064,67 @@ public final class TeamManager implements Listener {
         );
     }
 
+    private void scheduleTeamVaultLegendaryClaimSync(String teamKey) {
+        if (teamKey == null || teamKey.isBlank()) {
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            TeamVaultSession session = teamVaultsByKey.get(teamKey);
+            if (session != null) {
+                syncTeamVaultLegendaryClaims(session);
+                for (var viewer : List.copyOf(session.inventory().getViewers())) {
+                    if (viewer instanceof Player player) {
+                        syncPlayerLegendaryClaims(player);
+                    }
+                }
+            }
+        });
+    }
+
+    private void syncTeamVaultLegendaryClaims(TeamVaultSession session) {
+        if (session == null || plugin.getLegendaryListener() == null) {
+            return;
+        }
+        plugin.getLegendaryListener().syncStoredLegendaryOwnership(
+            teamVaultLegendarySourceKey(session.teamKey()),
+            session.inventory()
+        );
+    }
+
+    private void clearTeamVaultLegendaryClaims(String teamKey) {
+        if (teamKey == null || teamKey.isBlank() || plugin.getLegendaryListener() == null) {
+            return;
+        }
+        plugin.getLegendaryListener().clearStoredLegendaryOwnership(teamVaultLegendarySourceKey(teamKey));
+    }
+
+    private String teamVaultLegendarySourceKey(String teamKey) {
+        return "team_vault:" + teamKey;
+    }
+
+    private void syncPlayerLegendaryClaims(Player player) {
+        if (player == null || plugin.getLegendaryListener() == null) {
+            return;
+        }
+        plugin.getLegendaryListener().resyncLegendaryOwnership(player);
+    }
+
     private CompletableFuture<Void> saveAndDiscardVaultForRename(TeamData team) {
         TeamVaultSession session = teamVaultsByKey.get(team.key);
         if (session == null) {
+            clearTeamVaultLegendaryClaims(team.key);
             vaultLoadingByTeamKey.remove(team.key);
             return CompletableFuture.completedFuture(null);
         }
 
+        syncTeamVaultLegendaryClaims(session);
         for (var viewer : List.copyOf(session.inventory().getViewers())) {
             viewer.closeInventory();
         }
 
         return saveTeamVault(session)
             .thenCompose(ignored -> runOnMainThread(() -> {
+                clearTeamVaultLegendaryClaims(team.key);
                 teamVaultsByKey.remove(team.key, session);
                 vaultLoadingByTeamKey.remove(team.key);
                 return null;
@@ -1119,6 +1202,7 @@ public final class TeamManager implements Listener {
 
     private void discardTeamVault(String teamKey) {
         vaultLoadingByTeamKey.remove(teamKey);
+        clearTeamVaultLegendaryClaims(teamKey);
         TeamVaultSession session = teamVaultsByKey.remove(teamKey);
         if (session == null) return;
 
