@@ -1,6 +1,7 @@
 package me.rique.smpcore.spawner;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
@@ -282,7 +283,7 @@ public final class SpawnerManager {
             entity.text(buildHologramText(world, data));
             entity.setAlignment(TextDisplay.TextAlignment.CENTER);
             entity.setBillboard(Display.Billboard.CENTER);
-            entity.setViewRange(plugin.getConfigManager().spawnerHologramViewRange);
+            entity.setViewRange(VisualRangeUtil.clampHologramViewRange(plugin.getConfigManager().spawnerHologramViewRange));
             entity.setPersistent(false);
             entity.setSeeThrough(false);
             entity.setBackgroundColor(Color.fromARGB(160, 0, 0, 0));

@@ -45,6 +45,7 @@ public final class VeinMinerListener implements Listener {
     private final SMPCore plugin;
     private final File dataFile;
     private final Map<UUID, Boolean> playerEnabled = new ConcurrentHashMap<>();
+    private final Map<UUID, Set<Material>> playerCustomBlocks = new ConcurrentHashMap<>();
     private final Set<BlockKey> internalBreaks = ConcurrentHashMap.newKeySet();
     private final Map<Material, String> oreFamilyByMaterial = new EnumMap<>(Material.class);
     private final Map<Material, String> treeFamilyByMaterial = new EnumMap<>(Material.class);
@@ -123,6 +124,48 @@ public final class VeinMinerListener implements Listener {
         savePlayerSettings();
     }
 
+    public boolean addCustomBlock(Player player, Material material) {
+        if (!isValidCustomBlock(material)) {
+            return false;
+        }
+        Set<Material> blocks = playerCustomBlocks.computeIfAbsent(player.getUniqueId(), ignored -> ConcurrentHashMap.newKeySet());
+        boolean changed = blocks.add(material);
+        if (changed) {
+            savePlayerSettings();
+        }
+        return changed;
+    }
+
+    public boolean removeCustomBlock(Player player, Material material) {
+        if (material == null) {
+            return false;
+        }
+        Set<Material> blocks = playerCustomBlocks.get(player.getUniqueId());
+        if (blocks == null) {
+            return false;
+        }
+        boolean changed = blocks.remove(material);
+        if (blocks.isEmpty()) {
+            playerCustomBlocks.remove(player.getUniqueId());
+        }
+        if (changed) {
+            savePlayerSettings();
+        }
+        return changed;
+    }
+
+    public List<Material> customBlocks(Player player) {
+        Set<Material> blocks = playerCustomBlocks.get(player.getUniqueId());
+        if (blocks == null || blocks.isEmpty()) {
+            return List.of();
+        }
+        return blocks.stream().sorted().toList();
+    }
+
+    public boolean isValidCustomBlock(Material material) {
+        return material != null && material.isBlock() && !material.isAir();
+    }
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onBlockBreak(BlockBreakEvent event) {
         BlockKey key = blockKey(event.getBlock().getLocation());
@@ -138,7 +181,7 @@ public final class VeinMinerListener implements Listener {
             return;
         }
 
-        VeinTarget target = classifyTarget(event.getBlock().getType());
+        VeinTarget target = classifyTarget(player, event.getBlock().getType());
         if (target == null) {
             return;
         }
@@ -163,7 +206,7 @@ public final class VeinMinerListener implements Listener {
         if (origin.getType().isAir()) return false;
 
         ItemStack tool = player.getInventory().getItemInMainHand();
-        VeinTarget target = classifyTarget(origin.getType());
+        VeinTarget target = classifyTarget(player, origin.getType());
         if (target == null) return false;
 
         if (target.type() == VeinTargetType.ORE && oresRequirePickaxe && !isPickaxe(tool)) {
@@ -172,10 +215,13 @@ public final class VeinMinerListener implements Listener {
         if (target.type() == VeinTargetType.TREE && treesRequireAxe && !isAxe(tool)) {
             return false;
         }
+        if (target.type() == VeinTargetType.CUSTOM && !canMineCustomTarget(tool, origin.getType())) {
+            return false;
+        }
         return true;
     }
 
-    private VeinTarget classifyTarget(Material material) {
+    private VeinTarget classifyTarget(Player player, Material material) {
         String oreFamily = oresEnabled ? oreFamilyByMaterial.get(material) : null;
         if (oreFamily != null) {
             return new VeinTarget(VeinTargetType.ORE, oreFamily);
@@ -184,6 +230,10 @@ public final class VeinMinerListener implements Listener {
         String treeFamily = treesEnabled ? treeFamilyByMaterial.get(material) : null;
         if (treeFamily != null) {
             return new VeinTarget(VeinTargetType.TREE, treeFamily);
+        }
+        Set<Material> customBlocks = playerCustomBlocks.get(player.getUniqueId());
+        if (customBlocks != null && customBlocks.contains(material)) {
+            return new VeinTarget(VeinTargetType.CUSTOM, material.name());
         }
         return null;
     }
@@ -225,6 +275,7 @@ public final class VeinMinerListener implements Listener {
         return switch (target.type()) {
             case ORE -> target.family().equals(oreFamilyByMaterial.get(material));
             case TREE -> target.family().equals(treeFamilyByMaterial.get(material));
+            case CUSTOM -> target.family().equals(material.name());
         };
     }
 
@@ -287,24 +338,84 @@ public final class VeinMinerListener implements Listener {
         return item != null && Tag.ITEMS_AXES.isTagged(item.getType());
     }
 
+    private boolean canMineCustomTarget(ItemStack tool, Material material) {
+        if (material == null) {
+            return false;
+        }
+        if (requiresPickaxe(material)) {
+            return isPickaxe(tool);
+        }
+        String name = material.name();
+        if (name.endsWith("_LOG")
+            || name.endsWith("_WOOD")
+            || name.endsWith("_STEM")
+            || name.endsWith("_HYPHAE")) {
+            return isAxe(tool);
+        }
+        return tool != null && tool.getType() != Material.AIR;
+    }
+
+    private boolean requiresPickaxe(Material material) {
+        String name = material.name();
+        return name.endsWith("_ORE")
+            || name.equals("ANCIENT_DEBRIS")
+            || name.equals("OBSIDIAN")
+            || name.equals("CRYING_OBSIDIAN")
+            || name.endsWith("_STONE")
+            || name.contains("DEEPSLATE")
+            || name.contains("BLACKSTONE")
+            || name.contains("BASALT")
+            || name.contains("TUFF")
+            || name.contains("TERRACOTTA")
+            || name.contains("CONCRETE")
+            || name.contains("COPPER")
+            || name.contains("IRON")
+            || name.contains("GOLD")
+            || name.contains("DIAMOND")
+            || name.contains("EMERALD")
+            || name.contains("NETHERITE")
+            || name.contains("PRISMARINE");
+    }
+
     private void loadPlayerSettings() {
         playerEnabled.clear();
+        playerCustomBlocks.clear();
         if (!dataFile.exists()) {
             return;
         }
 
         YamlConfiguration data = YamlConfiguration.loadConfiguration(dataFile);
         ConfigurationSection section = data.getConfigurationSection("players");
-        if (section == null) {
-            return;
+        if (section != null) {
+            for (String key : section.getKeys(false)) {
+                try {
+                    UUID uuid = UUID.fromString(key);
+                    playerEnabled.put(uuid, section.getBoolean(key));
+                } catch (IllegalArgumentException ignored) {
+                    plugin.getLogger().warning("Ignoring invalid vein miner player setting key: " + key);
+                }
+            }
         }
 
-        for (String key : section.getKeys(false)) {
+        ConfigurationSection blocksSection = data.getConfigurationSection("custom-blocks");
+        if (blocksSection == null) {
+            return;
+        }
+        for (String key : blocksSection.getKeys(false)) {
             try {
                 UUID uuid = UUID.fromString(key);
-                playerEnabled.put(uuid, section.getBoolean(key));
+                Set<Material> blocks = ConcurrentHashMap.newKeySet();
+                for (String raw : blocksSection.getStringList(key)) {
+                    Material material = parseMaterial(raw);
+                    if (isValidCustomBlock(material)) {
+                        blocks.add(material);
+                    }
+                }
+                if (!blocks.isEmpty()) {
+                    playerCustomBlocks.put(uuid, blocks);
+                }
             } catch (IllegalArgumentException ignored) {
-                plugin.getLogger().warning("Ignoring invalid vein miner player setting key: " + key);
+                plugin.getLogger().warning("Ignoring invalid vein miner custom block key: " + key);
             }
         }
     }
@@ -313,6 +424,15 @@ public final class VeinMinerListener implements Listener {
         YamlConfiguration data = new YamlConfiguration();
         playerEnabled.forEach((uuid, value) -> {
             data.set("players." + uuid, value);
+        });
+        playerCustomBlocks.forEach((uuid, blocks) -> {
+            if (blocks == null || blocks.isEmpty()) {
+                return;
+            }
+            data.set(
+                "custom-blocks." + uuid,
+                blocks.stream().sorted().map(Material::name).toList()
+            );
         });
         try {
             if (!plugin.getDataFolder().exists() && !plugin.getDataFolder().mkdirs()) {
@@ -383,7 +503,8 @@ public final class VeinMinerListener implements Listener {
 
     private enum VeinTargetType {
         ORE,
-        TREE
+        TREE,
+        CUSTOM
     }
 
     private record BlockKey(UUID worldId, int x, int y, int z) {}

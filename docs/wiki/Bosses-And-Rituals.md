@@ -407,13 +407,13 @@ How to brew:
 
 Current brews:
 
-- Sunforged Ichor: Solar Ember. Fire Resistance I for 8:00, Speed II for 3:00, Haste II for 3:00.
-- Dominion Blood: Crimson Rib or Sculk Heart. Strength II for 3:00, Resistance II for 3:00, Absorption II for 2:00.
-- Rift Draught: Rift Lens or Void Halo. Speed III for 2:30, Jump Boost II for 2:30, Slow Falling I for 2:30.
-- Abyssal Tonic: Abyssal Pearl or Tideheart. Water Breathing I for 8:00, Conduit Power I for 4:00, Dolphin's Grace II for 3:00.
-- Verdant Elixir: Living Bark or Verdant Heart. Regeneration II for 1:00, Absorption II for 3:00.
-- Saint's Resolve: Gilded Skull, Oathbound Plate, Titan Gear, or Saint Alloy. Resistance II for 4:00, Absorption III for 3:00, Health Boost I for 4:00.
-- Widowstep Vial: Widow Silk. Invisibility I for 2:00, Speed II for 2:00, Jump Boost II for 2:00.
+- Sunforged Ichor: Solar Ember. Fire Resistance I for 20:00, Speed III for 8:00, Haste III for 8:00, Strength I for 8:00.
+- Dominion Blood: Crimson Rib or Sculk Heart. Strength III for 6:00, Resistance II for 8:00, Absorption IV for 6:00, Regeneration II for 2:00.
+- Rift Draught: Rift Lens or Void Halo. Speed IV for 5:00, Jump Boost III for 5:00, Slow Falling I for 8:00, Invisibility I for 2:00.
+- Abyssal Tonic: Abyssal Pearl or Tideheart. Water Breathing I for 30:00, Conduit Power I for 10:00, Dolphin's Grace III for 8:00, Night Vision I for 15:00.
+- Verdant Elixir: Living Bark or Verdant Heart. Regeneration III for 3:00, Absorption III for 8:00, Saturation I for 0:20.
+- Saint's Resolve: Gilded Skull, Oathbound Plate, Titan Gear, or Saint Alloy. Resistance III for 6:00, Absorption IV for 8:00, Health Boost II for 8:00, Regeneration II for 2:00.
+- Widowstep Vial: Widow Silk. Invisibility I for 5:00, Speed III for 5:00, Jump Boost III for 5:00, Strength I for 3:00.
 
 ## Troubleshooting Rituals
 

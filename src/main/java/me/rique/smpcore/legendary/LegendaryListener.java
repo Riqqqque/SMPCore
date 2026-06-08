@@ -128,6 +128,7 @@ public final class LegendaryListener implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final String BACKPACK_RECIPE_ID = "backpack";
+    private static final String EXPANDED_BACKPACK_RECIPE_ID = "expanded_backpack";
     private static final String MYTHIC_NEXUS_MENU_ID = "mythic_nexus";
     private static final String RELIQUARY_SECTION_PREFIX = "reliquary_section:";
     private static final int[] RELIQUARY_CONTENT_SLOTS = {
@@ -140,6 +141,7 @@ public final class LegendaryListener implements Listener {
 
     private static final int LEGENDARY_ITEM_DATA_VERSION = 21;
     private static final double ORB_OF_THE_MYSTICS_DROP_CHANCE = 0.10;
+    private static final long ORB_OF_THE_MYSTICS_COOLDOWN_MS = 60L * 60L * 1000L;
     private static final int STARTUP_LEGENDARY_MIGRATION_CHUNKS_PER_TICK = 24;
     private static final int LEGENDARY_ITEM_SCAN_MAX_DEPTH = 2;
     private static final long LEGENDARY_DUPLICATE_AUDIT_INTERVAL_TICKS = 20L * 15L;
@@ -288,6 +290,7 @@ public final class LegendaryListener implements Listener {
     private final NamespacedKey keyMenuLegendary;
     private final NamespacedKey keyEnderBone;
     private final NamespacedKey keyOrbOfTheMystics;
+    private final NamespacedKey keyOrbOfTheMysticsCooldownUntil;
     private final NamespacedKey keyLegacyOrbOfTheMysticsInstance;
     private final NamespacedKey keyFaradayUses;
     private final NamespacedKey keyMidasSharpness;
@@ -396,6 +399,7 @@ public final class LegendaryListener implements Listener {
         this.keyMenuLegendary = new NamespacedKey(plugin, "legendary_menu_id");
         this.keyEnderBone = new NamespacedKey(plugin, "ender_bone");
         this.keyOrbOfTheMystics = new NamespacedKey(plugin, "orb_of_the_mystics");
+        this.keyOrbOfTheMysticsCooldownUntil = new NamespacedKey(plugin, "orb_of_the_mystics_cooldown_until");
         this.keyLegacyOrbOfTheMysticsInstance = new NamespacedKey(plugin, "orb_of_the_mystics_instance");
         this.keyFaradayUses = new NamespacedKey(plugin, "faraday_uses");
         this.keyMidasSharpness = new NamespacedKey(plugin, "midas_sharpness");
@@ -917,13 +921,17 @@ public final class LegendaryListener implements Listener {
             return;
         }
 
-        if (top.getHolder() instanceof BackpackRecipeHolder) {
+        if (top.getHolder() instanceof BackpackRecipeHolder holder) {
             event.setCancelled(true);
             if (event.getSlot() == RECIPE_TRADE_SLOT) {
                 if (plugin.getBackpackListener() != null) {
-                    plugin.getBackpackListener().tradeBackpack(player);
+                    if (EXPANDED_BACKPACK_RECIPE_ID.equals(holder.recipeId())) {
+                        plugin.getBackpackListener().tradeUpgradedBackpack(player);
+                    } else {
+                        plugin.getBackpackListener().tradeBackpack(player);
+                    }
                 }
-                Bukkit.getScheduler().runTask(plugin, () -> openBackpackRecipeDetails(player));
+                Bukkit.getScheduler().runTask(plugin, () -> openBackpackRecipeDetails(player, holder.recipeId()));
                 return;
             }
             if (event.getSlot() == 18) {
@@ -1183,7 +1191,11 @@ public final class LegendaryListener implements Listener {
 
     private void openReliquaryEntry(Player player, String recipeId) {
         if (BACKPACK_RECIPE_ID.equals(recipeId)) {
-            openBackpackRecipeDetails(player);
+            openBackpackRecipeDetails(player, BACKPACK_RECIPE_ID);
+            return;
+        }
+        if (EXPANDED_BACKPACK_RECIPE_ID.equals(recipeId)) {
+            openBackpackRecipeDetails(player, EXPANDED_BACKPACK_RECIPE_ID);
             return;
         }
         if (MYTHIC_NEXUS_MENU_ID.equals(recipeId)) {
@@ -1271,7 +1283,8 @@ public final class LegendaryListener implements Listener {
                 }
             }
             case TOOLS -> {
-                entries.add(new CustomRecipeEntry(BACKPACK_RECIPE_ID, appendRecipeMenuHint(player, createBackpackRecipeDisplayItem())));
+                entries.add(new CustomRecipeEntry(BACKPACK_RECIPE_ID, appendRecipeMenuHint(player, createBackpackRecipeDisplayItem(false))));
+                entries.add(new CustomRecipeEntry(EXPANDED_BACKPACK_RECIPE_ID, appendRecipeMenuHint(player, createBackpackRecipeDisplayItem(true))));
                 if (plugin.getSalvagingDepotListener() != null) {
                     entries.add(new CustomRecipeEntry(SalvagingDepotListener.ITEM_ID, createSalvagingDepotPreview(player)));
                 }
@@ -2114,14 +2127,17 @@ public final class LegendaryListener implements Listener {
         player.openInventory(inv);
     }
 
-    private void openBackpackRecipeDetails(Player player) {
+    private void openBackpackRecipeDetails(Player player, String recipeId) {
+        boolean upgraded = EXPANDED_BACKPACK_RECIPE_ID.equals(recipeId);
+        String displayName = upgraded ? "Expanded Backpack" : "Backpack";
+        CustomLoreUtil.Rarity rarity = upgraded ? CustomLoreUtil.Rarity.RARE : CustomLoreUtil.Rarity.UNCOMMON;
         Inventory inv = Bukkit.createInventory(
-            new BackpackRecipeHolder(),
+            new BackpackRecipeHolder(recipeId),
             27,
             BedrockCompat.menuTitle(
                 player,
-                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.UNCOMMON, "Backpack")),
-                "Recipe: Backpack"
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + CustomLoreUtil.displayNameTag(rarity, displayName)),
+                "Recipe: " + displayName
             )
         );
 
@@ -2132,11 +2148,14 @@ public final class LegendaryListener implements Listener {
 
         int[] matrixSlots = {3, 4, 5, 12, 13, 14, 21, 22, 23};
         Map<Material, Integer> backpackIngredients = plugin.getBackpackListener() == null
-            ? Map.of(Material.LEATHER, 4, Material.STRING, 4, Material.CHEST, 1)
-            : plugin.getBackpackListener().tradeIngredients();
+            ? (upgraded ? Map.of(Material.LEATHER, 16, Material.DIAMOND, 8) : Map.of(Material.LEATHER, 4, Material.STRING, 4, Material.CHEST, 1))
+            : (upgraded ? plugin.getBackpackListener().upgradedTradeIngredients() : plugin.getBackpackListener().tradeIngredients());
         List<Map.Entry<Material, Integer>> ingredients = new ArrayList<>(backpackIngredients.entrySet());
 
         int index = 0;
+        if (upgraded) {
+            inv.setItem(matrixSlots[index++], createBackpackRecipeDisplayItem(false));
+        }
         for (Map.Entry<Material, Integer> entry : ingredients) {
             if (index >= matrixSlots.length) break;
             ItemStack ingredientItem = new ItemStack(entry.getKey(), Math.min(64, entry.getValue()));
@@ -2148,11 +2167,12 @@ public final class LegendaryListener implements Listener {
             inv.setItem(matrixSlots[index++], ingredientItem);
         }
 
-        inv.setItem(16, createBackpackRecipeDisplayItem());
-        boolean canTrade = plugin.getBackpackListener() != null && plugin.getBackpackListener().canTradeBackpack(player);
+        inv.setItem(16, createBackpackRecipeDisplayItem(upgraded));
+        boolean canTrade = plugin.getBackpackListener() != null
+            && (upgraded ? plugin.getBackpackListener().canTradeUpgradedBackpack(player) : plugin.getBackpackListener().canTradeBackpack(player));
         inv.setItem(RECIPE_TRADE_SLOT, createTradeButton(
             player,
-            CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.UNCOMMON, "Backpack"),
+            CustomLoreUtil.displayNameTag(rarity, displayName),
             backpackIngredients,
             canTrade
         ));
@@ -2731,24 +2751,27 @@ public final class LegendaryListener implements Listener {
         return item;
     }
 
-    private ItemStack createBackpackRecipeDisplayItem() {
+    private ItemStack createBackpackRecipeDisplayItem(boolean upgraded) {
         ItemStack item = new ItemStack(Material.FLOWER_POT);
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return item;
 
+        String displayName = upgraded ? "Expanded Backpack" : "Backpack";
+        CustomLoreUtil.Rarity rarity = upgraded ? CustomLoreUtil.Rarity.RARE : CustomLoreUtil.Rarity.UNCOMMON;
+        int slots = upgraded ? 54 : 27;
         meta.setItemModel(null);
-        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.UNCOMMON, "Backpack"));
+        meta.displayName(CustomLoreUtil.displayName(rarity, displayName));
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.FLOWER_POT,
-            CustomLoreUtil.Rarity.UNCOMMON.label(),
+            rarity.label(),
             "STORAGE",
             List.of("<gray>Portable storage.</gray>"),
             List.of(CustomLoreUtil.section(
                 "Use",
-                "Pocket Vault",
+                upgraded ? "Deep Pocket Vault" : "Pocket Vault",
                 "<gray>Right-click to open.</gray>",
-                "<gray>Holds items safely in its own saved storage.</gray>"
+                "<gray>Holds <white>" + slots + "</white> items safely in its own saved storage.</gray>"
             ))
         ));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
@@ -5885,13 +5908,15 @@ public final class LegendaryListener implements Listener {
             "ORB",
             List.of(
                 "<gray>Right-click to summon a legendary altar.</gray>",
-                "<gray>Single-use. Consumed when the altar is called.</gray>"
+                "<gray>Single-use. Consumed when the altar is called.</gray>",
+                "<gray>Cooldown: <white>1 hour</white> per player.</gray>"
             ),
             List.of(CustomLoreUtil.section(
                 "Item Ability",
                 "Mystic Summon",
                 "<gray>Calls forth a dormant legendary altar at a random location.</gray>",
-                "<gray>Dropped by Endermen at <white>10%</white>.</gray>"
+                "<gray>Dropped by Endermen at <white>10%</white>.</gray>",
+                "<gray>The caller cannot use another orb for <white>1 hour</white>.</gray>"
             ))
         ));
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
@@ -5908,7 +5933,12 @@ public final class LegendaryListener implements Listener {
 
         String displayName = meta.hasDisplayName() ? PLAIN.serialize(meta.displayName()).trim() : "";
         boolean hasLegacyInstance = meta.getPersistentDataContainer().has(keyLegacyOrbOfTheMysticsInstance, PersistentDataType.STRING);
-        if ("Orb of the Mystics".equals(displayName) && hasLoreText(meta, "LEGENDARY ORB") && !hasLegacyInstance) return false;
+        if ("Orb of the Mystics".equals(displayName)
+            && hasLoreText(meta, "LEGENDARY ORB")
+            && hasLoreText(meta, "Cooldown: 1 hour")
+            && !hasLegacyInstance) {
+            return false;
+        }
 
         applyOrbOfTheMysticsPresentation(meta);
         item.setItemMeta(meta);
@@ -5933,6 +5963,15 @@ public final class LegendaryListener implements Listener {
             return;
         }
 
+        long now = System.currentTimeMillis();
+        long cooldownUntil = orbOfTheMysticsCooldownUntil(player);
+        if (cooldownUntil > now) {
+            player.sendMessage(MessageUtil.warn(
+                "Orb of the Mystics cooldown: <white>" + formatShortDuration(cooldownUntil - now) + "</white>."
+            ));
+            return;
+        }
+
         LegendaryAltarManager.AdminActionResult result = plugin.getLegendaryAltarManager().summonFromMysticOrb(player);
         if (!result.success()) {
             player.sendMessage(MessageUtil.error(result.message()));
@@ -5940,7 +5979,38 @@ public final class LegendaryListener implements Listener {
         }
 
         consumeMainHandItem(player);
+        setOrbOfTheMysticsCooldownUntil(player, System.currentTimeMillis() + ORB_OF_THE_MYSTICS_COOLDOWN_MS);
         player.sendMessage(MessageUtil.success(result.message()));
+    }
+
+    private long orbOfTheMysticsCooldownUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(
+            keyOrbOfTheMysticsCooldownUntil,
+            PersistentDataType.LONG,
+            0L
+        );
+    }
+
+    private void setOrbOfTheMysticsCooldownUntil(Player player, long value) {
+        if (value <= System.currentTimeMillis()) {
+            player.getPersistentDataContainer().remove(keyOrbOfTheMysticsCooldownUntil);
+            return;
+        }
+        player.getPersistentDataContainer().set(keyOrbOfTheMysticsCooldownUntil, PersistentDataType.LONG, value);
+    }
+
+    private String formatShortDuration(long millis) {
+        long totalSeconds = Math.max(1L, (millis + 999L) / 1000L);
+        long hours = totalSeconds / 3600L;
+        long minutes = (totalSeconds % 3600L) / 60L;
+        long seconds = totalSeconds % 60L;
+        if (hours > 0L) {
+            return hours + "h " + minutes + "m";
+        }
+        if (minutes > 0L) {
+            return minutes + "m " + seconds + "s";
+        }
+        return seconds + "s";
     }
 
     private void consumeMainHandItem(Player player) {
@@ -8332,7 +8402,7 @@ public final class LegendaryListener implements Listener {
         }
     }
 
-    private record BackpackRecipeHolder() implements InventoryHolder {
+    private record BackpackRecipeHolder(String recipeId) implements InventoryHolder {
         @Override
         public Inventory getInventory() {
             return null;

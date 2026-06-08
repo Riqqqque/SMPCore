@@ -1204,6 +1204,12 @@ public final class SeasonRelicManager implements Listener {
         leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
         player.updateInventory();
         player.sendMessage(MessageUtil.success("Crafted <white>" + definition.name() + "</white>."));
+        if (definition.rarity() == CustomLoreUtil.Rarity.MYTHIC) {
+            Bukkit.broadcast(MessageUtil.prefixedRaw(
+                "<gradient:#ff4df0:#ffb000><white>" + player.getName() + "</white> forged the mythic relic <white>"
+                    + definition.name() + "</white>.</gradient>"
+            ));
+        }
         player.playSound(player.getLocation(), Sound.BLOCK_SMITHING_TABLE_USE, 0.9f, 0.9f);
         openRelicDetails(player, definition.id());
         return 1;
@@ -1945,8 +1951,20 @@ public final class SeasonRelicManager implements Listener {
         List<RecipeIngredient> recipe
     ) {
         List<AttributeBonus> attributes = new ArrayList<>();
-        if (damageBonus != 0.0) attributes.add(new AttributeBonus(Attribute.ATTACK_DAMAGE, damageBonus, AttributeModifier.Operation.ADD_NUMBER, EquipmentSlotGroup.MAINHAND));
-        if (speedBonus != 0.0) attributes.add(new AttributeBonus(Attribute.ATTACK_SPEED, speedBonus, AttributeModifier.Operation.ADD_NUMBER, EquipmentSlotGroup.MAINHAND));
+        double tunedDamage = damageBonus == 0.0 ? 0.0 : damageBonus + switch (rarity) {
+            case MYTHIC -> 2.5;
+            case LEGENDARY -> 2.0;
+            case EPIC -> 1.25;
+            default -> 0.75;
+        };
+        double tunedSpeed = speedBonus == 0.0 ? 0.0 : speedBonus + switch (rarity) {
+            case MYTHIC -> 0.18;
+            case LEGENDARY -> 0.14;
+            case EPIC -> 0.10;
+            default -> 0.06;
+        };
+        if (tunedDamage != 0.0) attributes.add(new AttributeBonus(Attribute.ATTACK_DAMAGE, tunedDamage, AttributeModifier.Operation.ADD_NUMBER, EquipmentSlotGroup.MAINHAND));
+        if (tunedSpeed != 0.0) attributes.add(new AttributeBonus(Attribute.ATTACK_SPEED, tunedSpeed, AttributeModifier.Operation.ADD_NUMBER, EquipmentSlotGroup.MAINHAND));
         return new RelicDefinition(
             id, material, name, rarity, RelicKind.WEAPON, RelicCategory.WEAPONS,
             null, null, material.getMaxDurability() > 0 ? Math.max(material.getMaxDurability() * 2, material.getMaxDurability() + 512) : 0,
@@ -2061,16 +2079,16 @@ public final class SeasonRelicManager implements Listener {
     private static List<AttributeBonus> armorAttributes(EquipmentSlotGroup slot, CustomLoreUtil.Rarity rarity, boolean setPiece) {
         boolean highTier = rarity.ordinal() >= CustomLoreUtil.Rarity.LEGENDARY.ordinal();
         double armor = setPiece
-            ? (rarity == CustomLoreUtil.Rarity.MYTHIC ? 4.0 : highTier ? 3.0 : 2.0)
-            : (rarity == CustomLoreUtil.Rarity.MYTHIC ? 2.5 : highTier ? 2.0 : 1.25);
-        double toughness = rarity == CustomLoreUtil.Rarity.MYTHIC ? 2.0 : highTier ? 1.5 : 0.75;
+            ? (rarity == CustomLoreUtil.Rarity.MYTHIC ? 6.0 : highTier ? 4.75 : 3.25)
+            : (rarity == CustomLoreUtil.Rarity.MYTHIC ? 3.75 : highTier ? 3.0 : 2.0);
+        double toughness = rarity == CustomLoreUtil.Rarity.MYTHIC ? 3.0 : highTier ? 2.25 : 1.25;
         List<AttributeBonus> attributes = new ArrayList<>();
         attributes.add(new AttributeBonus(Attribute.ARMOR, armor, AttributeModifier.Operation.ADD_NUMBER, slot));
         attributes.add(new AttributeBonus(Attribute.ARMOR_TOUGHNESS, toughness, AttributeModifier.Operation.ADD_NUMBER, slot));
         if (setPiece && highTier) {
             attributes.add(new AttributeBonus(
                 Attribute.KNOCKBACK_RESISTANCE,
-                rarity == CustomLoreUtil.Rarity.MYTHIC ? 0.04 : 0.03,
+                rarity == CustomLoreUtil.Rarity.MYTHIC ? 0.07 : 0.05,
                 AttributeModifier.Operation.ADD_NUMBER,
                 slot
             ));

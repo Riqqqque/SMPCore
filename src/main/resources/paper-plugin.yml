@@ -60,6 +60,9 @@ permissions:
   smpcore.team:
     description: Use /team and /tvault commands
     default: true
+  smpcore.teamglow:
+    description: Use /teamglow to privately highlight teammates
+    default: true
   smpcore.waystone.use:
     description: Use waystones
     default: true

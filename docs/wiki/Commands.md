@@ -12,12 +12,18 @@
 - `/wiki`, `/guide`, `/smpwiki` - shows the clickable wiki link.
 - `/team` - team commands. Leaders can use `/team color <color>` and `/team rename "new name"`.
 - `/tvault`, `/teamvault` - opens team vault storage.
+- `/teamglow`, `/allyglow`, `/teammateglow` - privately highlights only your teammates for your client.
 - `/powerinfo` - opens superpower information.
 - `/stormcaller on|off|toggle|status` - Stormcaller-only lightning strike toggle.
 - `/home`, `/sethome`, `/delhome`, `/homes` - home system.
 - `/spawn` - OP-only spawn command on this server.
 - `/back` - OP-only back command on this server.
 - `/veinminer` - vein miner toggle if enabled.
+- `/veinminer addblock [block]` or `/veinminer add block [block]` - add the block you are looking at, holding, or typing to your personal veinminer list.
+- `/veinminer removeblock [block]` or `/veinminer remove block [block]` - remove a block from your personal veinminer list.
+- `/veinminer blocks` - list your personal veinminer blocks.
+- `/msummon <amount>` - Sovereign-only command to summon stored mobs.
+- `/msummon despawn` - Sovereign-only command to unsummon active mobs.
 
 ## Admin Commands
 

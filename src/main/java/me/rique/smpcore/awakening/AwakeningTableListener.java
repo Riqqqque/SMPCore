@@ -8,6 +8,7 @@ import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
@@ -1737,7 +1738,7 @@ public final class AwakeningTableListener implements Listener {
             display.setBillboard(Display.Billboard.CENTER);
             display.setSeeThrough(true);
             display.setShadowed(false);
-            display.setViewRange((float) plugin.getConfigManager().awakeningTableHologramViewRange);
+            display.setViewRange(VisualRangeUtil.clampHologramViewRange(plugin.getConfigManager().awakeningTableHologramViewRange));
             display.setLineWidth(220);
             display.setBackgroundColor(Color.fromARGB(96, 12, 0, 0));
         });

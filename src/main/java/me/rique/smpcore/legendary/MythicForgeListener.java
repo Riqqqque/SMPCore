@@ -4,6 +4,7 @@ import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
@@ -343,6 +344,7 @@ public final class MythicForgeListener implements Listener {
         UUID hologramId = forgeHolograms.get(forgeId);
         Entity existing = hologramId == null ? null : Bukkit.getEntity(hologramId);
         if (existing instanceof TextDisplay display && display.isValid()) {
+            VisualRangeUtil.applyHologramRange(display);
             return;
         }
         if (existing != null) {
@@ -360,7 +362,7 @@ public final class MythicForgeListener implements Listener {
             textDisplay.setBackgroundColor(Color.fromARGB(45, 34, 0, 54));
             textDisplay.setTextOpacity((byte) 255);
             textDisplay.setLineWidth(120);
-            textDisplay.setViewRange(42.0f);
+            VisualRangeUtil.applyHologramRange(textDisplay);
             textDisplay.setGlowing(true);
             textDisplay.setGlowColorOverride(Color.fromRGB(190, 80, 255));
             textDisplay.getPersistentDataContainer().set(keyMythicForgeHologram, PersistentDataType.BYTE, (byte) 1);
@@ -378,6 +380,7 @@ public final class MythicForgeListener implements Listener {
         }
 
         display.teleport(forgeHologramLocation(crystal));
+        VisualRangeUtil.applyHologramRange(display);
         display.text(MM.deserialize(
             CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.MYTHIC, "Mythic Forge")
                 + "\n<gray>Right-click to fuse relics</gray>"

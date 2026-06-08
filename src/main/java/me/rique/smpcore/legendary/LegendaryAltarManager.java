@@ -3,6 +3,7 @@ package me.rique.smpcore.legendary;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.database.DatabaseManager;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.HeightMap;
@@ -891,9 +892,11 @@ public final class LegendaryAltarManager implements Listener {
                 display.setInvulnerable(true);
                 display.setBillboard(Display.Billboard.CENTER);
                 display.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
+                VisualRangeUtil.applyHologramRange(display);
             });
         }
         itemDisplay.teleport(itemLocation);
+        VisualRangeUtil.applyHologramRange(itemDisplay);
         itemDisplay.setItemStack(displayItem);
 
         String statusLine = isActivated()
@@ -917,9 +920,11 @@ public final class LegendaryAltarManager implements Listener {
                 display.setSeeThrough(true);
                 display.setShadowed(false);
                 display.setLineWidth(220);
+                VisualRangeUtil.applyHologramRange(display);
             });
         }
         textDisplay.teleport(textLocation);
+        VisualRangeUtil.applyHologramRange(textDisplay);
         textDisplay.text(Component.text(text.toString()));
     }
 

@@ -19,7 +19,7 @@ Open it with:
 
 ## Utility Relics
 
-- `Orb of the Mystics` - stackable single-use Enderman drop that summons a random legendary altar.
+- `Orb of the Mystics` - stackable single-use Enderman drop that summons a random legendary altar. The caller has a 1-hour cooldown.
 - `Ancient Scroll` - rerolls a player's superpower and avoids giving back the same current power.
 - `Talisman of Sustenance` - passive inventory talisman that restores health and hunger over time.
 
@@ -38,7 +38,8 @@ Each rarity uses a consistent color theme across names, lore, drops, and menu pr
 
 This section is for normal craftable gear, not Covenant boss weapons.
 
-- `Backpack` - portable storage.
+- `Backpack` - portable 27-slot storage.
+- `Expanded Backpack` - upgrades a Backpack into 54-slot storage. Recipe: 1 Backpack, 16 leather, and 8 diamonds. The upgrade keeps the same backpack data, so existing contents stay inside when the old backpack is upgraded.
 - `Salvaging Depot` - placeable chest station that recycles vanilla armor, tools, and weapons after 6 seconds. Recipe: 1 iron ingot, 2 redstone, 1 chest, and 1 hopper. It returns about 66% of the base materials, reduced by item damage. Hoppers can insert gear, but custom items and processing items are protected.
 - `XP Lectern` - placeable utility station that stores player XP and lets players withdraw it later. Recipe: 1 experience bottle, 2 books, 1 lectern, and 1 redstone. The menu supports 1, 5, 10, and all-level deposit/withdraw buttons. Stored XP stays inside if the lectern is broken and moved.
 - `Prospector's Pick` - lucky ore mining.

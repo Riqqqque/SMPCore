@@ -2,6 +2,8 @@
 
 The Covenant Armory is the boss-forged item path inside `/reliquary`.
 
+Covenant gear is meant to sit just above standard legendary strength because it costs public boss trophies and progression materials. Mythic Covenant relics announce to the server when they are forged.
+
 It adds:
 
 - 13 custom weapons and tools.

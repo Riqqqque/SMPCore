@@ -52,6 +52,7 @@ public final class AdminCommands {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final String BACKPACK_ITEM_ID = "backpack";
+    private static final String EXPANDED_BACKPACK_ITEM_ID = "expanded_backpack";
     private static final String AWAKENING_TABLE_ITEM_ID = "awakening_table";
     private static final String ENDER_BONE_ITEM_ID = "ender_bone";
     private static final String ORB_OF_THE_MYSTICS_ITEM_ID = "orb_of_the_mystics";
@@ -70,6 +71,7 @@ public final class AdminCommands {
     private static final Set<String> ABSOLUTE_OWNER_ACCOUNTS = Set.of("riqqqque");
     private static final List<String> CUSTOM_ITEM_IDS = List.of(
         BACKPACK_ITEM_ID,
+        EXPANDED_BACKPACK_ITEM_ID,
         AWAKENING_TABLE_ITEM_ID,
         ENDER_BONE_ITEM_ID,
         ORB_OF_THE_MYSTICS_ITEM_ID,
@@ -985,6 +987,7 @@ public final class AdminCommands {
         String itemId = normalizeCustomItemId(requestedId);
         AdminGiveItem item = switch (itemId) {
             case BACKPACK_ITEM_ID -> createBackpackAdminItem(plugin, sender);
+            case EXPANDED_BACKPACK_ITEM_ID -> createExpandedBackpackAdminItem(plugin, sender);
             case AWAKENING_TABLE_ITEM_ID -> createAwakeningTableAdminItem(plugin, sender);
             case ENDER_BONE_ITEM_ID -> createEnderBoneAdminItem(plugin, sender);
             case ORB_OF_THE_MYSTICS_ITEM_ID -> createOrbOfTheMysticsAdminItem(plugin, sender);
@@ -1048,6 +1051,15 @@ public final class AdminCommands {
             return null;
         }
         return new AdminGiveItem(backpacks.createNewBackpack(), "Backpack");
+    }
+
+    private static AdminGiveItem createExpandedBackpackAdminItem(SMPCore plugin, CommandSender sender) {
+        BackpackListener backpacks = plugin.getBackpackListener();
+        if (backpacks == null) {
+            sender.sendMessage(MessageUtil.error("Backpack system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(backpacks.createNewUpgradedBackpack(), "Expanded Backpack");
     }
 
     private static AdminGiveItem createAwakeningTableAdminItem(SMPCore plugin, CommandSender sender) {

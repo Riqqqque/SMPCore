@@ -46,6 +46,7 @@ import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.player.DragonEggListener;
 import me.rique.smpcore.player.JoinListener;
 import me.rique.smpcore.player.PlayerManager;
+import me.rique.smpcore.player.PlayerVisualListener;
 import me.rique.smpcore.player.WorldRulesListener;
 import me.rique.smpcore.motd.MotdListener;
 import me.rique.smpcore.season.SeasonRelicManager;
@@ -72,6 +73,7 @@ public final class SMPCore extends JavaPlugin {
     private HomeManager homeManager;
     private PlayerManager playerManager;
     private TeamManager teamManager;
+    private PlayerVisualListener playerVisualListener;
     private WaystoneManager waystoneManager;
     private BackpackListener backpackListener;
     private CombatLogListener combatLogListener;
@@ -157,6 +159,7 @@ public final class SMPCore extends JavaPlugin {
         if (rareDropVisualListener != null) rareDropVisualListener.shutdown();
         if (itemAuditManager != null) itemAuditManager.shutdown();
         if (smpStartManager != null) smpStartManager.shutdown();
+        if (playerVisualListener != null) playerVisualListener.shutdown();
         if (teamManager != null) teamManager.shutdown();
         if (databaseManager != null) databaseManager.close();
         getLogger().info("SMPCore disabled.");
@@ -237,6 +240,9 @@ public final class SMPCore extends JavaPlugin {
         pm.registerEvents(itemAuditManager, this);
         itemAuditManager.start();
         pm.registerEvents(teamManager, this);
+        playerVisualListener = new PlayerVisualListener(this);
+        pm.registerEvents(playerVisualListener, this);
+        playerVisualListener.start();
         pm.registerEvents(new JoinListener(this), this);
         restartDragonEggListener();
     }
@@ -281,6 +287,7 @@ public final class SMPCore extends JavaPlugin {
     public HomeManager getHomeManager() { return homeManager; }
     public PlayerManager getPlayerManager() { return playerManager; }
     public TeamManager getTeamManager() { return teamManager; }
+    public PlayerVisualListener getPlayerVisualListener() { return playerVisualListener; }
     public WaystoneManager getWaystoneManager() { return waystoneManager; }
     public BackpackListener getBackpackListener() { return backpackListener; }
     public CombatLogListener getCombatLogListener() { return combatLogListener; }

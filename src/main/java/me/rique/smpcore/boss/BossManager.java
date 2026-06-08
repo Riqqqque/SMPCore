@@ -5,6 +5,7 @@ import me.rique.smpcore.database.DatabaseManager;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
@@ -1936,6 +1937,7 @@ public final class BossManager implements Listener {
         UUID hologramId = holograms.get(entity.getUniqueId());
         Entity existing = hologramId == null ? null : Bukkit.getEntity(hologramId);
         if (existing instanceof TextDisplay) {
+            VisualRangeUtil.applyHologramRange((TextDisplay) existing);
             return;
         }
 
@@ -1950,6 +1952,7 @@ public final class BossManager implements Listener {
             textDisplay.setTeleportDuration(HOLOGRAM_TELEPORT_DURATION_TICKS);
             textDisplay.setInterpolationDelay(0);
             textDisplay.setInterpolationDuration(HOLOGRAM_TELEPORT_DURATION_TICKS);
+            VisualRangeUtil.applyHologramRange(textDisplay);
         });
         holograms.put(entity.getUniqueId(), display.getUniqueId());
     }
@@ -1991,6 +1994,7 @@ public final class BossManager implements Listener {
         TextDisplay display;
         if (existing instanceof TextDisplay current && current.isValid()) {
             display = current;
+            VisualRangeUtil.applyHologramRange(display);
         } else {
             holograms.remove(entity.getUniqueId());
             ensureBossHologram(entity, type);

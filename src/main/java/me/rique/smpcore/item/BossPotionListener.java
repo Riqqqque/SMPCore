@@ -251,9 +251,10 @@ public final class BossPotionListener implements Listener {
             Color.fromRGB(255, 155, 45),
             List.of("solar_ember"),
             List.of(
-                new BrewEffect(PotionEffectType.FIRE_RESISTANCE, 8 * 60 * 20, 0, "Fire Resistance I - 8:00"),
-                new BrewEffect(PotionEffectType.SPEED, 3 * 60 * 20, 1, "Speed II - 3:00"),
-                new BrewEffect(PotionEffectType.HASTE, 3 * 60 * 20, 1, "Haste II - 3:00")
+                new BrewEffect(PotionEffectType.FIRE_RESISTANCE, 20 * 60 * 20, 0, "Fire Resistance I - 20:00"),
+                new BrewEffect(PotionEffectType.SPEED, 8 * 60 * 20, 2, "Speed III - 8:00"),
+                new BrewEffect(PotionEffectType.HASTE, 8 * 60 * 20, 2, "Haste III - 8:00"),
+                new BrewEffect(PotionEffectType.STRENGTH, 8 * 60 * 20, 0, "Strength I - 8:00")
             )
         ),
         DOMINION_BLOOD(
@@ -262,9 +263,10 @@ public final class BossPotionListener implements Listener {
             Color.fromRGB(190, 30, 55),
             List.of("crimson_rib", "sculk_heart"),
             List.of(
-                new BrewEffect(PotionEffectType.STRENGTH, 3 * 60 * 20, 1, "Strength II - 3:00"),
-                new BrewEffect(PotionEffectType.RESISTANCE, 3 * 60 * 20, 1, "Resistance II - 3:00"),
-                new BrewEffect(PotionEffectType.ABSORPTION, 2 * 60 * 20, 1, "Absorption II - 2:00")
+                new BrewEffect(PotionEffectType.STRENGTH, 6 * 60 * 20, 2, "Strength III - 6:00"),
+                new BrewEffect(PotionEffectType.RESISTANCE, 8 * 60 * 20, 1, "Resistance II - 8:00"),
+                new BrewEffect(PotionEffectType.ABSORPTION, 6 * 60 * 20, 3, "Absorption IV - 6:00"),
+                new BrewEffect(PotionEffectType.REGENERATION, 2 * 60 * 20, 1, "Regeneration II - 2:00")
             )
         ),
         RIFT_DRAUGHT(
@@ -273,9 +275,10 @@ public final class BossPotionListener implements Listener {
             Color.fromRGB(170, 90, 255),
             List.of("rift_lens", "void_halo"),
             List.of(
-                new BrewEffect(PotionEffectType.SPEED, 150 * 20, 2, "Speed III - 2:30"),
-                new BrewEffect(PotionEffectType.JUMP_BOOST, 150 * 20, 1, "Jump Boost II - 2:30"),
-                new BrewEffect(PotionEffectType.SLOW_FALLING, 150 * 20, 0, "Slow Falling I - 2:30")
+                new BrewEffect(PotionEffectType.SPEED, 5 * 60 * 20, 3, "Speed IV - 5:00"),
+                new BrewEffect(PotionEffectType.JUMP_BOOST, 5 * 60 * 20, 2, "Jump Boost III - 5:00"),
+                new BrewEffect(PotionEffectType.SLOW_FALLING, 8 * 60 * 20, 0, "Slow Falling I - 8:00"),
+                new BrewEffect(PotionEffectType.INVISIBILITY, 2 * 60 * 20, 0, "Invisibility I - 2:00")
             )
         ),
         ABYSSAL_TONIC(
@@ -284,9 +287,10 @@ public final class BossPotionListener implements Listener {
             Color.fromRGB(35, 180, 220),
             List.of("abyssal_pearl", "tideheart"),
             List.of(
-                new BrewEffect(PotionEffectType.WATER_BREATHING, 8 * 60 * 20, 0, "Water Breathing I - 8:00"),
-                new BrewEffect(PotionEffectType.CONDUIT_POWER, 4 * 60 * 20, 0, "Conduit Power I - 4:00"),
-                new BrewEffect(PotionEffectType.DOLPHINS_GRACE, 3 * 60 * 20, 1, "Dolphin's Grace II - 3:00")
+                new BrewEffect(PotionEffectType.WATER_BREATHING, 30 * 60 * 20, 0, "Water Breathing I - 30:00"),
+                new BrewEffect(PotionEffectType.CONDUIT_POWER, 10 * 60 * 20, 0, "Conduit Power I - 10:00"),
+                new BrewEffect(PotionEffectType.DOLPHINS_GRACE, 8 * 60 * 20, 2, "Dolphin's Grace III - 8:00"),
+                new BrewEffect(PotionEffectType.NIGHT_VISION, 15 * 60 * 20, 0, "Night Vision I - 15:00")
             )
         ),
         VERDANT_ELIXIR(
@@ -295,8 +299,9 @@ public final class BossPotionListener implements Listener {
             Color.fromRGB(70, 190, 90),
             List.of("living_bark", "verdant_heart"),
             List.of(
-                new BrewEffect(PotionEffectType.REGENERATION, 60 * 20, 1, "Regeneration II - 1:00"),
-                new BrewEffect(PotionEffectType.ABSORPTION, 3 * 60 * 20, 1, "Absorption II - 3:00")
+                new BrewEffect(PotionEffectType.REGENERATION, 3 * 60 * 20, 2, "Regeneration III - 3:00"),
+                new BrewEffect(PotionEffectType.ABSORPTION, 8 * 60 * 20, 2, "Absorption III - 8:00"),
+                new BrewEffect(PotionEffectType.SATURATION, 20 * 20, 0, "Saturation I - 0:20")
             )
         ),
         SAINTS_RESOLVE(
@@ -305,9 +310,10 @@ public final class BossPotionListener implements Listener {
             Color.fromRGB(210, 210, 175),
             List.of("gilded_skull", "oathbound_plate", "titan_gear", "saint_alloy"),
             List.of(
-                new BrewEffect(PotionEffectType.RESISTANCE, 4 * 60 * 20, 1, "Resistance II - 4:00"),
-                new BrewEffect(PotionEffectType.ABSORPTION, 3 * 60 * 20, 2, "Absorption III - 3:00"),
-                new BrewEffect(PotionEffectType.HEALTH_BOOST, 4 * 60 * 20, 0, "Health Boost I - 4:00")
+                new BrewEffect(PotionEffectType.RESISTANCE, 6 * 60 * 20, 2, "Resistance III - 6:00"),
+                new BrewEffect(PotionEffectType.ABSORPTION, 8 * 60 * 20, 3, "Absorption IV - 8:00"),
+                new BrewEffect(PotionEffectType.HEALTH_BOOST, 8 * 60 * 20, 1, "Health Boost II - 8:00"),
+                new BrewEffect(PotionEffectType.REGENERATION, 2 * 60 * 20, 1, "Regeneration II - 2:00")
             )
         ),
         WIDOWSTEP_VIAL(
@@ -316,9 +322,10 @@ public final class BossPotionListener implements Listener {
             Color.fromRGB(85, 180, 90),
             List.of("widow_silk"),
             List.of(
-                new BrewEffect(PotionEffectType.INVISIBILITY, 2 * 60 * 20, 0, "Invisibility I - 2:00"),
-                new BrewEffect(PotionEffectType.SPEED, 2 * 60 * 20, 1, "Speed II - 2:00"),
-                new BrewEffect(PotionEffectType.JUMP_BOOST, 2 * 60 * 20, 1, "Jump Boost II - 2:00")
+                new BrewEffect(PotionEffectType.INVISIBILITY, 5 * 60 * 20, 0, "Invisibility I - 5:00"),
+                new BrewEffect(PotionEffectType.SPEED, 5 * 60 * 20, 2, "Speed III - 5:00"),
+                new BrewEffect(PotionEffectType.JUMP_BOOST, 5 * 60 * 20, 2, "Jump Boost III - 5:00"),
+                new BrewEffect(PotionEffectType.STRENGTH, 3 * 60 * 20, 0, "Strength I - 3:00")
             )
         );
 

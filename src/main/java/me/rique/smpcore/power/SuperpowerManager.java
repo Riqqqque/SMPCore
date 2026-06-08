@@ -63,6 +63,7 @@ import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.event.inventory.PrepareGrindstoneEvent;
 import org.bukkit.event.inventory.PrepareItemCraftEvent;
+import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.player.PlayerAnimationEvent;
 import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
@@ -135,6 +136,13 @@ public final class SuperpowerManager implements Listener {
     private static final int SHADOW_HIT_COOLDOWN_SECONDS = 7 * 60;
     private static final int TRAVEL_PORTAL_DURATION_SECONDS = 60;
     private static final int MONARCH_STORAGE_LIMIT = 15;
+    private static final double MONARCH_TARGET_RANGE = 34.0;
+    private static final double MONARCH_TARGET_VERTICAL_RANGE = 18.0;
+    private static final double MONARCH_MIN_HEALTH = 56.0;
+    private static final double MONARCH_HEALTH_MULTIPLIER = 2.75;
+    private static final double MONARCH_MIN_DAMAGE = 9.0;
+    private static final double MONARCH_DAMAGE_MULTIPLIER = 1.65;
+    private static final double MONARCH_MIN_SPEED = 0.30;
     private static final int FLORIST_HEAL_DURATION_SECONDS = 10;
     private static final int FLORIST_VINE_DAMAGE = 2;
     private static final int FLORIST_VINE_RANGE = 18;
@@ -323,6 +331,9 @@ public final class SuperpowerManager implements Listener {
     private final NamespacedKey keyStormcallerLightningEnabled;
     private final NamespacedKey keyMonarchSummonOwner;
     private final NamespacedKey keyMonarchSummonTag;
+    private final NamespacedKey keyMonarchBaseHealth;
+    private final NamespacedKey keyMonarchBaseDamage;
+    private final NamespacedKey keyMonarchBaseSpeed;
     private final Map<UUID, Integer> pendingFloristStickReturns = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> pendingTheWorldClockReturns = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> pendingDruidGrimoireReturns = new ConcurrentHashMap<>();
@@ -330,6 +341,7 @@ public final class SuperpowerManager implements Listener {
     private final Map<UUID, Long> recentPortalTravel = new ConcurrentHashMap<>();
     private final Map<UUID, Set<UUID>> monarchSummonsByOwner = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> monarchOwnerByMob = new ConcurrentHashMap<>();
+    private final Set<UUID> pendingMonarchUnsummonOwners = ConcurrentHashMap.newKeySet();
     private final Map<UUID, Long> floristCrouchGrowthCooldowns = new ConcurrentHashMap<>();
     private final Map<UUID, Long> floristLeftClickCooldowns = new ConcurrentHashMap<>();
     private final Map<UUID, Long> floristRightClickCooldowns = new ConcurrentHashMap<>();
@@ -384,6 +396,9 @@ public final class SuperpowerManager implements Listener {
         this.keyStormcallerLightningEnabled = new NamespacedKey(plugin, "superpower_stormcaller_lightning_enabled");
         this.keyMonarchSummonOwner = new NamespacedKey(plugin, "superpower_monarch_owner");
         this.keyMonarchSummonTag = new NamespacedKey(plugin, "superpower_monarch_summon");
+        this.keyMonarchBaseHealth = new NamespacedKey(plugin, "superpower_monarch_base_health");
+        this.keyMonarchBaseDamage = new NamespacedKey(plugin, "superpower_monarch_base_damage");
+        this.keyMonarchBaseSpeed = new NamespacedKey(plugin, "superpower_monarch_base_speed");
     }
 
     public void start() {
@@ -418,9 +433,9 @@ public final class SuperpowerManager implements Listener {
         for (UUID ownerId : new HashSet<>(activeTravelerPortals.keySet())) {
             closeTravelerPortal(ownerId, false);
         }
-        for (UUID ownerId : new HashSet<>(monarchSummonsByOwner.keySet())) {
-            despawnMonarchSummons(ownerId);
-        }
+        monarchSummonsByOwner.clear();
+        monarchOwnerByMob.clear();
+        pendingMonarchUnsummonOwners.clear();
         clearAllTimeStops();
         pendingFloristStickReturns.clear();
         pendingTheWorldClockReturns.clear();
@@ -772,6 +787,19 @@ public final class SuperpowerManager implements Listener {
         return true;
     }
 
+    public boolean handleMonarchDespawnCommand(Player player) {
+        if (!hasPower(player, SuperpowerType.MONARCH)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+
+        int removed = despawnMonarchSummons(player.getUniqueId(), true);
+        player.sendMessage(removed > 0
+            ? MessageUtil.success("Unsummoned <white>" + removed + "</white> Monarch summon(s).")
+            : MessageUtil.info("No loaded Monarch summons were active. Any unloaded summons will be removed when their chunks load."));
+        return true;
+    }
+
     public boolean handleTravelCommand(Player player, int x, int y, int z, String dimensionRaw) {
         if (!hasPower(player, SuperpowerType.TRAVELER)) {
             player.sendMessage(MessageUtil.warn("Nothing happens."));
@@ -913,7 +941,6 @@ public final class SuperpowerManager implements Listener {
         clearPowerAttributeModifiers(player);
         clearVirtualEnchanterLapis(player);
         closeTravelerPortal(player.getUniqueId(), false);
-        despawnMonarchSummons(player.getUniqueId());
         clearTimeStopForOwner(player.getUniqueId());
     }
 
@@ -951,7 +978,6 @@ public final class SuperpowerManager implements Listener {
         stopSupermanFlight(player, false);
         clearVirtualEnchanterLapis(player);
         closeTravelerPortal(playerId, false);
-        despawnMonarchSummons(playerId);
         clearTimeStopForOwner(playerId);
         timeStoppedPlayers.remove(playerId);
         recentPortalTravel.remove(playerId);
@@ -1415,6 +1441,34 @@ public final class SuperpowerManager implements Listener {
         if (event.getTarget() instanceof Player teammate && sameTeamOrSelf(ownerId, teammate.getUniqueId())) {
             event.setCancelled(true);
             mob.setTarget(null);
+            return;
+        }
+        if (event.getTarget() instanceof Tameable tameable
+            && tameable.getOwner() != null
+            && sameTeamOrSelf(ownerId, tameable.getOwner().getUniqueId())) {
+            event.setCancelled(true);
+            mob.setTarget(null);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onChunkLoad(ChunkLoadEvent event) {
+        for (Entity entity : event.getChunk().getEntities()) {
+            if (!(entity instanceof Mob mob) || !isTaggedMonarchSummon(mob)) {
+                continue;
+            }
+            UUID ownerId = monarchOwnerIdFromPdc(mob);
+            if (ownerId == null) {
+                mob.remove();
+                continue;
+            }
+            if (pendingMonarchUnsummonOwners.contains(ownerId)) {
+                mob.remove();
+                continue;
+            }
+            monarchOwnerByMob.put(mob.getUniqueId(), ownerId);
+            monarchSummonsByOwner.computeIfAbsent(ownerId, ignored -> ConcurrentHashMap.newKeySet()).add(mob.getUniqueId());
+            hardenMonarchSummon(mob, false);
         }
     }
 
@@ -1953,6 +2007,7 @@ public final class SuperpowerManager implements Listener {
             applyPassiveEffects(player);
         }
         cleanupRecentPortalTravel(now);
+        tickMonarchSummons();
     }
 
     private void applyPassiveEffects(Player player) {
@@ -3376,9 +3431,101 @@ public final class SuperpowerManager implements Listener {
         PersistentDataContainer pdc = mob.getPersistentDataContainer();
         pdc.set(keyMonarchSummonTag, PersistentDataType.BYTE, (byte) 1);
         pdc.set(keyMonarchSummonOwner, PersistentDataType.STRING, ownerId.toString());
-        mob.setPersistent(false);
+        pendingMonarchUnsummonOwners.remove(ownerId);
+        hardenMonarchSummon(mob, true);
         monarchOwnerByMob.put(mob.getUniqueId(), ownerId);
         monarchSummonsByOwner.computeIfAbsent(ownerId, ignored -> ConcurrentHashMap.newKeySet()).add(mob.getUniqueId());
+    }
+
+    private void hardenMonarchSummon(Mob mob, boolean healToFull) {
+        mob.setPersistent(true);
+        mob.setRemoveWhenFarAway(false);
+        mob.setCanPickupItems(false);
+        mob.setSilent(false);
+        double baseHealth = monarchBaseAttribute(mob, keyMonarchBaseHealth, Attribute.MAX_HEALTH, 20.0);
+        double baseDamage = monarchBaseAttribute(mob, keyMonarchBaseDamage, Attribute.ATTACK_DAMAGE, 4.0);
+        double baseSpeed = monarchBaseAttribute(mob, keyMonarchBaseSpeed, Attribute.MOVEMENT_SPEED, 0.23);
+        setMobAttributeBase(
+            mob,
+            Attribute.MAX_HEALTH,
+            Math.max(MONARCH_MIN_HEALTH, baseHealth * MONARCH_HEALTH_MULTIPLIER)
+        );
+        setMobAttributeBase(
+            mob,
+            Attribute.ATTACK_DAMAGE,
+            Math.max(MONARCH_MIN_DAMAGE, baseDamage * MONARCH_DAMAGE_MULTIPLIER)
+        );
+        setMobAttributeBase(
+            mob,
+            Attribute.MOVEMENT_SPEED,
+            Math.max(MONARCH_MIN_SPEED, baseSpeed * 1.20)
+        );
+        setMobAttributeBase(mob, Attribute.FOLLOW_RANGE, Math.max(42.0, currentMobAttribute(mob, Attribute.FOLLOW_RANGE, 24.0)));
+        setMobAttributeBase(mob, Attribute.KNOCKBACK_RESISTANCE, Math.max(0.25, currentMobAttribute(mob, Attribute.KNOCKBACK_RESISTANCE, 0.0)));
+        double maxHealth = Math.max(1.0, currentMobAttribute(mob, Attribute.MAX_HEALTH, MONARCH_MIN_HEALTH));
+        if (healToFull) {
+            mob.setHealth(maxHealth);
+        } else if (mob.getHealth() > maxHealth) {
+            mob.setHealth(maxHealth);
+        }
+        mob.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, Integer.MAX_VALUE, 0, false, false, false));
+        mob.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, Integer.MAX_VALUE, 0, false, false, false));
+        equipMonarchSummon(mob);
+    }
+
+    private double monarchBaseAttribute(Mob mob, NamespacedKey key, Attribute attribute, double fallback) {
+        PersistentDataContainer pdc = mob.getPersistentDataContainer();
+        Double stored = pdc.get(key, PersistentDataType.DOUBLE);
+        if (stored != null && stored > 0.0 && Double.isFinite(stored)) {
+            return stored;
+        }
+        double observed = currentMobAttribute(mob, attribute, fallback);
+        pdc.set(key, PersistentDataType.DOUBLE, observed);
+        return observed;
+    }
+
+    private void equipMonarchSummon(Mob mob) {
+        var equipment = mob.getEquipment();
+        if (equipment == null) {
+            return;
+        }
+        if (equipment.getItemInMainHand().getType().isAir()) {
+            Material weapon = mob.getType() == EntityType.SKELETON
+                || mob.getType() == EntityType.STRAY
+                || mob.getType() == EntityType.BOGGED
+                ? Material.BOW
+                : Material.IRON_AXE;
+            equipment.setItemInMainHand(new ItemStack(weapon));
+        }
+        if (equipment.getHelmet() == null || equipment.getHelmet().getType().isAir()) {
+            equipment.setHelmet(new ItemStack(Material.IRON_HELMET));
+        }
+        if (equipment.getChestplate() == null || equipment.getChestplate().getType().isAir()) {
+            equipment.setChestplate(new ItemStack(Material.IRON_CHESTPLATE));
+        }
+        if (equipment.getLeggings() == null || equipment.getLeggings().getType().isAir()) {
+            equipment.setLeggings(new ItemStack(Material.IRON_LEGGINGS));
+        }
+        if (equipment.getBoots() == null || equipment.getBoots().getType().isAir()) {
+            equipment.setBoots(new ItemStack(Material.IRON_BOOTS));
+        }
+        equipment.setItemInMainHandDropChance(0.0f);
+        equipment.setHelmetDropChance(0.0f);
+        equipment.setChestplateDropChance(0.0f);
+        equipment.setLeggingsDropChance(0.0f);
+        equipment.setBootsDropChance(0.0f);
+    }
+
+    private double currentMobAttribute(Mob mob, Attribute attribute, double fallback) {
+        var instance = mob.getAttribute(attribute);
+        return instance == null ? fallback : instance.getBaseValue();
+    }
+
+    private void setMobAttributeBase(Mob mob, Attribute attribute, double value) {
+        var instance = mob.getAttribute(attribute);
+        if (instance != null) {
+            instance.setBaseValue(value);
+        }
     }
 
     private Player monarchOwnerOf(Entity entity) {
@@ -3390,7 +3537,7 @@ public final class SuperpowerManager implements Listener {
         if (owner == null || target == null) {
             return;
         }
-        if (target instanceof Player teammate && sameTeamOrSelf(owner.getUniqueId(), teammate.getUniqueId())) {
+        if (!isValidMonarchTarget(owner.getUniqueId(), target, true)) {
             return;
         }
 
@@ -3401,6 +3548,9 @@ public final class SuperpowerManager implements Listener {
 
         for (UUID mobId : new HashSet<>(summons)) {
             Entity entity = Bukkit.getEntity(mobId);
+            if (entity == null) {
+                continue;
+            }
             if (!(entity instanceof Mob mob) || !mob.isValid() || mob.isDead()) {
                 summons.remove(mobId);
                 monarchOwnerByMob.remove(mobId);
@@ -3421,16 +3571,130 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void despawnMonarchSummons(UUID ownerId) {
+        despawnMonarchSummons(ownerId, true);
+    }
+
+    private int despawnMonarchSummons(UUID ownerId, boolean rememberUnloaded) {
+        if (rememberUnloaded && ownerId != null) {
+            pendingMonarchUnsummonOwners.add(ownerId);
+        }
         Set<UUID> summons = monarchSummonsByOwner.remove(ownerId);
         if (summons == null) {
-            return;
+            return 0;
         }
+        int removed = 0;
         for (UUID mobId : summons) {
             monarchOwnerByMob.remove(mobId);
             Entity entity = Bukkit.getEntity(mobId);
             if (entity != null && entity.isValid()) {
                 entity.remove();
+                removed++;
             }
+        }
+        return removed;
+    }
+
+    private void tickMonarchSummons() {
+        for (Map.Entry<UUID, Set<UUID>> entry : new HashMap<>(monarchSummonsByOwner).entrySet()) {
+            UUID ownerId = entry.getKey();
+            Set<UUID> summons = entry.getValue();
+            if (summons == null || summons.isEmpty()) {
+                monarchSummonsByOwner.remove(ownerId);
+                continue;
+            }
+
+            for (UUID mobId : new HashSet<>(summons)) {
+                Entity entity = Bukkit.getEntity(mobId);
+                if (entity == null) {
+                    continue;
+                }
+                if (!(entity instanceof Mob mob) || !mob.isValid() || mob.isDead()) {
+                    summons.remove(mobId);
+                    monarchOwnerByMob.remove(mobId);
+                    continue;
+                }
+
+                hardenMonarchSummon(mob, false);
+                LivingEntity currentTarget = mob.getTarget();
+                if (currentTarget != null
+                    && currentTarget.isValid()
+                    && !currentTarget.isDead()
+                    && isValidMonarchTarget(ownerId, currentTarget, true)) {
+                    continue;
+                }
+
+                LivingEntity nextTarget = findBestMonarchTarget(ownerId, mob);
+                mob.setTarget(nextTarget);
+            }
+
+            if (summons.isEmpty()) {
+                monarchSummonsByOwner.remove(ownerId);
+            }
+        }
+    }
+
+    private LivingEntity findBestMonarchTarget(UUID ownerId, Mob mob) {
+        LivingEntity bestHostile = null;
+        double bestPlayerDistance = Double.MAX_VALUE;
+        double bestHostileDistance = Double.MAX_VALUE;
+
+        for (Entity entity : mob.getWorld().getNearbyEntities(
+            mob.getLocation(),
+            MONARCH_TARGET_RANGE,
+            MONARCH_TARGET_VERTICAL_RANGE,
+            MONARCH_TARGET_RANGE
+        )) {
+            if (!(entity instanceof LivingEntity living) || living.equals(mob)) {
+                continue;
+            }
+            if (!isValidMonarchTarget(ownerId, living, false)) {
+                continue;
+            }
+            double distance = living.getLocation().distanceSquared(mob.getLocation());
+            if (living instanceof Player && distance < bestPlayerDistance) {
+                bestPlayerDistance = distance;
+                bestHostile = living;
+                continue;
+            }
+            if (bestPlayerDistance == Double.MAX_VALUE && isHostileMob(living) && distance < bestHostileDistance) {
+                bestHostileDistance = distance;
+                bestHostile = living;
+            }
+        }
+        return bestHostile;
+    }
+
+    private boolean isValidMonarchTarget(UUID ownerId, LivingEntity target, boolean allowPassive) {
+        if (target == null || target.isDead() || !target.isValid()) {
+            return false;
+        }
+        if (target instanceof Player player) {
+            return player.getGameMode() != GameMode.SPECTATOR
+                && !sameTeamOrSelf(ownerId, player.getUniqueId());
+        }
+        if (monarchOwnerByMob.containsKey(target.getUniqueId())) {
+            return false;
+        }
+        if (target instanceof Tameable tameable && tameable.getOwner() != null) {
+            return !sameTeamOrSelf(ownerId, tameable.getOwner().getUniqueId());
+        }
+        return allowPassive || isHostileMob(target);
+    }
+
+    private boolean isTaggedMonarchSummon(Mob mob) {
+        Byte tag = mob.getPersistentDataContainer().get(keyMonarchSummonTag, PersistentDataType.BYTE);
+        return tag != null && tag == (byte) 1;
+    }
+
+    private UUID monarchOwnerIdFromPdc(Mob mob) {
+        String raw = mob.getPersistentDataContainer().get(keyMonarchSummonOwner, PersistentDataType.STRING);
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException ignored) {
+            return null;
         }
     }
 
@@ -4549,9 +4813,12 @@ public final class SuperpowerManager implements Listener {
             }
             case MONARCH -> {
                 lore.add(MM.deserialize("<gray>Stores slain mobs for later battle.</gray>"));
+                lore.add(MM.deserialize("<gray>Summons are reinforced with armor, weapons, health, speed, and resistance.</gray>"));
+                lore.add(MM.deserialize("<gray>They persist during normal gameplay and guard against enemies of your team.</gray>"));
+                lore.add(MM.deserialize("<gray>They auto-prioritize enemy players, then hostile mobs. Passive mobs require combat direction.</gray>"));
                 lore.add(MM.deserialize("<gray>Undead mobs refuse to target the Monarch.</gray>"));
                 lore.add(MM.deserialize("<gray>Storage limit: <white>" + MONARCH_STORAGE_LIMIT + "</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Command: <white>/msummon [amount]</white></gray>"));
+                lore.add(MM.deserialize("<gray>Command: <white>/msummon [amount]</white> or <white>/msummon despawn</white></gray>"));
             }
             case SHADOW -> {
                 lore.add(MM.deserialize("<gray>Toggle invisibility for <white>15 minutes</white>.</gray>"));
