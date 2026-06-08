@@ -1945,7 +1945,7 @@ public final class BossManager implements Listener {
             textDisplay.setPersistent(false);
             textDisplay.setGravity(false);
             textDisplay.setBillboard(Display.Billboard.CENTER);
-            textDisplay.setSeeThrough(true);
+            textDisplay.setSeeThrough(false);
             textDisplay.setShadowed(true);
             textDisplay.setDefaultBackground(false);
             textDisplay.setTextOpacity((byte) 255);

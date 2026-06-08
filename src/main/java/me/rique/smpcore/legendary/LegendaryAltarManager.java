@@ -917,7 +917,7 @@ public final class LegendaryAltarManager implements Listener {
                 display.setPersistent(false);
                 display.setInvulnerable(true);
                 display.setBillboard(Display.Billboard.CENTER);
-                display.setSeeThrough(true);
+                display.setSeeThrough(false);
                 display.setShadowed(false);
                 display.setLineWidth(220);
                 VisualRangeUtil.applyHologramRange(display);

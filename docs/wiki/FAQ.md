@@ -43,3 +43,7 @@ Yes. Staff can use `/itemaudit <player> [item]`. Major custom items receive trac
 ## Do cooldowns reset if someone relogs?
 
 Important player cooldowns are stored on the player where needed, including Covenant utility relics.
+
+## Can holograms be seen through walls?
+
+No. Custom holograms use the same 32-block visibility cap as player nameplates and respect solid blocks, so depot, item, boss, altar, forge, lectern, and table labels should not show through walls.

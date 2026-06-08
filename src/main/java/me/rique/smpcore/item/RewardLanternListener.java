@@ -461,7 +461,7 @@ public final class RewardLanternListener implements Listener {
             display.setInvulnerable(true);
             display.setAlignment(TextDisplay.TextAlignment.CENTER);
             display.setBillboard(Display.Billboard.CENTER);
-            display.setSeeThrough(true);
+            display.setSeeThrough(false);
             display.setShadowed(false);
             VisualRangeUtil.applyHologramRange(display);
             display.setLineWidth(200);

@@ -1736,9 +1736,9 @@ public final class AwakeningTableListener implements Listener {
             display.setInvulnerable(true);
             display.setAlignment(TextDisplay.TextAlignment.CENTER);
             display.setBillboard(Display.Billboard.CENTER);
-            display.setSeeThrough(true);
+            display.setSeeThrough(false);
             display.setShadowed(false);
-            display.setViewRange(VisualRangeUtil.clampHologramViewRange(plugin.getConfigManager().awakeningTableHologramViewRange));
+            VisualRangeUtil.applyHologramRange(display, plugin.getConfigManager().awakeningTableHologramViewRange);
             display.setLineWidth(220);
             display.setBackgroundColor(Color.fromARGB(96, 12, 0, 0));
         });

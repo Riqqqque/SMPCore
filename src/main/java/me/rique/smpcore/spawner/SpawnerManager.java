@@ -283,7 +283,7 @@ public final class SpawnerManager {
             entity.text(buildHologramText(world, data));
             entity.setAlignment(TextDisplay.TextAlignment.CENTER);
             entity.setBillboard(Display.Billboard.CENTER);
-            entity.setViewRange(VisualRangeUtil.clampHologramViewRange(plugin.getConfigManager().spawnerHologramViewRange));
+            VisualRangeUtil.applyHologramRange(entity, plugin.getConfigManager().spawnerHologramViewRange);
             entity.setPersistent(false);
             entity.setSeeThrough(false);
             entity.setBackgroundColor(Color.fromARGB(160, 0, 0, 0));
