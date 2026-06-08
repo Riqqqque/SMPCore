@@ -23,7 +23,9 @@ import org.bukkit.event.enchantment.EnchantItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
+import org.bukkit.event.inventory.PrepareGrindstoneEvent;
 import org.bukkit.inventory.AnvilInventory;
+import org.bukkit.inventory.GrindstoneInventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
@@ -108,6 +110,25 @@ public final class ReplenishListener implements Listener {
         });
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onPrepareGrindstone(PrepareGrindstoneEvent event) {
+        if (!(event.getInventory() instanceof GrindstoneInventory grindstone)) return;
+
+        ItemStack top = grindstone.getUpperItem();
+        ItemStack bottom = grindstone.getLowerItem();
+        if (!hasReplenish(top) && !hasReplenish(bottom)) return;
+
+        ItemStack result = event.getResult();
+        if (result != null && result.getType() != Material.AIR) {
+            event.setResult(stripReplenish(result.clone()));
+            return;
+        }
+
+        ItemStack source = hasReplenish(top) ? top : bottom;
+        if (source == null || source.getType() == Material.AIR) return;
+        event.setResult(stripReplenish(source.clone()));
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onAnvilClick(InventoryClickEvent event) {
         if (!(event.getWhoClicked() instanceof Player player)) return;
@@ -187,6 +208,19 @@ public final class ReplenishListener implements Listener {
         lore.removeIf(line -> REPLENISH_LORE_LINE.equalsIgnoreCase(PLAIN.serialize(line).trim()));
         lore.add(0, MM.deserialize("<gray>Replenish I</gray>"));
         meta.lore(lore);
+        hoe.setItemMeta(meta);
+        return hoe;
+    }
+
+    private ItemStack stripReplenish(ItemStack hoe) {
+        if (!isHoe(hoe)) return hoe;
+        ItemMeta meta = hoe.getItemMeta();
+        if (meta == null) return hoe;
+
+        meta.getPersistentDataContainer().remove(keyReplenishHoe);
+        List<Component> lore = meta.lore() == null ? new ArrayList<>() : new ArrayList<>(meta.lore());
+        lore.removeIf(line -> REPLENISH_LORE_LINE.equalsIgnoreCase(PLAIN.serialize(line).trim()));
+        meta.lore(lore.isEmpty() ? null : lore);
         hoe.setItemMeta(meta);
         return hoe;
     }
