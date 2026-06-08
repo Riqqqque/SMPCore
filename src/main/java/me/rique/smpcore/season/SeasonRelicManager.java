@@ -2,6 +2,7 @@ package me.rique.smpcore.season;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.boss.BossManager;
+import me.rique.smpcore.command.MainMenuCommand;
 import me.rique.smpcore.legendary.MythicForgeListener;
 import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.util.BedrockCompat;
@@ -101,6 +102,7 @@ public final class SeasonRelicManager implements Listener {
     private final Map<String, RelicDefinition> relics;
     private final Map<RelicCategory, List<RelicDefinition>> relicsByCategory;
     private final Map<String, List<RelicDefinition>> armorSets;
+    private final Map<UUID, ArmoryBackTarget> menuBackTargets = new java.util.concurrent.ConcurrentHashMap<>();
     private final Set<UUID> trueSightGlowingTargets = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private BukkitTask passiveTask;
 
@@ -230,8 +232,13 @@ public final class SeasonRelicManager implements Listener {
     }
 
     public void openReliquaryEntry(Player player, String recipeId) {
+        openReliquaryEntry(player, recipeId, false);
+    }
+
+    public void openReliquaryEntry(Player player, String recipeId, boolean reliquaryReturnsToMainMenu) {
+        setBackTarget(player, reliquaryReturnsToMainMenu ? ArmoryBackTarget.RELIQUARY_THEN_MAIN_MENU : ArmoryBackTarget.RELIQUARY);
         if (ARMORY_MENU_ID.equals(recipeId)) {
-            openArmoryMenu(player);
+            openArmoryMenuInternal(player);
             return;
         }
         if (isRelicId(recipeId)) {
@@ -240,6 +247,22 @@ public final class SeasonRelicManager implements Listener {
     }
 
     public void openArmoryMenu(Player player) {
+        setBackTarget(player, ArmoryBackTarget.RELIQUARY);
+        openArmoryMenuInternal(player);
+    }
+
+    public void openArmoryMenuFromReliquary(Player player, boolean reliquaryReturnsToMainMenu) {
+        setBackTarget(player, reliquaryReturnsToMainMenu ? ArmoryBackTarget.RELIQUARY_THEN_MAIN_MENU : ArmoryBackTarget.RELIQUARY);
+        openArmoryMenuInternal(player);
+    }
+
+    public void openArmoryMenuFromMainMenu(Player player) {
+        setBackTarget(player, ArmoryBackTarget.MAIN_MENU);
+        openArmoryMenuInternal(player);
+    }
+
+    private void openArmoryMenuInternal(Player player) {
+        ArmoryBackTarget backTarget = backTarget(player);
         Inventory inventory = Bukkit.createInventory(
             new SeasonMenuHolder(MenuView.HUB, null, null),
             54,
@@ -275,9 +298,41 @@ public final class SeasonRelicManager implements Listener {
                 "<dark_gray>Boss trophies unlock gear for the next step.</dark_gray>"
             )
         ));
-        inventory.setItem(BACK_SLOT, backItem("Return to Reliquary"));
+        inventory.setItem(BACK_SLOT, backItem(backTarget == ArmoryBackTarget.MAIN_MENU ? "Return to /menu" : "Return to Reliquary"));
         inventory.setItem(CLOSE_SLOT, createGuiItem(Material.BARRIER, "<red>Close</red>", List.of("<gray>Close the Armory.</gray>")));
         player.openInventory(inventory);
+    }
+
+    private void setBackTarget(Player player, ArmoryBackTarget target) {
+        if (player == null) {
+            return;
+        }
+        menuBackTargets.put(player.getUniqueId(), target == null ? ArmoryBackTarget.RELIQUARY : target);
+    }
+
+    private ArmoryBackTarget backTarget(Player player) {
+        if (player == null) {
+            return ArmoryBackTarget.RELIQUARY;
+        }
+        return menuBackTargets.getOrDefault(player.getUniqueId(), ArmoryBackTarget.RELIQUARY);
+    }
+
+    private void openArmoryParent(Player player) {
+        ArmoryBackTarget target = backTarget(player);
+        if (target == ArmoryBackTarget.MAIN_MENU) {
+            menuBackTargets.remove(player.getUniqueId());
+            MainMenuCommand.openMenu(plugin, player);
+            return;
+        }
+        if (plugin.getLegendaryListener() == null) {
+            player.closeInventory();
+            return;
+        }
+        if (target == ArmoryBackTarget.RELIQUARY_THEN_MAIN_MENU) {
+            plugin.getLegendaryListener().openRecipeMenuFromMainMenu(player);
+        } else {
+            plugin.getLegendaryListener().openRecipeMenu(player);
+        }
     }
 
     public void openCategoryMenu(Player player, RelicCategory category) {
@@ -459,11 +514,7 @@ public final class SeasonRelicManager implements Listener {
         }
         if (event.getRawSlot() == BACK_SLOT) {
             if (holder.view() == MenuView.HUB) {
-                if (plugin.getLegendaryListener() != null) {
-                    plugin.getLegendaryListener().openRecipeMenu(player);
-                } else {
-                    player.closeInventory();
-                }
+                openArmoryParent(player);
             } else if (holder.view() == MenuView.RELIC && holder.relicId() != null) {
                 RelicDefinition definition = relics.get(holder.relicId());
                 if (definition != null && definition.armorSetId() != null) {
@@ -471,16 +522,16 @@ public final class SeasonRelicManager implements Listener {
                 } else if (holder.category() != null) {
                     openCategoryMenu(player, holder.category());
                 } else {
-                    openArmoryMenu(player);
+                    openArmoryMenuInternal(player);
                 }
             } else if (holder.view() == MenuView.ARMOR_SET) {
                 openCategoryMenu(player, RelicCategory.ARMOR_SETS);
             } else if (holder.view() == MenuView.CATEGORY) {
-                openArmoryMenu(player);
+                openArmoryMenuInternal(player);
             } else if (holder.category() != null) {
                 openCategoryMenu(player, holder.category());
             } else {
-                openArmoryMenu(player);
+                openArmoryMenuInternal(player);
             }
             return;
         }
@@ -2189,6 +2240,12 @@ public final class SeasonRelicManager implements Listener {
         CATEGORY,
         ARMOR_SET,
         RELIC
+    }
+
+    private enum ArmoryBackTarget {
+        RELIQUARY,
+        RELIQUARY_THEN_MAIN_MENU,
+        MAIN_MENU
     }
 
     private enum RelicKind {

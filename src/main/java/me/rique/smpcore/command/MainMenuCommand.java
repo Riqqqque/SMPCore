@@ -42,7 +42,7 @@ public final class MainMenuCommand implements Listener {
                 .requires(src -> src.getSender() instanceof Player player && player.hasPermission("smpcore.menu"))
                 .executes(ctx -> {
                     Player player = (Player) ctx.getSource().getSender();
-                    open(plugin, player);
+                    openMenu(plugin, player);
                     return Command.SINGLE_SUCCESS;
                 })
                 .build(),
@@ -51,7 +51,7 @@ public final class MainMenuCommand implements Listener {
         );
     }
 
-    private static void open(SMPCore plugin, Player player) {
+    public static void openMenu(SMPCore plugin, Player player) {
         Inventory inventory = Bukkit.createInventory(
             new MainMenuHolder(),
             SIZE,
@@ -169,7 +169,7 @@ public final class MainMenuCommand implements Listener {
             player.sendMessage(MessageUtil.error("You do not have permission to use the Reliquary."));
             return;
         }
-        plugin.getLegendaryListener().openRecipeMenu(player);
+        plugin.getLegendaryListener().openRecipeMenuFromMainMenu(player);
     }
 
     private void openMythics(Player player) {
@@ -177,7 +177,7 @@ public final class MainMenuCommand implements Listener {
             player.sendMessage(MessageUtil.error("You do not have permission to view mythics."));
             return;
         }
-        plugin.getLegendaryListener().openMythicFusionMenu(player);
+        plugin.getLegendaryListener().openMythicFusionMenuFromMainMenu(player);
     }
 
     private void openArmory(Player player) {
@@ -189,7 +189,7 @@ public final class MainMenuCommand implements Listener {
             player.sendMessage(MessageUtil.error("The Covenant Armory is not ready yet."));
             return;
         }
-        plugin.getSeasonRelicManager().openArmoryMenu(player);
+        plugin.getSeasonRelicManager().openArmoryMenuFromMainMenu(player);
     }
 
     private void openBossRituals(Player player) {
