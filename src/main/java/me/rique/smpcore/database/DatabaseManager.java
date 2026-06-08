@@ -908,6 +908,47 @@ public final class DatabaseManager {
         }, executor);
     }
 
+    public CompletableFuture<Boolean> renameTeam(String oldName, String newName) {
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = connection()) {
+                conn.setAutoCommit(false);
+                try (PreparedStatement psTeam = conn.prepareStatement("UPDATE teams SET name=? WHERE name=?");
+                     PreparedStatement psMembers = conn.prepareStatement("UPDATE team_members SET team_name=? WHERE team_name=?");
+                     PreparedStatement psVault = conn.prepareStatement("UPDATE team_vaults SET team_name=? WHERE team_name=?")) {
+                    psTeam.setString(1, newName);
+                    psTeam.setString(2, oldName);
+                    int updated = psTeam.executeUpdate();
+                    if (updated == 0) {
+                        conn.rollback();
+                        return false;
+                    }
+
+                    psMembers.setString(1, newName);
+                    psMembers.setString(2, oldName);
+                    psMembers.executeUpdate();
+
+                    psVault.setString(1, newName);
+                    psVault.setString(2, oldName);
+                    psVault.executeUpdate();
+
+                    conn.commit();
+                    return true;
+                } catch (SQLException e) {
+                    conn.rollback();
+                    if (isConstraintViolation(e)) {
+                        return false;
+                    }
+                    throw e;
+                } finally {
+                    conn.setAutoCommit(true);
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("renameTeam: " + e.getMessage());
+                throw new RuntimeException("renameTeam failed", e);
+            }
+        }, executor);
+    }
+
     // ── Player Queries ────────────────────────────────────────────────────────
 
     public CompletableFuture<byte[]> loadTeamVault(String teamName) {

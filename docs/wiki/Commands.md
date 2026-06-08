@@ -10,7 +10,7 @@
 - `/bossbrews`, `/bosspotions`, `/brews` - opens the boss-material potion guide.
 - `/leaderboards`, `/leaderboard`, `/lb`, `/topstats` - opens persistent server leaderboards.
 - `/wiki`, `/guide`, `/smpwiki` - shows the clickable wiki link.
-- `/team` - team commands.
+- `/team` - team commands. Leaders can use `/team color <color>` and `/team rename "new name"`.
 - `/tvault`, `/teamvault` - opens team vault storage.
 - `/powerinfo` - opens superpower information.
 - `/stormcaller on|off|toggle|status` - Stormcaller-only lightning strike toggle.
