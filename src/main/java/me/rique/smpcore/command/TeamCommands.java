@@ -64,6 +64,39 @@ public final class TeamCommands {
                                 });
                             return Command.SINGLE_SUCCESS;
                         })))
+                .then(Commands.literal("color")
+                    .then(Commands.argument("color", StringArgumentType.word())
+                        .executes(ctx -> {
+                            Player player = (Player) ctx.getSource().getSender();
+                            String color = StringArgumentType.getString(ctx, "color");
+                            plugin.getTeamManager().changeTeamColor(player, color)
+                                .thenAccept(error ->
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if (!player.isOnline()) return;
+                                        if (error != null) {
+                                            player.sendMessage(MessageUtil.error(error));
+                                            return;
+                                        }
+                                        player.sendMessage(MessageUtil.success("Team color changed to <white>" + color + "</white>."));
+                                    })
+                                )
+                                .exceptionally(ex -> {
+                                    plugin.getLogger().severe("team color failed: " + ex.getMessage());
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if (player.isOnline()) {
+                                            player.sendMessage(MessageUtil.error("Could not change team color right now."));
+                                        }
+                                    });
+                                    return null;
+                                });
+                            return Command.SINGLE_SUCCESS;
+                        })))
+                .then(Commands.literal("rename")
+                    .then(Commands.argument("name", StringArgumentType.greedyString())
+                        .executes(ctx -> renameTeam(ctx.getSource().getSender() instanceof Player player ? player : null, plugin, StringArgumentType.getString(ctx, "name")))))
+                .then(Commands.literal("name")
+                    .then(Commands.argument("name", StringArgumentType.greedyString())
+                        .executes(ctx -> renameTeam(ctx.getSource().getSender() instanceof Player player ? player : null, plugin, StringArgumentType.getString(ctx, "name")))))
                 .then(Commands.literal("invite")
                     .then(Commands.argument("target", ArgumentTypes.player())
                         .executes(ctx -> {
@@ -186,6 +219,33 @@ public final class TeamCommands {
         for (String line : teamManager.teamHelpLines()) {
             player.sendMessage(MessageUtil.prefixedRaw(line));
         }
+    }
+
+    private static int renameTeam(Player player, SMPCore plugin, String name) {
+        if (player == null) {
+            return 0;
+        }
+        plugin.getTeamManager().renameTeam(player, name)
+            .thenAccept(error ->
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (!player.isOnline()) return;
+                    if (error != null) {
+                        player.sendMessage(MessageUtil.error(error));
+                        return;
+                    }
+                    player.sendMessage(MessageUtil.success("Team renamed to <white>" + name + "</white>."));
+                })
+            )
+            .exceptionally(ex -> {
+                plugin.getLogger().severe("team rename failed: " + ex.getMessage());
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (player.isOnline()) {
+                        player.sendMessage(MessageUtil.error("Could not rename team right now."));
+                    }
+                });
+                return null;
+            });
+        return Command.SINGLE_SUCCESS;
     }
 
     private static TeamCreateInput parseCreateInput(String raw, TeamManager teamManager) {

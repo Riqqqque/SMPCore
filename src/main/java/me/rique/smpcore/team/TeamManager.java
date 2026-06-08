@@ -79,6 +79,7 @@ public final class TeamManager implements Listener {
     private final Map<String, CompletableFuture<TeamVaultSession>> vaultLoadingByTeamKey = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<Void>> vaultSaveChainsByTeamKey = new ConcurrentHashMap<>();
     private final Set<UUID> pendingCrownReturns = ConcurrentHashMap.newKeySet();
+    private final Set<String> renamingTeamKeys = ConcurrentHashMap.newKeySet();
     private volatile boolean teamsLoaded;
     private volatile boolean teamsLoading;
 
@@ -439,12 +440,126 @@ public final class TeamManager implements Listener {
             });
     }
 
+    public CompletableFuture<String> changeTeamColor(Player owner, String rawColor) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) return CompletableFuture.completedFuture(unavailable);
+
+        TeamData team = teamOf(owner.getUniqueId());
+        if (team == null) return CompletableFuture.completedFuture("You are not in a team.");
+        if (!team.owner.equals(owner.getUniqueId())) {
+            return CompletableFuture.completedFuture("Only the team owner can change the team color.");
+        }
+        if (renamingTeamKeys.contains(team.key)) {
+            return CompletableFuture.completedFuture("Team settings are already updating. Try again in a moment.");
+        }
+
+        TeamColor color = TeamColor.fromId(rawColor);
+        if (color == null) {
+            return CompletableFuture.completedFuture("Unknown team color. Use /team colors.");
+        }
+        if (team.color == color) {
+            return CompletableFuture.completedFuture("Your team already uses that color.");
+        }
+
+        String teamKey = team.key;
+        UUID ownerId = owner.getUniqueId();
+        TeamColor finalColor = color;
+        return plugin.getDatabase().setTeamColor(team.displayName, finalColor.id)
+            .handle((ignored, ex) -> {
+                if (ex == null) return null;
+                plugin.getLogger().severe("setTeamColor failed: " + ex.getMessage());
+                return "Could not change team color right now.";
+            })
+            .thenCompose(error -> runOnMainThread(() -> {
+                if (error != null) return error;
+                TeamData current = teamsByKey.get(teamKey);
+                if (current == null) return "That team no longer exists.";
+                if (!current.owner.equals(ownerId)) return "Only the team owner can change the team color.";
+
+                current.color = finalColor;
+                refreshTeamVisuals(current);
+                return (String) null;
+            }));
+    }
+
+    public CompletableFuture<String> renameTeam(Player owner, String rawName) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) return CompletableFuture.completedFuture(unavailable);
+
+        TeamData team = teamOf(owner.getUniqueId());
+        if (team == null) return CompletableFuture.completedFuture("You are not in a team.");
+        if (!team.owner.equals(owner.getUniqueId())) {
+            return CompletableFuture.completedFuture("Only the team owner can rename the team.");
+        }
+
+        String displayName = normalizeDisplayName(rawName);
+        String validationError = validateTeamName(displayName);
+        if (validationError != null) return CompletableFuture.completedFuture(validationError);
+
+        String oldName = team.displayName;
+        String oldKey = team.key;
+        String newKey = key(displayName);
+        if (oldName.equals(displayName)) {
+            return CompletableFuture.completedFuture("Your team already uses that name.");
+        }
+        if (!oldKey.equals(newKey) && teamsByKey.containsKey(newKey)) {
+            return CompletableFuture.completedFuture("That team already exists.");
+        }
+        if (!renamingTeamKeys.add(oldKey)) {
+            return CompletableFuture.completedFuture("Team settings are already updating. Try again in a moment.");
+        }
+
+        UUID ownerId = owner.getUniqueId();
+        return saveAndDiscardVaultForRename(team)
+            .thenCompose(ignored -> plugin.getDatabase().renameTeam(oldName, displayName)
+                .handle((renamed, ex) -> {
+                    if (ex != null) {
+                        plugin.getLogger().severe("renameTeam failed: " + ex.getMessage());
+                        return "Could not rename team right now.";
+                    }
+                    if (!renamed) {
+                        return "That team already exists.";
+                    }
+                    return null;
+                }))
+            .exceptionally(ex -> {
+                plugin.getLogger().severe("renameTeam failed: " + ex.getMessage());
+                return "Could not rename team right now.";
+            })
+            .thenCompose(error -> runOnMainThread(() -> {
+                renamingTeamKeys.remove(oldKey);
+                if (error != null) return error;
+
+                TeamData current = teamsByKey.get(oldKey);
+                if (current == null) return "That team no longer exists.";
+                if (!current.owner.equals(ownerId)) return "Only the team owner can rename the team.";
+                if (!oldKey.equals(newKey) && teamsByKey.containsKey(newKey)) {
+                    return "That team already exists.";
+                }
+
+                teamsByKey.remove(oldKey);
+                unregisterScoreboardTeam(oldKey);
+                current.key = newKey;
+                current.displayName = displayName;
+                teamsByKey.put(newKey, current);
+                for (UUID member : current.members) {
+                    teamByPlayer.put(member, newKey);
+                }
+                invitesByTarget.replaceAll((targetId, invite) -> invite.teamKey().equals(oldKey)
+                    ? new InviteData(newKey, invite.inviter(), invite.expiresAt())
+                    : invite);
+                refreshTeamVisuals(current);
+                return (String) null;
+            }));
+    }
+
     public String invite(Player inviter, Player target) {
         String unavailable = teamsUnavailableMessage();
         if (unavailable != null) return unavailable;
 
         TeamData team = teamOf(inviter.getUniqueId());
         if (team == null) return "You are not in a team.";
+        if (renamingTeamKeys.contains(team.key)) return "Team settings are updating. Try again in a moment.";
         if (!team.owner.equals(inviter.getUniqueId())) {
             return "Only the team owner can invite players.";
         }
@@ -477,6 +592,10 @@ public final class TeamManager implements Listener {
 
         TeamData team = teamsByKey.get(invite.teamKey);
         if (team == null) return CompletableFuture.completedFuture("That team no longer exists.");
+        if (renamingTeamKeys.contains(team.key)) {
+            invitesByTarget.put(targetId, invite);
+            return CompletableFuture.completedFuture("Team settings are updating. Try again in a moment.");
+        }
 
         team.members.add(targetId);
         teamByPlayer.put(targetId, team.key);
@@ -528,6 +647,9 @@ public final class TeamManager implements Listener {
         UUID playerId = player.getUniqueId();
         TeamData team = teamOf(playerId);
         if (team == null) return CompletableFuture.completedFuture("You are not in a team.");
+        if (renamingTeamKeys.contains(team.key)) {
+            return CompletableFuture.completedFuture("Team settings are updating. Try again in a moment.");
+        }
 
         String teamName = team.displayName;
         String teamKey = team.key;
@@ -598,6 +720,9 @@ public final class TeamManager implements Listener {
         if (team == null) return CompletableFuture.completedFuture("You are not in a team.");
         if (!team.owner.equals(owner.getUniqueId())) {
             return CompletableFuture.completedFuture("Only the team owner can disband the team.");
+        }
+        if (renamingTeamKeys.contains(team.key)) {
+            return CompletableFuture.completedFuture("Team settings are updating. Try again in a moment.");
         }
 
         String teamName = team.displayName;
@@ -676,6 +801,10 @@ public final class TeamManager implements Listener {
         TeamData team = teamOf(player.getUniqueId());
         if (team == null) {
             player.sendMessage(MessageUtil.error("You are not in a team."));
+            return;
+        }
+        if (renamingTeamKeys.contains(team.key)) {
+            player.sendMessage(MessageUtil.error("Team settings are updating. Try again in a moment."));
             return;
         }
 
@@ -776,6 +905,8 @@ public final class TeamManager implements Listener {
             "<gold><bold>Team Commands</bold></gold>",
             "<gray><white>/team create \"name\" [color]</white> - Create a team</gray>",
             "<gray><white>/team colors</white> - View team colors</gray>",
+            "<gray><white>/team color <color></white> - Change team color (owner)</gray>",
+            "<gray><white>/team rename \"name\"</white> - Rename your team (owner)</gray>",
             "<gray><white>/team invite <player></white> - Invite a player</gray>",
             "<gray><white>/team accept</white> / <white>/team deny</white> - Handle invites</gray>",
             "<gray><white>/team leave</white> - Leave your team</gray>",
@@ -896,6 +1027,38 @@ public final class TeamManager implements Listener {
             session.inventory(),
             "team_vault:" + session.displayName() + ":" + reason
         );
+    }
+
+    private CompletableFuture<Void> saveAndDiscardVaultForRename(TeamData team) {
+        TeamVaultSession session = teamVaultsByKey.get(team.key);
+        if (session == null) {
+            vaultLoadingByTeamKey.remove(team.key);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        for (var viewer : List.copyOf(session.inventory().getViewers())) {
+            viewer.closeInventory();
+        }
+
+        return saveTeamVault(session)
+            .thenCompose(ignored -> runOnMainThread(() -> {
+                teamVaultsByKey.remove(team.key, session);
+                vaultLoadingByTeamKey.remove(team.key);
+                return null;
+            }));
+    }
+
+    private void refreshTeamVisuals(TeamData team) {
+        getOrCreateScoreboardTeam(team);
+        for (UUID memberId : team.members) {
+            Player online = Bukkit.getPlayer(memberId);
+            if (online == null || !online.isOnline()) {
+                continue;
+            }
+            applyTeamTag(online);
+            removeCrownsFromPlayer(online);
+            reconcileCrowns(online);
+        }
     }
 
     private String teamsUnavailableMessage() {
@@ -1042,16 +1205,22 @@ public final class TeamManager implements Listener {
                 continue;
             }
 
-            if (!shouldHaveCrown || !isCrownFor(item, player.getUniqueId(), team.key) || validCrowns++ > 0) {
+            if (!shouldHaveCrown || !isCrownFor(item, player.getUniqueId(), team.key) || validCrowns > 0) {
                 contents[i] = null;
+                continue;
             }
+            contents[i] = createTeamCrown(player, team);
+            validCrowns++;
         }
         player.getInventory().setStorageContents(contents);
 
         ItemStack helmet = player.getInventory().getHelmet();
         if (isTeamCrown(helmet)) {
-            if (!shouldHaveCrown || !isCrownFor(helmet, player.getUniqueId(), team.key) || validCrowns++ > 0) {
+            if (!shouldHaveCrown || !isCrownFor(helmet, player.getUniqueId(), team.key) || validCrowns > 0) {
                 player.getInventory().setHelmet(null);
+            } else {
+                player.getInventory().setHelmet(createTeamCrown(player, team));
+                validCrowns++;
             }
         }
 
@@ -1266,9 +1435,9 @@ public final class TeamManager implements Listener {
     }
 
     private static final class TeamData {
-        private final String key;
-        private final String displayName;
-        private final TeamColor color;
+        private String key;
+        private String displayName;
+        private TeamColor color;
         private UUID owner;
         private final Set<UUID> members = ConcurrentHashMap.newKeySet();
 

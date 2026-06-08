@@ -32,10 +32,25 @@ Teams support:
 
 - Team creation and membership.
 - Team colors.
+- Owner-controlled team renames.
+- Owner-controlled team color changes.
 - Team vault storage through `/tvault` or `/teamvault`.
 - Teammate protection hooks for compatible abilities.
 - Owner crown unlocks when team size requirements are met.
 
+Useful team commands:
+
+- `/team create "name" [color]` - create a team.
+- `/team colors` - list available colors.
+- `/team color <color>` - change your team color. Owner only.
+- `/team rename "new name"` - rename your team. Owner only.
+- `/team name "new name"` - alias for `/team rename`.
+- `/team invite <player>` - invite a player. Owner only.
+- `/team leave` - leave your current team.
+- `/team disband` - disband your team. Owner only.
+- `/team info` - view team members, owner, and color.
+- `/tvault` or `/teamvault` - open your team vault.
+
 ## Team Vaults
 
-Team vaults are double chest storage for the team. Saves are serialized per team to avoid write-order bugs.
+Team vaults are double chest storage for the team. Saves are serialized per team to avoid write-order bugs. If a team is renamed while the vault is open, the plugin saves and closes the vault first, migrates the stored vault row, and the next `/tvault` opens it under the new name.
