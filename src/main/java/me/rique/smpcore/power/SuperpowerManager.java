@@ -2290,6 +2290,8 @@ public final class SuperpowerManager implements Listener {
         SuperpowerType parsed = SuperpowerType.fromId(raw);
         if (parsed == null && raw != null && !raw.isBlank()) {
             pdc.remove(keyPowerType);
+        } else if (parsed != null && !parsed.name().equals(raw)) {
+            pdc.set(keyPowerType, PersistentDataType.STRING, parsed.name());
         }
         return parsed;
     }
@@ -2648,11 +2650,16 @@ public final class SuperpowerManager implements Listener {
 
     private void useAncientScroll(Player player) {
         SuperpowerType currentPower = powerOf(player);
-
-        consumeHeldItem(player);
         SuperpowerType rerolled = currentPower == null
             ? randomPower(false)
             : randomDifferentPower(currentPower, false);
+
+        if (currentPower != null && rerolled == currentPower) {
+            player.sendMessage(MessageUtil.error("The Ancient Scroll resisted the reroll. Try again."));
+            return;
+        }
+
+        consumeHeldItem(player);
         assignPower(player, rerolled, true, true);
         player.sendMessage(MessageUtil.success("The Ancient Scroll rewrites your fate."));
     }
