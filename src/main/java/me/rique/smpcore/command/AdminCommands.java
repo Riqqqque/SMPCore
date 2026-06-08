@@ -21,6 +21,7 @@ import me.rique.smpcore.item.ReplenishListener;
 import me.rique.smpcore.item.RewardLanternListener;
 import me.rique.smpcore.item.SalvagingDepotListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
+import me.rique.smpcore.item.XpLecternListener;
 import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.legendary.MythicForgeListener;
 import me.rique.smpcore.power.SuperpowerManager;
@@ -59,6 +60,7 @@ public final class AdminCommands {
     private static final String ASCENDANT_CORE_ITEM_ID = MythicForgeListener.ASCENDANT_CORE_ITEM_ID;
     private static final String TALISMAN_OF_SUSTENANCE_ITEM_ID = SustenanceTalismanListener.ITEM_ID;
     private static final String SALVAGING_DEPOT_ITEM_ID = SalvagingDepotListener.ITEM_ID;
+    private static final String XP_LECTERN_ITEM_ID = XpLecternListener.ITEM_ID;
     private static final String ANCIENT_SCROLL_ITEM_ID = SuperpowerManager.ANCIENT_SCROLL_ITEM_ID;
     private static final String WARDEN_HEART_ITEM_ID = SuperpowerManager.WARDEN_HEART_ITEM_ID;
     private static final String MOTHER_NATURE_STICK_ITEM_ID = SuperpowerManager.MOTHER_NATURE_STICK_ITEM_ID;
@@ -76,6 +78,7 @@ public final class AdminCommands {
         ASCENDANT_CORE_ITEM_ID,
         TALISMAN_OF_SUSTENANCE_ITEM_ID,
         SALVAGING_DEPOT_ITEM_ID,
+        XP_LECTERN_ITEM_ID,
         ANCIENT_SCROLL_ITEM_ID,
         WARDEN_HEART_ITEM_ID,
         MOTHER_NATURE_STICK_ITEM_ID,
@@ -990,6 +993,7 @@ public final class AdminCommands {
             case ASCENDANT_CORE_ITEM_ID -> createAscendantCoreAdminItem(plugin, sender);
             case TALISMAN_OF_SUSTENANCE_ITEM_ID -> createTalismanOfSustenanceAdminItem(plugin, sender);
             case SALVAGING_DEPOT_ITEM_ID -> createSalvagingDepotAdminItem(plugin, sender);
+            case XP_LECTERN_ITEM_ID -> createXpLecternAdminItem(plugin, sender);
             case ANCIENT_SCROLL_ITEM_ID -> createAncientScrollAdminItem(plugin, sender);
             case WARDEN_HEART_ITEM_ID -> createWardenHeartAdminItem(plugin, sender);
             case MOTHER_NATURE_STICK_ITEM_ID -> createMotherNatureStickAdminItem(plugin, sender);
@@ -1116,6 +1120,15 @@ public final class AdminCommands {
             return null;
         }
         return new AdminGiveItem(depot.createDepotItem(), "Salvaging Depot");
+    }
+
+    private static AdminGiveItem createXpLecternAdminItem(SMPCore plugin, CommandSender sender) {
+        XpLecternListener lectern = plugin.getXpLecternListener();
+        if (lectern == null) {
+            sender.sendMessage(MessageUtil.error("XP Lectern system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(lectern.createLecternItem(), "XP Lectern");
     }
 
     private static AdminGiveItem createAncientScrollAdminItem(SMPCore plugin, CommandSender sender) {
@@ -1327,6 +1340,7 @@ public final class AdminCommands {
                 case CustomToolListener.SPELUNKER_LANTERN_ID -> "spelunkers_lantern";
                 case CustomToolListener.SURVEYORS_LENS_ID -> "surveyors_lens";
                 case CustomToolListener.MENDERS_KIT_ID -> "menders_kit";
+                case XP_LECTERN_ITEM_ID -> "xp_lectern";
                 default -> id;
             };
             options.add(displayToken);
@@ -1402,6 +1416,7 @@ public final class AdminCommands {
             case "mothernature", "mother_nature", "mothernaturestick", "mother_nature_stick", "naturestick" -> MOTHER_NATURE_STICK_ITEM_ID;
             case "orb", "mystic_orb", "orb_of_mystics", "orb_of_the_mystic", "orbofthemystics" -> ORB_OF_THE_MYSTICS_ITEM_ID;
             case "salvage", "salvaging", "salvagingdepot", "salvaging_depot", "depot", "recycler" -> SALVAGING_DEPOT_ITEM_ID;
+            case "xp", "xplectern", "xp_lectern", "experiencelectern", "experience_lectern", "levelbank", "level_bank" -> XP_LECTERN_ITEM_ID;
             case "talisman", "sustenance_talisman", "talisman_of_sustenance" -> TALISMAN_OF_SUSTENANCE_ITEM_ID;
             case "theworld", "the_world", "worldclock", "world_clock", "clock" -> THE_WORLD_CLOCK_ITEM_ID;
             case "wardenheart", "warden_heart" -> WARDEN_HEART_ITEM_ID;

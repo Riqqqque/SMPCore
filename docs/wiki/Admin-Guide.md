@@ -33,6 +33,7 @@
 - `/customitem give spelunkers_lantern Rique`
 - `/customitem give surveyors_lens Rique`
 - `/customitem give menders_kit Rique`
+- `/customitem give xp_lectern Rique`
 
 ## Recovery Tips
 
