@@ -9,6 +9,8 @@ Open it with:
 - `/lrecipe`
 - `/lrecipes`
 
+Recipe detail pages have a `Craft From Inventory` button for normal custom items and utility relics. It consumes the shown materials from the player's inventory on the server and gives the result directly. Java players can still use the normal crafting table recipes where those exist, but this button is the safest path for Bedrock/Geyser players because it does not depend on the Bedrock client recipe book.
+
 ## Reliquary Sections
 
 - `Legendary Relics` - altar-crafted legendary weapons, armor, and combat relics.

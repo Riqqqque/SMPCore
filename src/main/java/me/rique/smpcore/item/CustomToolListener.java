@@ -239,6 +239,16 @@ public final class CustomToolListener implements Listener {
         };
     }
 
+    public ItemStack createCustomToolForPlayer(String toolId, Player player) {
+        if (ADVANCED_PICKAXE_ID.equals(toolId)) {
+            boolean enchanterCraft = player != null
+                && plugin.getSuperpowerManager() != null
+                && plugin.getSuperpowerManager().hasPower(player, me.rique.smpcore.power.SuperpowerType.ENCHANTER);
+            return createAdvancedPickaxe(enchanterCraft);
+        }
+        return createCustomTool(toolId);
+    }
+
     public ItemStack createRecipePreview(String toolId) {
         return createCustomTool(toolId);
     }

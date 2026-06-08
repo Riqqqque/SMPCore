@@ -3,6 +3,7 @@ package me.rique.smpcore.item;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -880,6 +881,12 @@ public final class CustomEnchantListener implements Listener {
             }
             if (event.getRawSlot() == 40) {
                 openEnchantMenu(player);
+                return;
+            }
+            if (event.getRawSlot() == 23 || event.getRawSlot() == 25) {
+                CustomEnchantEntry enchant = ((EnchantRecipeMenuHolder) event.getView().getTopInventory().getHolder()).enchant();
+                craftEnchantBookFromInventory(player, enchant);
+                Bukkit.getScheduler().runTask(plugin, () -> openEnchantRecipeMenu(player, enchant));
             }
             return;
         }
@@ -1061,7 +1068,7 @@ public final class CustomEnchantListener implements Listener {
             "<gradient:#00d4ff:#73ff9d><bold>" + enchant.plainName() + " Book</bold></gradient>",
             List.of(
                 "<gray>Boss-forged custom enchant recipe.</gray>",
-                "<gray>Craft in a normal crafting table.</gray>"
+                "<gray>Click the crafting table or output book to craft from inventory.</gray>"
             )
         ));
 
@@ -1072,8 +1079,9 @@ public final class CustomEnchantListener implements Listener {
                 inventory.setItem(matrixSlots[i], matrix[i]);
             }
         }
-        inventory.setItem(23, createMenuItem(Material.CRAFTING_TABLE, "<gold><bold>Crafting Table</bold></gold>", List.of(
-            "<gray>Use the exact layout shown.</gray>",
+        inventory.setItem(23, createMenuItem(Material.CRAFTING_TABLE, "<gold><bold>Craft From Inventory</bold></gold>", List.of(
+            "<gray>Click to craft server-side using your inventory.</gray>",
+            "<gray>Java players can still use the exact layout shown.</gray>",
             "<gray>The book ingredient is a normal <white>Book</white>.</gray>",
             "<gray>Boss materials must be real Covenant drops.</gray>"
         )));
@@ -1150,6 +1158,99 @@ public final class CustomEnchantListener implements Listener {
         return enchant == CustomEnchantEntry.KINGSLAYER
             || enchant == CustomEnchantEntry.SOUL_SIPHON
             || enchant == CustomEnchantEntry.ECHOING;
+    }
+
+    private boolean craftEnchantBookFromInventory(Player player, CustomEnchantEntry enchant) {
+        if (!hasCraftingRecipe(enchant)) {
+            player.sendMessage(MessageUtil.error("That enchant does not have a craftable book recipe."));
+            return false;
+        }
+        if (plugin.getSeasonRelicManager() == null) {
+            player.sendMessage(MessageUtil.error("Boss material recipes are not ready yet."));
+            return false;
+        }
+
+        List<InventoryRecipeUtil.Ingredient> ingredients = craftOnlyRecipeIngredients(enchant);
+        for (InventoryRecipeUtil.Ingredient ingredient : ingredients) {
+            int available = InventoryRecipeUtil.countIngredient(player, ingredient);
+            if (available < ingredient.amount()) {
+                player.sendMessage(MessageUtil.error(
+                    "Missing <white>" + (ingredient.amount() - available) + "x " + ingredient.name()
+                        + "</white> <gray>(need <white>" + ingredient.amount()
+                        + "</white>, have <white>" + available + "</white>).</gray>"
+                ));
+                return false;
+            }
+        }
+        if (!InventoryRecipeUtil.removeIngredients(player, ingredients)) {
+            player.sendMessage(MessageUtil.error("Those ingredients changed before the craft finished. Try again."));
+            return false;
+        }
+
+        ItemStack reward = createBook(enchant, 1);
+        if (plugin.getItemAuditManager() != null) {
+            plugin.getItemAuditManager().recordKnownAcquisition(
+                player,
+                reward,
+                "custom_enchant_reliquary_craft",
+                "Crafted " + enchant.plainName() + " Book from the custom enchant menu."
+            );
+        }
+        InventoryRecipeUtil.giveOrDrop(player, reward);
+        player.playSound(player.getLocation(), Sound.BLOCK_ENCHANTMENT_TABLE_USE, 0.7f, 1.25f);
+        player.sendMessage(MessageUtil.success("Crafted <white>" + enchant.plainName() + " Book</white>."));
+        return true;
+    }
+
+    private List<InventoryRecipeUtil.Ingredient> craftOnlyRecipeIngredients(CustomEnchantEntry enchant) {
+        return switch (enchant) {
+            case KINGSLAYER -> List.of(
+                relicIngredientRequirement("crimson_rib", 2),
+                InventoryRecipeUtil.plainMaterial(plugin, Material.BLAZE_ROD, 3),
+                InventoryRecipeUtil.plainMaterial(plugin, Material.BOOK, 1),
+                relicIngredientRequirement("sculk_heart", 2),
+                InventoryRecipeUtil.plainMaterial(plugin, Material.NETHER_STAR, 1)
+            );
+            case SOUL_SIPHON -> List.of(
+                relicIngredientRequirement("verdant_heart", 2),
+                InventoryRecipeUtil.plainMaterial(plugin, Material.GHAST_TEAR, 1),
+                relicIngredientRequirement("crimson_rib", 2),
+                InventoryRecipeUtil.plainMaterial(plugin, Material.BOOK, 1),
+                InventoryRecipeUtil.plainMaterial(plugin, Material.SOUL_SAND, 2),
+                InventoryRecipeUtil.plainMaterial(plugin, Material.GOLDEN_APPLE, 1)
+            );
+            case ECHOING -> List.of(
+                relicIngredientRequirement("titan_gear", 2),
+                InventoryRecipeUtil.plainMaterial(plugin, Material.ECHO_SHARD, 2),
+                InventoryRecipeUtil.plainMaterial(plugin, Material.AMETHYST_SHARD, 2),
+                relicIngredientRequirement("sculk_heart", 2),
+                InventoryRecipeUtil.plainMaterial(plugin, Material.BOOK, 1)
+            );
+            default -> List.of();
+        };
+    }
+
+    private InventoryRecipeUtil.Ingredient relicIngredientRequirement(String relicId, int amount) {
+        String name = plugin.getSeasonRelicManager() == null ? prettyRelicId(relicId) : plugin.getSeasonRelicManager().displayNameFor(relicId);
+        return new InventoryRecipeUtil.Ingredient(
+            name == null ? prettyRelicId(relicId) : name,
+            amount,
+            item -> plugin.getSeasonRelicManager() != null && relicId.equals(plugin.getSeasonRelicManager().relicId(item))
+        );
+    }
+
+    private String prettyRelicId(String relicId) {
+        StringBuilder out = new StringBuilder();
+        for (String part : relicId.toLowerCase(Locale.ROOT).split("_")) {
+            if (part.isEmpty()) {
+                continue;
+            }
+            if (!out.isEmpty()) {
+                out.append(' ');
+            }
+            out.append(Character.toUpperCase(part.charAt(0))).append(part.substring(1));
+        }
+        return out.toString();
     }
 
     private CustomEnchantEntry menuEnchant(ItemStack item) {
