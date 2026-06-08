@@ -288,7 +288,7 @@ public final class LegendaryListener implements Listener {
     private final NamespacedKey keyMenuLegendary;
     private final NamespacedKey keyEnderBone;
     private final NamespacedKey keyOrbOfTheMystics;
-    private final NamespacedKey keyOrbOfTheMysticsInstance;
+    private final NamespacedKey keyLegacyOrbOfTheMysticsInstance;
     private final NamespacedKey keyFaradayUses;
     private final NamespacedKey keyMidasSharpness;
     private final NamespacedKey keyPercyTridentMode;
@@ -396,7 +396,7 @@ public final class LegendaryListener implements Listener {
         this.keyMenuLegendary = new NamespacedKey(plugin, "legendary_menu_id");
         this.keyEnderBone = new NamespacedKey(plugin, "ender_bone");
         this.keyOrbOfTheMystics = new NamespacedKey(plugin, "orb_of_the_mystics");
-        this.keyOrbOfTheMysticsInstance = new NamespacedKey(plugin, "orb_of_the_mystics_instance");
+        this.keyLegacyOrbOfTheMysticsInstance = new NamespacedKey(plugin, "orb_of_the_mystics_instance");
         this.keyFaradayUses = new NamespacedKey(plugin, "faraday_uses");
         this.keyMidasSharpness = new NamespacedKey(plugin, "midas_sharpness");
         this.keyPercyTridentMode = new NamespacedKey(plugin, "trident_of_percy_mode");
@@ -5876,7 +5876,7 @@ public final class LegendaryListener implements Listener {
         ));
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
         pdc.set(keyOrbOfTheMystics, PersistentDataType.BYTE, (byte) 1);
-        ensureOrbOfTheMysticsInstance(pdc);
+        pdc.remove(keyLegacyOrbOfTheMysticsInstance);
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
     }
 
@@ -5886,10 +5886,9 @@ public final class LegendaryListener implements Listener {
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return false;
 
-        PersistentDataContainer pdc = meta.getPersistentDataContainer();
-        boolean missingInstance = !pdc.has(keyOrbOfTheMysticsInstance, PersistentDataType.STRING);
         String displayName = meta.hasDisplayName() ? PLAIN.serialize(meta.displayName()).trim() : "";
-        if ("Orb of the Mystics".equals(displayName) && hasLoreText(meta, "LEGENDARY ORB") && !missingInstance) return false;
+        boolean hasLegacyInstance = meta.getPersistentDataContainer().has(keyLegacyOrbOfTheMysticsInstance, PersistentDataType.STRING);
+        if ("Orb of the Mystics".equals(displayName) && hasLoreText(meta, "LEGENDARY ORB") && !hasLegacyInstance) return false;
 
         applyOrbOfTheMysticsPresentation(meta);
         item.setItemMeta(meta);
@@ -5935,14 +5934,6 @@ public final class LegendaryListener implements Listener {
         }
         hand.setAmount(hand.getAmount() - 1);
         player.getInventory().setItemInMainHand(hand);
-    }
-
-    private void ensureOrbOfTheMysticsInstance(PersistentDataContainer pdc) {
-        String instanceId = pdc.get(keyOrbOfTheMysticsInstance, PersistentDataType.STRING);
-        if (instanceId != null && !instanceId.isBlank()) {
-            return;
-        }
-        pdc.set(keyOrbOfTheMysticsInstance, PersistentDataType.STRING, UUID.randomUUID().toString());
     }
 
     private boolean isEnderbowTpForm(ItemStack bow) {
