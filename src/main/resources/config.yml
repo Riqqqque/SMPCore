@@ -243,6 +243,8 @@ awakening-table:
 
 thors-hammer:
   bonus-damage: 1.0
+  true-damage: 6.0
+  true-damage-cooldown-seconds: 12
 
 custom-enchants:
   wise:

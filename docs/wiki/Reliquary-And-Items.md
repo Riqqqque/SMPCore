@@ -65,6 +65,10 @@ Custom items are allowed to feel powerful, but the plugin tries to avoid one-cli
 - Boss trophy cost.
 - Public ritual progression.
 
+## Legendary Relic Notes
+
+- `Mjolnir` - every hit calls lightning and adds bonus mace damage. When Thunder Strike is off cooldown, the hit also deals configurable true damage that ignores armor. By default this is 3 hearts of true damage every 12 seconds.
+
 ## Legendary Limits
 
 Exclusive legendary relics are tracked while held by players, stored in ender chests, stored in plugin team vaults, or nested inside backpacks/shulker-style containers that the plugin can safely inspect. If a team stores something like `Siegebreaker Pick` in `/tvault`, the altar system still treats that legendary as existing and will not roll another copy.

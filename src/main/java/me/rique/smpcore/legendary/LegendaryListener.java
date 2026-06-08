@@ -366,6 +366,7 @@ public final class LegendaryListener implements Listener {
     private final Map<UUID, Long> strengthSwordBeamCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> strengthSwordDomainCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> dashMaceCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> thorsHammerCd = new ConcurrentHashMap<>();
 
     private final Map<UUID, ChronoState> chronoStates = new ConcurrentHashMap<>();
     private final Map<UUID, FrostScytheFreezeState> frostScytheFrozen = new ConcurrentHashMap<>();
@@ -2010,6 +2011,7 @@ public final class LegendaryListener implements Listener {
         if (held == LegendaryType.THORS_HAMMER) {
             victim.getWorld().strikeLightningEffect(victim.getLocation());
             event.setDamage(event.getDamage() + plugin.getConfigManager().thorsHammerBonusDamage);
+            tryThorsHammerThunderStrike(attacker, victim);
         }
 
         if (!(victim instanceof Player targetPlayer)) return;
@@ -3938,6 +3940,30 @@ public final class LegendaryListener implements Listener {
         return true;
     }
 
+    private void tryThorsHammerThunderStrike(Player attacker, LivingEntity target) {
+        UUID attackerId = attacker.getUniqueId();
+        if (onCooldown(thorsHammerCd, attackerId)) {
+            return;
+        }
+
+        double trueDamage = plugin.getConfigManager().thorsHammerTrueDamage;
+        if (!applyWardenBladeTrueDamage(attacker, target, trueDamage)) {
+            return;
+        }
+
+        setCooldown(thorsHammerCd, attackerId, plugin.getConfigManager().thorsHammerTrueDamageCooldownSeconds);
+        World world = target.getWorld();
+        Location impact = target.getLocation().add(0.0, 1.0, 0.0);
+        world.spawnParticle(Particle.ELECTRIC_SPARK, impact, 26, 0.35, 0.55, 0.35, 0.08);
+        world.spawnParticle(Particle.FLASH, impact, 1, 0.0, 0.0, 0.0, 0.0);
+        world.playSound(impact, Sound.ENTITY_LIGHTNING_BOLT_THUNDER, 0.65f, 1.35f);
+        attacker.sendActionBar(MM.deserialize(
+            "<gold><bold>Thunder Strike</bold></gold> <gray>"
+                + formatDamageNumber(trueDamage / 2.0)
+                + " hearts true damage</gray>"
+        ));
+    }
+
     private void useFrostScythe(Player player) {
         UUID playerId = player.getUniqueId();
         if (onCooldown(frostScytheCd, playerId)) {
@@ -5596,6 +5622,7 @@ public final class LegendaryListener implements Listener {
         cleanupExpiredCooldownMap(strengthSwordBeamCd, now);
         cleanupExpiredCooldownMap(strengthSwordDomainCd, now);
         cleanupExpiredCooldownMap(dashMaceCd, now);
+        cleanupExpiredCooldownMap(thorsHammerCd, now);
         cleanupExpiredCooldownMap(blinkDaggerStunnedUntil, now);
         cleanupExpiredCooldownMap(shadowBladeActiveUntil, now);
         rhittaBurns.entrySet().removeIf(entry -> entry.getValue() == null || entry.getValue().expiresAt() <= now);
@@ -7838,13 +7865,21 @@ public final class LegendaryListener implements Listener {
                 meta,
                 Material.MACE,
                 "MACE",
-                List.of("<gray>Bonus Hit Damage: <white>+" + formatDamageNumber(plugin.getConfigManager().thorsHammerBonusDamage) + "</white></gray>"),
+                List.of(
+                    "<gray>Bonus Hit Damage: <white>+" + formatDamageNumber(plugin.getConfigManager().thorsHammerBonusDamage) + "</white></gray>",
+                    "<gray>Thunder Strike: <white>"
+                        + formatDamageNumber(plugin.getConfigManager().thorsHammerTrueDamage / 2.0)
+                        + " hearts true damage</white></gray>",
+                    "<gray>Thunder Strike Cooldown: <white>"
+                        + plugin.getConfigManager().thorsHammerTrueDamageCooldownSeconds
+                        + "s</white></gray>"
+                ),
                 CustomLoreUtil.section(
                     "Item Ability",
                     "Thunder Strike",
                     "<gray>Every hit calls lightning on the target.</gray>",
-                    "<gray>Deals normal bonus hit damage only.</gray>",
-                    "<gray>Does not bypass armor or Totems.</gray>"
+                    "<gray>When off cooldown, the lightning also deals armor-piercing true damage.</gray>",
+                    "<gray>Creative, spectator, invulnerable, and teammate targets are ignored.</gray>"
                 )
             ));
             case DASH_MACE -> meta.lore(buildLegendaryLore(
