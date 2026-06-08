@@ -4,6 +4,7 @@ import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.combat.DamageNumberListener;
+import me.rique.smpcore.command.MainMenuCommand;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.SalvagingDepotListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
@@ -337,6 +338,8 @@ public final class LegendaryListener implements Listener {
 
     private final List<LegendaryRecipe> recipes;
     private final Set<NamespacedKey> recipeBookKeys = new HashSet<>();
+    private final Set<UUID> reliquaryReturnToMainMenuPlayers = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> mythicFusionReturnToMainMenuPlayers = ConcurrentHashMap.newKeySet();
 
     private final Map<UUID, Long> enderbowCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> enderSwordSummonCd = new ConcurrentHashMap<>();
@@ -763,8 +766,14 @@ public final class LegendaryListener implements Listener {
         if (top.getHolder() instanceof ReliquaryMenuHolder holder) {
             event.setCancelled(true);
 
+            if (holder.section() == null && event.getSlot() == 49 && reliquaryReturnsToMainMenu(player)) {
+                reliquaryReturnToMainMenuPlayers.remove(player.getUniqueId());
+                MainMenuCommand.openMenu(plugin, player);
+                return;
+            }
+
             if (holder.section() != null && event.getSlot() == 49) {
-                openRecipeMenu(player);
+                openCurrentReliquaryMenu(player);
                 return;
             }
 
@@ -778,7 +787,7 @@ public final class LegendaryListener implements Listener {
                 ReliquarySection section = ReliquarySection.fromId(recipeId.substring(RELIQUARY_SECTION_PREFIX.length()));
                 if (section != null) {
                     if (section == ReliquarySection.SEASON && plugin.getSeasonRelicManager() != null) {
-                        plugin.getSeasonRelicManager().openArmoryMenu(player);
+                        plugin.getSeasonRelicManager().openArmoryMenuFromReliquary(player, reliquaryReturnsToMainMenu(player));
                         return;
                     }
                     openReliquarySectionMenu(player, section);
@@ -813,7 +822,7 @@ public final class LegendaryListener implements Listener {
             }
 
             if (event.getSlot() == 18) {
-                openRecipeMenu(player);
+                openCurrentReliquaryMenu(player);
             }
             return;
         }
@@ -827,7 +836,7 @@ public final class LegendaryListener implements Listener {
                 return;
             }
             if (event.getSlot() == 18) {
-                openRecipeMenu(player);
+                openCurrentReliquaryMenu(player);
             }
             return;
         }
@@ -841,7 +850,7 @@ public final class LegendaryListener implements Listener {
                 return;
             }
             if (event.getSlot() == 18) {
-                openRecipeMenu(player);
+                openCurrentReliquaryMenu(player);
             }
             return;
         }
@@ -858,7 +867,7 @@ public final class LegendaryListener implements Listener {
                 return;
             }
             if (event.getSlot() == 18) {
-                openRecipeMenu(player);
+                openCurrentReliquaryMenu(player);
             }
             return;
         }
@@ -872,11 +881,11 @@ public final class LegendaryListener implements Listener {
                 return;
             }
             if (event.getSlot() == 40) {
-                openMythicFusionMenu(player);
+                openMythicFusionMenuFromReliquary(player);
                 return;
             }
             if (event.getSlot() == 45) {
-                openRecipeMenu(player);
+                openCurrentReliquaryMenu(player);
             }
             return;
         }
@@ -884,7 +893,11 @@ public final class LegendaryListener implements Listener {
         if (top.getHolder() instanceof MythicFusionMenuHolder) {
             event.setCancelled(true);
             if (event.getSlot() == 49) {
-                openRecipeMenu(player);
+                if (mythicFusionReturnToMainMenuPlayers.remove(player.getUniqueId())) {
+                    MainMenuCommand.openMenu(plugin, player);
+                } else {
+                    openCurrentReliquaryMenu(player);
+                }
             }
             return;
         }
@@ -898,7 +911,7 @@ public final class LegendaryListener implements Listener {
                 return;
             }
             if (event.getSlot() == 18) {
-                openRecipeMenu(player);
+                openCurrentReliquaryMenu(player);
             }
             return;
         }
@@ -913,7 +926,7 @@ public final class LegendaryListener implements Listener {
                 return;
             }
             if (event.getSlot() == 18) {
-                openRecipeMenu(player);
+                openCurrentReliquaryMenu(player);
             }
             return;
         }
@@ -927,7 +940,7 @@ public final class LegendaryListener implements Listener {
                 return;
             }
             if (event.getSlot() == 18) {
-                openRecipeMenu(player);
+                openCurrentReliquaryMenu(player);
             }
             return;
         }
@@ -941,7 +954,7 @@ public final class LegendaryListener implements Listener {
                 return;
             }
             if (event.getSlot() == 18) {
-                openRecipeMenu(player);
+                openCurrentReliquaryMenu(player);
             }
         }
     }
@@ -1000,6 +1013,29 @@ public final class LegendaryListener implements Listener {
     }
 
     public void openRecipeMenu(Player player) {
+        openRecipeMenu(player, false);
+    }
+
+    public void openRecipeMenuFromMainMenu(Player player) {
+        openRecipeMenu(player, true);
+    }
+
+    private void openCurrentReliquaryMenu(Player player) {
+        openRecipeMenu(player, reliquaryReturnsToMainMenu(player));
+    }
+
+    private boolean reliquaryReturnsToMainMenu(Player player) {
+        return player != null && reliquaryReturnToMainMenuPlayers.contains(player.getUniqueId());
+    }
+
+    private void openRecipeMenu(Player player, boolean returnToMainMenu) {
+        if (returnToMainMenu) {
+            reliquaryReturnToMainMenuPlayers.add(player.getUniqueId());
+        } else {
+            reliquaryReturnToMainMenuPlayers.remove(player.getUniqueId());
+        }
+        mythicFusionReturnToMainMenuPlayers.remove(player.getUniqueId());
+
         Inventory inv = Bukkit.createInventory(
             new ReliquaryMenuHolder(null),
             54,
@@ -1021,6 +1057,9 @@ public final class LegendaryListener implements Listener {
         inv.setItem(31, createReliquarySectionItem(player, ReliquarySection.UTILITY));
         if (plugin.getSeasonRelicManager() != null) {
             inv.setItem(13, createReliquarySectionItem(player, ReliquarySection.SEASON));
+        }
+        if (returnToMainMenu) {
+            inv.setItem(49, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to /menu.</gray>")));
         }
 
         player.openInventory(inv);
@@ -1060,6 +1099,26 @@ public final class LegendaryListener implements Listener {
     }
 
     public void openMythicFusionMenu(Player player) {
+        reliquaryReturnToMainMenuPlayers.remove(player.getUniqueId());
+        openMythicFusionMenuInternal(player, false);
+    }
+
+    public void openMythicFusionMenuFromMainMenu(Player player) {
+        reliquaryReturnToMainMenuPlayers.remove(player.getUniqueId());
+        openMythicFusionMenuInternal(player, true);
+    }
+
+    private void openMythicFusionMenuFromReliquary(Player player) {
+        openMythicFusionMenuInternal(player, false);
+    }
+
+    private void openMythicFusionMenuInternal(Player player, boolean returnToMainMenu) {
+        if (returnToMainMenu) {
+            mythicFusionReturnToMainMenuPlayers.add(player.getUniqueId());
+        } else {
+            mythicFusionReturnToMainMenuPlayers.remove(player.getUniqueId());
+        }
+
         MythicForgeListener forge = plugin.getMythicForgeListener();
         if (forge == null) {
             player.sendMessage(MessageUtil.error("Mythic fusion recipes are not ready yet."));
@@ -1099,7 +1158,11 @@ public final class LegendaryListener implements Listener {
             inv.setItem(MYTHIC_FUSION_MENU_SLOTS[index++], createFusionRecipePreview(recipe));
         }
 
-        inv.setItem(49, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
+        inv.setItem(49, createGuiItem(
+            Material.ARROW,
+            "<yellow>Back</yellow>",
+            List.of(returnToMainMenu ? "<gray>Return to /menu.</gray>" : "<gray>Return to the Reliquary</gray>")
+        ));
         player.openInventory(inv);
     }
 
@@ -1109,7 +1172,7 @@ public final class LegendaryListener implements Listener {
             return;
         }
         if (MYTHIC_NEXUS_MENU_ID.equals(recipeId)) {
-            openMythicFusionMenu(player);
+            openMythicFusionMenuFromReliquary(player);
             return;
         }
         if (SuperpowerManager.ANCIENT_SCROLL_ITEM_ID.equals(recipeId)) {
@@ -1134,7 +1197,7 @@ public final class LegendaryListener implements Listener {
         }
         if (plugin.getSeasonRelicManager() != null
             && plugin.getSeasonRelicManager().handlesReliquaryEntry(recipeId)) {
-            plugin.getSeasonRelicManager().openReliquaryEntry(player, recipeId);
+            plugin.getSeasonRelicManager().openReliquaryEntry(player, recipeId, reliquaryReturnsToMainMenu(player));
             return;
         }
         if (plugin.getCustomToolListener() != null && plugin.getCustomToolListener().isCustomToolId(recipeId)) {
