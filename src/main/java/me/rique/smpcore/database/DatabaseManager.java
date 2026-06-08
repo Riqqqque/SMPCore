@@ -231,7 +231,8 @@ public final class DatabaseManager {
                 instance_id TEXT PRIMARY KEY,
                 legendary_id TEXT NOT NULL COLLATE NOCASE,
                 claimed_at INTEGER NOT NULL,
-                owner_uuid TEXT
+                owner_uuid TEXT,
+                source_key TEXT
             )""";
 
         String legendaryInstancesByType = """
@@ -411,6 +412,7 @@ public final class DatabaseManager {
             stmt.executeUpdate(bossFightParticipantsByPlayer);
             stmt.executeUpdate(bossFightsByEndedAt);
             ensureColumn(conn, "teams", "color", "TEXT NOT NULL DEFAULT 'gold'");
+            ensureColumn(conn, "legendary_instances", "source_key", "TEXT");
             ensureColumn(conn, "leaderboard_stats", "boss_damage", "INTEGER NOT NULL DEFAULT 0");
             ensureColumn(conn, "leaderboard_stats", "boss_fights", "INTEGER NOT NULL DEFAULT 0");
             stmt.executeUpdate(leaderboardBossDamage);
@@ -1066,7 +1068,7 @@ public final class DatabaseManager {
     public CompletableFuture<Map<String, LegendaryClaimedInstanceRecord>> loadClaimedLegendaryInstances() {
         return CompletableFuture.supplyAsync(() -> {
             Map<String, LegendaryClaimedInstanceRecord> instances = new LinkedHashMap<>();
-            String sql = "SELECT instance_id, legendary_id, owner_uuid FROM legendary_instances";
+            String sql = "SELECT instance_id, legendary_id, owner_uuid, source_key FROM legendary_instances";
             try (Connection conn = connection();
                  PreparedStatement ps = conn.prepareStatement(sql);
                  ResultSet rs = ps.executeQuery()) {
@@ -1090,7 +1092,8 @@ public final class DatabaseManager {
                         new LegendaryClaimedInstanceRecord(
                             instanceId,
                             legendaryId.trim().toLowerCase(Locale.ROOT),
-                            ownerId
+                            ownerId,
+                            normalizedSourceKey(rs.getString("source_key"))
                         )
                     );
                 }
@@ -1128,17 +1131,22 @@ public final class DatabaseManager {
     }
 
     public CompletableFuture<Void> saveClaimedLegendaryInstance(String instanceId, String legendaryId, UUID ownerId) {
+        return saveClaimedLegendaryInstance(instanceId, legendaryId, ownerId, null);
+    }
+
+    public CompletableFuture<Void> saveClaimedLegendaryInstance(String instanceId, String legendaryId, UUID ownerId, String sourceKey) {
         return CompletableFuture.runAsync(() -> {
             if (instanceId == null || instanceId.isBlank() || legendaryId == null || legendaryId.isBlank()) {
                 return;
             }
             String sql = """
-                INSERT INTO legendary_instances (instance_id, legendary_id, claimed_at, owner_uuid)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO legendary_instances (instance_id, legendary_id, claimed_at, owner_uuid, source_key)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(instance_id) DO UPDATE SET
                     legendary_id = excluded.legendary_id,
                     claimed_at = excluded.claimed_at,
-                    owner_uuid = excluded.owner_uuid
+                    owner_uuid = excluded.owner_uuid,
+                    source_key = excluded.source_key
                 """;
             try (Connection conn = connection();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -1150,12 +1158,26 @@ public final class DatabaseManager {
                 } else {
                     ps.setString(4, ownerId.toString());
                 }
+                String normalizedSource = normalizedSourceKey(sourceKey);
+                if (normalizedSource == null) {
+                    ps.setNull(5, Types.VARCHAR);
+                } else {
+                    ps.setString(5, normalizedSource);
+                }
                 ps.executeUpdate();
             } catch (SQLException e) {
                 plugin.getLogger().severe("saveClaimedLegendaryInstance: " + e.getMessage());
                 throw new RuntimeException("saveClaimedLegendaryInstance failed", e);
             }
         }, executor);
+    }
+
+    private String normalizedSourceKey(String sourceKey) {
+        if (sourceKey == null || sourceKey.isBlank()) {
+            return null;
+        }
+        String normalized = sourceKey.trim().toLowerCase(Locale.ROOT);
+        return normalized.isBlank() ? null : normalized;
     }
 
     public CompletableFuture<Void> deleteClaimedLegendary(String legendaryId) {
@@ -1803,7 +1825,7 @@ public final class DatabaseManager {
     }
 
     public record TeamRecord(String name, UUID ownerUuid, String color, Set<UUID> members) {}
-    public record LegendaryClaimedInstanceRecord(String instanceId, String legendaryId, UUID ownerUuid) {}
+    public record LegendaryClaimedInstanceRecord(String instanceId, String legendaryId, UUID ownerUuid, String sourceKey) {}
     public record ManagedItemInstanceRecord(
         String instanceId,
         String itemKey,

@@ -64,6 +64,10 @@ Custom items are allowed to feel powerful, but the plugin tries to avoid one-cli
 - Boss trophy cost.
 - Public ritual progression.
 
+## Legendary Limits
+
+Exclusive legendary relics are tracked while held by players, stored in ender chests, stored in plugin team vaults, or nested inside backpacks/shulker-style containers that the plugin can safely inspect. If a team stores something like `Siegebreaker Pick` in `/tvault`, the altar system still treats that legendary as existing and will not roll another copy.
+
 ## Mythic Nexus Fusions
 
 Mythic fusions are made in the Mythic Forge with two source relics and the required catalyst. Mythics stay unique like other top-end relics.

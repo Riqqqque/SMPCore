@@ -1410,6 +1410,26 @@ public final class LegendaryListener implements Listener {
         syncLegendaryOwnership(player);
     }
 
+    public void syncStoredLegendaryOwnership(String sourceKey, Inventory inventory) {
+        LegendaryAltarManager altarManager = plugin.getLegendaryAltarManager();
+        if (altarManager == null || sourceKey == null || sourceKey.isBlank()) {
+            return;
+        }
+
+        Map<String, String> heldLegendaryInstances = new LinkedHashMap<>();
+        migrateLegendaryItemsInInventory(inventory);
+        collectLegendaryOwnership(inventory, heldLegendaryInstances);
+        altarManager.syncStoredLegendaryOwnership(sourceKey, heldLegendaryInstances);
+    }
+
+    public void clearStoredLegendaryOwnership(String sourceKey) {
+        LegendaryAltarManager altarManager = plugin.getLegendaryAltarManager();
+        if (altarManager == null || sourceKey == null || sourceKey.isBlank()) {
+            return;
+        }
+        altarManager.syncStoredLegendaryOwnership(sourceKey, Map.of());
+    }
+
     public String normalizeLegendaryId(String input) {
         if (input == null) return null;
         String normalized = input.trim().toLowerCase();
@@ -7045,7 +7065,14 @@ public final class LegendaryListener implements Listener {
     }
 
     private void collectLegendaryOwnership(ItemStack item, Map<String, String> heldLegendaryInstances) {
+        collectLegendaryOwnership(item, heldLegendaryInstances, 0);
+    }
+
+    private void collectLegendaryOwnership(ItemStack item, Map<String, String> heldLegendaryInstances, int depth) {
         if (heldLegendaryInstances == null) {
+            return;
+        }
+        if (item == null || item.getType() == Material.AIR || depth > LEGENDARY_ITEM_SCAN_MAX_DEPTH) {
             return;
         }
 
@@ -7055,6 +7082,34 @@ public final class LegendaryListener implements Listener {
             if (instanceId != null && !instanceId.isBlank()) {
                 heldLegendaryInstances.put(instanceId, type.id);
             }
+        }
+
+        if (depth >= LEGENDARY_ITEM_SCAN_MAX_DEPTH) {
+            return;
+        }
+
+        if (plugin.getBackpackListener() != null && plugin.getBackpackListener().isBackpack(item)) {
+            for (ItemStack nested : plugin.getBackpackListener().auditContents(null, item)) {
+                collectLegendaryOwnership(nested, heldLegendaryInstances, depth + 1);
+            }
+        }
+
+        ItemMeta meta = item.getItemMeta();
+        if (!(meta instanceof BlockStateMeta blockStateMeta)) {
+            return;
+        }
+
+        BlockState state = blockStateMeta.getBlockState();
+        if (!(state instanceof InventoryHolder holder)) {
+            return;
+        }
+
+        Inventory nestedInventory = holder.getInventory();
+        if (nestedInventory == null) {
+            return;
+        }
+        for (ItemStack nested : nestedInventory.getContents()) {
+            collectLegendaryOwnership(nested, heldLegendaryInstances, depth + 1);
         }
     }
 
