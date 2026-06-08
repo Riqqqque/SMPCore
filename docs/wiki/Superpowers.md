@@ -2,7 +2,7 @@
 
 Players receive one hidden superpower on first join. The power is meant to be discovered through gameplay. If the power has a command, the player privately receives a hint.
 
-Use `/powerinfo` to read about classes. Staff can assign powers with `/setpower <player> <power>`. Ancient Scroll rerolls a player's power, even if they already have one.
+Use `/powerinfo` to read about classes. Staff can assign powers with `/setpower <player> <power>`. Ancient Scroll rerolls a player's power, even if they already have one, and avoids giving back the same current power.
 
 The `/powerinfo` menu is sorted from most common to rarest.
 

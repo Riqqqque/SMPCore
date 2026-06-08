@@ -2,7 +2,9 @@ package me.rique.smpcore.power;
 
 import org.bukkit.Material;
 
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 
 public enum SuperpowerType {
     IMMORTALITY("Deathless", 0.0001, Material.TOTEM_OF_UNDYING, null),
@@ -38,6 +40,7 @@ public enum SuperpowerType {
     private final double chance;
     private final Material icon;
     private final String commandHint;
+    private static final Map<String, SuperpowerType> BY_ID = createLookup();
 
     SuperpowerType(String displayName, double chance, Material icon, String commandHint) {
         this.displayName = displayName;
@@ -70,10 +73,52 @@ public enum SuperpowerType {
         if (raw == null || raw.isBlank()) {
             return null;
         }
-        try {
-            return valueOf(raw.trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException ex) {
-            return null;
+        return BY_ID.get(normalizeId(raw));
+    }
+
+    private static Map<String, SuperpowerType> createLookup() {
+        Map<String, SuperpowerType> lookup = new HashMap<>();
+        for (SuperpowerType type : values()) {
+            addAlias(lookup, type, type.name(), type.displayName());
         }
+
+        addAlias(lookup, IMMORTALITY, "immortal");
+        addAlias(lookup, FLASH, "speed", "haste");
+        addAlias(lookup, ENCHANTER, "enchanting");
+        addAlias(lookup, BERSERK, "berserker");
+        addAlias(lookup, HUMAN, "no power", "no powers", "none", "normal", "no_power", "no_powers");
+        addAlias(lookup, TRAVELER, "traveller");
+        addAlias(lookup, FLORIST, "florest", "forest");
+        addAlias(lookup, THE_WORLD, "world", "theworld", "time stop", "timestop");
+        addAlias(lookup, XRAY_VISION, "xray", "x ray", "x-ray", "oracle");
+        addAlias(lookup, GIANT, "giant");
+        addAlias(lookup, SUPERMAN, "superman");
+        addAlias(lookup, WATERMAN, "waterman", "water man");
+        addAlias(lookup, VOIDWALKER, "void walker");
+        addAlias(lookup, STORMCALLER, "storm caller");
+        addAlias(lookup, BLOODMENDER, "blood mender");
+        return Map.copyOf(lookup);
+    }
+
+    private static void addAlias(Map<String, SuperpowerType> lookup, SuperpowerType type, String... aliases) {
+        for (String alias : aliases) {
+            String normalized = normalizeId(alias);
+            if (!normalized.isBlank()) {
+                lookup.put(normalized, type);
+            }
+        }
+    }
+
+    private static String normalizeId(String raw) {
+        String normalized = raw.trim().toUpperCase(Locale.ROOT)
+            .replaceAll("[^A-Z0-9]+", "_")
+            .replaceAll("_+", "_");
+        if (normalized.startsWith("_")) {
+            normalized = normalized.substring(1);
+        }
+        if (normalized.endsWith("_")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
     }
 }
