@@ -1,6 +1,7 @@
 package me.rique.smpcore.combat;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Color;
@@ -105,7 +106,7 @@ public final class DamageNumberListener implements Listener {
             entity.setBackgroundColor(Color.fromARGB(0, 0, 0, 0));
             entity.setTextOpacity((byte) 255);
             entity.setLineWidth(90);
-            entity.setViewRange(style.viewRange());
+            entity.setViewRange(VisualRangeUtil.clampHologramViewRange(style.viewRange()));
             entity.setBrightness(new Brightness(15, 15));
             entity.setPersistent(false);
             entity.setGravity(false);
@@ -178,8 +179,8 @@ public final class DamageNumberListener implements Listener {
     public enum DamageNumberStyle {
         NORMAL("<gradient:#fff07a:#ffb347><bold>%s</bold></gradient>", Color.fromRGB(255, 190, 70), false, 28.0f),
         HEAVY("<gradient:#ffd166:#ff6b35><bold>%s!</bold></gradient>", Color.fromRGB(255, 120, 45), true, 32.0f),
-        CRITICAL("<gradient:#ff3d3d:#ffd166><bold>CRIT %s!</bold></gradient>", Color.fromRGB(255, 45, 45), true, 36.0f),
-        TRUE("<gradient:#b388ff:#ff4d8d><bold>TRUE %s</bold></gradient>", Color.fromRGB(190, 80, 255), true, 36.0f);
+        CRITICAL("<gradient:#ff3d3d:#ffd166><bold>CRIT %s!</bold></gradient>", Color.fromRGB(255, 45, 45), true, 32.0f),
+        TRUE("<gradient:#b388ff:#ff4d8d><bold>TRUE %s</bold></gradient>", Color.fromRGB(190, 80, 255), true, 32.0f);
 
         private final String template;
         private final Color glowColor;

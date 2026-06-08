@@ -8,6 +8,7 @@ import me.rique.smpcore.legendary.MythicForgeListener;
 import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.season.SeasonRelicManager;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
@@ -51,7 +52,6 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class RareDropVisualListener implements Listener {
 
     private static final double HOLOGRAM_HEIGHT = 0.70;
-    private static final float HOLOGRAM_VIEW_RANGE = 28.0f;
     private static final String TEAM_PREFIX = "smpd_";
     private static final NamedTextColor[] GLOW_COLORS = {
         NamedTextColor.GOLD,
@@ -280,6 +280,7 @@ public final class RareDropVisualListener implements Listener {
         if (existing instanceof TextDisplay display && display.isValid()) {
             display.teleport(hologramLocation(itemEntity));
             display.text(buildRareHologramText(itemEntity.getItemStack(), profile));
+            VisualRangeUtil.applyHologramRange(display);
             return;
         }
 
@@ -294,7 +295,7 @@ public final class RareDropVisualListener implements Listener {
             display.setBillboard(Display.Billboard.CENTER);
             display.setSeeThrough(true);
             display.setShadowed(false);
-            display.setViewRange(HOLOGRAM_VIEW_RANGE);
+            VisualRangeUtil.applyHologramRange(display);
             display.setLineWidth(220);
             display.setTextOpacity((byte) 255);
             display.setBackgroundColor(Color.fromARGB(96, 8, 8, 16));

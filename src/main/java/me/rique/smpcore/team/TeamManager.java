@@ -61,6 +61,7 @@ public final class TeamManager implements Listener {
     private static final long INVITE_DURATION_MS = 120_000L;
     private static final int TEAM_VAULT_SIZE = 54;
     private static final String SCOREBOARD_TEAM_PREFIX = "smpct_";
+    private static final String SCOREBOARD_NO_TEAM_ID = SCOREBOARD_TEAM_PREFIX + "none";
     private static final String TEAMS_LOADING_MESSAGE = "Teams are still loading. Try again in a moment.";
     private static final int CROWN_MIN_TEAM_MEMBERS = 3;
 
@@ -386,6 +387,7 @@ public final class TeamManager implements Listener {
         vaultLoadingByTeamKey.clear();
         vaultSaveChainsByTeamKey.clear();
         teamVaultsByKey.clear();
+        unregisterAllScoreboardTeams();
     }
 
     public CompletableFuture<String> createTeam(Player creator, String rawName, String rawColor) {
@@ -924,6 +926,23 @@ public final class TeamManager implements Listener {
         return teamByPlayer.containsKey(playerId);
     }
 
+    public Component nameplateText(Player player) {
+        Component playerName = player.displayName();
+        if (playerName == null) {
+            playerName = Component.text(player.getName(), NamedTextColor.WHITE);
+        }
+
+        TeamData team = teamOf(player.getUniqueId());
+        if (team == null) {
+            return playerName;
+        }
+
+        return Component.text("[", NamedTextColor.DARK_GRAY)
+            .append(Component.text(team.displayName, team.color.textColor))
+            .append(Component.text("] ", NamedTextColor.DARK_GRAY))
+            .append(playerName);
+    }
+
     public boolean sameTeam(UUID firstPlayerId, UUID secondPlayerId) {
         if (firstPlayerId == null || secondPlayerId == null) return false;
         if (firstPlayerId.equals(secondPlayerId)) return true;
@@ -946,7 +965,8 @@ public final class TeamManager implements Listener {
             "<gray><white>/team leave</white> - Leave your team</gray>",
             "<gray><white>/team disband</white> - Disband your team (owner)</gray>",
             "<gray><white>/team info</white> - View your team info</gray>",
-            "<gray><white>/tvault</white> (<white>/teamvault</white>) - Open your team storage</gray>"
+            "<gray><white>/tvault</white> (<white>/teamvault</white>) - Open your team storage</gray>",
+            "<gray><white>/teamglow</white> - Privately highlight teammates</gray>"
         );
     }
 
@@ -1152,12 +1172,30 @@ public final class TeamManager implements Listener {
     private void applyTeamTag(Player player) {
         removePlayerFromPluginTeams(player.getName());
         TeamData team = teamOf(player.getUniqueId());
-        if (team == null) return;
+        if (team == null) {
+            Team noTeam = getOrCreateNoTeamScoreboardTeam();
+            if (!noTeam.hasEntry(player.getName())) {
+                noTeam.addEntry(player.getName());
+            }
+            return;
+        }
 
         Team scoreboardTeam = getOrCreateScoreboardTeam(team);
         if (!scoreboardTeam.hasEntry(player.getName())) {
             scoreboardTeam.addEntry(player.getName());
         }
+    }
+
+    private Team getOrCreateNoTeamScoreboardTeam() {
+        Scoreboard board = Bukkit.getScoreboardManager().getMainScoreboard();
+        Team team = board.getTeam(SCOREBOARD_NO_TEAM_ID);
+        if (team == null) {
+            team = board.registerNewTeam(SCOREBOARD_NO_TEAM_ID);
+        }
+        team.prefix(Component.empty());
+        team.color(NamedTextColor.WHITE);
+        team.setOption(Team.Option.NAME_TAG_VISIBILITY, Team.OptionStatus.NEVER);
+        return team;
     }
 
     private Team getOrCreateScoreboardTeam(TeamData data) {
@@ -1169,7 +1207,7 @@ public final class TeamManager implements Listener {
         }
         team.prefix(Component.text("[" + data.displayName + "] ", data.color.textColor));
         team.color(data.color.textColor);
-        team.setOption(Team.Option.NAME_TAG_VISIBILITY, Team.OptionStatus.ALWAYS);
+        team.setOption(Team.Option.NAME_TAG_VISIBILITY, Team.OptionStatus.NEVER);
         return team;
     }
 
@@ -1192,6 +1230,19 @@ public final class TeamManager implements Listener {
         if (team != null) {
             team.unregister();
         }
+    }
+
+    private void unregisterAllScoreboardTeams() {
+        if (Bukkit.getScoreboardManager() == null) {
+            return;
+        }
+        Scoreboard board = Bukkit.getScoreboardManager().getMainScoreboard();
+        for (Team team : new ArrayList<>(board.getTeams())) {
+            if (team.getName().startsWith(SCOREBOARD_TEAM_PREFIX)) {
+                team.unregister();
+            }
+        }
+        scoreboardIdByTeamKey.clear();
     }
 
     private void closeVaultIfViewing(Player player, String teamKey) {

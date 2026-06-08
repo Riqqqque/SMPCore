@@ -3,6 +3,7 @@ package me.rique.smpcore.item;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
@@ -471,6 +472,7 @@ public final class XpLecternListener implements Listener {
         if (existing instanceof TextDisplay display && display.isValid()) {
             display.teleport(hologramLocation(block));
             display.text(hologramText(block));
+            VisualRangeUtil.applyHologramRange(display);
             return;
         }
 
@@ -484,7 +486,7 @@ public final class XpLecternListener implements Listener {
             display.setBillboard(Display.Billboard.CENTER);
             display.setSeeThrough(true);
             display.setShadowed(false);
-            display.setViewRange(28.0f);
+            VisualRangeUtil.applyHologramRange(display);
             display.setLineWidth(180);
             display.setTextOpacity((byte) 255);
             display.setBackgroundColor(Color.fromARGB(92, 9, 13, 24));

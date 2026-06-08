@@ -3,6 +3,8 @@ package me.rique.smpcore.command;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import io.papermc.paper.command.brigadier.Commands;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.item.CustomEnchantListener;
@@ -12,11 +14,16 @@ import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.World;
+import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Survival-accessible player commands: /top, /suicide, /back, /spawn.
@@ -31,6 +38,7 @@ public final class PlayerCommands {
         registerEnchants(commands, plugin);
         registerVeinMiner(commands, plugin);
         registerTeamVault(commands, plugin);
+        registerTeamGlow(commands, plugin);
         registerTop(commands, plugin);
         registerSuicide(commands, plugin);
         registerShadow(commands, plugin);
@@ -108,6 +116,48 @@ public final class PlayerCommands {
                     .executes(ctx -> setVeinMiner(plugin, (Player) ctx.getSource().getSender(), false)))
                 .then(Commands.literal("status")
                     .executes(ctx -> showVeinMinerStatus(plugin, (Player) ctx.getSource().getSender())))
+                .then(Commands.literal("blocks")
+                    .executes(ctx -> showVeinMinerBlocks(plugin, (Player) ctx.getSource().getSender())))
+                .then(Commands.literal("list")
+                    .executes(ctx -> showVeinMinerBlocks(plugin, (Player) ctx.getSource().getSender())))
+                .then(Commands.literal("addblock")
+                    .executes(ctx -> addVeinMinerBlock(plugin, (Player) ctx.getSource().getSender(), null))
+                    .then(Commands.argument("block", StringArgumentType.word())
+                        .suggests(PlayerCommands::suggestBlockMaterials)
+                        .executes(ctx -> addVeinMinerBlock(
+                            plugin,
+                            (Player) ctx.getSource().getSender(),
+                            StringArgumentType.getString(ctx, "block")
+                        ))))
+                .then(Commands.literal("add")
+                    .then(Commands.literal("block")
+                        .executes(ctx -> addVeinMinerBlock(plugin, (Player) ctx.getSource().getSender(), null))
+                        .then(Commands.argument("block", StringArgumentType.word())
+                            .suggests(PlayerCommands::suggestBlockMaterials)
+                            .executes(ctx -> addVeinMinerBlock(
+                                plugin,
+                                (Player) ctx.getSource().getSender(),
+                                StringArgumentType.getString(ctx, "block")
+                            )))))
+                .then(Commands.literal("removeblock")
+                    .executes(ctx -> removeVeinMinerBlock(plugin, (Player) ctx.getSource().getSender(), null))
+                    .then(Commands.argument("block", StringArgumentType.word())
+                        .suggests(PlayerCommands::suggestBlockMaterials)
+                        .executes(ctx -> removeVeinMinerBlock(
+                            plugin,
+                            (Player) ctx.getSource().getSender(),
+                            StringArgumentType.getString(ctx, "block")
+                        ))))
+                .then(Commands.literal("remove")
+                    .then(Commands.literal("block")
+                        .executes(ctx -> removeVeinMinerBlock(plugin, (Player) ctx.getSource().getSender(), null))
+                        .then(Commands.argument("block", StringArgumentType.word())
+                            .suggests(PlayerCommands::suggestBlockMaterials)
+                            .executes(ctx -> removeVeinMinerBlock(
+                                plugin,
+                                (Player) ctx.getSource().getSender(),
+                                StringArgumentType.getString(ctx, "block")
+                            )))))
                 .build(),
             "Toggle vein miner",
             List.of("vm")
@@ -126,6 +176,25 @@ public final class PlayerCommands {
                 .build(),
             "Open your team vault",
             List.of("teamvault")
+        );
+    }
+
+    private static void registerTeamGlow(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("teamglow")
+                .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.teamglow"))
+                .executes(ctx -> toggleTeamGlow(plugin, (Player) ctx.getSource().getSender()))
+                .then(Commands.literal("toggle")
+                    .executes(ctx -> toggleTeamGlow(plugin, (Player) ctx.getSource().getSender())))
+                .then(Commands.literal("on")
+                    .executes(ctx -> setTeamGlow(plugin, (Player) ctx.getSource().getSender(), true)))
+                .then(Commands.literal("off")
+                    .executes(ctx -> setTeamGlow(plugin, (Player) ctx.getSource().getSender(), false)))
+                .then(Commands.literal("status")
+                    .executes(ctx -> showTeamGlowStatus(plugin, (Player) ctx.getSource().getSender())))
+                .build(),
+            "Privately highlight your teammates",
+            List.of("allyglow", "teammateglow")
         );
     }
 
@@ -318,6 +387,26 @@ public final class PlayerCommands {
         commands.register(
             Commands.literal("msummon")
                 .requires(src -> src.getSender() instanceof Player)
+                .then(Commands.literal("despawn")
+                    .executes(ctx -> {
+                        Player player = (Player) ctx.getSource().getSender();
+                        SuperpowerManager powers = plugin.getSuperpowerManager();
+                        if (powers == null) {
+                            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+                            return 0;
+                        }
+                        return powers.handleMonarchDespawnCommand(player) ? Command.SINGLE_SUCCESS : 0;
+                    }))
+                .then(Commands.literal("unsummon")
+                    .executes(ctx -> {
+                        Player player = (Player) ctx.getSource().getSender();
+                        SuperpowerManager powers = plugin.getSuperpowerManager();
+                        if (powers == null) {
+                            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+                            return 0;
+                        }
+                        return powers.handleMonarchDespawnCommand(player) ? Command.SINGLE_SUCCESS : 0;
+                    }))
                 .then(Commands.argument("amount", IntegerArgumentType.integer(1, 15))
                     .executes(ctx -> {
                         Player player = (Player) ctx.getSource().getSender();
@@ -420,6 +509,7 @@ public final class PlayerCommands {
         }
         if (player.hasPermission("smpcore.veinminer.use")) {
             lines.add("<gray><white>/veinminer</white> - Toggle vein miner</gray>");
+            lines.add("<gray><white>/veinminer addblock</white>, <white>/veinminer removeblock</white>, <white>/veinminer blocks</white> - Personal block list</gray>");
         }
         if (player.hasPermission("smpcore.spawn")) {
             lines.add("<gray><white>/spawn</white> - Teleport to spawn</gray>");
@@ -449,10 +539,13 @@ public final class PlayerCommands {
             lines.add("<gray><white>/team</white> - Team management commands</gray>");
             lines.add("<gray><white>/tvault</white> - Open your team vault</gray>");
         }
+        if (player.hasPermission("smpcore.teamglow")) {
+            lines.add("<gray><white>/teamglow</white> - Privately highlight teammates through walls</gray>");
+        }
         if (player.hasPermission("smpcore.waystone.use")) {
             lines.add("<gray>Right-click a known waystone sign to open your teleport menu</gray>");
         }
-        lines.add("<gray>Power commands unlock naturally if your hidden power uses them: <white>/shadow</white>, <white>/xray</white>, <white>/voidstep</white>, <white>/voidvision</white>, <white>/travel</white>, <white>/msummon</white>, <white>/stormcaller</white>.</gray>");
+        lines.add("<gray>Power commands unlock naturally if your hidden power uses them: <white>/shadow</white>, <white>/xray</white>, <white>/voidstep</white>, <white>/voidvision</white>, <white>/travel</white>, <white>/msummon</white>, <white>/msummon despawn</white>, <white>/stormcaller</white>.</gray>");
         if (player.hasPermission("smpcore.backpack.use")) {
             lines.add("<gray>Right-click a <white>Backpack</white> to open portable storage</gray>");
         }
@@ -481,6 +574,34 @@ public final class PlayerCommands {
             return 0;
         }
         return powers.handleStormcallerLightningStatusCommand(player) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static int toggleTeamGlow(SMPCore plugin, Player player) {
+        if (plugin.getPlayerVisualListener() == null) {
+            player.sendMessage(MessageUtil.error("Player visuals are not ready yet."));
+            return 0;
+        }
+        plugin.getPlayerVisualListener().toggleTeamGlow(player);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int setTeamGlow(SMPCore plugin, Player player, boolean enabled) {
+        if (plugin.getPlayerVisualListener() == null) {
+            player.sendMessage(MessageUtil.error("Player visuals are not ready yet."));
+            return 0;
+        }
+        plugin.getPlayerVisualListener().setTeamGlow(player, enabled);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int showTeamGlowStatus(SMPCore plugin, Player player) {
+        if (plugin.getPlayerVisualListener() == null) {
+            player.sendMessage(MessageUtil.error("Player visuals are not ready yet."));
+            return 0;
+        }
+        boolean enabled = plugin.getPlayerVisualListener().isTeamGlowEnabled(player);
+        player.sendMessage(MessageUtil.info("Teammate glow is <white>" + (enabled ? "enabled" : "disabled") + "</white>."));
+        return Command.SINGLE_SUCCESS;
     }
 
     private static int setVeinMiner(SMPCore plugin, Player player, boolean enabled) {
@@ -515,5 +636,135 @@ public final class PlayerCommands {
             player.sendMessage(MessageUtil.info("Current mode: <white>requires sneaking</white>."));
         }
         return Command.SINGLE_SUCCESS;
+    }
+
+    private static int addVeinMinerBlock(SMPCore plugin, Player player, String rawBlock) {
+        VeinMinerListener veinMiner = plugin.getVeinMinerListener();
+        if (veinMiner == null) {
+            player.sendMessage(MessageUtil.error("Vein miner is not ready yet."));
+            return 0;
+        }
+
+        Material material = resolveVeinMinerBlock(player, rawBlock);
+        if (!veinMiner.isValidCustomBlock(material)) {
+            player.sendMessage(MessageUtil.error("Use a real block name, hold a block, or look at a block within 6 blocks."));
+            return 0;
+        }
+
+        boolean changed = veinMiner.addCustomBlock(player, material);
+        player.sendMessage(changed
+            ? MessageUtil.success("Added <white>" + prettyMaterial(material) + "</white> to your veinminer blocks.")
+            : MessageUtil.info("<white>" + prettyMaterial(material) + "</white> is already in your veinminer blocks."));
+        player.sendMessage(MessageUtil.info("Use <white>/veinminer removeblock " + material.name().toLowerCase(Locale.ROOT) + "</white> when you do not want it veinmined."));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int removeVeinMinerBlock(SMPCore plugin, Player player, String rawBlock) {
+        VeinMinerListener veinMiner = plugin.getVeinMinerListener();
+        if (veinMiner == null) {
+            player.sendMessage(MessageUtil.error("Vein miner is not ready yet."));
+            return 0;
+        }
+
+        Material material = resolveVeinMinerBlock(player, rawBlock);
+        if (!veinMiner.isValidCustomBlock(material)) {
+            player.sendMessage(MessageUtil.error("Use a real block name, hold a block, or look at a block within 6 blocks."));
+            return 0;
+        }
+
+        boolean changed = veinMiner.removeCustomBlock(player, material);
+        player.sendMessage(changed
+            ? MessageUtil.success("Removed <white>" + prettyMaterial(material) + "</white> from your veinminer blocks.")
+            : MessageUtil.info("<white>" + prettyMaterial(material) + "</white> was not in your veinminer blocks."));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int showVeinMinerBlocks(SMPCore plugin, Player player) {
+        VeinMinerListener veinMiner = plugin.getVeinMinerListener();
+        if (veinMiner == null) {
+            player.sendMessage(MessageUtil.error("Vein miner is not ready yet."));
+            return 0;
+        }
+
+        List<Material> blocks = veinMiner.customBlocks(player);
+        if (blocks.isEmpty()) {
+            player.sendMessage(MessageUtil.info("You have no custom veinminer blocks. Add one with <white>/veinminer addblock</white>."));
+            return Command.SINGLE_SUCCESS;
+        }
+        String joined = String.join(", ", blocks.stream().map(PlayerCommands::prettyMaterial).toList());
+        player.sendMessage(MessageUtil.info("Custom veinminer blocks: <white>" + joined + "</white>."));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static Material resolveVeinMinerBlock(Player player, String rawBlock) {
+        if (rawBlock == null || rawBlock.isBlank() || rawBlock.equalsIgnoreCase("target") || rawBlock.equalsIgnoreCase("looking")) {
+            Block target = player.getTargetBlockExact(6);
+            if (target != null && !target.getType().isAir()) {
+                return target.getType();
+            }
+            return heldBlockMaterial(player);
+        }
+        if (rawBlock.equalsIgnoreCase("held") || rawBlock.equalsIgnoreCase("hand")) {
+            return heldBlockMaterial(player);
+        }
+        String normalized = rawBlock.trim().toUpperCase(Locale.ROOT).replace('-', '_');
+        int namespaceIndex = normalized.indexOf(':');
+        if (namespaceIndex >= 0 && namespaceIndex + 1 < normalized.length()) {
+            normalized = normalized.substring(namespaceIndex + 1);
+        }
+        try {
+            return Material.valueOf(normalized);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    private static Material heldBlockMaterial(Player player) {
+        ItemStack mainHand = player.getInventory().getItemInMainHand();
+        if (mainHand != null && mainHand.getType().isBlock() && !mainHand.getType().isAir()) {
+            return mainHand.getType();
+        }
+        ItemStack offhand = player.getInventory().getItemInOffHand();
+        if (offhand != null && offhand.getType().isBlock() && !offhand.getType().isAir()) {
+            return offhand.getType();
+        }
+        return null;
+    }
+
+    private static CompletableFuture<Suggestions> suggestBlockMaterials(
+        com.mojang.brigadier.context.CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx,
+        SuggestionsBuilder builder
+    ) {
+        builder.suggest("target");
+        builder.suggest("held");
+        String remaining = builder.getRemainingLowerCase();
+        int suggested = 0;
+        for (Material material : Material.values()) {
+            if (!material.isBlock() || material.isAir()) {
+                continue;
+            }
+            String name = material.name().toLowerCase(Locale.ROOT);
+            if (!remaining.isBlank() && !name.startsWith(remaining)) {
+                continue;
+            }
+            builder.suggest(name);
+            if (++suggested >= 80) {
+                break;
+            }
+        }
+        return builder.buildFuture();
+    }
+
+    private static String prettyMaterial(Material material) {
+        if (material == null) {
+            return "Unknown";
+        }
+        String[] parts = material.name().toLowerCase(Locale.ROOT).split("_");
+        List<String> words = new ArrayList<>();
+        for (String part : parts) {
+            if (part.isBlank()) continue;
+            words.add(part.substring(0, 1).toUpperCase(Locale.ROOT) + part.substring(1));
+        }
+        return String.join(" ", words);
     }
 }

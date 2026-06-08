@@ -8,6 +8,7 @@ public final class PluginCommandRoots {
     private static final Set<String> ROOTS = Set.of(
         "admin",
         "adminunvanish",
+        "allyglow",
         "announce",
         "audititem",
         "back",
@@ -102,8 +103,10 @@ public final class PluginCommandRoots {
         "suicide",
         "sun",
         "team",
+        "teamglow",
         "teams",
         "teamvault",
+        "teammateglow",
         "teamvaultsee",
         "telekenesisbook",
         "telekinesisbook",

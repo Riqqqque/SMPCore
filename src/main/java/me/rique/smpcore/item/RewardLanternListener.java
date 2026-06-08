@@ -3,6 +3,7 @@ package me.rique.smpcore.item;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
@@ -57,7 +58,6 @@ public final class RewardLanternListener implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final int EFFECT_DURATION_TICKS = 5 * 60 * 20;
     private static final double HOLOGRAM_HEIGHT = 0.75;
-    private static final float HOLOGRAM_VIEW_RANGE = 24.0f;
 
     private final SMPCore plugin;
     private final NamespacedKey keyRewardLantern;
@@ -448,6 +448,7 @@ public final class RewardLanternListener implements Listener {
         if (existing instanceof TextDisplay display && display.isValid()) {
             display.teleport(hologramLocation(itemEntity));
             display.text(buildLanternHologramText(itemEntity.getItemStack()));
+            VisualRangeUtil.applyHologramRange(display);
             return;
         }
 
@@ -462,7 +463,7 @@ public final class RewardLanternListener implements Listener {
             display.setBillboard(Display.Billboard.CENTER);
             display.setSeeThrough(true);
             display.setShadowed(false);
-            display.setViewRange(HOLOGRAM_VIEW_RANGE);
+            VisualRangeUtil.applyHologramRange(display);
             display.setLineWidth(200);
             display.setBackgroundColor(Color.fromARGB(96, 8, 16, 24));
             hologramsByItem.put(itemId, display.getUniqueId());
