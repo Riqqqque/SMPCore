@@ -8,6 +8,7 @@ import me.rique.smpcore.command.MainMenuCommand;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.SalvagingDepotListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
+import me.rique.smpcore.item.XpLecternListener;
 import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.season.SeasonRelicManager;
 import me.rique.smpcore.util.BedrockCompat;
@@ -957,6 +958,19 @@ public final class LegendaryListener implements Listener {
                 openCurrentReliquaryMenu(player);
             }
         }
+
+        if (top.getHolder() instanceof XpLecternRecipeHolder) {
+            event.setCancelled(true);
+            if (event.getSlot() == RECIPE_TRADE_SLOT) {
+                player.sendMessage(MessageUtil.info(
+                    "Craft <white>XP Lectern</white> in a normal crafting table, then place it to store and withdraw levels."
+                ));
+                return;
+            }
+            if (event.getSlot() == 18) {
+                openCurrentReliquaryMenu(player);
+            }
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -973,6 +987,7 @@ public final class LegendaryListener implements Listener {
             || top.getHolder() instanceof BackpackRecipeHolder
             || top.getHolder() instanceof TalismanRecipeHolder
             || top.getHolder() instanceof SalvagingDepotRecipeHolder
+            || top.getHolder() instanceof XpLecternRecipeHolder
             || top.getHolder() instanceof MythicForgeRecipeHolder
             || top.getHolder() instanceof MythicFusionMenuHolder
             || top.getHolder() instanceof CustomToolRecipeHolder
@@ -1195,6 +1210,10 @@ public final class LegendaryListener implements Listener {
             openSalvagingDepotRecipeDetails(player);
             return;
         }
+        if (XpLecternListener.ITEM_ID.equals(recipeId)) {
+            openXpLecternRecipeDetails(player);
+            return;
+        }
         if (plugin.getSeasonRelicManager() != null
             && plugin.getSeasonRelicManager().handlesReliquaryEntry(recipeId)) {
             plugin.getSeasonRelicManager().openReliquaryEntry(player, recipeId, reliquaryReturnsToMainMenu(player));
@@ -1255,6 +1274,9 @@ public final class LegendaryListener implements Listener {
                 entries.add(new CustomRecipeEntry(BACKPACK_RECIPE_ID, appendRecipeMenuHint(player, createBackpackRecipeDisplayItem())));
                 if (plugin.getSalvagingDepotListener() != null) {
                     entries.add(new CustomRecipeEntry(SalvagingDepotListener.ITEM_ID, createSalvagingDepotPreview(player)));
+                }
+                if (plugin.getXpLecternListener() != null) {
+                    entries.add(new CustomRecipeEntry(XpLecternListener.ITEM_ID, createXpLecternPreview(player)));
                 }
                 if (plugin.getCustomToolListener() != null) {
                     for (String toolId : plugin.getCustomToolListener().craftableToolIds()) {
@@ -2477,6 +2499,61 @@ public final class LegendaryListener implements Listener {
         player.openInventory(inv);
     }
 
+    private void openXpLecternRecipeDetails(Player player) {
+        if (plugin.getXpLecternListener() == null) {
+            player.sendMessage(MessageUtil.error("XP Lectern recipes are not ready yet."));
+            return;
+        }
+
+        Inventory inv = Bukkit.createInventory(
+            new XpLecternRecipeHolder(),
+            27,
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.RARE, "XP Lectern")),
+                "Recipe: XP Lectern"
+            )
+        );
+
+        ItemStack filler = createGuiItem(Material.GRAY_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        for (int i = 0; i < inv.getSize(); i++) {
+            inv.setItem(i, filler);
+        }
+
+        int[] matrixSlots = {3, 4, 5, 12, 13, 14, 21, 22, 23};
+        ItemStack[] recipeMatrix = {
+            null,
+            new ItemStack(Material.EXPERIENCE_BOTTLE),
+            null,
+            new ItemStack(Material.BOOK),
+            new ItemStack(Material.LECTERN),
+            new ItemStack(Material.BOOK),
+            null,
+            new ItemStack(Material.REDSTONE),
+            null
+        };
+        for (int i = 0; i < matrixSlots.length && i < recipeMatrix.length; i++) {
+            ItemStack ingredient = recipeMatrix[i];
+            if (ingredient == null || ingredient.getType() == Material.AIR) {
+                continue;
+            }
+            inv.setItem(matrixSlots[i], ingredient);
+        }
+
+        inv.setItem(16, plugin.getXpLecternListener().createLecternItem());
+        inv.setItem(RECIPE_TRADE_SLOT, createGuiItem(
+            Material.CRAFTING_TABLE,
+            "<gold><bold>Craft In Table</bold></gold>",
+            List.of(
+                "<gray>Place it as a station, then right-click it.</gray>",
+                "<gray>Deposit or withdraw <white>1</white>, <white>5</white>, <white>10</white>, or all levels.</gray>",
+                "<gray>Stored XP stays inside if the lectern is broken.</gray>"
+            )
+        ));
+        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
+        player.openInventory(inv);
+    }
+
     private ItemStack createPreviewItem(Player player, LegendaryType type) {
         return appendRecipeMenuHint(player, createDisplayLegendaryItem(type, true));
     }
@@ -2530,6 +2607,14 @@ public final class LegendaryListener implements Listener {
         }
 
         return appendRecipeMenuHint(player, plugin.getSalvagingDepotListener().createDepotItem());
+    }
+
+    private ItemStack createXpLecternPreview(Player player) {
+        if (plugin.getXpLecternListener() == null) {
+            return createGuiItem(Material.BARRIER, "<red>Unavailable</red>", List.of());
+        }
+
+        return appendRecipeMenuHint(player, plugin.getXpLecternListener().createLecternItem());
     }
 
     private ItemStack createAncientScrollPreview(Player player) {
@@ -7901,6 +7986,7 @@ public final class LegendaryListener implements Listener {
             || inventory.getHolder() instanceof BackpackRecipeHolder
             || inventory.getHolder() instanceof TalismanRecipeHolder
             || inventory.getHolder() instanceof SalvagingDepotRecipeHolder
+            || inventory.getHolder() instanceof XpLecternRecipeHolder
             || inventory.getHolder() instanceof MythicForgeRecipeHolder
             || inventory.getHolder() instanceof MythicFusionMenuHolder
             || inventory.getHolder() instanceof CustomToolRecipeHolder
@@ -8215,6 +8301,13 @@ public final class LegendaryListener implements Listener {
     }
 
     private record SalvagingDepotRecipeHolder() implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
+    private record XpLecternRecipeHolder() implements InventoryHolder {
         @Override
         public Inventory getInventory() {
             return null;

@@ -10,6 +10,7 @@ import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.RewardLanternListener;
 import me.rique.smpcore.item.SalvagingDepotListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
+import me.rique.smpcore.item.XpLecternListener;
 import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.legendary.MythicForgeListener;
 import me.rique.smpcore.power.SuperpowerManager;
@@ -177,6 +178,7 @@ public final class ItemAuditManager implements Listener {
         options.add("custom:reward_soul_lantern");
         options.add("custom:talisman_of_sustenance");
         options.add("custom:salvaging_depot");
+        options.add("custom:xp_lectern");
         options.add("custom_enchant:kingslayer");
         options.add("custom_enchant:soul_siphon");
         options.add("custom_enchant:echoing");
@@ -727,6 +729,11 @@ public final class ItemAuditManager implements Listener {
             return new ManagedItemDescriptor("custom:salvaging_depot", "Salvaging Depot", false);
         }
 
+        XpLecternListener xpLectern = plugin.getXpLecternListener();
+        if (xpLectern != null && xpLectern.isLecternItem(item)) {
+            return new ManagedItemDescriptor("custom:xp_lectern", "XP Lectern", false);
+        }
+
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers != null) {
             if (powers.isAncientScroll(item)) {
@@ -803,6 +810,7 @@ public final class ItemAuditManager implements Listener {
             || "custom:mythic_forge".equals(itemKey)
             || "custom:talisman_of_sustenance".equals(itemKey)
             || "custom:salvaging_depot".equals(itemKey)
+            || "custom:xp_lectern".equals(itemKey)
             || ("power:" + SuperpowerManager.ANCIENT_SCROLL_ITEM_ID).equals(itemKey);
     }
 

@@ -35,6 +35,7 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.ChunkUnloadEvent;
@@ -253,10 +254,19 @@ public final class SalvagingDepotListener implements Listener {
 
         if (event.getRawSlot() >= 0 && event.getRawSlot() < top.getSize()) {
             ItemStack current = event.getCurrentItem();
-            if (isProcessing(current) || !salvageOutputs(current).isEmpty()) {
+            if (isProcessing(current)) {
                 event.setCancelled(true);
                 if (event.getWhoClicked() instanceof Player player) {
                     player.sendMessage(MessageUtil.warn("Items placed in the Salvaging Depot are locked until salvage finishes."));
+                }
+                scheduleScan(top);
+                return;
+            }
+            if (!salvageOutputs(current).isEmpty()) {
+                event.setCancelled(true);
+                scanDepot(top);
+                if (event.getWhoClicked() instanceof Player player) {
+                    player.sendMessage(MessageUtil.warn("That item is being salvaged now."));
                 }
                 return;
             }
@@ -277,6 +287,13 @@ public final class SalvagingDepotListener implements Listener {
     public void onInventoryClose(InventoryCloseEvent event) {
         if (isDepotInventory(event.getInventory())) {
             scanDepot(event.getInventory());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onInventoryOpen(InventoryOpenEvent event) {
+        if (isDepotInventory(event.getInventory())) {
+            scheduleScan(event.getInventory());
         }
     }
 
@@ -406,6 +423,11 @@ public final class SalvagingDepotListener implements Listener {
                 scanDepot(inventory);
             }
         });
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            if (isDepotInventory(inventory)) {
+                scanDepot(inventory);
+            }
+        }, 2L);
     }
 
     private void scheduleCompletion(String blockKey, UUID processId, long readyAt) {
@@ -654,6 +676,9 @@ public final class SalvagingDepotListener implements Listener {
             return true;
         }
         if (plugin.getSustenanceTalismanListener() != null && plugin.getSustenanceTalismanListener().isTalisman(item)) {
+            return true;
+        }
+        if (plugin.getXpLecternListener() != null && plugin.getXpLecternListener().isLecternItem(item)) {
             return true;
         }
         if (plugin.getBossPotionListener() != null && plugin.getBossPotionListener().isBossPotion(item)) {
