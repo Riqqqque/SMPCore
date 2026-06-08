@@ -17,6 +17,12 @@ Open it with:
 - `Utility Relics` - support items such as Ancient Scroll and Talisman of Sustenance.
 - `Covenant Armory` - boss trophy gear, full armor sets, standalone armor, utility relics, and materials.
 
+## Utility Relics
+
+- `Orb of the Mystics` - stackable single-use Enderman drop that summons a random legendary altar.
+- `Ancient Scroll` - rerolls a player's superpower and avoids giving back the same current power.
+- `Talisman of Sustenance` - passive inventory talisman that restores health and hunger over time.
+
 ## Item Rarity Theme
 
 - `Common` - basic custom utility.
