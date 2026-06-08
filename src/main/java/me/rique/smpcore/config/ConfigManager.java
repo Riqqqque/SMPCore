@@ -143,6 +143,8 @@ public final class ConfigManager {
     public double awakeningTableHologramViewRange;
 
     public double thorsHammerBonusDamage;
+    public double thorsHammerTrueDamage;
+    public int thorsHammerTrueDamageCooldownSeconds;
 
     public double wiseLevelOneBonus;
     public double wiseLevelTwoBonus;
@@ -445,7 +447,22 @@ public final class ConfigManager {
         awakeningTableHologramHeight = clamp(c.getDouble("awakening-table.hologram.height", 1.9), 0.5, 6.0);
         awakeningTableHologramViewRange = clamp(c.getDouble("awakening-table.hologram.view-range", 32.0), 1.0, 96.0);
 
+        boolean thorsHammerConfigChanged = false;
+        if (!c.contains("thors-hammer.true-damage")) {
+            c.set("thors-hammer.true-damage", 6.0);
+            thorsHammerConfigChanged = true;
+        }
+        if (!c.contains("thors-hammer.true-damage-cooldown-seconds")) {
+            c.set("thors-hammer.true-damage-cooldown-seconds", 12);
+            thorsHammerConfigChanged = true;
+        }
+        if (thorsHammerConfigChanged) {
+            plugin.saveConfig();
+        }
+
         thorsHammerBonusDamage = clamp(c.getDouble("thors-hammer.bonus-damage", 1.0), 0.0, 1.0);
+        thorsHammerTrueDamage = clamp(c.getDouble("thors-hammer.true-damage", 6.0), 0.0, 40.0);
+        thorsHammerTrueDamageCooldownSeconds = clamp(c.getInt("thors-hammer.true-damage-cooldown-seconds", 12), 0, 3600);
 
         wiseLevelOneBonus = clamp(c.getDouble("custom-enchants.wise.level-bonus.1", 0.15), 0.0, 10.0);
         wiseLevelTwoBonus = clamp(c.getDouble("custom-enchants.wise.level-bonus.2", 0.30), 0.0, 10.0);
