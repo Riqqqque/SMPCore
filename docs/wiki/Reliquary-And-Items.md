@@ -75,3 +75,5 @@ Mythic fusions are made in the Mythic Forge with two source relics and the requi
 - `/mythics` opens Mythic Nexus fusions.
 - `/bossrituals` opens boss shrine instructions.
 - `/enchants` opens the custom enchant menu.
+
+If the Reliquary, Mythic Nexus, or Covenant Armory is opened from `/menu`, its Back buttons return to the menu path that opened it. Direct commands such as `/reliquary` and `/mythics` still work as standalone shortcuts.
