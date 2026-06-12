@@ -3,12 +3,14 @@ package me.rique.smpcore.legendary;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.MessageUtil;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
+import org.bukkit.Keyed;
 import org.bukkit.World;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -28,18 +30,23 @@ import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.ExplosionPrimeEvent;
 import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.inventory.CraftItemEvent;
+import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.PrepareItemCraftEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerKickEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
@@ -296,6 +303,24 @@ public final class MythicForgeListener implements Listener {
         event.getPlayer().discoverRecipe(ascendantCoreRecipeKey);
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onPrepareCraft(PrepareItemCraftEvent event) {
+        if (isManagedRecipe(event.getRecipe()) && !usesOnlyPlainRecipeIngredients(event.getInventory().getMatrix())) {
+            event.getInventory().setResult(null);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onCraft(CraftItemEvent event) {
+        if (!isManagedRecipe(event.getRecipe()) || usesOnlyPlainRecipeIngredients(event.getInventory().getMatrix())) {
+            return;
+        }
+        event.setCancelled(true);
+        if (event.getWhoClicked() instanceof Player player) {
+            player.sendMessage(MessageUtil.warn("Use plain vanilla ingredients for Mythic Forge recipes."));
+        }
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPlaceForge(PlayerInteractEvent event) {
         if (event.getHand() != EquipmentSlot.HAND) {
@@ -516,6 +541,10 @@ public final class MythicForgeListener implements Listener {
         }
 
         Inventory top = event.getView().getTopInventory();
+        if (isUnsafeForgeClick(event)) {
+            event.setCancelled(true);
+            return;
+        }
         if (event.getClickedInventory() == top) {
             event.setCancelled(true);
             if (event.getSlot() == RESULT_SLOT) {
@@ -545,9 +574,21 @@ public final class MythicForgeListener implements Listener {
             return;
         }
 
-        if (event.getClick() == ClickType.DOUBLE_CLICK || event.getClick() == ClickType.NUMBER_KEY) {
-            event.setCancelled(true);
-        }
+    }
+
+    private boolean isUnsafeForgeClick(InventoryClickEvent event) {
+        ClickType click = event.getClick();
+        InventoryAction action = event.getAction();
+        return click == ClickType.DOUBLE_CLICK
+            || click == ClickType.MIDDLE
+            || click == ClickType.NUMBER_KEY
+            || click == ClickType.SWAP_OFFHAND
+            || click == ClickType.CREATIVE
+            || click == ClickType.UNKNOWN
+            || action == InventoryAction.COLLECT_TO_CURSOR
+            || action == InventoryAction.HOTBAR_SWAP
+            || action == InventoryAction.CLONE_STACK
+            || action == InventoryAction.UNKNOWN;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -584,15 +625,24 @@ public final class MythicForgeListener implements Listener {
     }
 
     @EventHandler
+    public void onKick(PlayerKickEvent event) {
+        returnOpenForgeInputs(event.getPlayer());
+    }
+
+    @EventHandler
     public void onQuit(PlayerQuitEvent event) {
-        Inventory top = event.getPlayer().getOpenInventory().getTopInventory();
+        returnOpenForgeInputs(event.getPlayer());
+    }
+
+    private void returnOpenForgeInputs(Player player) {
+        Inventory top = player.getOpenInventory().getTopInventory();
         if (!(top.getHolder() instanceof MythicForgeMenuHolder)) {
             return;
         }
 
-        returnInput(event.getPlayer(), top, LEFT_SLOT);
-        returnInput(event.getPlayer(), top, CATALYST_SLOT);
-        returnInput(event.getPlayer(), top, RIGHT_SLOT);
+        returnInput(player, top, LEFT_SLOT);
+        returnInput(player, top, CATALYST_SLOT);
+        returnInput(player, top, RIGHT_SLOT);
     }
 
     private void registerRecipes() {
@@ -618,6 +668,29 @@ public final class MythicForgeListener implements Listener {
         recipe.setIngredient('O', Material.CRYING_OBSIDIAN);
         recipe.setIngredient('D', Material.DRAGON_BREATH);
         Bukkit.addRecipe(recipe);
+    }
+
+    private boolean isManagedRecipe(Recipe recipe) {
+        if (!(recipe instanceof Keyed keyed)) {
+            return false;
+        }
+        NamespacedKey key = keyed.getKey();
+        return mythicForgeRecipeKey.equals(key) || ascendantCoreRecipeKey.equals(key);
+    }
+
+    private boolean usesOnlyPlainRecipeIngredients(ItemStack[] matrix) {
+        if (matrix == null) {
+            return false;
+        }
+        for (ItemStack item : matrix) {
+            if (item == null || item.getType().isAir()) {
+                continue;
+            }
+            if (!InventoryRecipeUtil.isPlainMaterial(plugin, item, item.getType())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void openForgeMenu(Player player, UUID forgeId) {
@@ -741,6 +814,7 @@ public final class MythicForgeListener implements Listener {
             List.of(
                 "<gray>Aligned Output:</gray> <white>" + outputName + "</white>",
                 "<gray>Consumes both legendaries and the Ascendant Core.</gray>",
+                "<gray>The source legendaries leave altar rolls forever.</gray>",
                 "<dark_gray>Click to forge</dark_gray>"
             )
         );
@@ -856,6 +930,14 @@ public final class MythicForgeListener implements Listener {
             player.sendMessage(MessageUtil.error("That mythic output is not available right now."));
             return;
         }
+        if (!canFitReward(player, reward)) {
+            player.sendMessage(MessageUtil.warn("Clear one inventory slot before completing this fusion."));
+            return;
+        }
+
+        altarManager.retireLegendaryFromCycle(recipe.leftId(), player.getUniqueId());
+        altarManager.retireLegendaryFromCycle(recipe.rightId(), player.getUniqueId());
+
         if (plugin.getItemAuditManager() != null) {
             plugin.getItemAuditManager().recordKnownAcquisition(
                 player,
@@ -864,13 +946,13 @@ public final class MythicForgeListener implements Listener {
                 "Forged at the Mythic Forge from " + recipe.leftId() + " + " + recipe.rightId() + "."
             );
         }
+        legendary.registerLegendaryInstance(player, reward, false);
 
         inventory.setItem(LEFT_SLOT, null);
         inventory.setItem(CATALYST_SLOT, null);
         inventory.setItem(RIGHT_SLOT, null);
 
-        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(reward);
-        leftovers.values().forEach(leftover -> player.getWorld().dropItemNaturally(player.getLocation(), leftover));
+        InventoryRecipeUtil.giveOrDrop(player, reward);
         legendary.resyncLegendaryOwnership(player);
 
         String outputName = legendary.displayNameForLegendary(recipe.outputId());
@@ -879,6 +961,32 @@ public final class MythicForgeListener implements Listener {
         ));
         player.playSound(player.getLocation(), Sound.BLOCK_BEACON_POWER_SELECT, 1.0f, 1.15f);
         renderMenu(inventory);
+    }
+
+    private boolean canFitReward(Player player, ItemStack reward) {
+        if (reward == null || reward.getType().isAir()) {
+            return false;
+        }
+        int remaining = reward.getAmount();
+        int maxStack = Math.max(1, reward.getType().getMaxStackSize());
+        for (ItemStack item : player.getInventory().getStorageContents()) {
+            if (remaining <= 0) {
+                return true;
+            }
+            if (item == null || item.getType().isAir() || !item.isSimilar(reward)) {
+                continue;
+            }
+            remaining -= Math.max(0, maxStack - item.getAmount());
+        }
+        for (ItemStack item : player.getInventory().getStorageContents()) {
+            if (remaining <= 0) {
+                return true;
+            }
+            if (item == null || item.getType().isAir()) {
+                remaining -= maxStack;
+            }
+        }
+        return remaining <= 0;
     }
 
     private void returnInput(Player player, Inventory inventory, int slot) {

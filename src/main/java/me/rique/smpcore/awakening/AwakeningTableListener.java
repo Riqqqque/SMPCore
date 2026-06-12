@@ -5,6 +5,7 @@ import io.papermc.paper.event.player.PlayerInventorySlotChangeEvent;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.legendary.LegendaryListener;
+import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
@@ -44,6 +45,8 @@ import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.entity.EntityShootBowEvent;
 import org.bukkit.event.entity.ProjectileLaunchEvent;
+import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -52,6 +55,7 @@ import org.bukkit.event.inventory.PrepareGrindstoneEvent;
 import org.bukkit.event.inventory.PrepareSmithingEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerKickEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
@@ -177,7 +181,7 @@ public final class AwakeningTableListener implements Listener {
             List.of(CustomLoreUtil.section(
                 "Use",
                 "Awaken Gear",
-                "<gray>Insert a weapon, tool, or armor piece.</gray>",
+                "<gray>Insert a weapon, tool, armor piece, or Ancient Scroll.</gray>",
                 "<gray>Spend a <white>Nether Star</white> to attempt an awakening.</gray>"
             ))
         ));
@@ -288,20 +292,18 @@ public final class AwakeningTableListener implements Listener {
         removeAwakeningTableHolograms(block.getLocation());
         event.setDropItems(false);
         event.setExpToDrop(0);
-        if (event.getPlayer().getGameMode() == org.bukkit.GameMode.CREATIVE) {
-            return;
-        }
-        block.getWorld().dropItemNaturally(block.getLocation().add(0.5, 0.5, 0.5), createAwakeningTableItem());
+        boolean dropItem = event.getPlayer().getGameMode() != org.bukkit.GameMode.CREATIVE;
+        Bukkit.getScheduler().runTask(plugin, () -> finishAwakeningTableBreak(block, dropItem));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBlockExplode(BlockExplodeEvent event) {
-        dropExplodedAwakeningTables(event.blockList());
+        protectExplodedAwakeningTables(event.blockList());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onEntityExplode(EntityExplodeEvent event) {
-        dropExplodedAwakeningTables(event.blockList());
+        protectExplodedAwakeningTables(event.blockList());
     }
 
     @EventHandler
@@ -389,6 +391,15 @@ public final class AwakeningTableListener implements Listener {
         }
 
         Inventory top = event.getView().getTopInventory();
+        if (isUnsafeAwakeningClick(event)) {
+            event.setCancelled(true);
+            return;
+        }
+        if (event.getClickedInventory() == null) {
+            event.setCancelled(true);
+            return;
+        }
+
         int rawSlot = event.getRawSlot();
         if (rawSlot < top.getSize()) {
             event.setCancelled(true);
@@ -408,6 +419,21 @@ public final class AwakeningTableListener implements Listener {
             handleShiftTransfer(event, top);
             refreshMenu(top);
         }
+    }
+
+    private boolean isUnsafeAwakeningClick(InventoryClickEvent event) {
+        ClickType click = event.getClick();
+        InventoryAction action = event.getAction();
+        return click == ClickType.DOUBLE_CLICK
+            || click == ClickType.MIDDLE
+            || click == ClickType.NUMBER_KEY
+            || click == ClickType.SWAP_OFFHAND
+            || click == ClickType.CREATIVE
+            || click == ClickType.UNKNOWN
+            || action == InventoryAction.COLLECT_TO_CURSOR
+            || action == InventoryAction.HOTBAR_SWAP
+            || action == InventoryAction.CLONE_STACK
+            || action == InventoryAction.UNKNOWN;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -559,8 +585,16 @@ public final class AwakeningTableListener implements Listener {
     }
 
     @EventHandler
+    public void onKick(PlayerKickEvent event) {
+        handleDisconnect(event.getPlayer());
+    }
+
+    @EventHandler
     public void onQuit(PlayerQuitEvent event) {
-        Player player = event.getPlayer();
+        handleDisconnect(event.getPlayer());
+    }
+
+    private void handleDisconnect(Player player) {
         Inventory top = player.getOpenInventory().getTopInventory();
         if (top.getHolder() instanceof AwakeningMenuHolder) {
             returnMenuItem(player, top, ITEM_SLOT);
@@ -578,6 +612,16 @@ public final class AwakeningTableListener implements Listener {
         );
         refreshMenu(inventory);
         player.openInventory(inventory);
+    }
+
+    private void finishAwakeningTableBreak(Block block, boolean dropItem) {
+        if (isAwakeningTableBlock(block)) {
+            ensureAwakeningTableHologram(block.getLocation());
+            return;
+        }
+        if (dropItem) {
+            block.getWorld().dropItemNaturally(block.getLocation().add(0.5, 0.5, 0.5), createAwakeningTableItem());
+        }
     }
 
     private void refreshMenu(Inventory inventory) {
@@ -617,7 +661,7 @@ public final class AwakeningTableListener implements Listener {
         lore.add(MM.deserialize("<gray>Material cost: <white>1 Nether Star</white></gray>"));
         lore.add(Component.empty());
         if (input == null || input.getType() == Material.AIR) {
-            lore.add(MM.deserialize("<yellow>Place a weapon, tool, or armor piece in the left slot.</yellow>"));
+            lore.add(MM.deserialize("<yellow>Place a weapon, tool, armor piece, or Ancient Scroll in the left slot.</yellow>"));
         } else if (!isAwakenable(input)) {
             lore.add(MM.deserialize("<red>That item cannot be awakened.</red>"));
         } else if (isAwakened(input)) {
@@ -626,8 +670,13 @@ public final class AwakeningTableListener implements Listener {
             lore.add(MM.deserialize("<yellow>Place a Nether Star in the right slot.</yellow>"));
         } else {
             lore.add(MM.deserialize("<green>Ready to attempt an awakening.</green>"));
-            lore.add(MM.deserialize("<gray>Failure removes <white>" + formatPercent(plugin.getConfigManager().awakeningTableFailureDurabilityLossFraction) + "</white> of remaining durability.</gray>"));
-            lore.add(MM.deserialize("<gray>Items under <white>" + formatPercent(plugin.getConfigManager().awakeningTableDestroyThreshold) + "</white> remaining durability are destroyed on failure.</gray>"));
+            if (isAncientScroll(input)) {
+                lore.add(MM.deserialize("<gray>Success upgrades the scroll into a power-choice scroll.</gray>"));
+                lore.add(MM.deserialize("<gray>Failure destroys the scroll.</gray>"));
+            } else {
+                lore.add(MM.deserialize("<gray>Failure removes <white>" + formatPercent(plugin.getConfigManager().awakeningTableFailureDurabilityLossFraction) + "</white> of remaining durability.</gray>"));
+                lore.add(MM.deserialize("<gray>Items under <white>" + formatPercent(plugin.getConfigManager().awakeningTableDestroyThreshold) + "</white> remaining durability are destroyed on failure.</gray>"));
+            }
         }
         meta.lore(lore);
         info.setItemMeta(meta);
@@ -749,7 +798,11 @@ public final class AwakeningTableListener implements Listener {
         if (ThreadLocalRandom.current().nextDouble() < plugin.getConfigManager().awakeningTableSuccessChance) {
             ItemStack awakened = awakenItem(working);
             top.setItem(ITEM_SLOT, awakened);
-            player.sendMessage(MessageUtil.success("Awakening succeeded. Your item is now awakened."));
+            if (isAncientScroll(awakened)) {
+                player.sendMessage(MessageUtil.success("Awakening succeeded. The scroll can now choose a superpower."));
+            } else {
+                player.sendMessage(MessageUtil.success("Awakening succeeded. Your item is now awakened."));
+            }
             playSuccessAnimation(player, holder.tableLocation());
             announceAwakening(player, awakened);
         } else {
@@ -806,7 +859,7 @@ public final class AwakeningTableListener implements Listener {
     }
 
     private ItemStack failAwakening(ItemStack item) {
-        if (plugin.getSuperpowerManager() != null && plugin.getSuperpowerManager().isAncientScroll(item)) {
+        if (isAncientScroll(item)) {
             return null;
         }
         if (!(item.getItemMeta() instanceof Damageable damageable)) {
@@ -867,6 +920,11 @@ public final class AwakeningTableListener implements Listener {
 
         CustomToolListener customTools = plugin.getCustomToolListener();
         if (customTools != null && customTools.refreshCustomToolItem(item)) {
+            return;
+        }
+
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers != null && powers.refreshPowerItem(item)) {
             return;
         }
 
@@ -1424,6 +1482,9 @@ public final class AwakeningTableListener implements Listener {
         if (item == null || item.getType() == Material.AIR || item.getAmount() <= 0) {
             return false;
         }
+        if (isAncientScroll(item)) {
+            return true;
+        }
         return item.getType().getMaxDurability() > 0
             && (isArmor(item.getType()) || isToolOrWeapon(item.getType()));
     }
@@ -1492,6 +1553,11 @@ public final class AwakeningTableListener implements Listener {
 
     public boolean isAwakened(ItemMeta meta) {
         return meta != null && isMarked(meta.getPersistentDataContainer(), keyAwakened);
+    }
+
+    private boolean isAncientScroll(ItemStack item) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        return powers != null && powers.isAncientScroll(item);
     }
 
     private boolean isManagedByOtherSystem(ItemStack item) {
@@ -1655,7 +1721,7 @@ public final class AwakeningTableListener implements Listener {
         return item == null || item.getType() == Material.AIR || item.getAmount() <= 0;
     }
 
-    private void dropExplodedAwakeningTables(List<Block> blocks) {
+    private void protectExplodedAwakeningTables(List<Block> blocks) {
         Iterator<Block> iterator = blocks.iterator();
         while (iterator.hasNext()) {
             Block block = iterator.next();
@@ -1663,9 +1729,7 @@ public final class AwakeningTableListener implements Listener {
                 continue;
             }
             iterator.remove();
-            removeAwakeningTableHolograms(block.getLocation());
-            block.setType(Material.AIR, false);
-            block.getWorld().dropItemNaturally(block.getLocation().add(0.5, 0.5, 0.5), createAwakeningTableItem());
+            ensureAwakeningTableHologram(block.getLocation());
         }
     }
 

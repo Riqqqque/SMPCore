@@ -20,6 +20,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.enchantment.EnchantItemEvent;
+import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
@@ -133,8 +134,7 @@ public final class ReplenishListener implements Listener {
     public void onAnvilClick(InventoryClickEvent event) {
         if (!(event.getWhoClicked() instanceof Player player)) return;
         if (event.getView().getTopInventory().getType() != InventoryType.ANVIL) return;
-        if (event.getClickedInventory() != event.getView().getTopInventory()) return;
-        if (event.getSlotType() != InventoryType.SlotType.RESULT) return;
+        if (!isAnvilResultSlot(event)) return;
         if (!(event.getView().getTopInventory() instanceof AnvilInventory anvil)) return;
 
         ItemStack left = anvil.getFirstItem();
@@ -189,10 +189,10 @@ public final class ReplenishListener implements Listener {
 
         event.setDropItems(false);
         Location location = block.getLocation();
-        giveDrops(player, drops, location);
-
+        List<ItemStack> finalDrops = cloneDrops(drops);
         Bukkit.getScheduler().runTask(plugin, () -> {
             if (!block.getType().isAir()) return;
+            giveDrops(player, finalDrops, location);
             block.setBlockData(replanted, false);
         });
     }
@@ -319,7 +319,25 @@ public final class ReplenishListener implements Listener {
         }
     }
 
+    private List<ItemStack> cloneDrops(Collection<ItemStack> drops) {
+        if (drops == null || drops.isEmpty()) {
+            return List.of();
+        }
+        List<ItemStack> cloned = new ArrayList<>();
+        for (ItemStack drop : drops) {
+            if (drop == null || drop.getType() == Material.AIR || drop.getAmount() <= 0) {
+                continue;
+            }
+            cloned.add(drop.clone());
+        }
+        return cloned;
+    }
+
     private boolean canReceiveAnvilResult(Player player, InventoryClickEvent event) {
+        if (!isAllowedResultClick(event.getClick())) {
+            player.sendMessage(MessageUtil.warn("Use a normal click or shift-click to take this result."));
+            return false;
+        }
         if (event.isShiftClick()) {
             if (player.getInventory().firstEmpty() != -1) {
                 return true;
@@ -334,6 +352,19 @@ public final class ReplenishListener implements Listener {
         }
         player.sendMessage(MessageUtil.warn("Your cursor must be empty."));
         return false;
+    }
+
+    private boolean isAllowedResultClick(ClickType click) {
+        return click == ClickType.LEFT
+            || click == ClickType.RIGHT
+            || click == ClickType.SHIFT_LEFT
+            || click == ClickType.SHIFT_RIGHT;
+    }
+
+    private boolean isAnvilResultSlot(InventoryClickEvent event) {
+        return event.getView().getTopInventory().getType() == InventoryType.ANVIL
+            && (event.getClickedInventory() == event.getView().getTopInventory() || event.getRawSlot() == 2)
+            && (event.getSlotType() == InventoryType.SlotType.RESULT || event.getRawSlot() == 2);
     }
 
     private void giveAnvilResult(Player player, InventoryClickEvent event, ItemStack result) {

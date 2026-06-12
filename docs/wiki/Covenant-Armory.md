@@ -112,11 +112,10 @@ Each armor set recipe creates the full set through the Covenant Armory menu.
 - `Rift Anchor` - sneak-right-click to bind, right-click to return.
 - `Ember Vial` - Fire Resistance and extinguishes the caster.
 - `Widow Antidote` - cleanses Poison, Wither, and Slowness.
-- `Saint's Whetstone` - repairs the held damaged item by roughly 25%.
+- `Saint's Whetstone` - single-use repair stone that restores roughly 25% max durability to damaged gear.
 - `Abyssal Conch` - Water Breathing and Dolphin's Grace.
 - `Root Sigil` - Regeneration aura for caster and nearby teammates.
 - `Titan Charm` - Resistance II and Absorption II for a short window.
-- `Oathglass Compass` - gives a broad direction and rough distance to the nearest player.
 - `Warped Key` - short-range safe blink.
 - `Nullbell` - cleanses harmful effects from the caster and nearby teammates.
 - `Riftward Lens` - reveals nearby threats with a glowing mark.
@@ -130,11 +129,10 @@ Each armor set recipe creates the full set through the Covenant Armory menu.
 - `Rift Anchor` - 6 Rift Lens, 1 Respawn Anchor, 16 Ender Pearls.
 - `Ember Vial` - 2 Solar Ember, 1 Glass Bottle, 8 Blaze Powder.
 - `Widow Antidote` - 2 Widow Silk, 1 Milk Bucket, 8 Spider Eyes.
-- `Saint's Whetstone` - 1 Saint Alloy, 4 Titan Gear, 1 Grindstone.
+- `Saint's Whetstone` - 1 Saint Alloy, 4 Titan Gear, 1 Grindstone. Consumed only after a successful repair.
 - `Abyssal Conch` - 4 Abyssal Pearl, 1 Nautilus Shell, 16 Prismarine Crystals.
 - `Root Sigil` - 1 Verdant Heart, 6 Living Bark, 1 Spore Blossom.
 - `Titan Charm` - 6 Titan Gear, 1 Heavy Core, 8 Iron Blocks.
-- `Oathglass Compass` - 3 Oathbound Plate, 1 Recovery Compass, 16 Amethyst Shards.
 - `Warped Key` - 3 Rift Lens, 1 Trial Key, 12 Ender Pearls.
 - `Nullbell` - 4 Oathbound Plate, 3 Widow Silk, 1 Bell, 1 Milk Bucket.
 - `Riftward Lens` - 4 Rift Lens, 1 Spyglass, 24 Glowstone Dust, 12 Amethyst Shards.

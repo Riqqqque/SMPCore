@@ -387,6 +387,7 @@ public final class PlayerCommands {
         commands.register(
             Commands.literal("msummon")
                 .requires(src -> src.getSender() instanceof Player)
+                .executes(ctx -> runMonarchSummon(plugin, (Player) ctx.getSource().getSender(), 1))
                 .then(Commands.literal("despawn")
                     .executes(ctx -> {
                         Player player = (Player) ctx.getSource().getSender();
@@ -410,17 +411,21 @@ public final class PlayerCommands {
                 .then(Commands.argument("amount", IntegerArgumentType.integer(1, 15))
                     .executes(ctx -> {
                         Player player = (Player) ctx.getSource().getSender();
-                        SuperpowerManager powers = plugin.getSuperpowerManager();
-                        if (powers == null) {
-                            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
-                            return 0;
-                        }
                         int amount = IntegerArgumentType.getInteger(ctx, "amount");
-                        return powers.handleMonarchSummonCommand(player, amount) ? Command.SINGLE_SUCCESS : 0;
+                        return runMonarchSummon(plugin, player, amount);
                     }))
                 .build(),
             "Summon stored Monarch mobs"
         );
+    }
+
+    private static int runMonarchSummon(SMPCore plugin, Player player, int amount) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            return 0;
+        }
+        return powers.handleMonarchSummonCommand(player, amount) ? Command.SINGLE_SUCCESS : 0;
     }
 
     // /back — return to last death or pre-teleport location

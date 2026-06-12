@@ -8,6 +8,7 @@ import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -56,6 +57,7 @@ import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
 import org.bukkit.event.entity.ProjectileLaunchEvent;
+import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -126,11 +128,22 @@ public final class SuperpowerManager implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final Component POWERS_MENU_TITLE =
         MM.deserialize("<gradient:#ff9a3d:#d61c4e><bold>Superpower Info</bold></gradient>");
+    private static final Component POWER_CHOICE_MENU_TITLE =
+        MM.deserialize("<gradient:#ff4d6d:#7c3aed><bold>Choose Your Fate</bold></gradient>");
     private static final Component DRUID_MENU_TITLE =
         MM.deserialize("<gradient:#63c74d:#2f8f47><bold>Druid's Grimoire</bold></gradient>");
 
     private static final int MENU_SIZE = 54;
     private static final int DRUID_MENU_SIZE = 27;
+    private static final int[] POWER_CHOICE_SLOTS = {
+        10, 11, 12, 13, 14, 15, 16,
+        19, 20, 21, 22, 23, 24, 25,
+        28, 29, 30, 31, 32, 33, 34,
+        37, 38, 39, 40, 41, 42, 43
+    };
+    private static final int POWER_CHOICE_PREVIOUS_SLOT = 45;
+    private static final int POWER_CHOICE_CANCEL_SLOT = 49;
+    private static final int POWER_CHOICE_NEXT_SLOT = 53;
     private static final int SHADOW_DURATION_SECONDS = 15 * 60;
     private static final int SHADOW_COOLDOWN_SECONDS = 5 * 60;
     private static final int SHADOW_HIT_COOLDOWN_SECONDS = 7 * 60;
@@ -138,11 +151,13 @@ public final class SuperpowerManager implements Listener {
     private static final int MONARCH_STORAGE_LIMIT = 15;
     private static final double MONARCH_TARGET_RANGE = 34.0;
     private static final double MONARCH_TARGET_VERTICAL_RANGE = 18.0;
-    private static final double MONARCH_MIN_HEALTH = 56.0;
-    private static final double MONARCH_HEALTH_MULTIPLIER = 2.75;
-    private static final double MONARCH_MIN_DAMAGE = 9.0;
-    private static final double MONARCH_DAMAGE_MULTIPLIER = 1.65;
-    private static final double MONARCH_MIN_SPEED = 0.30;
+    private static final double MONARCH_SUMMON_HEALTH = 40.0;
+    private static final double MONARCH_MIN_DAMAGE = 10.0;
+    private static final double MONARCH_DAMAGE_MULTIPLIER = 1.85;
+    private static final double MONARCH_MIN_SPEED = 0.31;
+    private static final double MONARCH_MIN_ARMOR = 10.0;
+    private static final double MONARCH_MIN_ARMOR_TOUGHNESS = 4.0;
+    private static final double MONARCH_KNOCKBACK_RESISTANCE = 0.35;
     private static final int FLORIST_HEAL_DURATION_SECONDS = 10;
     private static final int FLORIST_VINE_DAMAGE = 2;
     private static final int FLORIST_VINE_RANGE = 18;
@@ -538,6 +553,38 @@ public final class SuperpowerManager implements Listener {
         return hasTaggedItem(item, keyDruidGrimoire, DRUID_GRIMOIRE_ITEM_ID);
     }
 
+    public boolean refreshPowerItem(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+
+        if (isAncientScroll(item)) {
+            applyAncientScrollState(meta);
+            applyAncientScrollPresentation(meta);
+        } else if (isWardenHeart(item)) {
+            applyWardenHeartState(meta);
+            applyWardenHeartPresentation(meta);
+        } else if (isMotherNatureStick(item)) {
+            applyMotherNatureStickState(meta);
+            applyMotherNatureStickPresentation(meta);
+        } else if (isTheWorldClock(item)) {
+            applyTheWorldClockState(meta);
+            applyTheWorldClockPresentation(meta);
+        } else if (isDruidGrimoire(item)) {
+            applyDruidGrimoireState(meta);
+            applyDruidGrimoirePresentation(meta);
+        } else {
+            return false;
+        }
+
+        item.setItemMeta(meta);
+        return true;
+    }
+
     public void openAdminInfoMenu(Player player) {
         Inventory inventory = Bukkit.createInventory(
             new PowerInfoHolder(),
@@ -748,9 +795,9 @@ public final class SuperpowerManager implements Listener {
             return false;
         }
 
-        List<EntityType> stored = monarchStorage(player);
+        List<EntityType> stored = cleanMonarchStorage(player, monarchStorage(player));
         if (stored.isEmpty()) {
-            player.sendMessage(MessageUtil.warn("You have no stored mobs to summon."));
+            player.sendMessage(MessageUtil.warn("You have no stored hostile mobs to summon."));
             return false;
         }
 
@@ -1898,10 +1945,7 @@ public final class SuperpowerManager implements Listener {
         if (!(event.getView().getTopInventory() instanceof CraftingInventory inventory)) {
             return;
         }
-        if (event.getClickedInventory() != event.getView().getTopInventory()) {
-            return;
-        }
-        if (event.getSlotType() != InventoryType.SlotType.RESULT) {
+        if (!isCraftResultSlot(event)) {
             return;
         }
 
@@ -1927,6 +1971,7 @@ public final class SuperpowerManager implements Listener {
                 "Crafted an Ancient Scroll."
             );
         }
+        event.setCurrentItem(null);
         giveCraftResult(player, event, result);
 
         inventory.setResult(null);
@@ -1974,6 +2019,35 @@ public final class SuperpowerManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPowerMenuClick(InventoryClickEvent event) {
+        if (event.getView().getTopInventory().getHolder() instanceof PowerChoiceHolder holder) {
+            event.setCancelled(true);
+            if (!(event.getWhoClicked() instanceof Player player)) {
+                return;
+            }
+            if (!player.getUniqueId().equals(holder.ownerId())) {
+                return;
+            }
+            if (event.getClickedInventory() != event.getView().getTopInventory()) {
+                return;
+            }
+            if (event.getSlot() == POWER_CHOICE_CANCEL_SLOT) {
+                player.closeInventory();
+                return;
+            }
+            if (event.getSlot() == POWER_CHOICE_PREVIOUS_SLOT && holder.page() > 0) {
+                openAncientScrollPowerChoice(player, holder.hand(), holder.page() - 1);
+                return;
+            }
+            if (event.getSlot() == POWER_CHOICE_NEXT_SLOT && holder.page() < maxPowerChoicePage(selectablePowerChoices().size())) {
+                openAncientScrollPowerChoice(player, holder.hand(), holder.page() + 1);
+                return;
+            }
+            SuperpowerType choice = powerChoiceBySlot(event.getSlot(), holder.page());
+            if (choice != null) {
+                chooseAncientScrollPower(player, holder, choice);
+            }
+            return;
+        }
         if (event.getView().getTopInventory().getHolder() instanceof PowerInfoHolder) {
             event.setCancelled(true);
             if (event.getRawSlot() == 49 && event.getWhoClicked() instanceof Player player) {
@@ -2004,6 +2078,7 @@ public final class SuperpowerManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPowerMenuDrag(InventoryDragEvent event) {
         if (event.getView().getTopInventory().getHolder() instanceof PowerInfoHolder
+            || event.getView().getTopInventory().getHolder() instanceof PowerChoiceHolder
             || event.getView().getTopInventory().getHolder() instanceof DruidGrimoireHolder) {
             event.setCancelled(true);
         }
@@ -2012,6 +2087,7 @@ public final class SuperpowerManager implements Listener {
     @EventHandler
     public void onPowerMenuClose(InventoryCloseEvent event) {
         if (event.getView().getTopInventory().getHolder() instanceof PowerInfoHolder
+            || event.getView().getTopInventory().getHolder() instanceof PowerChoiceHolder
             || event.getView().getTopInventory().getHolder() instanceof DruidGrimoireHolder) {
             event.getView().getTopInventory().clear();
         }
@@ -2778,6 +2854,12 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void useAncientScroll(Player player, EquipmentSlot hand) {
+        ItemStack held = itemInHand(player, hand);
+        if (isAwakenedAncientScroll(held)) {
+            openAncientScrollPowerChoice(player, hand);
+            return;
+        }
+
         SuperpowerType currentPower = powerOf(player);
         SuperpowerType rerolled = currentPower == null
             ? randomPower(false)
@@ -2794,6 +2876,52 @@ public final class SuperpowerManager implements Listener {
         }
         assignPower(player, rerolled, true, true);
         player.sendMessage(MessageUtil.success("The Ancient Scroll rewrites your fate."));
+    }
+
+    private void openAncientScrollPowerChoice(Player player, EquipmentSlot hand) {
+        openAncientScrollPowerChoice(player, hand, 0);
+    }
+
+    private void openAncientScrollPowerChoice(Player player, EquipmentSlot hand, int requestedPage) {
+        if (!isAwakenedAncientScroll(itemInHand(player, hand))) {
+            player.sendMessage(MessageUtil.error("Hold the awakened Ancient Scroll you want to use."));
+            return;
+        }
+
+        int page = clampPowerChoicePage(requestedPage);
+        Inventory inventory = Bukkit.createInventory(
+            new PowerChoiceHolder(player.getUniqueId(), hand, page),
+            MENU_SIZE,
+            BedrockCompat.menuTitle(player, POWER_CHOICE_MENU_TITLE, "Choose Your Fate")
+        );
+        fillPowerChoiceMenu(player, inventory, page);
+        player.openInventory(inventory);
+    }
+
+    private void chooseAncientScrollPower(Player player, PowerChoiceHolder holder, SuperpowerType choice) {
+        if (choice == null || choice == SuperpowerType.HUMAN) {
+            return;
+        }
+        if (choice == powerOf(player)) {
+            player.sendMessage(MessageUtil.warn("You already have <white>" + choice.displayName() + "</white>. Pick a different fate."));
+            return;
+        }
+        if (!isAwakenedAncientScroll(itemInHand(player, holder.hand()))) {
+            player.sendMessage(MessageUtil.error("Hold the awakened Ancient Scroll you want to use."));
+            player.closeInventory();
+            return;
+        }
+        if (!consumeHeldItem(player, holder.hand(), item -> isAncientScroll(item) && isAwakenedAncientScroll(item))) {
+            player.sendMessage(MessageUtil.error("The awakened Ancient Scroll slipped from your hand."));
+            player.closeInventory();
+            return;
+        }
+
+        assignPower(player, choice, true, true);
+        player.closeInventory();
+        player.sendMessage(MessageUtil.success("The awakened scroll binds you to <white>" + choice.displayName() + "</white>."));
+        player.getWorld().playSound(player.getLocation(), Sound.BLOCK_ENCHANTMENT_TABLE_USE, 0.9f, 1.45f);
+        player.getWorld().spawnParticle(Particle.ENCHANT, player.getLocation().add(0.0, 1.1, 0.0), 40, 0.45, 0.65, 0.45, 0.04);
     }
 
     private void openDruidGrimoire(Player player) {
@@ -3453,6 +3581,9 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void storeMonarchMob(Player player, EntityType type) {
+        if (!isMonarchStorableType(type)) {
+            return;
+        }
         List<EntityType> stored = monarchStorage(player);
         if (stored.size() >= MONARCH_STORAGE_LIMIT) {
             return;
@@ -3460,8 +3591,26 @@ public final class SuperpowerManager implements Listener {
         stored.add(type);
         saveMonarchStorage(player, stored);
         player.sendMessage(MessageUtil.info(
-            "Monarch stored <white>" + prettyEntityType(type) + "</white> (<white>" + stored.size() + "/" + MONARCH_STORAGE_LIMIT + "</white>)."
+            "Monarch stored hostile <white>" + prettyEntityType(type) + "</white> (<white>" + stored.size() + "/" + MONARCH_STORAGE_LIMIT + "</white>)."
         ));
+    }
+
+    private List<EntityType> cleanMonarchStorage(Player player, List<EntityType> stored) {
+        if (stored == null || stored.isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<EntityType> hostileOnly = new ArrayList<>();
+        for (EntityType type : stored) {
+            if (isMonarchStorableType(type)) {
+                hostileOnly.add(type);
+            }
+        }
+        if (hostileOnly.size() != stored.size()) {
+            saveMonarchStorage(player, hostileOnly);
+            int removed = stored.size() - hostileOnly.size();
+            player.sendMessage(MessageUtil.info("Cleared <white>" + removed + "</white> old non-hostile Sovereign stored mob(s)."));
+        }
+        return hostileOnly;
     }
 
     private List<EntityType> monarchStorage(Player player) {
@@ -3497,11 +3646,18 @@ public final class SuperpowerManager implements Listener {
             return false;
         }
         EntityType type = mob.getType();
-        if (MONARCH_BLOCKED_TYPES.contains(type) || !type.isSpawnable()) {
+        if (isCustomBoss(entity)) {
+            return false;
+        }
+        return isMonarchStorableType(type);
+    }
+
+    private boolean isMonarchStorableType(EntityType type) {
+        if (type == null || MONARCH_BLOCKED_TYPES.contains(type) || !type.isSpawnable()) {
             return false;
         }
         Class<?> entityClass = type.getEntityClass();
-        return entityClass != null && Mob.class.isAssignableFrom(entityClass);
+        return entityClass != null && org.bukkit.entity.Monster.class.isAssignableFrom(entityClass);
     }
 
     private void markMonarchSummon(Mob mob, UUID ownerId) {
@@ -3519,13 +3675,12 @@ public final class SuperpowerManager implements Listener {
         mob.setRemoveWhenFarAway(false);
         mob.setCanPickupItems(false);
         mob.setSilent(false);
-        double baseHealth = monarchBaseAttribute(mob, keyMonarchBaseHealth, Attribute.MAX_HEALTH, 20.0);
         double baseDamage = monarchBaseAttribute(mob, keyMonarchBaseDamage, Attribute.ATTACK_DAMAGE, 4.0);
         double baseSpeed = monarchBaseAttribute(mob, keyMonarchBaseSpeed, Attribute.MOVEMENT_SPEED, 0.23);
         setMobAttributeBase(
             mob,
             Attribute.MAX_HEALTH,
-            Math.max(MONARCH_MIN_HEALTH, baseHealth * MONARCH_HEALTH_MULTIPLIER)
+            MONARCH_SUMMON_HEALTH
         );
         setMobAttributeBase(
             mob,
@@ -3538,8 +3693,10 @@ public final class SuperpowerManager implements Listener {
             Math.max(MONARCH_MIN_SPEED, baseSpeed * 1.20)
         );
         setMobAttributeBase(mob, Attribute.FOLLOW_RANGE, Math.max(42.0, currentMobAttribute(mob, Attribute.FOLLOW_RANGE, 24.0)));
-        setMobAttributeBase(mob, Attribute.KNOCKBACK_RESISTANCE, Math.max(0.25, currentMobAttribute(mob, Attribute.KNOCKBACK_RESISTANCE, 0.0)));
-        double maxHealth = Math.max(1.0, currentMobAttribute(mob, Attribute.MAX_HEALTH, MONARCH_MIN_HEALTH));
+        setMobAttributeBase(mob, Attribute.ARMOR, Math.max(MONARCH_MIN_ARMOR, currentMobAttribute(mob, Attribute.ARMOR, 0.0)));
+        setMobAttributeBase(mob, Attribute.ARMOR_TOUGHNESS, Math.max(MONARCH_MIN_ARMOR_TOUGHNESS, currentMobAttribute(mob, Attribute.ARMOR_TOUGHNESS, 0.0)));
+        setMobAttributeBase(mob, Attribute.KNOCKBACK_RESISTANCE, Math.max(MONARCH_KNOCKBACK_RESISTANCE, currentMobAttribute(mob, Attribute.KNOCKBACK_RESISTANCE, 0.0)));
+        double maxHealth = Math.max(1.0, currentMobAttribute(mob, Attribute.MAX_HEALTH, MONARCH_SUMMON_HEALTH));
         if (healToFull) {
             mob.setHealth(maxHealth);
         } else if (mob.getHealth() > maxHealth) {
@@ -4566,64 +4723,17 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void refreshPowerItems(Player player) {
-        AwakeningTableListener awakening = plugin.getAwakeningTableListener();
         ItemStack[] contents = player.getInventory().getContents();
         for (int slot = 0; slot < contents.length; slot++) {
             ItemStack item = contents[slot];
-            if (isAncientScroll(item)) {
-                ItemMeta meta = item.getItemMeta();
-                if (meta != null) {
-                    if (awakening != null) {
-                        awakening.clearAwakeningState(meta);
-                    }
-                    applyAncientScrollState(meta);
-                    applyAncientScrollPresentation(meta);
-                    item.setItemMeta(meta);
-                    player.getInventory().setItem(slot, item);
-                }
-                continue;
-            }
-            if (isWardenHeart(item)) {
-                ItemMeta meta = item.getItemMeta();
-                if (meta != null) {
-                    applyWardenHeartState(meta);
-                    applyWardenHeartPresentation(meta);
-                    item.setItemMeta(meta);
-                    player.getInventory().setItem(slot, item);
-                }
-                continue;
-            }
-            if (isMotherNatureStick(item)) {
-                ItemMeta meta = item.getItemMeta();
-                if (meta != null) {
-                    applyMotherNatureStickState(meta);
-                    applyMotherNatureStickPresentation(meta);
-                    item.setItemMeta(meta);
-                    player.getInventory().setItem(slot, item);
-                }
-                continue;
-            }
-            if (isTheWorldClock(item)) {
-                ItemMeta meta = item.getItemMeta();
-                if (meta != null) {
-                    applyTheWorldClockState(meta);
-                    applyTheWorldClockPresentation(meta);
-                    item.setItemMeta(meta);
-                    player.getInventory().setItem(slot, item);
-                }
-                continue;
-            }
-            if (isDruidGrimoire(item)) {
-                ItemStack refreshed = createDruidGrimoireItem();
-                refreshed.setAmount(item.getAmount());
-                player.getInventory().setItem(slot, refreshed);
+            if (refreshPowerItem(item)) {
+                player.getInventory().setItem(slot, item);
             }
         }
 
-        if (isDruidGrimoire(player.getItemOnCursor())) {
-            ItemStack refreshed = createDruidGrimoireItem();
-            refreshed.setAmount(player.getItemOnCursor().getAmount());
-            player.setItemOnCursor(refreshed);
+        ItemStack cursor = player.getItemOnCursor();
+        if (refreshPowerItem(cursor)) {
+            player.setItemOnCursor(cursor);
         }
     }
 
@@ -4635,11 +4745,11 @@ public final class SuperpowerManager implements Listener {
             if (item == null || item.getType() == Material.AIR) {
                 continue;
             }
-            if (item.getType() == Material.TOTEM_OF_UNDYING && !isAncientScroll(item) && !isTalisman(item)) {
+            if (InventoryRecipeUtil.isPlainMaterial(plugin, item, Material.TOTEM_OF_UNDYING)) {
                 totems += item.getAmount();
                 continue;
             }
-            if (item.getType() == Material.NETHER_STAR) {
+            if (InventoryRecipeUtil.isPlainMaterial(plugin, item, Material.NETHER_STAR)) {
                 stars += item.getAmount();
                 continue;
             }
@@ -4650,6 +4760,10 @@ public final class SuperpowerManager implements Listener {
             return false;
         }
         return totems == 1 && stars == 2 && hearts == 1;
+    }
+
+    public boolean isAncientScrollCraft(ItemStack[] matrix) {
+        return matchesAncientScrollRecipe(matrix);
     }
 
     private boolean consumeAncientScrollIngredients(CraftingInventory inventory) {
@@ -4671,13 +4785,13 @@ public final class SuperpowerManager implements Listener {
             if (item == null || item.getType() == Material.AIR) {
                 continue;
             }
-            if (item.getType() == Material.NETHER_STAR && stars > 0) {
+            if (InventoryRecipeUtil.isPlainMaterial(plugin, item, Material.NETHER_STAR) && stars > 0) {
                 int take = Math.min(stars, item.getAmount());
                 stars -= take;
                 next[i] = reduceItem(item, take);
                 continue;
             }
-            if (item.getType() == Material.TOTEM_OF_UNDYING && totems > 0 && !isTalisman(item)) {
+            if (InventoryRecipeUtil.isPlainMaterial(plugin, item, Material.TOTEM_OF_UNDYING) && totems > 0) {
                 int take = Math.min(totems, item.getAmount());
                 totems -= take;
                 next[i] = reduceItem(item, take);
@@ -4721,6 +4835,10 @@ public final class SuperpowerManager implements Listener {
     }
 
     private boolean canReceiveCraftResult(Player player, InventoryClickEvent event) {
+        if (!isAllowedResultClick(event.getClick())) {
+            player.sendMessage(MessageUtil.warn("Use a normal click or shift-click to craft this item."));
+            return false;
+        }
         if (event.isShiftClick()) {
             if (player.getInventory().firstEmpty() != -1) {
                 return true;
@@ -4735,6 +4853,19 @@ public final class SuperpowerManager implements Listener {
         }
         player.sendMessage(MessageUtil.warn("Your cursor must be empty."));
         return false;
+    }
+
+    private boolean isAllowedResultClick(ClickType click) {
+        return click == ClickType.LEFT
+            || click == ClickType.RIGHT
+            || click == ClickType.SHIFT_LEFT
+            || click == ClickType.SHIFT_RIGHT;
+    }
+
+    private boolean isCraftResultSlot(InventoryClickEvent event) {
+        return event.getView().getTopInventory() instanceof CraftingInventory
+            && (event.getClickedInventory() == event.getView().getTopInventory() || event.getRawSlot() == 0)
+            && (event.getSlotType() == InventoryType.SlotType.RESULT || event.getRawSlot() == 0);
     }
 
     private ItemStack preserveBoundPowerItem(ItemStack result, ItemStack source) {
@@ -4794,6 +4925,81 @@ public final class SuperpowerManager implements Listener {
         inventory.setItem(49, simpleMenuItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to /menu.</gray>")));
     }
 
+    private void fillPowerChoiceMenu(Player viewer, Inventory inventory, int page) {
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            inventory.setItem(slot, fillerPane());
+        }
+
+        List<SuperpowerType> choices = selectablePowerChoices();
+        int safePage = clampPowerChoicePage(page, choices.size());
+        int totalPages = maxPowerChoicePage(choices.size()) + 1;
+        int start = safePage * POWER_CHOICE_SLOTS.length;
+        inventory.setItem(4, createPowerChoiceHeaderIcon(viewer, safePage, totalPages));
+
+        for (int i = 0; i < POWER_CHOICE_SLOTS.length; i++) {
+            int choiceIndex = start + i;
+            if (choiceIndex >= choices.size()) {
+                break;
+            }
+            inventory.setItem(POWER_CHOICE_SLOTS[i], createPowerChoiceIcon(choices.get(choiceIndex)));
+        }
+        if (safePage > 0) {
+            inventory.setItem(POWER_CHOICE_PREVIOUS_SLOT, simpleMenuItem(
+                Material.ARROW,
+                "<yellow>Previous Page</yellow>",
+                List.of("<gray>View earlier powers.</gray>")
+            ));
+        }
+        if (safePage + 1 < totalPages) {
+            inventory.setItem(POWER_CHOICE_NEXT_SLOT, simpleMenuItem(
+                Material.ARROW,
+                "<yellow>Next Page</yellow>",
+                List.of("<gray>View more powers.</gray>")
+            ));
+        }
+        inventory.setItem(POWER_CHOICE_CANCEL_SLOT, simpleMenuItem(Material.BARRIER, "<red>Cancel</red>", List.of("<gray>Keep the awakened scroll for later.</gray>")));
+    }
+
+    private List<SuperpowerType> selectablePowerChoices() {
+        List<SuperpowerType> choices = new ArrayList<>();
+        for (SuperpowerType type : SuperpowerType.values()) {
+            if (type != SuperpowerType.HUMAN) {
+                choices.add(type);
+            }
+        }
+        choices.sort(Comparator
+            .comparingDouble((SuperpowerType type) -> displayChance(type))
+            .reversed()
+            .thenComparing(SuperpowerType::displayName));
+        return choices;
+    }
+
+    private int clampPowerChoicePage(int requestedPage) {
+        return clampPowerChoicePage(requestedPage, selectablePowerChoices().size());
+    }
+
+    private int clampPowerChoicePage(int requestedPage, int choiceCount) {
+        int maxPage = maxPowerChoicePage(choiceCount);
+        return Math.max(0, Math.min(maxPage, requestedPage));
+    }
+
+    private int maxPowerChoicePage(int choiceCount) {
+        return Math.max(0, (Math.max(0, choiceCount) - 1) / POWER_CHOICE_SLOTS.length);
+    }
+
+    private SuperpowerType powerChoiceBySlot(int slot, int page) {
+        List<SuperpowerType> choices = selectablePowerChoices();
+        int offset = clampPowerChoicePage(page, choices.size()) * POWER_CHOICE_SLOTS.length;
+        for (int i = 0; i < POWER_CHOICE_SLOTS.length; i++) {
+            if (POWER_CHOICE_SLOTS[i] != slot) {
+                continue;
+            }
+            int index = offset + i;
+            return index < choices.size() ? choices.get(index) : null;
+        }
+        return null;
+    }
+
     private ItemStack fillerPane() {
         ItemStack pane = new ItemStack(Material.BLACK_STAINED_GLASS_PANE);
         ItemMeta meta = pane.getItemMeta();
@@ -4816,6 +5022,25 @@ public final class SuperpowerManager implements Listener {
         return item;
     }
 
+    private ItemStack createPowerChoiceHeaderIcon(Player viewer, int page, int totalPages) {
+        SuperpowerType currentPower = powerOf(viewer);
+        ItemStack item = new ItemStack(Material.NETHER_STAR);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        meta.displayName(MM.deserialize("<gradient:#ff4d6d:#7c3aed><bold>Awakened Ancient Scroll</bold></gradient>"));
+        meta.lore(List.of(
+            MM.deserialize("<gray>Choose the power you want to receive.</gray>"),
+            MM.deserialize("<gray>The scroll is consumed only after you click a power.</gray>"),
+            Component.empty(),
+            MM.deserialize("<gray>Current Fate: <white>" + (currentPower == null ? "Unknown" : currentPower.displayName()) + "</white></gray>"),
+            MM.deserialize("<gray>Page: <white>" + (page + 1) + "/" + Math.max(1, totalPages) + "</white></gray>")
+        ));
+        item.setItemMeta(meta);
+        return item;
+    }
+
     private ItemStack createPowerInfoIcon(SuperpowerType type) {
         ItemStack item = new ItemStack(type.icon());
         ItemMeta meta = item.getItemMeta();
@@ -4824,6 +5049,22 @@ public final class SuperpowerManager implements Listener {
         }
         meta.displayName(MM.deserialize("<gold><bold>" + type.displayName() + "</bold></gold>"));
         meta.lore(powerInfoLore(type));
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private ItemStack createPowerChoiceIcon(SuperpowerType type) {
+        ItemStack item = createPowerInfoIcon(type);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        List<Component> lore = meta.hasLore() && meta.lore() != null
+            ? new ArrayList<>(meta.lore())
+            : new ArrayList<>();
+        lore.add(Component.empty());
+        lore.add(MM.deserialize("<green>Click to choose this fate.</green>"));
+        meta.lore(lore);
         item.setItemMeta(meta);
         return item;
     }
@@ -4905,10 +5146,10 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Cooldown: <white>" + DRUID_BUFF_COOLDOWN_SECONDS + "s</white>.</gray>"));
             }
             case MONARCH -> {
-                lore.add(MM.deserialize("<gray>Stores slain mobs for later battle.</gray>"));
-                lore.add(MM.deserialize("<gray>Summons are reinforced with armor, weapons, health, speed, and resistance.</gray>"));
+                lore.add(MM.deserialize("<gray>Stores slain hostile mobs for later battle.</gray>"));
+                lore.add(MM.deserialize("<gray>Summons have <white>40 HP</white>, stronger damage, armor, resistance, and knockback defense.</gray>"));
                 lore.add(MM.deserialize("<gray>They persist during normal gameplay and guard against enemies of your team.</gray>"));
-                lore.add(MM.deserialize("<gray>They auto-prioritize enemy players, then hostile mobs. Passive mobs require combat direction.</gray>"));
+                lore.add(MM.deserialize("<gray>They auto-prioritize enemy players, then hostile mobs.</gray>"));
                 lore.add(MM.deserialize("<gray>Undead mobs refuse to target the Monarch.</gray>"));
                 lore.add(MM.deserialize("<gray>Storage limit: <white>" + MONARCH_STORAGE_LIMIT + "</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Command: <white>/msummon [amount]</white> or <white>/msummon despawn</white></gray>"));
@@ -5051,18 +5292,27 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void applyAncientScrollPresentation(ItemMeta meta) {
-        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.EPIC, "Ancient Scroll"));
+        boolean awakened = isAwakenedAncientScroll(meta);
+        CustomLoreUtil.Rarity rarity = awakened ? CustomLoreUtil.Rarity.MYTHIC : CustomLoreUtil.Rarity.EPIC;
+        String name = awakened ? "Awakened Ancient Scroll" : "Ancient Scroll";
+        meta.displayName(CustomLoreUtil.displayName(rarity, name));
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.PAPER,
-            CustomLoreUtil.Rarity.EPIC.label(),
+            rarity.label(),
             "SCROLL",
-            List.of("<gray>Use or tap to reroll your current superpower.</gray>"),
+            List.of(awakened
+                ? "<gray>Use or tap to choose your next superpower.</gray>"
+                : "<gray>Use or tap to reroll your current superpower.</gray>"),
             List.of(CustomLoreUtil.section(
                 "Use",
-                "Fate Rewrite",
-                "<gray>Works even if you already have a power.</gray>",
-                "<gray>Consumes the scroll and rerolls you into a random new fate.</gray>"
+                awakened ? "Chosen Fate" : "Fate Rewrite",
+                awakened
+                    ? "<gray>Opens a menu where you choose any non-Mortal power.</gray>"
+                    : "<gray>Works even if you already have a power.</gray>",
+                awakened
+                    ? "<gray>Consumes the scroll only after a new power is selected.</gray>"
+                    : "<gray>Consumes the scroll and rerolls you into a random new fate.</gray>"
             ))
         ));
     }
@@ -5341,7 +5591,7 @@ public final class SuperpowerManager implements Listener {
 
     private boolean isAwakenedAncientScroll(ItemStack item) {
         AwakeningTableListener awakening = plugin.getAwakeningTableListener();
-        return awakening != null && awakening.isAwakened(item);
+        return awakening != null && isAncientScroll(item) && awakening.isAwakened(item);
     }
 
     private boolean isAwakenedAncientScroll(ItemMeta meta) {
@@ -5353,6 +5603,13 @@ public final class SuperpowerManager implements Listener {
     private record FrozenMobState(boolean hadAi, boolean hadGravity) {}
     private record FrozenProjectileState(Location location, Vector velocity, boolean hadGravity) {}
     private record PowerInfoHolder() implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
+    private record PowerChoiceHolder(UUID ownerId, EquipmentSlot hand, int page) implements InventoryHolder {
         @Override
         public Inventory getInventory() {
             return null;

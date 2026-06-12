@@ -1,6 +1,7 @@
 package me.rique.smpcore.boss;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.config.ConfigManager;
 import me.rique.smpcore.database.DatabaseManager;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
@@ -22,6 +23,9 @@ import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.block.BlockState;
+import org.bukkit.block.Chest;
+import org.bukkit.block.TileState;
 import org.bukkit.boss.BarColor;
 import org.bukkit.boss.BarStyle;
 import org.bukkit.boss.BossBar;
@@ -41,6 +45,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
+import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.entity.EntityCombustEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
@@ -72,6 +77,7 @@ import org.bukkit.util.Vector;
 import java.time.DateTimeException;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -115,6 +121,7 @@ public final class BossManager implements Listener {
     private static final int BOSS_SCALE_MAX_EXTRA_PLAYERS = 4;
     private static final long BOSS_FAILURE_GRACE_MS = 3_000L;
     private static final ZoneId DEFAULT_DOUBLE_DROP_ZONE = ZoneId.of("America/Denver");
+    private static final long DOUBLE_DROP_ANNOUNCEMENT_CHECK_INTERVAL_MS = 30_000L;
 
     private final SMPCore plugin;
     private final NamespacedKey keyBossId;
@@ -128,6 +135,9 @@ public final class BossManager implements Listener {
     private final NamespacedKey keyBossScaledPlayerCount;
     private final NamespacedKey keyBossArenaHazardCooldown;
     private final NamespacedKey keyDominionCoreItem;
+    private final NamespacedKey keyBossLootChest;
+    private final NamespacedKey keyBossLootHologram;
+    private final NamespacedKey keyBossLootHologramBlock;
 
     private final Map<UUID, BossRecord> trackedBosses = new ConcurrentHashMap<>();
     private final Map<String, Set<UUID>> trackedByBossId = new ConcurrentHashMap<>();
@@ -139,6 +149,13 @@ public final class BossManager implements Listener {
     private final Set<String> pendingRituals = ConcurrentHashMap.newKeySet();
     private BukkitTask heartbeatTask;
     private long nextOrphanMinionCleanupAt;
+    private long nextDoubleDropAnnouncementCheckAt;
+    private boolean doubleDropAnnouncementStateInitialized;
+    private boolean lastDoubleDropActive;
+    private long lastDoubleDropActiveWindow = Long.MIN_VALUE;
+    private long announcedDoubleDropStartWindow = Long.MIN_VALUE;
+    private long announcedDoubleDropEndingWindow = Long.MIN_VALUE;
+    private long announcedDoubleDropEndWindow = Long.MIN_VALUE;
 
     public BossManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -153,6 +170,9 @@ public final class BossManager implements Listener {
         this.keyBossScaledPlayerCount = new NamespacedKey(plugin, "boss_scaled_player_count");
         this.keyBossArenaHazardCooldown = new NamespacedKey(plugin, "boss_arena_hazard_cd");
         this.keyDominionCoreItem = new NamespacedKey(plugin, DOMINION_CORE_ITEM_ID);
+        this.keyBossLootChest = new NamespacedKey(plugin, "boss_loot_chest");
+        this.keyBossLootHologram = new NamespacedKey(plugin, "boss_loot_hologram");
+        this.keyBossLootHologramBlock = new NamespacedKey(plugin, "boss_loot_hologram_block");
     }
 
     public void start() {
@@ -474,6 +494,8 @@ public final class BossManager implements Listener {
     }
 
     private void tickTrackedBosses() {
+        tickBossDoubleDropAnnouncements();
+
         List<BossRecord> snapshot = new ArrayList<>(trackedBosses.values());
         for (BossRecord record : snapshot) {
             World world = Bukkit.getWorld(record.world());
@@ -557,16 +579,17 @@ public final class BossManager implements Listener {
                 plugin.getLeaderboardManager().recordBossKill(killer, record.bossId());
             }
             int dropMultiplier = doubleDrops ? 2 : 1;
+            List<ItemStack> rewardDrops = new ArrayList<>();
             if (type == BossType.VORALITH_THE_CRIMSON_WARDEN) {
                 ItemStack coreDrop = createDominionCoreItem();
-                addBossDrop(event, killer, coreDrop, dropMultiplier, "Dropped from Voralith the Crimson Warden.");
+                addBossDrop(rewardDrops, killer, coreDrop, dropMultiplier, "Dropped from Voralith the Crimson Warden.");
             }
             if (type == BossType.AURELION_THE_RIFT_SERAPH
                 && plugin.getAwakeningTableListener() != null
                 && plugin.getConfigManager().awakeningTableEnabled
                 && ThreadLocalRandom.current().nextDouble() < plugin.getConfigManager().awakeningTableRiftSeraphDropChance) {
                 addBossDrop(
-                    event,
+                    rewardDrops,
                     killer,
                     plugin.getAwakeningTableListener().createAwakeningTableItem(),
                     dropMultiplier,
@@ -578,9 +601,13 @@ public final class BossManager implements Listener {
                     if (drop == null || drop.getType().isAir()) {
                         continue;
                     }
-                    addBossDrop(event, killer, drop, dropMultiplier, "Dropped from " + type.plainDisplayName() + ".");
+                    addBossDrop(rewardDrops, killer, drop, dropMultiplier, "Dropped from " + type.plainDisplayName() + ".");
                 }
             }
+            if (rewardDrops.isEmpty()) {
+                addBossDrop(rewardDrops, killer, guaranteedBossFallbackDrop(type), dropMultiplier, "Guaranteed fallback drop from " + (type == null ? "a custom boss" : type.plainDisplayName()) + ".");
+            }
+            spawnBossLootChest(type, event.getEntity().getLocation(), rewardDrops);
             event.setDroppedExp(Math.max(event.getDroppedExp(), bossExperience(type)));
             finishBossFight(record, type, true, doubleDrops, event.getEntity().getLocation());
             despawnBossMinions(record.entityUuid());
@@ -593,6 +620,13 @@ public final class BossManager implements Listener {
         if (isBossMinion(entity)) {
             entity.getPersistentDataContainer().remove(keyBossMinionMarker);
             entity.getPersistentDataContainer().remove(keyBossMinionOwner);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBossLootChestBreak(BlockBreakEvent event) {
+        if (isBossLootChest(event.getBlock())) {
+            removeBossLootHologram(event.getBlock());
         }
     }
 
@@ -621,7 +655,7 @@ public final class BossManager implements Listener {
         }
     }
 
-    private void addBossDrop(EntityDeathEvent event, Player owner, ItemStack drop, int multiplier, String auditDetails) {
+    private void addBossDrop(List<ItemStack> rewardDrops, Player owner, ItemStack drop, int multiplier, String auditDetails) {
         for (ItemStack multiplied : multipliedDrops(drop, multiplier)) {
             if (multiplied == null || multiplied.getType().isAir()) {
                 continue;
@@ -634,7 +668,7 @@ public final class BossManager implements Listener {
                     auditDetails
                 );
             }
-            event.getDrops().add(multiplied);
+            rewardDrops.add(multiplied);
         }
     }
 
@@ -655,6 +689,291 @@ public final class BossManager implements Listener {
         return drops;
     }
 
+    private ItemStack guaranteedBossFallbackDrop(BossType type) {
+        if (type != null && plugin.getSeasonRelicManager() != null) {
+            String relicId = primaryBossRelicId(type);
+            if (relicId != null) {
+                ItemStack relic = plugin.getSeasonRelicManager().createRelicItem(relicId);
+                if (relic != null && !relic.getType().isAir()) {
+                    return relic;
+                }
+            }
+        }
+
+        ItemStack fallback = new ItemStack(type == null ? Material.DIAMOND : type.menuIcon(), 1);
+        ItemMeta meta = fallback.getItemMeta();
+        if (meta != null) {
+            String bossName = type == null ? "Unknown Boss" : type.plainDisplayName();
+            meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.RARE, bossName + " Trophy"));
+            meta.lore(CustomLoreUtil.buildStyledLore(
+                meta,
+                fallback.getType(),
+                CustomLoreUtil.Rarity.RARE.label(),
+                "BOSS TROPHY",
+                List.of("<gray>Guaranteed fallback reward from a custom boss.</gray>"),
+                List.of()
+            ));
+            fallback.setItemMeta(meta);
+        }
+        return fallback;
+    }
+
+    private String primaryBossRelicId(BossType type) {
+        if (type == null) {
+            return null;
+        }
+        return switch (type) {
+            case YULE_THE_MINION -> "gilded_skull";
+            case KAEL_THE_ASHEN -> "solar_ember";
+            case VESPER_THE_WIDOW_QUEEN -> "widow_silk";
+            case VORALITH_THE_CRIMSON_WARDEN -> "crimson_rib";
+            case AURELION_THE_RIFT_SERAPH -> "rift_lens";
+            case NEREIDA_THE_ABYSS_MOTHER -> "abyssal_pearl";
+            case IRON_SAINT -> "titan_gear";
+            case MIREWOOD_THE_ROOT_TYRANT -> "living_bark";
+        };
+    }
+
+    private void spawnBossLootChest(BossType type, Location location, List<ItemStack> rewards) {
+        if (location == null || location.getWorld() == null || rewards == null || rewards.isEmpty()) {
+            return;
+        }
+
+        Block block = findBossLootChestBlock(location);
+        if (block == null) {
+            block = findForcedBossLootChestBlock(location);
+        }
+
+        Chest chest = placeBossLootChest(block);
+        if (chest == null) {
+            dropBossLootNaturally(location, rewards);
+            plugin.getLogger().warning("Dropped boss loot naturally because no loot chest spot could be prepared at "
+                + location.getWorld().getName() + " " + location.getBlockX() + "," + location.getBlockY() + "," + location.getBlockZ() + ".");
+            return;
+        }
+
+        String bossName = type == null ? "Unknown Boss" : type.plainDisplayName();
+        chest.customName(MM.deserialize("<gradient:#ff4d6d:#facc15><bold>" + escapeMiniMessage(bossName) + " Loot</bold></gradient>"));
+        chest.getPersistentDataContainer().set(keyBossLootChest, PersistentDataType.STRING, bossName);
+        chest.update(true, false);
+
+        Inventory inventory = chest.getBlockInventory();
+        Map<Integer, ItemStack> leftovers = inventory.addItem(rewards.stream().map(ItemStack::clone).toArray(ItemStack[]::new));
+        Block lootBlock = block;
+        leftovers.values().forEach(leftover -> lootBlock.getWorld().dropItemNaturally(lootBlock.getLocation().add(0.5, 1.0, 0.5), leftover));
+        spawnBossLootHologram(block, bossName);
+        World world = block.getWorld();
+        Location center = block.getLocation().add(0.5, 0.9, 0.5);
+        world.playSound(center, Sound.BLOCK_CHEST_OPEN, 0.9f, 1.25f);
+        world.spawnParticle(Particle.END_ROD, center, 24, 0.35, 0.35, 0.35, 0.025);
+        world.spawnParticle(Particle.DUST, center, 26, 0.45, 0.35, 0.45, 0.0, new Particle.DustOptions(type == null ? Color.fromRGB(255, 214, 96) : type.ritual().color(), 1.15f));
+    }
+
+    private Chest placeBossLootChest(Block block) {
+        if (block == null) {
+            return null;
+        }
+
+        try {
+            prepareBossLootChestSpace(block);
+            block.setType(Material.CHEST, false);
+            if (block.getBlockData() instanceof org.bukkit.block.data.type.Chest chestData) {
+                chestData.setType(org.bukkit.block.data.type.Chest.Type.SINGLE);
+                block.setBlockData(chestData, false);
+            }
+            BlockState state = block.getState();
+            return state instanceof Chest chest ? chest : null;
+        } catch (RuntimeException ex) {
+            plugin.getLogger().warning("Could not place boss loot chest at " + block.getWorld().getName()
+                + " " + block.getX() + "," + block.getY() + "," + block.getZ() + ": " + ex.getMessage());
+            return null;
+        }
+    }
+
+    private void prepareBossLootChestSpace(Block block) {
+        if (block == null) {
+            return;
+        }
+        if (!isBossLootProtectedBlock(block)) {
+            block.setType(Material.AIR, false);
+        }
+        Block above = block.getRelative(BlockFace.UP);
+        if (!above.getType().isAir() && !isBossLootProtectedBlock(above)) {
+            above.setType(Material.AIR, false);
+        }
+    }
+
+    private void dropBossLootNaturally(Location location, List<ItemStack> rewards) {
+        if (location == null || location.getWorld() == null || rewards == null) {
+            return;
+        }
+        for (ItemStack reward : rewards) {
+            if (reward != null && !reward.getType().isAir()) {
+                location.getWorld().dropItemNaturally(location, reward.clone());
+            }
+        }
+    }
+
+    private Block findBossLootChestBlock(Location location) {
+        World world = location.getWorld();
+        if (world == null) {
+            return null;
+        }
+        int baseX = location.getBlockX();
+        int baseY = Math.max(world.getMinHeight(), Math.min(world.getMaxHeight() - 1, location.getBlockY()));
+        int baseZ = location.getBlockZ();
+        int[][] offsets = {
+            {0, 0, 0}, {0, 1, 0}, {1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1},
+            {1, 1, 0}, {-1, 1, 0}, {0, 1, 1}, {0, 1, -1}, {1, 0, 1}, {-1, 0, -1},
+            {1, 0, -1}, {-1, 0, 1}, {0, -1, 0}
+        };
+        for (int[] offset : offsets) {
+            int y = baseY + offset[1];
+            if (y < world.getMinHeight() || y >= world.getMaxHeight()) {
+                continue;
+            }
+            Block candidate = world.getBlockAt(baseX + offset[0], y, baseZ + offset[2]);
+            if (isBossLootChestSpot(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private Block findForcedBossLootChestBlock(Location location) {
+        World world = location.getWorld();
+        if (world == null) {
+            return null;
+        }
+
+        int baseX = location.getBlockX();
+        int baseY = Math.max(world.getMinHeight(), Math.min(world.getMaxHeight() - 1, location.getBlockY()));
+        int baseZ = location.getBlockZ();
+        for (int radius = 0; radius <= 3; radius++) {
+            for (int yOffset = -1; yOffset <= 2; yOffset++) {
+                int y = baseY + yOffset;
+                if (y < world.getMinHeight() || y >= world.getMaxHeight()) {
+                    continue;
+                }
+                for (int xOffset = -radius; xOffset <= radius; xOffset++) {
+                    for (int zOffset = -radius; zOffset <= radius; zOffset++) {
+                        if (Math.max(Math.abs(xOffset), Math.abs(zOffset)) != radius) {
+                            continue;
+                        }
+                        Block candidate = world.getBlockAt(baseX + xOffset, y, baseZ + zOffset);
+                        if (canForceBossLootChestSpot(candidate)) {
+                            return candidate;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean isBossLootChestSpot(Block block) {
+        if (block == null) {
+            return false;
+        }
+        BlockState state = block.getState();
+        if (state instanceof InventoryHolder) {
+            return false;
+        }
+        if (state instanceof TileState tileState
+            && tileState.getPersistentDataContainer().has(keyBossLootChest, PersistentDataType.STRING)) {
+            return false;
+        }
+        Material type = block.getType();
+        if (isBossLootProtectedMaterial(type)) {
+            return false;
+        }
+        return type.isAir() || block.isReplaceable() || block.isPassable();
+    }
+
+    private boolean canForceBossLootChestSpot(Block block) {
+        if (block == null || isBossLootProtectedBlock(block)) {
+            return false;
+        }
+        Block above = block.getRelative(BlockFace.UP);
+        return above.getType().isAir()
+            || above.isReplaceable()
+            || above.isPassable()
+            || !isBossLootProtectedBlock(above);
+    }
+
+    private boolean isBossLootProtectedBlock(Block block) {
+        if (block == null) {
+            return true;
+        }
+        BlockState state = block.getState();
+        if (state instanceof InventoryHolder) {
+            return true;
+        }
+        if (state instanceof TileState tileState
+            && tileState.getPersistentDataContainer().has(keyBossLootChest, PersistentDataType.STRING)) {
+            return true;
+        }
+        return isBossLootProtectedMaterial(block.getType());
+    }
+
+    private boolean isBossLootProtectedMaterial(Material type) {
+        return type == Material.BEDROCK || type == Material.BARRIER || type == Material.END_PORTAL || type == Material.END_GATEWAY
+            || type == Material.COMMAND_BLOCK || type == Material.CHAIN_COMMAND_BLOCK || type == Material.REPEATING_COMMAND_BLOCK
+            || type == Material.STRUCTURE_BLOCK || type == Material.JIGSAW;
+    }
+
+    private void spawnBossLootHologram(Block block, String bossName) {
+        if (block == null || block.getWorld() == null) {
+            return;
+        }
+        String blockKey = bossLootBlockKey(block);
+        block.getWorld().spawn(block.getLocation().add(0.5, 1.45, 0.5), TextDisplay.class, display -> {
+            display.text(Component.empty()
+                .append(MM.deserialize("<gradient:#ff4d6d:#facc15><bold>" + escapeMiniMessage(bossName) + " Loot</bold></gradient>"))
+                .append(Component.newline())
+                .append(MM.deserialize("<gray>Boss rewards chest</gray>")));
+            display.setGravity(false);
+            display.setPersistent(false);
+            display.setInvulnerable(true);
+            display.setAlignment(TextDisplay.TextAlignment.CENTER);
+            display.setBillboard(Display.Billboard.CENTER);
+            display.setSeeThrough(false);
+            display.setShadowed(false);
+            display.setLineWidth(180);
+            display.setTextOpacity((byte) 255);
+            display.setBackgroundColor(Color.fromARGB(92, 12, 8, 10));
+            VisualRangeUtil.applyHologramRange(display);
+            display.getPersistentDataContainer().set(keyBossLootHologram, PersistentDataType.BYTE, (byte) 1);
+            display.getPersistentDataContainer().set(keyBossLootHologramBlock, PersistentDataType.STRING, blockKey);
+        });
+    }
+
+    private void removeBossLootHologram(Block block) {
+        if (block == null || block.getWorld() == null) {
+            return;
+        }
+        String blockKey = bossLootBlockKey(block);
+        for (Entity entity : block.getWorld().getNearbyEntities(block.getLocation().add(0.5, 1.45, 0.5), 2.0, 2.0, 2.0)) {
+            if (!(entity instanceof TextDisplay display)) {
+                continue;
+            }
+            String stored = display.getPersistentDataContainer().get(keyBossLootHologramBlock, PersistentDataType.STRING);
+            if (blockKey.equals(stored)) {
+                display.remove();
+            }
+        }
+    }
+
+    private boolean isBossLootChest(Block block) {
+        return block != null
+            && block.getState() instanceof TileState tileState
+            && tileState.getPersistentDataContainer().has(keyBossLootChest, PersistentDataType.STRING);
+    }
+
+    private String bossLootBlockKey(Block block) {
+        return block.getWorld().getUID() + ":" + block.getX() + ":" + block.getY() + ":" + block.getZ();
+    }
+
     private int bossExperience(BossType type) {
         if (type == null) {
             return 80;
@@ -672,27 +991,168 @@ public final class BossManager implements Listener {
     }
 
     private boolean isBossDoubleDropsActive() {
-        if (!plugin.getConfig().getBoolean("bosses.double-drops.enabled", true)) {
-            return false;
+        return currentBossDoubleDropWindow().active();
+    }
+
+    private void tickBossDoubleDropAnnouncements() {
+        long nowMillis = System.currentTimeMillis();
+        if (nowMillis < nextDoubleDropAnnouncementCheckAt) {
+            return;
         }
-        ZoneId zone = DEFAULT_DOUBLE_DROP_ZONE;
-        String zoneRaw = plugin.getConfig().getString("bosses.double-drops.timezone", "America/Denver");
-        try {
-            zone = ZoneId.of(zoneRaw == null || zoneRaw.isBlank() ? "America/Denver" : zoneRaw);
-        } catch (DateTimeException ignored) {
-            zone = DEFAULT_DOUBLE_DROP_ZONE;
+        nextDoubleDropAnnouncementCheckAt = nowMillis + DOUBLE_DROP_ANNOUNCEMENT_CHECK_INTERVAL_MS;
+
+        BossDoubleDropWindow window = currentBossDoubleDropWindow();
+        if (!window.enabled()) {
+            doubleDropAnnouncementStateInitialized = false;
+            lastDoubleDropActive = false;
+            lastDoubleDropActiveWindow = Long.MIN_VALUE;
+            return;
         }
 
-        int startHour = Math.max(0, Math.min(23, plugin.getConfig().getInt("bosses.double-drops.start-hour", 16)));
-        int endHour = Math.max(0, Math.min(24, plugin.getConfig().getInt("bosses.double-drops.end-hour", 18)));
+        if (!doubleDropAnnouncementStateInitialized) {
+            doubleDropAnnouncementStateInitialized = true;
+            lastDoubleDropActive = false;
+        }
+
+        long windowKey = window.startMillis();
+        if (window.active()) {
+            lastDoubleDropActiveWindow = windowKey;
+            if (announcedDoubleDropStartWindow != windowKey) {
+                announcedDoubleDropStartWindow = windowKey;
+                announceBossDoubleDropStart(window);
+            }
+            if (!window.allDay()
+                && announcedDoubleDropEndingWindow != windowKey
+                && !window.now().isBefore(window.warningAt())
+                && window.now().isBefore(window.end())) {
+                announcedDoubleDropEndingWindow = windowKey;
+                announceBossDoubleDropEnding(window);
+            }
+        } else if (lastDoubleDropActive
+            && lastDoubleDropActiveWindow != Long.MIN_VALUE
+            && announcedDoubleDropEndWindow != lastDoubleDropActiveWindow) {
+            announcedDoubleDropEndWindow = lastDoubleDropActiveWindow;
+            announceBossDoubleDropEnd();
+        }
+
+        lastDoubleDropActive = window.active();
+    }
+
+    private BossDoubleDropWindow currentBossDoubleDropWindow() {
+        ConfigManager config = plugin.getConfigManager();
+        boolean enabled = config == null
+            ? plugin.getConfig().getBoolean("bosses.double-drops.enabled", true)
+            : config.bossDoubleDropsEnabled;
+        ZoneId zone = bossDoubleDropZone(config);
+        ZonedDateTime now = ZonedDateTime.now(zone);
+        int startHour = config == null
+            ? Math.max(0, Math.min(23, plugin.getConfig().getInt("bosses.double-drops.start-hour", 16)))
+            : config.bossDoubleDropsStartHour;
+        int endHour = config == null
+            ? Math.max(0, Math.min(24, plugin.getConfig().getInt("bosses.double-drops.end-hour", 18)))
+            : config.bossDoubleDropsEndHour;
+        int warningMinutes = config == null
+            ? Math.max(1, Math.min(180, plugin.getConfig().getInt("bosses.double-drops.ending-warning-minutes", 10)))
+            : config.bossDoubleDropsEndingWarningMinutes;
+        if (!enabled) {
+            return new BossDoubleDropWindow(false, false, false, now, now, now, now);
+        }
+
+        ZonedDateTime start;
+        ZonedDateTime end;
+        boolean active;
         if (startHour == endHour) {
-            return true;
+            start = startOfDay(now);
+            end = start.plusDays(1);
+            return new BossDoubleDropWindow(true, true, true, now, start, start, end);
         }
-        int currentHour = ZonedDateTime.now(zone).getHour();
+
+        ZonedDateTime todayStart = startOfDay(now).plusHours(startHour);
+        ZonedDateTime todayEnd = endHour == 24 ? startOfDay(now).plusDays(1) : startOfDay(now).plusHours(endHour);
         if (startHour < endHour) {
-            return currentHour >= startHour && currentHour < endHour;
+            if (now.isBefore(todayStart)) {
+                start = todayStart;
+                end = todayEnd;
+                active = false;
+            } else if (now.isBefore(todayEnd)) {
+                start = todayStart;
+                end = todayEnd;
+                active = true;
+            } else {
+                start = todayStart.plusDays(1);
+                end = todayEnd.plusDays(1);
+                active = false;
+            }
+        } else if (!now.isBefore(todayStart)) {
+            start = todayStart;
+            end = todayEnd.plusDays(1);
+            active = true;
+        } else if (now.isBefore(todayEnd)) {
+            start = todayStart.minusDays(1);
+            end = todayEnd;
+            active = true;
+        } else {
+            start = todayStart;
+            end = todayEnd.plusDays(1);
+            active = false;
         }
-        return currentHour >= startHour || currentHour < endHour;
+
+        long durationMinutes = Math.max(1L, (end.toInstant().toEpochMilli() - start.toInstant().toEpochMilli()) / 60_000L);
+        long safeWarningMinutes = Math.min(Math.max(1, warningMinutes), durationMinutes);
+        ZonedDateTime warningAt = end.minusMinutes(safeWarningMinutes);
+        return new BossDoubleDropWindow(true, active, false, now, start, warningAt, end);
+    }
+
+    private ZoneId bossDoubleDropZone(ConfigManager config) {
+        String zoneRaw = config == null
+            ? plugin.getConfig().getString("bosses.double-drops.timezone", "America/Denver")
+            : config.bossDoubleDropsTimezone;
+        try {
+            return ZoneId.of(zoneRaw == null || zoneRaw.isBlank() ? "America/Denver" : zoneRaw);
+        } catch (DateTimeException ignored) {
+            return DEFAULT_DOUBLE_DROP_ZONE;
+        }
+    }
+
+    private ZonedDateTime startOfDay(ZonedDateTime time) {
+        return time.withHour(0).withMinute(0).withSecond(0).withNano(0);
+    }
+
+    private void announceBossDoubleDropStart(BossDoubleDropWindow window) {
+        String endText = window.allDay() ? "until tomorrow" : "until " + formatDoubleDropTime(window.end());
+        Bukkit.broadcast(MessageUtil.prefixedRaw(
+            "<gradient:#facc15:#fb7185><bold>Boss double loot is active!</bold></gradient> "
+                + "<gray>All custom boss reward chests are doubled " + endText + ".</gray>"
+        ));
+        playDoubleDropAnnouncementEffects(Sound.ENTITY_ENDER_DRAGON_GROWL, Particle.TOTEM_OF_UNDYING);
+    }
+
+    private void announceBossDoubleDropEnding(BossDoubleDropWindow window) {
+        Bukkit.broadcast(MessageUtil.prefixedRaw(
+            "<gold><bold>Boss double loot is ending soon.</bold></gold> "
+                + "<gray>It ends at <white>" + formatDoubleDropTime(window.end()) + "</white>.</gray>"
+        ));
+        playDoubleDropAnnouncementEffects(Sound.BLOCK_BEACON_DEACTIVATE, Particle.WAX_ON);
+    }
+
+    private void announceBossDoubleDropEnd() {
+        Bukkit.broadcast(MessageUtil.prefixedRaw(
+            "<gray><bold>Boss double loot has ended.</bold></gray> "
+                + "<dark_gray>Bosses are back to normal rewards.</dark_gray>"
+        ));
+        playDoubleDropAnnouncementEffects(Sound.BLOCK_BEACON_DEACTIVATE, Particle.ASH);
+    }
+
+    private void playDoubleDropAnnouncementEffects(Sound sound, Particle particle) {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            Location location = player.getLocation().add(0.0, 1.1, 0.0);
+            player.playSound(player.getLocation(), sound, 0.75f, 1.0f);
+            player.spawnParticle(particle, location, 18, 0.55, 0.45, 0.55, 0.02);
+        }
+    }
+
+    private String formatDoubleDropTime(ZonedDateTime time) {
+        return DateTimeFormatter.ofPattern("h:mm a z", Locale.ROOT).format(time);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -1439,7 +1899,7 @@ public final class BossManager implements Listener {
                 }
                 double progress = Math.min(1.0, pulse / (double) pulses);
                 spawnRitualRing(center, 1.2 + (progress * 2.2), ritual.color(), 36, 0.10 + progress * 0.65);
-                center.getWorld().spawnParticle(ritual.primaryParticle(), center, 18 + pulse * 2, 0.35, 0.45, 0.35, 0.02);
+                spawnRitualParticle(center.getWorld(), ritual.primaryParticle(), center, 18 + pulse * 2, 0.35, 0.45, 0.35, 0.02, ritual.color());
                 center.getWorld().spawnParticle(Particle.ENCHANT, center.clone().add(0.0, 0.5 + progress, 0.0), 12, 0.45, 0.25, 0.45, 0.18);
                 playBossSpecificRitualPulse(type, center, progress, pulse);
                 center.getWorld().playSound(center, ritual.pulseSound(), 0.85f, 0.65f + (float) progress * 0.55f);
@@ -1461,8 +1921,8 @@ public final class BossManager implements Listener {
         Location center = entity.getLocation().clone().add(0.0, Math.min(1.4, entity.getHeight() * 0.65), 0.0);
         BossRitual ritual = type.ritual();
         World world = entity.getWorld();
-        world.spawnParticle(Particle.FLASH, center, 1, 0.0, 0.0, 0.0, 0.0);
-        world.spawnParticle(ritual.primaryParticle(), center, fromRitual ? 90 : 42, 1.1, 0.85, 1.1, 0.04);
+        spawnRitualParticle(world, Particle.FLASH, center, 1, 0.0, 0.0, 0.0, 0.0, ritual.color());
+        spawnRitualParticle(world, ritual.primaryParticle(), center, fromRitual ? 90 : 42, 1.1, 0.85, 1.1, 0.04, ritual.color());
         world.spawnParticle(Particle.DUST, center, fromRitual ? 70 : 28, 1.2, 0.75, 1.2, 0.0, new Particle.DustOptions(ritual.color(), fromRitual ? 1.55f : 1.1f));
         spawnRitualRing(center, fromRitual ? 4.8 : 2.6, ritual.color(), fromRitual ? 72 : 36, 0.15);
         playBossSpecificSpawnBurst(type, center, fromRitual);
@@ -1479,6 +1939,51 @@ public final class BossManager implements Listener {
             double angle = (Math.PI * 2.0 * i) / points;
             Location point = center.clone().add(Math.cos(angle) * radius, yOffset, Math.sin(angle) * radius);
             world.spawnParticle(Particle.DUST, point, 1, 0.0, 0.0, 0.0, 0.0, dust);
+        }
+    }
+
+    private void spawnRitualParticle(
+        World world,
+        Particle particle,
+        Location location,
+        int count,
+        double offsetX,
+        double offsetY,
+        double offsetZ,
+        double extra,
+        Color color
+    ) {
+        if (world == null || particle == null || location == null) {
+            return;
+        }
+        Color safeColor = color == null ? Color.WHITE : color;
+        Class<?> dataType = particle.getDataType();
+        try {
+            if (dataType == Void.class) {
+                world.spawnParticle(particle, location, count, offsetX, offsetY, offsetZ, extra);
+            } else if (dataType == Color.class) {
+                world.spawnParticle(particle, location, count, offsetX, offsetY, offsetZ, extra, safeColor);
+            } else if (dataType == Particle.DustOptions.class) {
+                world.spawnParticle(particle, location, count, offsetX, offsetY, offsetZ, extra, new Particle.DustOptions(safeColor, 1.1f));
+            } else if (dataType == Particle.DustTransition.class) {
+                world.spawnParticle(particle, location, count, offsetX, offsetY, offsetZ, extra, new Particle.DustTransition(safeColor, Color.WHITE, 1.1f));
+            } else if (dataType == org.bukkit.block.data.BlockData.class) {
+                world.spawnParticle(particle, location, count, offsetX, offsetY, offsetZ, extra, Material.STONE.createBlockData());
+            } else if (dataType == ItemStack.class) {
+                world.spawnParticle(particle, location, count, offsetX, offsetY, offsetZ, extra, new ItemStack(Material.NETHER_STAR));
+            } else if (dataType == Float.class) {
+                world.spawnParticle(particle, location, count, offsetX, offsetY, offsetZ, extra, Float.valueOf(1.0f));
+            } else if (dataType == Integer.class) {
+                world.spawnParticle(particle, location, count, offsetX, offsetY, offsetZ, extra, Integer.valueOf(0));
+            } else if (dataType == Particle.Spell.class) {
+                world.spawnParticle(particle, location, count, offsetX, offsetY, offsetZ, extra, new Particle.Spell(safeColor, 1.0f));
+            } else if (dataType == Particle.Trail.class) {
+                world.spawnParticle(particle, location, count, offsetX, offsetY, offsetZ, extra, new Particle.Trail(location.clone().add(0.0, 1.0, 0.0), safeColor, 20));
+            } else {
+                plugin.getLogger().fine("Skipped ritual particle " + particle + " because it requires " + dataType.getName() + ".");
+            }
+        } catch (RuntimeException ex) {
+            plugin.getLogger().fine("Skipped ritual particle " + particle + ": " + ex.getMessage());
         }
     }
 
@@ -1624,7 +2129,7 @@ public final class BossManager implements Listener {
                         Color color = arm % 2 == 0 ? primary : secondary;
                         world.spawnParticle(Particle.DUST, point, 2, 0.02, 0.02, 0.02, 0.0, new Particle.DustOptions(color, 1.25f));
                         if (step % 2 == 0) {
-                            world.spawnParticle(accent, point, 1, 0.04, 0.04, 0.04, 0.01);
+                            spawnRitualParticle(world, accent, point, 1, 0.04, 0.04, 0.04, 0.01, color);
                         }
                     }
                 } catch (RuntimeException ex) {
@@ -3407,6 +3912,20 @@ public final class BossManager implements Listener {
     }
 
     private record BossArena(Location center, double radius, Color color) {
+    }
+
+    private record BossDoubleDropWindow(
+        boolean enabled,
+        boolean active,
+        boolean allDay,
+        ZonedDateTime now,
+        ZonedDateTime start,
+        ZonedDateTime warningAt,
+        ZonedDateTime end
+    ) {
+        private long startMillis() {
+            return start.toInstant().toEpochMilli();
+        }
     }
 
     private static final class BossFightState {

@@ -20,31 +20,75 @@ import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.scheduler.BukkitTask;
 
+import java.util.ArrayList;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 public final class LeaderboardManager implements Listener {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final int MENU_SIZE = 54;
     private static final int BACK_SLOT = 49;
+    private static final long PLAYTIME_FLUSH_INTERVAL_TICKS = 20L * 60L;
     private static final DateTimeFormatter REPORT_TIME_FORMAT = DateTimeFormatter.ofPattern("MMM d, h:mm a")
         .withZone(ZoneId.of("America/Denver"));
 
     private final SMPCore plugin;
+    private final Map<UUID, Long> playtimeAnchors = new ConcurrentHashMap<>();
+    private BukkitTask playtimeFlushTask;
 
     public LeaderboardManager(SMPCore plugin) {
         this.plugin = plugin;
+    }
+
+    public void start() {
+        long now = System.currentTimeMillis();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            playtimeAnchors.put(player.getUniqueId(), now);
+        }
+        playtimeFlushTask = Bukkit.getScheduler().runTaskTimer(plugin, this::flushOnlinePlaytime, PLAYTIME_FLUSH_INTERVAL_TICKS, PLAYTIME_FLUSH_INTERVAL_TICKS);
+    }
+
+    public void shutdown() {
+        if (playtimeFlushTask != null) {
+            playtimeFlushTask.cancel();
+            playtimeFlushTask = null;
+        }
+
+        long now = System.currentTimeMillis();
+        List<CompletableFuture<Void>> saves = new ArrayList<>();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            CompletableFuture<Void> save = flushPlayerPlaytime(player, now, false);
+            if (save != null) {
+                saves.add(save);
+            }
+        }
+        playtimeAnchors.clear();
+
+        if (!saves.isEmpty()) {
+            try {
+                CompletableFuture.allOf(saves.toArray(CompletableFuture[]::new)).get(3, TimeUnit.SECONDS);
+            } catch (Exception ex) {
+                plugin.getLogger().warning("Timed out while saving playtime stats: " + ex.getMessage());
+            }
+        }
     }
 
     public void recordBossKill(Player killer, String bossId) {
@@ -80,11 +124,13 @@ public final class LeaderboardManager implements Listener {
         )));
 
         inventory.setItem(10, label(Material.DIAMOND_SWORD, "<gradient:#fb7185:#f97316><bold>Combat</bold></gradient>", List.of("<dark_gray>PvP and death stats</dark_gray>")));
+        inventory.setItem(13, label(Material.CLOCK, "<gradient:#67e8f9:#facc15><bold>Activity</bold></gradient>", List.of("<dark_gray>Time spent online</dark_gray>")));
         inventory.setItem(16, label(Material.WITHER_SKELETON_SKULL, "<gradient:#a855f7:#22d3ee><bold>Bosses</bold></gradient>", List.of("<dark_gray>Boss contribution stats</dark_gray>")));
 
         inventory.setItem(19, categoryItem(LeaderboardType.PLAYER_KILLS));
         inventory.setItem(20, categoryItem(LeaderboardType.DEATHS));
         inventory.setItem(21, categoryItem(LeaderboardType.MOB_KILLS));
+        inventory.setItem(22, categoryItem(LeaderboardType.PLAYTIME));
         inventory.setItem(23, categoryItem(LeaderboardType.BOSS_KILLS));
         inventory.setItem(24, categoryItem(LeaderboardType.BOSS_DAMAGE));
         inventory.setItem(25, categoryItem(LeaderboardType.BOSS_FIGHTS));
@@ -161,7 +207,16 @@ public final class LeaderboardManager implements Listener {
         loading.setItem(BACK_SLOT, item(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to leaderboards.</gray>")));
         player.openInventory(loading);
 
-        plugin.getDatabase().loadLeaderboard(type.column, 10).whenComplete((entries, throwable) -> {
+        CompletableFuture<List<DatabaseManager.LeaderboardEntry>> entriesFuture = (type == LeaderboardType.PLAYTIME
+            ? flushOnlinePlaytimeAsync()
+                .exceptionally(throwable -> {
+                    plugin.getLogger().warning("Could not flush live playtime before loading leaderboard: " + throwable.getMessage());
+                    return null;
+                })
+            : CompletableFuture.completedFuture(null))
+            .thenCompose(ignored -> plugin.getDatabase().loadLeaderboard(type.column, 10));
+
+        entriesFuture.whenComplete((entries, throwable) -> {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (!player.isOnline()) {
                     return;
@@ -197,6 +252,44 @@ public final class LeaderboardManager implements Listener {
                 player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 0.6f, 1.2f);
             });
         });
+    }
+
+    public void sendPlaytime(Player player) {
+        if (player == null) {
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        CompletableFuture<Void> flush = flushPlayerPlaytime(player, System.currentTimeMillis(), true);
+        if (flush == null) {
+            flush = CompletableFuture.completedFuture(null);
+        }
+        flush
+            .exceptionally(throwable -> {
+                plugin.getLogger().warning("Could not flush live playtime before /playtime: " + throwable.getMessage());
+                return null;
+            })
+            .thenCompose(ignored -> plugin.getDatabase().loadLeaderboardStat(playerId, LeaderboardType.PLAYTIME.column))
+            .whenComplete((storedSeconds, throwable) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) {
+                    return;
+                }
+                if (throwable != null) {
+                    player.sendMessage(MessageUtil.error("Could not load your playtime right now."));
+                    return;
+                }
+                long totalSeconds = Math.max(0L, storedSeconds == null ? 0L : storedSeconds);
+                player.sendMessage(MessageUtil.info("Your playtime: <white>" + formatPlaytimeSeconds(totalSeconds) + "</white>."));
+            }));
+    }
+
+    @EventHandler
+    public void onJoin(PlayerJoinEvent event) {
+        playtimeAnchors.put(event.getPlayer().getUniqueId(), System.currentTimeMillis());
+    }
+
+    @EventHandler
+    public void onQuit(PlayerQuitEvent event) {
+        flushPlayerPlaytime(event.getPlayer(), System.currentTimeMillis(), false);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -266,6 +359,7 @@ public final class LeaderboardManager implements Listener {
             case 19 -> LeaderboardType.PLAYER_KILLS;
             case 20 -> LeaderboardType.DEATHS;
             case 21 -> LeaderboardType.MOB_KILLS;
+            case 22 -> LeaderboardType.PLAYTIME;
             case 23 -> LeaderboardType.BOSS_KILLS;
             case 24 -> LeaderboardType.BOSS_DAMAGE;
             case 25 -> LeaderboardType.BOSS_FIGHTS;
@@ -293,6 +387,50 @@ public final class LeaderboardManager implements Listener {
         plugin.getDatabase().incrementLeaderboardStat(player.getUniqueId(), player.getName(), type.column, 1);
     }
 
+    private void flushOnlinePlaytime() {
+        flushOnlinePlaytimeAsync();
+    }
+
+    private CompletableFuture<Void> flushOnlinePlaytimeAsync() {
+        long now = System.currentTimeMillis();
+        List<CompletableFuture<Void>> saves = new ArrayList<>();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            CompletableFuture<Void> save = flushPlayerPlaytime(player, now, true);
+            if (save != null) {
+                saves.add(save);
+            }
+        }
+        return saves.isEmpty() ? CompletableFuture.completedFuture(null) : CompletableFuture.allOf(saves.toArray(CompletableFuture[]::new));
+    }
+
+    private CompletableFuture<Void> flushPlayerPlaytime(Player player, long now, boolean keepTracking) {
+        if (player == null) {
+            return null;
+        }
+        UUID playerId = player.getUniqueId();
+        Long previous = keepTracking ? playtimeAnchors.put(playerId, now) : playtimeAnchors.remove(playerId);
+        if (previous == null) {
+            return null;
+        }
+        long seconds = Math.max(0L, (now - previous) / 1000L);
+        if (seconds <= 0L) {
+            return null;
+        }
+        int safeSeconds = (int) Math.min(Integer.MAX_VALUE, seconds);
+        return plugin.getDatabase().incrementLeaderboardStat(playerId, player.getName(), LeaderboardType.PLAYTIME.column, safeSeconds);
+    }
+
+    public long liveSessionSeconds(UUID playerId, long now) {
+        if (playerId == null) {
+            return 0L;
+        }
+        Long anchor = playtimeAnchors.get(playerId);
+        if (anchor == null) {
+            return 0L;
+        }
+        return Math.max(0L, (now - anchor) / 1000L);
+    }
+
     private ItemStack categoryItem(LeaderboardType type) {
         return item(type.icon, type.gradientTitle(), List.of(
             type.description,
@@ -313,7 +451,7 @@ public final class LeaderboardManager implements Listener {
             : entry.playerName();
         return item(material, rankTitle(rank, name), List.of(
             rankSubtitle(rank),
-            "<gray>" + type.valueLabel + ": <white>" + entry.value() + "</white></gray>",
+            "<gray>" + type.valueLabel + ": <white>" + formatLeaderboardValue(entry.value(), type) + "</white></gray>",
             rank == 1 ? "<gold>Current leader.</gold>" : "<dark_gray>Keep climbing.</dark_gray>"
         ));
     }
@@ -427,6 +565,31 @@ public final class LeaderboardManager implements Listener {
         return minutes + "m " + remainingSeconds + "s";
     }
 
+    private String formatLeaderboardValue(long value, LeaderboardType type) {
+        return type == LeaderboardType.PLAYTIME ? formatPlaytimeSeconds(value) : Long.toString(value);
+    }
+
+    private String formatPlaytimeSeconds(long totalSeconds) {
+        long seconds = Math.max(0L, totalSeconds);
+        long days = seconds / 86_400L;
+        seconds %= 86_400L;
+        long hours = seconds / 3_600L;
+        seconds %= 3_600L;
+        long minutes = seconds / 60L;
+        seconds %= 60L;
+
+        if (days > 0L) {
+            return days + "d " + hours + "h " + minutes + "m";
+        }
+        if (hours > 0L) {
+            return hours + "h " + minutes + "m";
+        }
+        if (minutes > 0L) {
+            return minutes + "m " + seconds + "s";
+        }
+        return seconds + "s";
+    }
+
     private String trim(double value) {
         if (Math.rint(value) == value) {
             return Long.toString(Math.round(value));
@@ -440,7 +603,8 @@ public final class LeaderboardManager implements Listener {
         BOSS_KILLS("boss_kills", "Boss Kills", Material.WITHER_SKELETON_SKULL, "<gray>Most custom boss kills.</gray>", "Boss Kills"),
         BOSS_DAMAGE("boss_damage", "Boss Damage", Material.NETHERITE_AXE, "<gray>Most total damage dealt to custom bosses.</gray>", "Damage"),
         BOSS_FIGHTS("boss_fights", "Boss Fights", Material.SHIELD, "<gray>Most custom boss fights participated in.</gray>", "Fights"),
-        MOB_KILLS("mob_kills", "Mob Kills", Material.ZOMBIE_HEAD, "<gray>Most non-player mobs killed.</gray>", "Mob Kills");
+        MOB_KILLS("mob_kills", "Mob Kills", Material.ZOMBIE_HEAD, "<gray>Most non-player mobs killed.</gray>", "Mob Kills"),
+        PLAYTIME("playtime_seconds", "Playtime", Material.CLOCK, "<gray>Most time spent online.</gray>", "Time");
 
         private final String column;
         private final String title;
@@ -472,6 +636,7 @@ public final class LeaderboardManager implements Listener {
                 case "bossdamage", "damage" -> BOSS_DAMAGE;
                 case "bossfights", "fights" -> BOSS_FIGHTS;
                 case "mobs", "mobkills" -> MOB_KILLS;
+                case "playtime", "time", "timeplayed", "time_played" -> PLAYTIME;
                 default -> null;
             };
         }
@@ -484,6 +649,7 @@ public final class LeaderboardManager implements Listener {
                 case BOSS_DAMAGE -> "<gradient:#ef4444:#facc15><bold>Boss Damage</bold></gradient>";
                 case BOSS_FIGHTS -> "<gradient:#38bdf8:#a78bfa><bold>Boss Fights</bold></gradient>";
                 case MOB_KILLS -> "<gradient:#4ade80:#22c55e><bold>Mob Kills</bold></gradient>";
+                case PLAYTIME -> "<gradient:#67e8f9:#facc15><bold>Playtime</bold></gradient>";
             };
         }
     }

@@ -2,6 +2,7 @@ package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -14,6 +15,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityResurrectEvent;
+import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
@@ -151,8 +153,7 @@ public final class SustenanceTalismanListener implements Listener {
     public void onCraftClick(InventoryClickEvent event) {
         if (!(event.getWhoClicked() instanceof Player player)) return;
         if (!(event.getView().getTopInventory() instanceof CraftingInventory inventory)) return;
-        if (event.getClickedInventory() != event.getView().getTopInventory()) return;
-        if (event.getSlotType() != InventoryType.SlotType.RESULT) return;
+        if (!isCraftResultSlot(event)) return;
 
         ItemStack current = event.getCurrentItem();
         if (!isTalisman(current) && !matchesRecipe(inventory.getMatrix())) {
@@ -176,6 +177,7 @@ public final class SustenanceTalismanListener implements Listener {
                 "Crafted a Talisman of Sustenance."
             );
         }
+        event.setCurrentItem(null);
         giveCraftResult(player, event, result);
 
         inventory.setResult(null);
@@ -378,7 +380,7 @@ public final class SustenanceTalismanListener implements Listener {
         if (!RECIPE_INGREDIENTS.containsKey(item.getType())) {
             return false;
         }
-        return item.getType() != Material.TOTEM_OF_UNDYING || !isTalisman(item);
+        return InventoryRecipeUtil.isPlainMaterial(plugin, item, item.getType());
     }
 
     private boolean consumeRecipeIngredients(CraftingInventory inventory) {
@@ -436,6 +438,10 @@ public final class SustenanceTalismanListener implements Listener {
     }
 
     private boolean canReceiveCraftResult(Player player, InventoryClickEvent event) {
+        if (!isAllowedResultClick(event.getClick())) {
+            player.sendMessage(MessageUtil.warn("Use a normal click or shift-click to craft this item."));
+            return false;
+        }
         if (event.isShiftClick()) {
             if (player.getInventory().firstEmpty() != -1) {
                 return true;
@@ -450,6 +456,19 @@ public final class SustenanceTalismanListener implements Listener {
         }
         player.sendMessage(MessageUtil.warn("Your cursor must be empty."));
         return false;
+    }
+
+    private boolean isAllowedResultClick(ClickType click) {
+        return click == ClickType.LEFT
+            || click == ClickType.RIGHT
+            || click == ClickType.SHIFT_LEFT
+            || click == ClickType.SHIFT_RIGHT;
+    }
+
+    private boolean isCraftResultSlot(InventoryClickEvent event) {
+        return event.getView().getTopInventory() instanceof CraftingInventory
+            && (event.getClickedInventory() == event.getView().getTopInventory() || event.getRawSlot() == 0)
+            && (event.getSlotType() == InventoryType.SlotType.RESULT || event.getRawSlot() == 0);
     }
 
     private boolean isRealTotem(ItemStack item) {

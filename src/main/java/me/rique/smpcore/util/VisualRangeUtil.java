@@ -5,14 +5,16 @@ import org.bukkit.entity.TextDisplay;
 
 public final class VisualRangeUtil {
 
-    public static final float HOLOGRAM_VIEW_RANGE = 32.0f;
+    public static final double HOLOGRAM_VIEW_RANGE_BLOCKS = 32.0D;
+    private static final double DISPLAY_RANGE_BLOCK_UNIT = 64.0D;
+    private static final float MIN_DISPLAY_VIEW_RANGE = 0.05f;
 
     private VisualRangeUtil() {
     }
 
     public static void applyHologramRange(Display display) {
         if (display != null) {
-            display.setViewRange(HOLOGRAM_VIEW_RANGE);
+            display.setViewRange(blocksToDisplayViewRange(HOLOGRAM_VIEW_RANGE_BLOCKS));
             if (display instanceof TextDisplay textDisplay) {
                 textDisplay.setSeeThrough(false);
             }
@@ -29,6 +31,14 @@ public final class VisualRangeUtil {
     }
 
     public static float clampHologramViewRange(double requestedRange) {
-        return (float) Math.max(0.05, Math.min(HOLOGRAM_VIEW_RANGE, requestedRange));
+        if (requestedRange <= 1.0D) {
+            return (float) Math.max(MIN_DISPLAY_VIEW_RANGE, Math.min(1.0D, requestedRange));
+        }
+        double clampedBlocks = Math.max(1.0D, Math.min(HOLOGRAM_VIEW_RANGE_BLOCKS, requestedRange));
+        return blocksToDisplayViewRange(clampedBlocks);
+    }
+
+    public static float blocksToDisplayViewRange(double blockRange) {
+        return (float) Math.max(MIN_DISPLAY_VIEW_RANGE, blockRange / DISPLAY_RANGE_BLOCK_UNIT);
     }
 }

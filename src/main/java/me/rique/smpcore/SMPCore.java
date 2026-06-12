@@ -20,6 +20,7 @@ import me.rique.smpcore.command.MainMenuCommand;
 import me.rique.smpcore.command.PlayerCommands;
 import me.rique.smpcore.command.SMPCoreCommand;
 import me.rique.smpcore.command.ServerUtilityCommands;
+import me.rique.smpcore.command.ShopCommands;
 import me.rique.smpcore.command.SpawnerAdminCommand;
 import me.rique.smpcore.command.SmpStartCommand;
 import me.rique.smpcore.command.TeamCommands;
@@ -29,6 +30,7 @@ import me.rique.smpcore.database.DatabaseManager;
 import me.rique.smpcore.death.DeathChestListener;
 import me.rique.smpcore.home.HomeManager;
 import me.rique.smpcore.item.BossPotionListener;
+import me.rique.smpcore.item.AgriculturalPylonListener;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.RareDropVisualListener;
@@ -40,20 +42,25 @@ import me.rique.smpcore.item.VeinMinerListener;
 import me.rique.smpcore.item.XpLecternListener;
 import me.rique.smpcore.legendary.LegendaryAltarManager;
 import me.rique.smpcore.legendary.LegendaryListener;
+import me.rique.smpcore.legendary.LegendaryStorageGuardListener;
 import me.rique.smpcore.legendary.MythicForgeListener;
 import me.rique.smpcore.leaderboard.LeaderboardManager;
 import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.player.DragonEggListener;
 import me.rique.smpcore.player.JoinListener;
+import me.rique.smpcore.player.PlayerControlListener;
 import me.rique.smpcore.player.PlayerManager;
+import me.rique.smpcore.player.PlayerSettingsManager;
 import me.rique.smpcore.player.PlayerVisualListener;
 import me.rique.smpcore.player.WorldRulesListener;
 import me.rique.smpcore.motd.MotdListener;
 import me.rique.smpcore.season.SeasonRelicManager;
+import me.rique.smpcore.shop.PlayerShopListener;
 import me.rique.smpcore.spawner.SpawnerListener;
 import me.rique.smpcore.spawner.SpawnerManager;
 import me.rique.smpcore.smp.SmpStartManager;
 import me.rique.smpcore.team.TeamManager;
+import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.waystone.WaystoneListener;
 import me.rique.smpcore.waystone.WaystoneManager;
 import org.bukkit.event.HandlerList;
@@ -93,6 +100,7 @@ public final class SMPCore extends JavaPlugin {
     private ItemAuditManager itemAuditManager;
     private RareDropVisualListener rareDropVisualListener;
     private RewardLanternListener rewardLanternListener;
+    private AgriculturalPylonListener agriculturalPylonListener;
     private SalvagingDepotListener salvagingDepotListener;
     private XpLecternListener xpLecternListener;
     private BossPotionListener bossPotionListener;
@@ -102,6 +110,9 @@ public final class SMPCore extends JavaPlugin {
     private WorldRulesListener worldRulesListener;
     private SmpStartManager smpStartManager;
     private LeaderboardManager leaderboardManager;
+    private PlayerSettingsManager playerSettingsManager;
+    private PlayerControlListener playerControlListener;
+    private PlayerShopListener playerShopListener;
 
     @Override
     public void onEnable() {
@@ -153,12 +164,15 @@ public final class SMPCore extends JavaPlugin {
         if (awakeningTableListener != null) awakeningTableListener.shutdown();
         if (superpowerManager != null) superpowerManager.shutdown();
         if (rewardLanternListener != null) rewardLanternListener.shutdown();
+        if (agriculturalPylonListener != null) agriculturalPylonListener.shutdown();
         if (salvagingDepotListener != null) salvagingDepotListener.shutdown();
         if (xpLecternListener != null) xpLecternListener.shutdown();
         if (bossPotionListener != null) bossPotionListener.shutdown();
         if (rareDropVisualListener != null) rareDropVisualListener.shutdown();
         if (itemAuditManager != null) itemAuditManager.shutdown();
         if (smpStartManager != null) smpStartManager.shutdown();
+        if (leaderboardManager != null) leaderboardManager.shutdown();
+        if (playerSettingsManager != null) playerSettingsManager.shutdown();
         if (playerVisualListener != null) playerVisualListener.shutdown();
         if (teamManager != null) teamManager.shutdown();
         if (databaseManager != null) databaseManager.close();
@@ -171,6 +185,10 @@ public final class SMPCore extends JavaPlugin {
         pm.registerEvents(new MotdListener(this), this);
         pm.registerEvents(new PluginActivityLogger(this), this);
         pm.registerEvents(new MainMenuCommand(this), this);
+        playerSettingsManager = new PlayerSettingsManager(this);
+        pm.registerEvents(playerSettingsManager, this);
+        playerControlListener = new PlayerControlListener(this);
+        pm.registerEvents(playerControlListener, this);
         craftingRulesListener = new CraftingRulesListener(this);
         pm.registerEvents(craftingRulesListener, this);
         combatLogListener = new CombatLogListener(this);
@@ -186,6 +204,7 @@ public final class SMPCore extends JavaPlugin {
         smpStartManager.applyConfiguredState();
         leaderboardManager = new LeaderboardManager(this);
         pm.registerEvents(leaderboardManager, this);
+        leaderboardManager.start();
         veinMinerListener = new VeinMinerListener(this);
         pm.registerEvents(veinMinerListener, this);
         replenishListener = new ReplenishListener(this);
@@ -224,12 +243,17 @@ public final class SMPCore extends JavaPlugin {
         bossManager.start();
         customToolListener = new CustomToolListener(this);
         pm.registerEvents(customToolListener, this);
+        agriculturalPylonListener = new AgriculturalPylonListener(this);
+        pm.registerEvents(agriculturalPylonListener, this);
+        agriculturalPylonListener.start();
         salvagingDepotListener = new SalvagingDepotListener(this);
         pm.registerEvents(salvagingDepotListener, this);
         salvagingDepotListener.start();
         xpLecternListener = new XpLecternListener(this);
         pm.registerEvents(xpLecternListener, this);
         xpLecternListener.start();
+        playerShopListener = new PlayerShopListener(this);
+        pm.registerEvents(playerShopListener, this);
         awakeningTableListener = new AwakeningTableListener(this);
         pm.registerEvents(awakeningTableListener, this);
         awakeningTableListener.start();
@@ -240,10 +264,12 @@ public final class SMPCore extends JavaPlugin {
         pm.registerEvents(itemAuditManager, this);
         itemAuditManager.start();
         pm.registerEvents(teamManager, this);
+        pm.registerEvents(new LegendaryStorageGuardListener(this), this);
         playerVisualListener = new PlayerVisualListener(this);
         pm.registerEvents(playerVisualListener, this);
         playerVisualListener.start();
         pm.registerEvents(new JoinListener(this), this);
+        pm.registerEvents(new MenuDupeGuardListener(this), this);
         restartDragonEggListener();
     }
 
@@ -274,6 +300,7 @@ public final class SMPCore extends JavaPlugin {
             BossCommands.register(commands, this);
             BossPotionCommands.register(commands, this);
             LeaderboardCommands.register(commands, this);
+            ShopCommands.register(commands, this);
             WikiCommand.register(commands, this);
             MainMenuCommand.register(commands, this);
 
@@ -305,6 +332,7 @@ public final class SMPCore extends JavaPlugin {
     public ItemAuditManager getItemAuditManager() { return itemAuditManager; }
     public RareDropVisualListener getRareDropVisualListener() { return rareDropVisualListener; }
     public RewardLanternListener getRewardLanternListener() { return rewardLanternListener; }
+    public AgriculturalPylonListener getAgriculturalPylonListener() { return agriculturalPylonListener; }
     public SalvagingDepotListener getSalvagingDepotListener() { return salvagingDepotListener; }
     public XpLecternListener getXpLecternListener() { return xpLecternListener; }
     public BossPotionListener getBossPotionListener() { return bossPotionListener; }
@@ -314,4 +342,7 @@ public final class SMPCore extends JavaPlugin {
     public WorldRulesListener getWorldRulesListener() { return worldRulesListener; }
     public SmpStartManager getSmpStartManager() { return smpStartManager; }
     public LeaderboardManager getLeaderboardManager() { return leaderboardManager; }
+    public PlayerSettingsManager getPlayerSettingsManager() { return playerSettingsManager; }
+    public PlayerControlListener getPlayerControlListener() { return playerControlListener; }
+    public PlayerShopListener getPlayerShopListener() { return playerShopListener; }
 }

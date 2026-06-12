@@ -23,12 +23,12 @@ Custom enchants use normal gameplay surfaces where possible: enchant table rolls
 - Telekinesis I: tool and weapon enchant. Mining and mob drops go straight into your inventory when space is available. Overflow drops normally.
 - Smelting Touch I: pickaxe enchant. Smelts mined drops when a real furnace or blast recipe exists. Netherrack is intentionally ignored.
 - Wise I-III: pickaxe, sword, and hoe enchant. Gives +15%, +30%, or +40% XP from all sources while held. Breaking or right-click harvesting crops with it drops at least 2 XP.
-- Dash I: sword and axe enchant. Right-click or sneak-left-click to dash forward. Current cooldown is 15 seconds.
+- Dash I: sword and axe enchant. Right-click to dash forward. Sneak while right-clicking interactable blocks if you want Dash to trigger instead of opening the block. Current cooldown is 15 seconds and shows above the hotbar.
 - Frostbite I-II: melee enchant. Hits can briefly slow enemies. Higher levels improve the chance and chill strength.
 - Harvesting I-III: hoe enchant. Mature crops can produce one extra crop drop.
 - Bulwark I-III: armor enchant. Worn pieces reduce incoming damage, capped at 30% total reduction.
 - Reinforced I-III: gear enchant. Items can ignore durability damage.
-- Essence Capture I: tool and weapon enchant. Eligible mob kills have a 1% chance to drop that mob's spawn egg.
+- Essence Capture I-III: tool and weapon enchant. Eligible mob kills can drop that mob's spawn egg: level I is 1%, level II is 3%, and level III is 5%.
 
 Essence Capture exclusions:
 

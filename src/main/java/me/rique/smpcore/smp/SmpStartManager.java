@@ -75,7 +75,9 @@ public final class SmpStartManager implements Listener {
             return;
         }
 
-        applyBorder(world, false);
+        if (!plugin.getConfigManager().smpStarted) {
+            applyBorder(world, false);
+        }
         updateGraceBossBarState();
     }
 
@@ -156,7 +158,10 @@ public final class SmpStartManager implements Listener {
             return MessageUtil.info("SMP start flow is disabled.");
         }
 
-        String border = formatNumber(config.smpStarted ? config.smpStartedBorderDiameter : config.smpPreStartBorderDiameter);
+        World world = configuredWorld();
+        String border = config.smpStarted && world != null
+            ? formatNumber(world.getWorldBorder().getSize())
+            : formatNumber(config.smpPreStartBorderDiameter);
         if (!config.smpStarted) {
             return MessageUtil.info("SMP has not started. Border: <white>" + border + "</white>. PvP is blocked.");
         }

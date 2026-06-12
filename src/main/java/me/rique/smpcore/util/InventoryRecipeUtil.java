@@ -5,6 +5,7 @@ import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.ItemMeta;
 
 import java.util.ArrayList;
@@ -114,6 +115,20 @@ public final class InventoryRecipeUtil {
         return true;
     }
 
+    public static boolean canFitRewardAfterRemovingIngredients(Player player, Collection<Ingredient> ingredients, ItemStack reward) {
+        if (player == null || reward == null || reward.getType().isAir()) {
+            return false;
+        }
+        PlayerInventory inventory = player.getInventory();
+        ItemStack[] storage = cloneContents(inventory.getStorageContents());
+        ItemStack nextOffhand = cloneOrNull(inventory.getItemInOffHand());
+
+        if (!removeFromCopies(storage, nextOffhandHolder(nextOffhand), ingredients)) {
+            return false;
+        }
+        return canFit(storage, reward);
+    }
+
     public static void giveOrDrop(Player player, ItemStack reward) {
         if (player == null || reward == null || reward.getType().isAir()) {
             return;
@@ -132,8 +147,83 @@ public final class InventoryRecipeUtil {
             return true;
         }
         String namespace = plugin.getName().toLowerCase(Locale.ROOT);
-        return meta.getPersistentDataContainer().getKeys().stream()
-            .noneMatch(key -> namespace.equals(key.getNamespace()));
+        if (meta.getPersistentDataContainer().getKeys().stream()
+            .anyMatch(key -> namespace.equals(key.getNamespace()))) {
+            return false;
+        }
+        if (meta.hasDisplayName() || meta.hasLore() || !meta.getEnchants().isEmpty()
+            || meta.hasCustomModelDataComponent() || meta.hasItemModel()) {
+            return false;
+        }
+        return !(meta instanceof Damageable damageable) || damageable.getDamage() <= 0;
+    }
+
+    private static boolean removeFromCopies(ItemStack[] storage, OffhandHolder offhand, Collection<Ingredient> ingredients) {
+        if (ingredients == null) {
+            return false;
+        }
+        for (Ingredient ingredient : ingredients) {
+            if (ingredient == null || ingredient.amount() <= 0) {
+                continue;
+            }
+            int remaining = ingredient.amount();
+
+            for (int i = 0; i < storage.length && remaining > 0; i++) {
+                ItemStack item = storage[i];
+                if (!matches(ingredient, item)) {
+                    continue;
+                }
+                int take = Math.min(remaining, item.getAmount());
+                storage[i] = reduce(item, take);
+                remaining -= take;
+            }
+
+            if (remaining > 0 && matches(ingredient, offhand.item())) {
+                int take = Math.min(remaining, offhand.item().getAmount());
+                offhand.item(reduce(offhand.item(), take));
+                remaining -= take;
+            }
+
+            if (remaining > 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean canFit(ItemStack[] storage, ItemStack reward) {
+        int remaining = reward.getAmount();
+        int maxStack = Math.max(1, reward.getType().getMaxStackSize());
+        for (ItemStack item : storage) {
+            if (remaining <= 0) {
+                return true;
+            }
+            if (item == null || item.getType().isAir() || !item.isSimilar(reward)) {
+                continue;
+            }
+            remaining -= Math.max(0, maxStack - item.getAmount());
+        }
+        for (ItemStack item : storage) {
+            if (remaining <= 0) {
+                return true;
+            }
+            if (item == null || item.getType().isAir()) {
+                remaining -= maxStack;
+            }
+        }
+        return remaining <= 0;
+    }
+
+    private static OffhandHolder nextOffhandHolder(ItemStack item) {
+        return new OffhandHolder(item);
+    }
+
+    private static ItemStack[] cloneContents(ItemStack[] contents) {
+        ItemStack[] clone = new ItemStack[contents.length];
+        for (int i = 0; i < contents.length; i++) {
+            clone[i] = cloneOrNull(contents[i]);
+        }
+        return clone;
     }
 
     private static boolean matches(Ingredient ingredient, ItemStack item) {
@@ -164,5 +254,21 @@ public final class InventoryRecipeUtil {
             out.append(Character.toUpperCase(part.charAt(0))).append(part.substring(1));
         }
         return out.toString();
+    }
+
+    private static final class OffhandHolder {
+        private ItemStack item;
+
+        private OffhandHolder(ItemStack item) {
+            this.item = item;
+        }
+
+        private ItemStack item() {
+            return item;
+        }
+
+        private void item(ItemStack item) {
+            this.item = item;
+        }
     }
 }

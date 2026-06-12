@@ -36,6 +36,14 @@ public final class LeaderboardCommands {
             "Open server leaderboards",
             List.of("leaderboard", "lb", "topstats")
         );
+
+        commands.register(
+            Commands.literal("playtime")
+                .executes(ctx -> showPlaytime(plugin, ctx.getSource().getSender()))
+                .build(),
+            "Show your playtime",
+            List.of("ptime")
+        );
     }
 
     private static int openOverview(SMPCore plugin, CommandSender sender) {
@@ -69,6 +77,19 @@ public final class LeaderboardCommands {
         return Command.SINGLE_SUCCESS;
     }
 
+    private static int showPlaytime(SMPCore plugin, CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(MessageUtil.error("Console does not have playtime."));
+            return 0;
+        }
+        if (plugin.getLeaderboardManager() == null) {
+            sender.sendMessage(MessageUtil.error("Playtime tracking is not ready yet."));
+            return 0;
+        }
+        plugin.getLeaderboardManager().sendPlaytime(player);
+        return Command.SINGLE_SUCCESS;
+    }
+
     private static CompletableFuture<Suggestions> suggestTypes(com.mojang.brigadier.context.CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx, SuggestionsBuilder builder) {
         builder.suggest("player_kills");
         builder.suggest("deaths");
@@ -76,6 +97,7 @@ public final class LeaderboardCommands {
         builder.suggest("boss_damage");
         builder.suggest("boss_fights");
         builder.suggest("mob_kills");
+        builder.suggest("playtime");
         return builder.buildFuture();
     }
 }

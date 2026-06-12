@@ -49,6 +49,22 @@ public final class MainMenuCommand implements Listener {
             "Open the main SMPCore menu",
             List.of("smpmenu")
         );
+        commands.register(
+            Commands.literal("settings")
+                .requires(src -> src.getSender() instanceof Player player && player.hasPermission("smpcore.settings"))
+                .executes(ctx -> {
+                    Player player = (Player) ctx.getSource().getSender();
+                    if (plugin.getPlayerSettingsManager() == null) {
+                        player.sendMessage(MessageUtil.error("Player settings are not ready yet."));
+                        return Command.SINGLE_SUCCESS;
+                    }
+                    plugin.getPlayerSettingsManager().openSettingsMenu(player, false);
+                    return Command.SINGLE_SUCCESS;
+                })
+                .build(),
+            "Open personal player settings",
+            List.of("playersettings", "prefs")
+        );
     }
 
     public static void openMenu(SMPCore plugin, Player player) {
@@ -105,15 +121,20 @@ public final class MainMenuCommand implements Listener {
             "<gray>and command abilities.</gray>",
             "<yellow>Click to open.</yellow>"
         )));
-        inventory.setItem(31, button(Material.BARREL, "<green><bold>Team Vault</bold></green>", List.of(
-            "<gray>Open your team's shared double chest.</gray>",
-            "<dark_gray>Requires a team.</dark_gray>",
+        inventory.setItem(31, button(Material.SHIELD, "<gradient:#22c55e:#22d3ee><bold>Teams</bold></gradient>", List.of(
+            "<gray>Browse teams, compare stats,</gray>",
+            "<gray>and open your team vault.</gray>",
             "<yellow>Click to open.</yellow>"
         )));
         inventory.setItem(32, button(Material.GOLD_BLOCK, "<gradient:#facc15:#22d3ee><bold>Leaderboards</bold></gradient>", List.of(
             "<gray>Kills, deaths, boss damage,</gray>",
             "<gray>boss fights, and personal reports.</gray>",
             "<yellow>Click to compete.</yellow>"
+        )));
+        inventory.setItem(40, button(Material.COMPARATOR, "<gradient:#38bdf8:#facc15><bold>Player Settings</bold></gradient>", List.of(
+            "<gray>Personal toggles and safety options.</gray>",
+            "<gray>Includes important-item drop safety.</gray>",
+            "<yellow>Click to configure.</yellow>"
         )));
         inventory.setItem(53, button(Material.WRITABLE_BOOK, "<yellow><bold>Wiki</bold></yellow>", List.of(
             "<gray>Open the server guide link.</gray>",
@@ -146,8 +167,9 @@ public final class MainMenuCommand implements Listener {
             case 24 -> openEnchants(player);
             case 25 -> openBossBrews(player);
             case 30 -> openPowers(player);
-            case 31 -> openTeamVault(player);
+            case 31 -> openTeams(player);
             case 32 -> openLeaderboards(player);
+            case 40 -> openSettings(player);
             case 53 -> {
                 player.closeInventory();
                 player.performCommand("wiki");
@@ -216,12 +238,12 @@ public final class MainMenuCommand implements Listener {
         plugin.getSuperpowerManager().openAdminInfoMenu(player);
     }
 
-    private void openTeamVault(Player player) {
+    private void openTeams(Player player) {
         if (!player.hasPermission("smpcore.team")) {
-            player.sendMessage(MessageUtil.error("You do not have permission to use team vaults."));
+            player.sendMessage(MessageUtil.error("You do not have permission to view teams."));
             return;
         }
-        plugin.getTeamManager().openTeamVault(player);
+        plugin.getTeamManager().openTeamsMenu(player, null, true);
     }
 
     private void openLeaderboards(Player player) {
@@ -234,6 +256,18 @@ public final class MainMenuCommand implements Listener {
             return;
         }
         plugin.getLeaderboardManager().openOverviewMenu(player);
+    }
+
+    private void openSettings(Player player) {
+        if (!player.hasPermission("smpcore.settings")) {
+            player.sendMessage(MessageUtil.error("You do not have permission to use player settings."));
+            return;
+        }
+        if (plugin.getPlayerSettingsManager() == null) {
+            player.sendMessage(MessageUtil.error("Player settings are not ready yet."));
+            return;
+        }
+        plugin.getPlayerSettingsManager().openSettingsMenu(player, true);
     }
 
     private void openBossBrews(Player player) {

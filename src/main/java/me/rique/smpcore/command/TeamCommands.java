@@ -28,6 +28,15 @@ public final class TeamCommands {
                     sendHelp(player, plugin.getTeamManager());
                     return Command.SINGLE_SUCCESS;
                 })
+                .then(Commands.literal("list")
+                    .executes(ctx -> openTeams(ctx.getSource().getSender() instanceof Player player ? player : null, plugin, null)))
+                .then(Commands.literal("search")
+                    .then(Commands.argument("name", StringArgumentType.greedyString())
+                        .executes(ctx -> openTeams(
+                            ctx.getSource().getSender() instanceof Player player ? player : null,
+                            plugin,
+                            StringArgumentType.getString(ctx, "name")
+                        ))))
                 .then(Commands.literal("colors")
                     .executes(ctx -> {
                         Player player = (Player) ctx.getSource().getSender();
@@ -211,7 +220,22 @@ public final class TeamCommands {
                     }))
                 .build(),
             "Manage player teams",
-            List.of("teams")
+            List.of()
+        );
+
+        commands.register(
+            Commands.literal("teams")
+                .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.team"))
+                .executes(ctx -> openTeams(ctx.getSource().getSender() instanceof Player player ? player : null, plugin, null))
+                .then(Commands.argument("search", StringArgumentType.greedyString())
+                    .executes(ctx -> openTeams(
+                        ctx.getSource().getSender() instanceof Player player ? player : null,
+                        plugin,
+                        StringArgumentType.getString(ctx, "search")
+                    )))
+                .build(),
+            "Browse server teams",
+            List.of("teamlist")
         );
     }
 
@@ -245,6 +269,14 @@ public final class TeamCommands {
                 });
                 return null;
             });
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int openTeams(Player player, SMPCore plugin, String search) {
+        if (player == null) {
+            return 0;
+        }
+        plugin.getTeamManager().openTeamsMenu(player, search, false);
         return Command.SINGLE_SUCCESS;
     }
 

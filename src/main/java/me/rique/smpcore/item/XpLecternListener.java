@@ -2,6 +2,7 @@ package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.MessageUtil;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
@@ -9,6 +10,7 @@ import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.Color;
+import org.bukkit.Keyed;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -33,6 +35,8 @@ import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.event.inventory.CraftItemEvent;
+import org.bukkit.event.inventory.PrepareItemCraftEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
@@ -42,6 +46,7 @@ import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
@@ -187,6 +192,24 @@ public final class XpLecternListener implements Listener {
         event.getPlayer().discoverRecipe(recipeKey);
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onPrepareCraft(PrepareItemCraftEvent event) {
+        if (isManagedRecipe(event.getRecipe()) && !usesOnlyPlainRecipeIngredients(event.getInventory().getMatrix())) {
+            event.getInventory().setResult(null);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onCraft(CraftItemEvent event) {
+        if (!isManagedRecipe(event.getRecipe()) || usesOnlyPlainRecipeIngredients(event.getInventory().getMatrix())) {
+            return;
+        }
+        event.setCancelled(true);
+        if (event.getWhoClicked() instanceof Player player) {
+            player.sendMessage(MessageUtil.warn("Use plain vanilla ingredients for XP Lectern recipes."));
+        }
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPlace(BlockPlaceEvent event) {
         ItemStack placedItem = event.getItemInHand();
@@ -211,10 +234,7 @@ public final class XpLecternListener implements Listener {
         long storedXp = storedXp(block);
         event.setDropItems(false);
         removeHologram(block);
-        block.getWorld().dropItemNaturally(block.getLocation().add(0.5, 0.75, 0.5), createLecternItem(storedXp));
-        if (storedXp > 0L) {
-            event.getPlayer().sendMessage(MessageUtil.info("The XP Lectern kept <white>" + levelSummary(storedXp) + "</white> inside the dropped item."));
-        }
+        Bukkit.getScheduler().runTask(plugin, () -> finishBreak(block, storedXp));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -312,6 +332,25 @@ public final class XpLecternListener implements Listener {
         Bukkit.addRecipe(recipe);
     }
 
+    private boolean isManagedRecipe(Recipe recipe) {
+        return recipe instanceof Keyed keyed && recipeKey.equals(keyed.getKey());
+    }
+
+    private boolean usesOnlyPlainRecipeIngredients(ItemStack[] matrix) {
+        if (matrix == null) {
+            return false;
+        }
+        for (ItemStack item : matrix) {
+            if (item == null || item.getType().isAir()) {
+                continue;
+            }
+            if (!InventoryRecipeUtil.isPlainMaterial(plugin, item, item.getType())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private void setupPlacedLectern(Block block, long storedXp) {
         if (block == null || block.getType() != Material.LECTERN) {
             return;
@@ -326,6 +365,15 @@ public final class XpLecternListener implements Listener {
         ensureHologram(block);
         block.getWorld().playSound(block.getLocation().add(0.5, 0.5, 0.5), Sound.BLOCK_ENCHANTMENT_TABLE_USE, 0.85f, 1.35f);
         block.getWorld().spawnParticle(Particle.ENCHANT, block.getLocation().add(0.5, 1.15, 0.5), 28, 0.35, 0.28, 0.35, 0.02);
+    }
+
+    private void finishBreak(Block block, long storedXp) {
+        if (isLecternBlock(block)) {
+            ensureHologram(block);
+            return;
+        }
+
+        block.getWorld().dropItemNaturally(block.getLocation().add(0.5, 0.75, 0.5), createLecternItem(storedXp));
     }
 
     private void openMenu(Player player, Block block) {

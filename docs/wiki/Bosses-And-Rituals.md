@@ -19,7 +19,9 @@ Important rules:
 - If a ritual fizzles because the area unloads or the boss cannot form, the catalyst is refunded.
 - Stronger bosses may create arena pressure. Edge camping and high-ground cheese are punished.
 - If everyone in the fight area dies or leaves after the fight starts, the boss despawns and the fight counts as a failure.
-- Boss drops are doubled from 4-6 PM America/Denver by default.
+- Boss rewards spawn in a labeled loot chest at or near the death spot. The plugin first looks for a safe space, then force-clears a nearby non-protected block if needed. It will not overwrite containers, existing boss loot, portals, bedrock/barriers, command blocks, structure blocks, or jigsaw blocks. Natural item drops are only used as the final emergency fallback.
+- Every boss victory is guaranteed to produce at least one reward item. Random bonus drops can fail, but the base reward cannot.
+- Boss drops are doubled from 4-6 PM America/Denver by default. The server announces when double loot starts, warns before it ends, and announces when it ends.
 
 ## Ritual Cheat Sheet
 
@@ -262,6 +264,8 @@ End Stone Bricks Purpur Block End Stone Bricks
 ```
 
 Rewards: 2 Rift Lens, 30% Void Halo, 50% Awakening Table. XP: 600.
+
+Awakening Table note: this boss is the normal player source for Awakening Tables. The chance is controlled by `awakening-table.rift-seraph-drop-chance` in `config.yml`.
 
 ### Nereida the Abyss Mother - Abyssal Baptism
 
