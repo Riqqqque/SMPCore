@@ -204,7 +204,7 @@ public final class PlayerVisualListener implements Listener {
             if (!desiredHidden.contains(targetId) || hidden.contains(targetId)) {
                 continue;
             }
-            viewer.hidePlayer(plugin, target);
+            viewer.hideEntity(plugin, target);
             hidden.add(targetId);
             clearFakeGlow(viewer, target);
             removeTeamGlowMarker(viewerId, targetId);
@@ -264,7 +264,7 @@ public final class PlayerVisualListener implements Listener {
         if (target == null || !target.isOnline() || isVanishedFromViewer(viewer, target)) {
             return;
         }
-        viewer.showPlayer(plugin, target);
+        viewer.showEntity(plugin, target);
     }
 
     private void clearPlayerFinderDefenseForViewer(Player viewer) {
