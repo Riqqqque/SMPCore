@@ -183,6 +183,8 @@ public final class PlayerVisualListener implements Listener {
             return;
         }
 
+        restorePlayerFinderTabEntries(viewer, players);
+
         Set<UUID> desiredHidden = new HashSet<>();
         for (Player target : players) {
             if (shouldHideForPlayerFinderDefense(viewer, target, teams)) {
@@ -212,6 +214,15 @@ public final class PlayerVisualListener implements Listener {
 
         if (hidden.isEmpty()) {
             playerFinderHiddenTargetsByViewer.remove(viewerId);
+        }
+    }
+
+    private void restorePlayerFinderTabEntries(Player viewer, ArrayList<Player> players) {
+        for (Player target : players) {
+            if (viewer.equals(target) || isVanishedFromViewer(viewer, target)) {
+                continue;
+            }
+            viewer.showPlayer(plugin, target);
         }
     }
 
@@ -264,6 +275,7 @@ public final class PlayerVisualListener implements Listener {
         if (target == null || !target.isOnline() || isVanishedFromViewer(viewer, target)) {
             return;
         }
+        viewer.showPlayer(plugin, target);
         viewer.showEntity(plugin, target);
     }
 
