@@ -4,6 +4,8 @@ Players receive one hidden superpower on first join. The power is meant to be di
 
 Use `/powerinfo` to read about classes. Staff can assign powers with `/setpower <player> <power>`. Ancient Scroll rerolls a player's power, even if they already have one, and avoids giving back the same current power. Java players can right-click it; Bedrock players can tap or swing it if their client does not send a normal item-use packet.
 
+An `Ancient Scroll` can also be upgraded in the Awakening Table with 1 Nether Star. If the awakening succeeds, it becomes an `Awakened Ancient Scroll`. Using that upgraded scroll opens a menu where the player can choose any real power instead of rolling randomly. Picking the player's current power is blocked so the scroll is not wasted. If the scroll awakening fails, the scroll is destroyed.
+
 The `/powerinfo` menu is sorted from most common to rarest.
 
 ## Power Chances
@@ -22,7 +24,7 @@ The `/powerinfo` menu is sorted from most common to rarest.
 - `Arcanist` - 3.29%. XP, enchanting, luck, durability, and essence extraction.
 - `Oathbound` - 3.29%. Team aura identity for grouped fights.
 - `Runesmith` - 3.29%. Durability protection and boss-kill repair flavor.
-- `Sovereign` - 3.29%. `/msummon <amount>` stores killed mobs, summons reinforced persistent mobs, and `/msummon despawn` unsummons them.
+- `Sovereign` - 3.29%. Stores killed hostile mobs only. `/msummon` summons 1 stored hostile mob, `/msummon <amount>` summons more, and `/msummon despawn` unsummons active mobs. Summons have 40 HP, boosted damage, armor, resistance, and knockback defense.
 - `The World` - 3.29%. Bound clock that stops time in a radius.
 - `Graveborn` - 2.88%. Undead resistance and healing from kills.
 - `Riftwarden` - 2.88%. Boss-hunter with Slow Falling near custom bosses, plus Resistance near bosses or in the End.

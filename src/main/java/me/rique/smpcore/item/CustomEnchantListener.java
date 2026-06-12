@@ -10,6 +10,7 @@ import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
+import org.bukkit.Keyed;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -27,6 +28,8 @@ import org.bukkit.entity.Item;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
+import org.bukkit.entity.AbstractArrow;
+import org.bukkit.entity.ThrowableProjectile;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -37,10 +40,14 @@ import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.EntityShootBowEvent;
+import org.bukkit.event.entity.ProjectileLaunchEvent;
+import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.inventory.CraftItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
+import org.bukkit.event.inventory.PrepareItemCraftEvent;
 import org.bukkit.event.inventory.PrepareGrindstoneEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerExpChangeEvent;
@@ -58,6 +65,7 @@ import org.bukkit.inventory.GrindstoneInventory;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.RecipeChoice;
 import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
@@ -97,7 +105,10 @@ public final class CustomEnchantListener implements Listener {
     private static final String KINGSLAYER_LORE_LINE = "Kingslayer I";
     private static final String SOUL_SIPHON_LORE_LINE = "Soul Siphon I";
     private static final String ECHOING_LORE_LINE = "Echoing I";
-    private static final double ESSENCE_CAPTURE_DROP_CHANCE = 0.01D;
+    private static final String ESSENCE_CAPTURE_LORE_PREFIX = "Essence Capture ";
+    private static final double ESSENCE_CAPTURE_LEVEL_ONE_CHANCE = 0.01D;
+    private static final double ESSENCE_CAPTURE_LEVEL_TWO_CHANCE = 0.03D;
+    private static final double ESSENCE_CAPTURE_LEVEL_THREE_CHANCE = 0.05D;
     private static final long TELEKINESIS_MINING_CONTEXT_TTL_MS = 1000L;
     private static final int CUSTOM_ENCHANT_ANVIL_BASE_COST = 6;
     private static final int CUSTOM_ENCHANT_ANVIL_LEVEL_COST = 3;
@@ -122,11 +133,12 @@ public final class CustomEnchantListener implements Listener {
     private final NamespacedKey keyDashCooldownUntil;
     private final NamespacedKey keyTelekinesisProjectileOwner;
     private final NamespacedKey keyEssenceCaptureProjectileOwner;
+    private final NamespacedKey keyEssenceCaptureProjectileLevel;
     private final NamespacedKey keyKingslayerRecipe;
     private final NamespacedKey keySoulSiphonRecipe;
     private final NamespacedKey keyEchoingRecipe;
     private final Map<UUID, UUID> telekinesisLootOwners = new ConcurrentHashMap<>();
-    private final Map<UUID, UUID> essenceCaptureLootOwners = new ConcurrentHashMap<>();
+    private final Map<UUID, EssenceCaptureHit> essenceCaptureLootOwners = new ConcurrentHashMap<>();
     private final Map<BlockKey, TelekinesisMiningContext> telekinesisMiningContexts = new ConcurrentHashMap<>();
     private final Map<UUID, Double> wiseXpRemainders = new ConcurrentHashMap<>();
     private final Map<Material, ItemStack> smeltingResults = new ConcurrentHashMap<>();
@@ -154,6 +166,7 @@ public final class CustomEnchantListener implements Listener {
         this.keyDashCooldownUntil = new NamespacedKey(plugin, "dash_cooldown_until");
         this.keyTelekinesisProjectileOwner = new NamespacedKey(plugin, "telekinesis_projectile_owner");
         this.keyEssenceCaptureProjectileOwner = new NamespacedKey(plugin, "essence_capture_projectile_owner");
+        this.keyEssenceCaptureProjectileLevel = new NamespacedKey(plugin, "essence_capture_projectile_level");
         this.keyKingslayerRecipe = new NamespacedKey(plugin, "kingslayer_book");
         this.keySoulSiphonRecipe = new NamespacedKey(plugin, "soul_siphon_book");
         this.keyEchoingRecipe = new NamespacedKey(plugin, "echoing_book");
@@ -248,6 +261,31 @@ public final class CustomEnchantListener implements Listener {
         );
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onPrepareCraftOnlyEnchant(PrepareItemCraftEvent event) {
+        CustomEnchantEntry enchant = craftOnlyRecipeEntry(event.getRecipe());
+        if (enchant == null) {
+            return;
+        }
+        if (!usesOnlyValidCraftOnlyIngredients(enchant, event.getInventory().getMatrix())) {
+            event.getInventory().setResult(null);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onCraftOnlyEnchant(CraftItemEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+        CustomEnchantEntry enchant = craftOnlyRecipeEntry(event.getRecipe());
+        if (enchant == null || usesOnlyValidCraftOnlyIngredients(enchant, event.getInventory().getMatrix())) {
+            return;
+        }
+
+        event.setCancelled(true);
+        player.sendMessage(MessageUtil.warn("That enchant recipe needs the exact boss materials and clean vanilla ingredients."));
+    }
+
     public boolean hasTelekinesisEnchant(ItemStack item) {
         return hasTelekinesis(item);
     }
@@ -264,6 +302,12 @@ public final class CustomEnchantListener implements Listener {
     public String customEnchantBookDisplayName(ItemStack item) {
         BookEnchantData enchant = bookEnchant(item);
         return enchant == null ? null : enchant.enchant().plainDisplay(enchant.level()) + " Book";
+    }
+
+    public List<String> managedEnchantIds() {
+        return CustomEnchantEntry.MANAGED.stream()
+            .map(enchant -> enchant.id)
+            .toList();
     }
 
     public void deliverTelekinesisDrops(Player player, Collection<ItemStack> drops, Location origin) {
@@ -409,8 +453,7 @@ public final class CustomEnchantListener implements Listener {
     public void onAnvilClick(InventoryClickEvent event) {
         if (!(event.getWhoClicked() instanceof Player player)) return;
         if (event.getView().getTopInventory().getType() != InventoryType.ANVIL) return;
-        if (event.getClickedInventory() != event.getView().getTopInventory()) return;
-        if (event.getSlotType() != InventoryType.SlotType.RESULT) return;
+        if (!isAnvilResultSlot(event)) return;
         if (!(event.getView().getTopInventory() instanceof AnvilInventory anvil)) return;
 
         ItemStack left = anvil.getFirstItem();
@@ -436,6 +479,14 @@ public final class CustomEnchantListener implements Listener {
         anvil.setItem(1, consumeOne(right));
         anvil.setItem(2, null);
         chargeAnvilCost(player, xpCost);
+        if (bookEnchant(result) != null && plugin.getItemAuditManager() != null) {
+            plugin.getItemAuditManager().recordKnownAcquisition(
+                player,
+                result,
+                "custom_enchant_anvil",
+                customResult.action() + " " + customResult.description() + " in an anvil."
+            );
+        }
         giveAnvilResult(player, event, result);
         String action = customResult.action();
         player.sendMessage(MessageUtil.success(
@@ -564,13 +615,22 @@ public final class CustomEnchantListener implements Listener {
                 player.getUniqueId().toString()
             );
         }
-        if (hasEssenceCapture(weapon)) {
-            projectile.getPersistentDataContainer().set(
-                keyEssenceCaptureProjectileOwner,
-                PersistentDataType.STRING,
-                player.getUniqueId().toString()
-            );
+        int essenceCaptureLevel = storedEnchantLevel(weapon, CustomEnchantEntry.ESSENCE_CAPTURE);
+        if (essenceCaptureLevel > 0) {
+            tagEssenceCaptureProjectile(projectile, player.getUniqueId(), essenceCaptureLevel);
         }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onProjectileLaunch(ProjectileLaunchEvent event) {
+        Projectile projectile = event.getEntity();
+        if (!(projectile.getShooter() instanceof Player player)) return;
+
+        ItemStack sourceItem = projectileSourceItem(projectile);
+        int essenceCaptureLevel = storedEnchantLevel(sourceItem, CustomEnchantEntry.ESSENCE_CAPTURE);
+        if (essenceCaptureLevel <= 0) return;
+
+        tagEssenceCaptureProjectile(projectile, player.getUniqueId(), essenceCaptureLevel);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -582,9 +642,9 @@ public final class CustomEnchantListener implements Listener {
             telekinesisLootOwners.put(victim.getUniqueId(), telekinesisOwnerId);
         }
 
-        UUID essenceCaptureOwnerId = essenceCaptureOwner(event.getDamager());
-        if (essenceCaptureOwnerId != null) {
-            essenceCaptureLootOwners.put(victim.getUniqueId(), essenceCaptureOwnerId);
+        EssenceCaptureHit essenceCaptureHit = essenceCaptureHit(event.getDamager());
+        if (essenceCaptureHit != null) {
+            essenceCaptureLootOwners.put(victim.getUniqueId(), essenceCaptureHit);
         } else {
             essenceCaptureLootOwners.remove(victim.getUniqueId());
         }
@@ -616,10 +676,11 @@ public final class CustomEnchantListener implements Listener {
         LivingEntity entity = event.getEntity();
         if (entity instanceof Player) return;
 
-        UUID ownerId = essenceCaptureLootOwners.remove(entity.getUniqueId());
+        EssenceCaptureHit essenceCaptureHit = essenceCaptureLootOwners.remove(entity.getUniqueId());
         if (isCustomBoss(entity) || isBlockedEssenceCaptureType(entity.getType())) return;
-        if (ownerId == null) return;
+        if (essenceCaptureHit == null) return;
 
+        UUID ownerId = essenceCaptureHit.ownerId();
         Player killer = entity.getKiller();
         if (killer == null || !killer.getUniqueId().equals(ownerId)) {
             return;
@@ -628,7 +689,8 @@ public final class CustomEnchantListener implements Listener {
         Player owner = Bukkit.getPlayer(ownerId);
         if (owner == null || !owner.isOnline()) return;
         if (owner.getGameMode() == GameMode.CREATIVE || owner.getGameMode() == GameMode.SPECTATOR) return;
-        if (ThreadLocalRandom.current().nextDouble() >= ESSENCE_CAPTURE_DROP_CHANCE) return;
+        double dropChance = essenceCaptureDropChance(essenceCaptureHit.level());
+        if (dropChance <= 0.0D || ThreadLocalRandom.current().nextDouble() >= dropChance) return;
 
         Material eggMaterial = spawnEggMaterial(entity.getType());
         if (eggMaterial == null) return;
@@ -795,9 +857,7 @@ public final class CustomEnchantListener implements Listener {
 
         Action action = event.getAction();
         boolean rightClick = action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK;
-        boolean sneakingLeftClick = event.getPlayer().isSneaking()
-            && (action == Action.LEFT_CLICK_AIR || action == Action.LEFT_CLICK_BLOCK);
-        if (!rightClick && !sneakingLeftClick) {
+        if (!rightClick) {
             return;
         }
 
@@ -865,7 +925,7 @@ public final class CustomEnchantListener implements Listener {
     public void onQuit(PlayerQuitEvent event) {
         UUID playerId = event.getPlayer().getUniqueId();
         wiseXpRemainders.remove(playerId);
-        essenceCaptureLootOwners.entrySet().removeIf(entry -> playerId.equals(entry.getValue()));
+        essenceCaptureLootOwners.entrySet().removeIf(entry -> playerId.equals(entry.getValue().ownerId()));
         clearDoubleJumpFlight(event.getPlayer());
     }
 
@@ -982,6 +1042,50 @@ public final class CustomEnchantListener implements Listener {
             }
         }
         Bukkit.addRecipe(recipe);
+    }
+
+    private CustomEnchantEntry craftOnlyRecipeEntry(Recipe recipe) {
+        if (!(recipe instanceof Keyed keyed)) {
+            return null;
+        }
+        NamespacedKey key = keyed.getKey();
+        if (keyKingslayerRecipe.equals(key)) {
+            return CustomEnchantEntry.KINGSLAYER;
+        }
+        if (keySoulSiphonRecipe.equals(key)) {
+            return CustomEnchantEntry.SOUL_SIPHON;
+        }
+        if (keyEchoingRecipe.equals(key)) {
+            return CustomEnchantEntry.ECHOING;
+        }
+        return null;
+    }
+
+    private boolean usesOnlyValidCraftOnlyIngredients(CustomEnchantEntry enchant, ItemStack[] matrix) {
+        if (enchant == null || matrix == null) {
+            return false;
+        }
+        List<InventoryRecipeUtil.Ingredient> ingredients = craftOnlyRecipeIngredients(enchant);
+        if (ingredients.isEmpty()) {
+            return false;
+        }
+
+        for (ItemStack item : matrix) {
+            if (item == null || item.getType().isAir() || item.getAmount() <= 0) {
+                continue;
+            }
+            boolean valid = false;
+            for (InventoryRecipeUtil.Ingredient ingredient : ingredients) {
+                if (ingredient.matcher() != null && ingredient.matcher().test(item)) {
+                    valid = true;
+                    break;
+                }
+            }
+            if (!valid) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private RecipeChoice exactRelicChoice(String relicId) {
@@ -1182,12 +1286,16 @@ public final class CustomEnchantListener implements Listener {
                 return false;
             }
         }
+        ItemStack reward = createBook(enchant, 1);
+        if (!InventoryRecipeUtil.canFitRewardAfterRemovingIngredients(player, ingredients, reward)) {
+            player.sendMessage(MessageUtil.warn("Clear enough inventory space before crafting <white>" + enchant.plainName() + " Book</white>."));
+            return false;
+        }
         if (!InventoryRecipeUtil.removeIngredients(player, ingredients)) {
             player.sendMessage(MessageUtil.error("Those ingredients changed before the craft finished. Try again."));
             return false;
         }
 
-        ItemStack reward = createBook(enchant, 1);
         if (plugin.getItemAuditManager() != null) {
             plugin.getItemAuditManager().recordKnownAcquisition(
                 player,
@@ -1395,6 +1503,10 @@ public final class CustomEnchantListener implements Listener {
     }
 
     private boolean canReceiveAnvilResult(Player player, InventoryClickEvent event) {
+        if (!isAllowedResultClick(event.getClick())) {
+            player.sendMessage(MessageUtil.warn("Use a normal click or shift-click to take this result."));
+            return false;
+        }
         if (event.isShiftClick()) {
             if (player.getInventory().firstEmpty() != -1) {
                 return true;
@@ -1409,6 +1521,19 @@ public final class CustomEnchantListener implements Listener {
         }
         player.sendMessage(MessageUtil.warn("Your cursor must be empty."));
         return false;
+    }
+
+    private boolean isAllowedResultClick(ClickType click) {
+        return click == ClickType.LEFT
+            || click == ClickType.RIGHT
+            || click == ClickType.SHIFT_LEFT
+            || click == ClickType.SHIFT_RIGHT;
+    }
+
+    private boolean isAnvilResultSlot(InventoryClickEvent event) {
+        return event.getView().getTopInventory().getType() == InventoryType.ANVIL
+            && (event.getClickedInventory() == event.getView().getTopInventory() || event.getRawSlot() == 2)
+            && (event.getSlotType() == InventoryType.SlotType.RESULT || event.getRawSlot() == 2);
     }
 
     private CustomEnchantAnvilResult customEnchantAnvilResult(ItemStack left, ItemStack right) {
@@ -1847,7 +1972,7 @@ public final class CustomEnchantListener implements Listener {
         long now = System.currentTimeMillis();
         long cooldownUntil = dashCooldownUntil(player);
         if (cooldownUntil > now) {
-            player.sendMessage(MessageUtil.warn("Dash cooldown: <white>" + secondsLeft(cooldownUntil - now) + "s</white>."));
+            player.sendActionBar(MM.deserialize("<red>Dash ready in <white>" + secondsLeft(cooldownUntil - now) + "s</white>.</red>"));
             return;
         }
         if (cooldownUntil > 0L) {
@@ -1874,6 +1999,9 @@ public final class CustomEnchantListener implements Listener {
         int cooldownSeconds = plugin.getConfigManager().dashEnchantCooldownSeconds;
         if (cooldownSeconds > 0) {
             setDashCooldownUntil(player, now + (cooldownSeconds * 1000L));
+            player.sendActionBar(MM.deserialize("<aqua>Dash used. Ready in <white>" + cooldownSeconds + "s</white>.</aqua>"));
+        } else {
+            player.sendActionBar(MM.deserialize("<aqua>Dash used.</aqua>"));
         }
     }
 
@@ -2159,9 +2287,13 @@ public final class CustomEnchantListener implements Listener {
         }
     }
 
-    private UUID essenceCaptureOwner(Entity damager) {
-        if (damager instanceof Player player && hasEssenceCapture(player.getInventory().getItemInMainHand())) {
-            return player.getUniqueId();
+    private EssenceCaptureHit essenceCaptureHit(Entity damager) {
+        if (damager instanceof Player player) {
+            int level = storedEnchantLevel(player.getInventory().getItemInMainHand(), CustomEnchantEntry.ESSENCE_CAPTURE);
+            if (level > 0) {
+                return new EssenceCaptureHit(player.getUniqueId(), level);
+            }
+            return null;
         }
 
         if (!(damager instanceof Projectile projectile)) return null;
@@ -2169,10 +2301,57 @@ public final class CustomEnchantListener implements Listener {
         if (owner == null || owner.isBlank()) return null;
 
         try {
-            return UUID.fromString(owner);
+            Integer storedLevel = projectile.getPersistentDataContainer().get(keyEssenceCaptureProjectileLevel, PersistentDataType.INTEGER);
+            int level = storedLevel == null ? 1 : CustomEnchantEntry.ESSENCE_CAPTURE.clampLevel(storedLevel);
+            return new EssenceCaptureHit(UUID.fromString(owner), level);
         } catch (IllegalArgumentException ignored) {
             return null;
         }
+    }
+
+    private void tagEssenceCaptureProjectile(Projectile projectile, UUID ownerId, int level) {
+        projectile.getPersistentDataContainer().set(
+            keyEssenceCaptureProjectileOwner,
+            PersistentDataType.STRING,
+            ownerId.toString()
+        );
+        projectile.getPersistentDataContainer().set(
+            keyEssenceCaptureProjectileLevel,
+            PersistentDataType.INTEGER,
+            CustomEnchantEntry.ESSENCE_CAPTURE.clampLevel(level)
+        );
+    }
+
+    private double essenceCaptureDropChance(int level) {
+        return switch (CustomEnchantEntry.ESSENCE_CAPTURE.clampLevel(level)) {
+            case 1 -> ESSENCE_CAPTURE_LEVEL_ONE_CHANCE;
+            case 2 -> ESSENCE_CAPTURE_LEVEL_TWO_CHANCE;
+            case 3 -> ESSENCE_CAPTURE_LEVEL_THREE_CHANCE;
+            default -> 0.0D;
+        };
+    }
+
+    private ItemStack projectileSourceItem(Projectile projectile) {
+        if (projectile instanceof AbstractArrow arrow) {
+            ItemStack weapon = arrow.getWeapon();
+            if (weapon != null && !weapon.getType().isAir()) {
+                return weapon;
+            }
+
+            ItemStack itemStack = arrow.getItemStack();
+            if (itemStack != null && !itemStack.getType().isAir()) {
+                return itemStack;
+            }
+        }
+
+        if (projectile instanceof ThrowableProjectile throwable) {
+            ItemStack item = throwable.getItem();
+            if (item != null && !item.getType().isAir()) {
+                return item;
+            }
+        }
+
+        return null;
     }
 
     private void rememberTelekinesisMiningContext(Player player, Location location) {
@@ -2456,8 +2635,8 @@ public final class CustomEnchantListener implements Listener {
             List.of(
                 "Sword and axe enchant.",
                 "Right-click to burst in the direction you are facing.",
-                "Sneak + left-click also triggers the dash.",
-                "Sneak when clicking interactable blocks to dash instead of opening them."
+                "Sneak + right-click interactable blocks to dash instead of opening them.",
+                "Cooldown feedback appears above your hotbar."
             ),
             CustomEnchantListener::isSwordOrAxe,
             true,
@@ -2595,17 +2774,17 @@ public final class CustomEnchantListener implements Listener {
             "<dark_green><bold>Essence Capture Book</bold></dark_green>",
             "Essence Capture",
             Material.ZOMBIE_SPAWN_EGG,
-            "I",
+            "I, II, III",
             List.of(
                 "Tool and weapon enchant.",
-                "Mob kills have a 1% chance to drop that mob's spawn egg.",
+                "Spawn egg chance: I 1%, II 3%, III 5%.",
                 "Does not work on players, custom bosses, or vanilla boss mobs."
             ),
             CustomEnchantListener::isToolOrWeapon,
             true,
             24,
             1,
-            1
+            3
         );
 
         private static final List<CustomEnchantEntry> MANAGED = List.of(
@@ -2754,6 +2933,9 @@ public final class CustomEnchantListener implements Listener {
             if (this == ECHOING) {
                 return ECHOING_LORE_LINE.equalsIgnoreCase(plain);
             }
+            if (this == ESSENCE_CAPTURE) {
+                return plain.startsWith(ESSENCE_CAPTURE_LORE_PREFIX);
+            }
             return loreLine(1).equalsIgnoreCase(plain);
         }
 
@@ -2792,9 +2974,27 @@ public final class CustomEnchantListener implements Listener {
             if (this == DASH) {
                 return List.of(
                     "Sword and axe enchant.",
-                    "Right-click or sneak + left-click to dash forward.",
+                    "Right-click to dash forward.",
                     "Cooldown: " + config.dashEnchantCooldownSeconds + " seconds.",
-                    "Interactable blocks still open normally unless you are sneaking."
+                    "Sneak while right-clicking interactable blocks to dash instead of opening them.",
+                    "Cooldown feedback appears above your hotbar."
+                );
+            }
+
+            if (this == ESSENCE_CAPTURE) {
+                if (specificLevelBook) {
+                    return List.of(
+                        "Tool and weapon enchant.",
+                        "Eligible mob kills have a " + essenceCaptureChanceLabel(clampLevel(level)) + " chance to drop that mob's spawn egg.",
+                        "Does not work on players, custom bosses, or vanilla boss mobs."
+                    );
+                }
+                return List.of(
+                    "Tool and weapon enchant.",
+                    "Level I: 1% spawn egg chance.",
+                    "Level II: 3% spawn egg chance.",
+                    "Level III: 5% spawn egg chance.",
+                    "Does not work on players, custom bosses, or vanilla boss mobs."
                 );
             }
 
@@ -2824,6 +3024,15 @@ public final class CustomEnchantListener implements Listener {
                 "Level III: +" + formatConfigPercent(config.wiseLevelThreeBonus) + " XP from all sources while held.",
                 "Breaking or right-click harvesting crops with it drops at least " + config.wiseCropXp + " XP."
             );
+        }
+
+        private static String essenceCaptureChanceLabel(int level) {
+            return switch (level) {
+                case 1 -> "1%";
+                case 2 -> "3%";
+                case 3 -> "5%";
+                default -> "0%";
+            };
         }
 
         private static String formatConfigPercent(double bonus) {
@@ -2881,6 +3090,8 @@ public final class CustomEnchantListener implements Listener {
     }
 
     private record BookEnchantData(CustomEnchantEntry enchant, int level) {}
+
+    private record EssenceCaptureHit(UUID ownerId, int level) {}
 
     private record CustomEnchantAnvilResult(
         ItemStack result,

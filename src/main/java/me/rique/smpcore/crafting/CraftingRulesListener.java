@@ -3,6 +3,7 @@ package me.rique.smpcore.crafting;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.ReplenishListener;
+import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Keyed;
@@ -12,6 +13,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.CraftItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareItemCraftEvent;
@@ -69,6 +71,10 @@ public final class CraftingRulesListener implements Listener {
             inv.setResult(null);
             return;
         }
+        if (isManagedConvenienceRecipe(event.getRecipe()) && !usesOnlyPlainRecipeIngredients(inv.getMatrix())) {
+            inv.setResult(null);
+            return;
+        }
 
         ItemStack result = inv.getResult();
         if (result == null || result.getType() != Material.GOLDEN_APPLE) return;
@@ -87,6 +93,31 @@ public final class CraftingRulesListener implements Listener {
         if (hasInvalidIngredient) {
             inv.setResult(null);
         }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onCraft(CraftItemEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+        if (isManagedConvenienceRecipe(event.getRecipe())) {
+            if (usesOnlyPlainRecipeIngredients(event.getInventory().getMatrix())) {
+                return;
+            }
+
+            event.setCancelled(true);
+            player.sendMessage(MessageUtil.warn("Custom items cannot be used in SMPCore crafting recipes."));
+            return;
+        }
+        if (!isMinecraftRecipe(event.getRecipe())) {
+            return;
+        }
+        if (!containsProtectedCustomItem(event.getInventory().getMatrix())) {
+            return;
+        }
+
+        event.setCancelled(true);
+        player.sendMessage(MessageUtil.warn("Custom items cannot be used in vanilla crafting recipes."));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -124,15 +155,21 @@ public final class CraftingRulesListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onSmithingClick(InventoryClickEvent event) {
-        if (!plugin.getConfigManager().blockNetheriteArmorUpgrade) return;
         if (!(event.getWhoClicked() instanceof Player player)) return;
-        if (event.getClickedInventory() == null) return;
         if (event.getView().getTopInventory().getType() != InventoryType.SMITHING) return;
-        if (event.getSlotType() != InventoryType.SlotType.RESULT) return;
+        if (!isSmithingResultSlot(event)) return;
         if (!(event.getView().getTopInventory() instanceof SmithingInventory smith)) return;
+
+        ItemStack source = smith.getInputEquipment();
+        if (isProtectedCustomItem(source) && !isCustomEnchantedVanillaGear(source)) {
+            event.setCancelled(true);
+            player.sendMessage(MessageUtil.warn("Custom items cannot be used in vanilla smithing recipes."));
+            return;
+        }
 
         ItemStack result = smith.getResult();
         if (result == null || result.getType() == Material.AIR) return;
+        if (!plugin.getConfigManager().blockNetheriteArmorUpgrade) return;
         if (!isNetheriteArmor(result.getType())) return;
 
         event.setCancelled(true);
@@ -199,10 +236,20 @@ public final class CraftingRulesListener implements Listener {
         if ((result == null || result.getType().isAir()) && recipe == null) {
             return false;
         }
+        if (isAllowedCustomCraft(event.getInventory().getMatrix())) {
+            return false;
+        }
         if (!containsProtectedCustomItem(event.getInventory().getMatrix())) {
             return false;
         }
         return recipe == null || isMinecraftRecipe(recipe);
+    }
+
+    private boolean isAllowedCustomCraft(ItemStack[] matrix) {
+        if (plugin.getBackpackListener() != null && plugin.getBackpackListener().isBackpackUpgradeCraft(matrix)) {
+            return true;
+        }
+        return plugin.getSuperpowerManager() != null && plugin.getSuperpowerManager().isAncientScrollCraft(matrix);
     }
 
     private boolean isMinecraftRecipe(Recipe recipe) {
@@ -211,6 +258,37 @@ public final class CraftingRulesListener implements Listener {
         }
         NamespacedKey key = keyed.getKey();
         return key != null && "minecraft".equals(key.getNamespace());
+    }
+
+    private boolean isManagedConvenienceRecipe(Recipe recipe) {
+        if (!(recipe instanceof Keyed keyed)) {
+            return false;
+        }
+        NamespacedKey key = keyed.getKey();
+        return goldenAppleNuggetRecipeKey.equals(key)
+            || leatherFromRottenFleshRecipeKey.equals(key)
+            || bellRecipeKey.equals(key);
+    }
+
+    private boolean usesOnlyPlainRecipeIngredients(ItemStack[] matrix) {
+        if (matrix == null) {
+            return false;
+        }
+        for (ItemStack item : matrix) {
+            if (item == null || item.getType().isAir() || item.getAmount() <= 0) {
+                continue;
+            }
+            if (!InventoryRecipeUtil.isPlainMaterial(plugin, item, item.getType())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isSmithingResultSlot(InventoryClickEvent event) {
+        return event.getView().getTopInventory().getType() == InventoryType.SMITHING
+            && (event.getClickedInventory() == event.getView().getTopInventory() || event.getRawSlot() == 3)
+            && (event.getSlotType() == InventoryType.SlotType.RESULT || event.getRawSlot() == 3);
     }
 
     private boolean containsProtectedCustomItem(ItemStack[] contents) {

@@ -13,6 +13,7 @@ Default intent:
 - Hostile mobs are blocked from spawning inside the start barrier.
 - `/startsmp` expands to the real border.
 - `/startsmp [graceMinutes]` expands the border and uses that PvP grace length.
+- After `/startsmp`, the plugin does not reapply the configured border on restart. Staff can safely use vanilla `/worldborder set ...`, and that live border remains in control.
 - Default one-hour post-start grace period.
 - PvP is blocked during grace.
 - The PvP grace period shows a countdown bossbar.
@@ -34,6 +35,7 @@ Teams support:
 - Team colors.
 - Owner-controlled team renames.
 - Owner-controlled team color changes.
+- A searchable team browser through `/teams`.
 - Team vault storage through `/tvault` or `/teamvault`.
 - Teammate protection hooks for compatible abilities.
 - Owner crown unlocks when team size requirements are met.
@@ -41,6 +43,9 @@ Teams support:
 Useful team commands:
 
 - `/team create "name" [color]` - create a team.
+- `/teams [search]` - open the team browser. Searching sorts by best team-name match.
+- `/team list` - open the team browser.
+- `/team search <name>` - open the team browser filtered to the closest team-name matches.
 - `/team colors` - list available colors.
 - `/team color <color>` - change your team color. Owner only.
 - `/team rename "new name"` - rename your team. Owner only.
@@ -51,6 +56,27 @@ Useful team commands:
 - `/team info` - view team members, owner, and color.
 - `/tvault` or `/teamvault` - open your team vault.
 
+## Team Browser
+
+The team browser is opened from `/teams`, `/team list`, `/team search <name>`, or the main `/menu`.
+
+It shows:
+
+- Team owner.
+- Member count and online count.
+- Team color.
+- Player kills.
+- Deaths.
+- K/D ratio.
+- Boss kills.
+- Boss damage.
+- Total tracked playtime.
+- A short member preview.
+
+The browser loads team membership from memory and pulls player stat totals in one batched database read. This keeps the menu lightweight even when many teams exist. Clicking a team sends a quick chat summary. The barrel button opens your own team vault if you are in a team.
+
 ## Team Vaults
 
 Team vaults are double chest storage for the team. Saves are serialized per team to avoid write-order bugs. If a team is renamed while the vault is open, the plugin saves and closes the vault first, migrates the stored vault row, and the next `/tvault` opens it under the new name.
+
+Unique legendary and mythic relics cannot be stored in team vaults. If one somehow gets into a vault from old data or a weird edge case, it is moved back to the player who opens the vault. If their inventory is full, it drops safely at their feet instead of being deleted.

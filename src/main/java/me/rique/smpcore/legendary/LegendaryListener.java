@@ -4,9 +4,11 @@ import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.combat.DamageNumberListener;
+import me.rique.smpcore.combat.CombatLogListener;
 import me.rique.smpcore.command.MainMenuCommand;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.SalvagingDepotListener;
+import me.rique.smpcore.item.AgriculturalPylonListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
 import me.rique.smpcore.item.XpLecternListener;
 import me.rique.smpcore.power.SuperpowerManager;
@@ -76,6 +78,7 @@ import org.bukkit.event.enchantment.EnchantItemEvent;
 import org.bukkit.event.enchantment.PrepareItemEnchantEvent;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.inventory.CraftItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
@@ -100,6 +103,7 @@ import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.EquipmentSlotGroup;
 import org.bukkit.inventory.meta.BlockStateMeta;
+import org.bukkit.inventory.meta.BundleMeta;
 import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
@@ -123,6 +127,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Consumer;
 
 public final class LegendaryListener implements Listener {
 
@@ -131,6 +136,7 @@ public final class LegendaryListener implements Listener {
     private static final String BACKPACK_RECIPE_ID = "backpack";
     private static final String EXPANDED_BACKPACK_RECIPE_ID = "expanded_backpack";
     private static final String MYTHIC_NEXUS_MENU_ID = "mythic_nexus";
+    private static final String AWAKENING_TABLE_INFO_ID = "awakening_table_info";
     private static final String RELIQUARY_SECTION_PREFIX = "reliquary_section:";
     private static final int[] RELIQUARY_CONTENT_SLOTS = {
         10, 11, 12, 13, 14, 15, 16,
@@ -212,8 +218,6 @@ public final class LegendaryListener implements Listener {
     private static final double DASH_MACE_HORIZONTAL = 2.10;
     private static final double DASH_MACE_VERTICAL = 0.52;
     private static final double STRENGTH_MACE_DAMAGE_BONUS = 9.0;
-    private static final double FARADAY_PLAYER_SCAN_RANGE = 5000.0;
-    private static final int FARADAY_SCAN_MAX_USES = 15;
     private static final int LIFE_STEALER_MAX_STACKS = 3;
     private static final int LIFE_STEALER_MAX_SHARPNESS = 6;
     private static final int PERCY_TRIDENT_WATER_BREATHING_TICKS = 60;
@@ -242,6 +246,11 @@ public final class LegendaryListener implements Listener {
     private static final double ENDER_SWORD_SEAT_START_Y_OFFSET = 0.35;
     private static final double ENDER_SWORD_DRAGON_BASE_MOVE_SCALAR = 0.60;
     private static final double ENDER_SWORD_DRAGON_SPRINT_MULTIPLIER = 1.15;
+    private static final int ENDER_SWORD_DRAGON_COLLISION_STABILIZE_TICKS = 4;
+    private static final double ENDER_SWORD_DRAGON_RIDER_COLLISION_MAX_HORIZONTAL = 0.18;
+    private static final double ENDER_SWORD_DRAGON_RIDER_COLLISION_MAX_VERTICAL = 0.10;
+    private static final double ENDER_SWORD_DRAGON_TARGET_COLLISION_MAX_HORIZONTAL = 0.85;
+    private static final double ENDER_SWORD_DRAGON_TARGET_COLLISION_MAX_VERTICAL = 0.35;
     private static final double ENDER_SWORD_SEAT_COLLISION_RADIUS = 0.45;
     private static final double ENDER_SWORD_SEAT_COLLISION_HEAD_HEIGHT = 1.55;
     private static final double ENDER_SWORD_SEAT_COLLISION_MID_HEIGHT = 0.90;
@@ -293,7 +302,6 @@ public final class LegendaryListener implements Listener {
     private final NamespacedKey keyOrbOfTheMystics;
     private final NamespacedKey keyOrbOfTheMysticsCooldownUntil;
     private final NamespacedKey keyLegacyOrbOfTheMysticsInstance;
-    private final NamespacedKey keyFaradayUses;
     private final NamespacedKey keyMidasSharpness;
     private final NamespacedKey keyPercyTridentMode;
     private final NamespacedKey keyWarPickMode;
@@ -403,7 +411,6 @@ public final class LegendaryListener implements Listener {
         this.keyOrbOfTheMystics = new NamespacedKey(plugin, "orb_of_the_mystics");
         this.keyOrbOfTheMysticsCooldownUntil = new NamespacedKey(plugin, "orb_of_the_mystics_cooldown_until");
         this.keyLegacyOrbOfTheMysticsInstance = new NamespacedKey(plugin, "orb_of_the_mystics_instance");
-        this.keyFaradayUses = new NamespacedKey(plugin, "faraday_uses");
         this.keyMidasSharpness = new NamespacedKey(plugin, "midas_sharpness");
         this.keyPercyTridentMode = new NamespacedKey(plugin, "trident_of_percy_mode");
         this.keyWarPickMode = new NamespacedKey(plugin, "war_pick_mode");
@@ -534,7 +541,7 @@ public final class LegendaryListener implements Listener {
         CraftingInventory inv = event.getInventory();
         Recipe eventRecipe = event.getRecipe();
         if (eventRecipe instanceof Keyed keyed && faradaysMagnetRecipeKey.equals(keyed.getKey())) {
-            inv.setResult(containsLegendaryIngredient(inv.getMatrix()) ? null : createFaradaysMagnetItem());
+            inv.setResult(usesOnlyPlainNormalRecipeIngredients(inv.getMatrix()) ? createFaradaysMagnetItem() : null);
             return;
         }
         LegendaryRecipe recipe = findRecipe(inv.getMatrix());
@@ -544,6 +551,20 @@ public final class LegendaryListener implements Listener {
         }
         if (isLegendaryRecipe(eventRecipe)) {
             inv.setResult(null);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onCraft(CraftItemEvent event) {
+        if (!(event.getRecipe() instanceof Keyed keyed) || !faradaysMagnetRecipeKey.equals(keyed.getKey())) {
+            return;
+        }
+        if (usesOnlyPlainNormalRecipeIngredients(event.getInventory().getMatrix())) {
+            return;
+        }
+        event.setCancelled(true);
+        if (event.getWhoClicked() instanceof Player player) {
+            player.sendMessage(MessageUtil.warn("Use plain vanilla ingredients for Faraday's Magnet."));
         }
     }
 
@@ -892,6 +913,19 @@ public final class LegendaryListener implements Listener {
                 } else {
                     openCurrentReliquaryMenu(player);
                 }
+                return;
+            }
+            MythicForgeListener.FusionRecipeView recipe = fusionRecipeForMenuSlot(event.getSlot());
+            if (recipe != null) {
+                openMythicFusionRecipeDetails(player, recipe);
+            }
+            return;
+        }
+
+        if (top.getHolder() instanceof MythicFusionRecipeHolder) {
+            event.setCancelled(true);
+            if (event.getSlot() == 49) {
+                openMythicFusionMenuInternal(player, mythicFusionReturnToMainMenuPlayers.contains(player.getUniqueId()));
             }
             return;
         }
@@ -953,6 +987,18 @@ public final class LegendaryListener implements Listener {
             }
         }
 
+        if (top.getHolder() instanceof AgriculturalPylonRecipeHolder) {
+            event.setCancelled(true);
+            if (event.getSlot() == RECIPE_TRADE_SLOT) {
+                craftAgriculturalPylonFromInventory(player);
+                Bukkit.getScheduler().runTask(plugin, () -> openAgriculturalPylonRecipeDetails(player));
+                return;
+            }
+            if (event.getSlot() == 18) {
+                openCurrentReliquaryMenu(player);
+            }
+        }
+
         if (top.getHolder() instanceof XpLecternRecipeHolder) {
             event.setCancelled(true);
             if (event.getSlot() == RECIPE_TRADE_SLOT) {
@@ -960,6 +1006,13 @@ public final class LegendaryListener implements Listener {
                 Bukkit.getScheduler().runTask(plugin, () -> openXpLecternRecipeDetails(player));
                 return;
             }
+            if (event.getSlot() == 18) {
+                openCurrentReliquaryMenu(player);
+            }
+        }
+
+        if (top.getHolder() instanceof AwakeningTableInfoHolder) {
+            event.setCancelled(true);
             if (event.getSlot() == 18) {
                 openCurrentReliquaryMenu(player);
             }
@@ -980,9 +1033,12 @@ public final class LegendaryListener implements Listener {
             || top.getHolder() instanceof BackpackRecipeHolder
             || top.getHolder() instanceof TalismanRecipeHolder
             || top.getHolder() instanceof SalvagingDepotRecipeHolder
+            || top.getHolder() instanceof AgriculturalPylonRecipeHolder
             || top.getHolder() instanceof XpLecternRecipeHolder
+            || top.getHolder() instanceof AwakeningTableInfoHolder
             || top.getHolder() instanceof MythicForgeRecipeHolder
             || top.getHolder() instanceof MythicFusionMenuHolder
+            || top.getHolder() instanceof MythicFusionRecipeHolder
             || top.getHolder() instanceof CustomToolRecipeHolder
             || top.getHolder() instanceof FaradaysMagnetRecipeHolder) {
             event.setCancelled(true);
@@ -1106,6 +1162,20 @@ public final class LegendaryListener implements Listener {
         player.openInventory(inv);
     }
 
+    private MythicForgeListener.FusionRecipeView fusionRecipeForMenuSlot(int slot) {
+        MythicForgeListener forge = plugin.getMythicForgeListener();
+        if (forge == null) {
+            return null;
+        }
+        List<MythicForgeListener.FusionRecipeView> recipes = forge.fusionRecipes();
+        for (int i = 0; i < MYTHIC_FUSION_MENU_SLOTS.length && i < recipes.size(); i++) {
+            if (MYTHIC_FUSION_MENU_SLOTS[i] == slot) {
+                return recipes.get(i);
+            }
+        }
+        return null;
+    }
+
     public void openMythicFusionMenu(Player player) {
         reliquaryReturnToMainMenuPlayers.remove(player.getUniqueId());
         openMythicFusionMenuInternal(player, false);
@@ -1163,7 +1233,7 @@ public final class LegendaryListener implements Listener {
             if (index >= MYTHIC_FUSION_MENU_SLOTS.length) {
                 break;
             }
-            inv.setItem(MYTHIC_FUSION_MENU_SLOTS[index++], createFusionRecipePreview(recipe));
+            inv.setItem(MYTHIC_FUSION_MENU_SLOTS[index++], createFusionRecipePreview(player, recipe));
         }
 
         inv.setItem(49, createGuiItem(
@@ -1207,8 +1277,16 @@ public final class LegendaryListener implements Listener {
             openSalvagingDepotRecipeDetails(player);
             return;
         }
+        if (AgriculturalPylonListener.ITEM_ID.equals(recipeId)) {
+            openAgriculturalPylonRecipeDetails(player);
+            return;
+        }
         if (XpLecternListener.ITEM_ID.equals(recipeId)) {
             openXpLecternRecipeDetails(player);
+            return;
+        }
+        if (AWAKENING_TABLE_INFO_ID.equals(recipeId)) {
+            openAwakeningTableInfo(player);
             return;
         }
         if (plugin.getSeasonRelicManager() != null
@@ -1273,6 +1351,9 @@ public final class LegendaryListener implements Listener {
                 if (plugin.getSalvagingDepotListener() != null) {
                     entries.add(new CustomRecipeEntry(SalvagingDepotListener.ITEM_ID, createSalvagingDepotPreview(player)));
                 }
+                if (plugin.getAgriculturalPylonListener() != null) {
+                    entries.add(new CustomRecipeEntry(AgriculturalPylonListener.ITEM_ID, createAgriculturalPylonPreview(player)));
+                }
                 if (plugin.getXpLecternListener() != null) {
                     entries.add(new CustomRecipeEntry(XpLecternListener.ITEM_ID, createXpLecternPreview(player)));
                 }
@@ -1284,6 +1365,9 @@ public final class LegendaryListener implements Listener {
                 entries.add(new CustomRecipeEntry(LegendaryType.FARADAYS_MAGNET.id, createFaradaysMagnetPreview(player)));
             }
             case UTILITY -> {
+                if (plugin.getAwakeningTableListener() != null) {
+                    entries.add(new CustomRecipeEntry(AWAKENING_TABLE_INFO_ID, createAwakeningTablePreview(player)));
+                }
                 if (plugin.getSuperpowerManager() != null) {
                     entries.add(new CustomRecipeEntry(SuperpowerManager.ANCIENT_SCROLL_ITEM_ID, createAncientScrollPreview(player)));
                 }
@@ -1326,6 +1410,10 @@ public final class LegendaryListener implements Listener {
 
     public boolean isLegendaryItem(ItemStack item) {
         return typeOf(item) != null;
+    }
+
+    public boolean containsStorageRestrictedLegendary(ItemStack item) {
+        return containsStorageRestrictedLegendary(item, 0);
     }
 
     public boolean isEnderBoneItem(ItemStack item) {
@@ -1543,13 +1631,9 @@ public final class LegendaryListener implements Listener {
                 useWardenBlade(player);
             }
             case FARADAYS_MAGNET -> {
-                if (!right) return;
+                if (!right || !player.isSneaking()) return;
                 event.setCancelled(true);
-                if (player.isSneaking()) {
-                    toggleMagnet(player, hand);
-                } else {
-                    useFaradaysMagnet(player, hand);
-                }
+                toggleMagnet(player, hand);
                 player.getInventory().setItemInMainHand(hand);
             }
             case FROST_SCYTHE -> {
@@ -1660,12 +1744,9 @@ public final class LegendaryListener implements Listener {
                 useWardenBlade(player);
             }
             case FARADAYS_MAGNET -> {
+                if (!player.isSneaking()) return;
                 event.setCancelled(true);
-                if (player.isSneaking()) {
-                    toggleMagnet(player, hand);
-                } else {
-                    useFaradaysMagnet(player, hand);
-                }
+                toggleMagnet(player, hand);
                 player.getInventory().setItemInMainHand(hand);
             }
             case FROST_SCYTHE -> {
@@ -1889,7 +1970,7 @@ public final class LegendaryListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onDamageByEntity(EntityDamageByEntityEvent event) {
-        if (isOwnedEnderDragon(event.getDamager())) {
+        if (handleOwnedEnderDragonAttack(event.getDamager(), event.getEntity())) {
             event.setCancelled(true);
             return;
         }
@@ -2294,7 +2375,7 @@ public final class LegendaryListener implements Listener {
         player.openInventory(inv);
     }
 
-    private ItemStack createFusionRecipePreview(MythicForgeListener.FusionRecipeView recipe) {
+    private ItemStack createFusionRecipePreview(Player player, MythicForgeListener.FusionRecipeView recipe) {
         LegendaryType outputType = LegendaryType.fromId(normalizeLegendaryId(recipe.outputId()));
         if (outputType == null) {
             return createGuiItem(Material.BARRIER, "<red>Unavailable</red>", List.of());
@@ -2312,9 +2393,81 @@ public final class LegendaryListener implements Listener {
         lore.add(MM.deserialize("<gray>Left:</gray> <white>" + displayNameForLegendary(recipe.leftId()) + "</white>"));
         lore.add(MM.deserialize("<gray>Right:</gray> <white>" + displayNameForLegendary(recipe.rightId()) + "</white>"));
         lore.add(MM.deserialize("<gray>Catalyst:</gray> <white>Ascendant Core</white>"));
+        lore.add(MM.deserialize("<dark_gray>" + BedrockCompat.menuActionWord(player) + " to view exact fusion steps</dark_gray>"));
         meta.lore(lore);
         preview.setItemMeta(meta);
         return preview;
+    }
+
+    private void openMythicFusionRecipeDetails(Player player, MythicForgeListener.FusionRecipeView recipe) {
+        MythicForgeListener forge = plugin.getMythicForgeListener();
+        if (forge == null || recipe == null) {
+            player.sendMessage(MessageUtil.error("Mythic fusion recipes are not ready yet."));
+            return;
+        }
+
+        LegendaryType leftType = LegendaryType.fromId(normalizeLegendaryId(recipe.leftId()));
+        LegendaryType rightType = LegendaryType.fromId(normalizeLegendaryId(recipe.rightId()));
+        LegendaryType outputType = LegendaryType.fromId(normalizeLegendaryId(recipe.outputId()));
+        if (leftType == null || rightType == null || outputType == null) {
+            player.sendMessage(MessageUtil.error("That mythic fusion recipe is not available right now."));
+            return;
+        }
+
+        Inventory inv = Bukkit.createInventory(
+            new MythicFusionRecipeHolder(recipe.outputId()),
+            54,
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.MYTHIC, displayNameForLegendary(recipe.outputId()))),
+                "Mythic Fusion"
+            )
+        );
+
+        ItemStack filler = createGuiItem(Material.GRAY_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        for (int i = 0; i < inv.getSize(); i++) {
+            inv.setItem(i, filler);
+        }
+
+        inv.setItem(4, createGuiItem(
+            Material.NETHER_STAR,
+            "<gradient:#ff4df0:#ffb000><bold>Mythic Fusion</bold></gradient>",
+            List.of(
+                "<gray>Use a placed <white>Mythic Forge</white>.</gray>",
+                "<gray>Put the two source relics on the sides.</gray>",
+                "<gray>Put an <white>Ascendant Core</white> in the center.</gray>"
+            )
+        ));
+        inv.setItem(10, createDisplayLegendaryItem(leftType, true));
+        inv.setItem(13, forge.createAscendantCoreItem());
+        inv.setItem(16, createDisplayLegendaryItem(rightType, true));
+        inv.setItem(22, createDisplayLegendaryItem(outputType, true));
+        inv.setItem(28, forge.createMythicForgeItem());
+        inv.setItem(31, createGuiItem(
+            Material.CRAFTING_TABLE,
+            "<gold><bold>How To Forge</bold></gold>",
+            List.of(
+                "<gray>1. Craft and place a <white>Mythic Forge</white>.</gray>",
+                "<gray>2. Open it and insert both source relics.</gray>",
+                "<gray>3. Add an <white>Ascendant Core</white>.</gray>",
+                "<gray>4. Click the result slot to claim the mythic.</gray>"
+            )
+        ));
+        inv.setItem(34, createGuiItem(
+            Material.LODESTONE,
+            "<red><bold>One-Of-One Warning</bold></red>",
+            List.of(
+                "<gray>The mythic output is unique to the server.</gray>",
+                "<gray>The two source relics are retired from</gray>",
+                "<gray>future altar rolls once the fusion succeeds.</gray>"
+            )
+        ));
+        inv.setItem(49, createGuiItem(
+            Material.ARROW,
+            "<yellow>Back</yellow>",
+            List.of("<gray>Return to Mythic Nexus</gray>")
+        ));
+        player.openInventory(inv);
     }
 
     private void openCustomToolRecipeDetails(Player player, String toolId) {
@@ -2480,6 +2633,49 @@ public final class LegendaryListener implements Listener {
         player.openInventory(inv);
     }
 
+    private void openAgriculturalPylonRecipeDetails(Player player) {
+        if (plugin.getAgriculturalPylonListener() == null) {
+            player.sendMessage(MessageUtil.error("Agricultural Pylon recipes are not ready yet."));
+            return;
+        }
+
+        Inventory inv = Bukkit.createInventory(
+            new AgriculturalPylonRecipeHolder(),
+            27,
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.UNCOMMON, "Agricultural Pylon")),
+                "Recipe: Agricultural Pylon"
+            )
+        );
+
+        ItemStack filler = createGuiItem(Material.GRAY_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        for (int i = 0; i < inv.getSize(); i++) {
+            inv.setItem(i, filler);
+        }
+
+        int[] matrixSlots = {3, 4, 5, 12, 13, 14, 21, 22, 23};
+        ItemStack[] recipeMatrix = {
+            new ItemStack(Material.BONE_MEAL),
+            new ItemStack(Material.WHEAT),
+            new ItemStack(Material.BONE_MEAL),
+            new ItemStack(Material.COPPER_INGOT),
+            new ItemStack(Material.LANTERN),
+            new ItemStack(Material.COPPER_INGOT),
+            new ItemStack(Material.BONE_MEAL),
+            new ItemStack(Material.WHEAT),
+            new ItemStack(Material.BONE_MEAL)
+        };
+        for (int i = 0; i < matrixSlots.length && i < recipeMatrix.length; i++) {
+            inv.setItem(matrixSlots[i], recipeMatrix[i]);
+        }
+
+        inv.setItem(16, plugin.getAgriculturalPylonListener().createPylonItem());
+        inv.setItem(RECIPE_TRADE_SLOT, createInventoryCraftButton("Place it near farms to prevent nearby farmland from being trampled."));
+        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
+        player.openInventory(inv);
+    }
+
     private void openXpLecternRecipeDetails(Player player) {
         if (plugin.getXpLecternListener() == null) {
             player.sendMessage(MessageUtil.error("XP Lectern recipes are not ready yet."));
@@ -2523,6 +2719,47 @@ public final class LegendaryListener implements Listener {
 
         inv.setItem(16, plugin.getXpLecternListener().createLecternItem());
         inv.setItem(RECIPE_TRADE_SLOT, createInventoryCraftButton("Place it as a station, then right-click it to store XP."));
+        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
+        player.openInventory(inv);
+    }
+
+    private void openAwakeningTableInfo(Player player) {
+        Inventory inv = Bukkit.createInventory(
+            new AwakeningTableInfoHolder(),
+            27,
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.MYTHIC, "Awakening Table")),
+                "Awakening Table"
+            )
+        );
+
+        ItemStack filler = createGuiItem(Material.GRAY_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        for (int i = 0; i < inv.getSize(); i++) {
+            inv.setItem(i, filler);
+        }
+
+        inv.setItem(11, createAwakeningTablePreview(player));
+        inv.setItem(13, createGuiItem(
+            Material.END_ROD,
+            "<gradient:#8b5cf6:#f0abfc><bold>Aurelion the Rift Seraph</bold></gradient>",
+            List.of(
+                "<gray>Current player source for Awakening Tables.</gray>",
+                "<gray>Ritual works only in <white>The End</white>.</gray>",
+                "<gray>Default guide: <white>/bossrituals</white> -> Aurelion.</gray>",
+                "<gray>Configured drop chance: <white>" + menuPercent(plugin.getConfigManager().awakeningTableRiftSeraphDropChance) + "</white></gray>"
+            )
+        ));
+        inv.setItem(15, createGuiItem(
+            Material.NETHER_STAR,
+            "<gradient:#ff8a5b:#ff3d3d><bold>What It Does</bold></gradient>",
+            List.of(
+                "<gray>Place the table, then right-click it.</gray>",
+                "<gray>Use <white>1 Nether Star</white> per awakening attempt.</gray>",
+                "<gray>Success chance: <white>" + menuPercent(plugin.getConfigManager().awakeningTableSuccessChance) + "</white></gray>",
+                "<gray>Failures damage the item and can shatter weak gear.</gray>"
+            )
+        ));
         inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
     }
@@ -2582,12 +2819,38 @@ public final class LegendaryListener implements Listener {
         return appendRecipeMenuHint(player, plugin.getSalvagingDepotListener().createDepotItem());
     }
 
+    private ItemStack createAgriculturalPylonPreview(Player player) {
+        if (plugin.getAgriculturalPylonListener() == null) {
+            return createGuiItem(Material.BARRIER, "<red>Unavailable</red>", List.of());
+        }
+
+        return appendRecipeMenuHint(player, plugin.getAgriculturalPylonListener().createPylonItem());
+    }
+
     private ItemStack createXpLecternPreview(Player player) {
         if (plugin.getXpLecternListener() == null) {
             return createGuiItem(Material.BARRIER, "<red>Unavailable</red>", List.of());
         }
 
         return appendRecipeMenuHint(player, plugin.getXpLecternListener().createLecternItem());
+    }
+
+    private ItemStack createAwakeningTablePreview(Player player) {
+        if (plugin.getAwakeningTableListener() == null) {
+            return createGuiItem(Material.BARRIER, "<red>Unavailable</red>", List.of());
+        }
+
+        return createGuiItem(
+            Material.ENCHANTING_TABLE,
+            CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.MYTHIC, "Awakening Table"),
+            List.of(
+                "<gray>Dropped by <white>Aurelion the Rift Seraph</white>.</gray>",
+                "<gray>Drop chance: <white>" + menuPercent(plugin.getConfigManager().awakeningTableRiftSeraphDropChance) + "</white></gray>",
+                "<gray>Use it to awaken armor, tools, weapons,</gray>",
+                "<gray>and special supported relics.</gray>",
+                "<dark_gray>" + BedrockCompat.menuActionWord(player) + " to view source and usage</dark_gray>"
+            )
+        );
     }
 
     private ItemStack createAncientScrollPreview(Player player) {
@@ -2651,6 +2914,14 @@ public final class LegendaryListener implements Listener {
         meta.lore(lore);
         item.setItemMeta(meta);
         return item;
+    }
+
+    private String menuPercent(double chance) {
+        double percent = chance * 100.0;
+        if (Math.abs(percent - Math.rint(percent)) < 0.001) {
+            return String.valueOf((int) Math.round(percent)) + "%";
+        }
+        return String.format(java.util.Locale.US, "%.1f%%", percent);
     }
 
     private ItemStack addRequiredTotalLore(ItemStack item, int totalRequired) {
@@ -2821,6 +3092,23 @@ public final class LegendaryListener implements Listener {
         );
     }
 
+    private boolean craftAgriculturalPylonFromInventory(Player player) {
+        AgriculturalPylonListener pylon = plugin.getAgriculturalPylonListener();
+        if (pylon == null) {
+            player.sendMessage(MessageUtil.error("Agricultural Pylon recipes are not ready yet."));
+            return false;
+        }
+
+        return craftInventoryRecipe(
+            player,
+            "Agricultural Pylon",
+            InventoryRecipeUtil.plainMaterials(plugin, pylon.recipeIngredients()),
+            pylon.createPylonItem(),
+            "agricultural_pylon_reliquary_craft",
+            "Crafted an Agricultural Pylon from the Reliquary."
+        );
+    }
+
     private boolean craftXpLecternFromInventory(Player player) {
         XpLecternListener lectern = plugin.getXpLecternListener();
         if (lectern == null) {
@@ -2861,6 +3149,10 @@ public final class LegendaryListener implements Listener {
                 return false;
             }
         }
+        if (!InventoryRecipeUtil.canFitRewardAfterRemovingIngredients(player, ingredients, reward)) {
+            player.sendMessage(MessageUtil.warn("Clear enough inventory space before crafting <white>" + displayName + "</white>."));
+            return false;
+        }
         if (!InventoryRecipeUtil.removeIngredients(player, ingredients)) {
             player.sendMessage(MessageUtil.error("Those ingredients changed before the craft finished. Try again."));
             return false;
@@ -2900,7 +3192,10 @@ public final class LegendaryListener implements Listener {
             Material.FLOWER_POT,
             rarity.label(),
             "STORAGE",
-            List.of("<gray>Portable storage.</gray>"),
+            List.of(
+                "<gray>Portable storage.</gray>",
+                "<dark_gray>Recipe preview only.</dark_gray>"
+            ),
             List.of(CustomLoreUtil.section(
                 "Use",
                 upgraded ? "Deep Pocket Vault" : "Pocket Vault",
@@ -2921,8 +3216,8 @@ public final class LegendaryListener implements Listener {
         List<String> lore = new ArrayList<>();
         lore.add("<gray>Legendaries can only be crafted at the active altar.</gray>");
         if (claimed) {
-            lore.add("<red>This legendary already exists on the server right now.</red>");
-            lore.add("<gray>It will return to the altar pool once no tracked copy remains.</gray>");
+            lore.add("<red>This legendary has already been created on this server.</red>");
+            lore.add("<gray>It is locked out of future altar rolls.</gray>");
             lore.add("<dark_gray> ");
             lore.addAll(recipeProgressLines(player, type.id));
             return createGuiItem(
@@ -3183,6 +3478,8 @@ public final class LegendaryListener implements Listener {
         seat.setRotation(yaw, 0.0f);
         updateEnderDragonChunkTickets(owner.getUniqueId(), nextSeat);
         syncEnderDragonVisual(nextSeat, yaw, dragon, false);
+        seat.setVelocity(new Vector());
+        owner.setVelocity(new Vector());
         owner.setFallDistance(0.0f);
     }
 
@@ -3496,12 +3793,82 @@ public final class LegendaryListener implements Listener {
         return enderDragonOwner(entity) != null;
     }
 
+    private boolean handleOwnedEnderDragonAttack(Entity damager, Entity target) {
+        UUID ownerId = enderDragonOwner(damager);
+        if (ownerId == null) {
+            return false;
+        }
+
+        Player owner = Bukkit.getPlayer(ownerId);
+        if (owner == null || !owner.isOnline()) {
+            return true;
+        }
+
+        if (target instanceof Player victim) {
+            if (owner.equals(victim)) {
+                stabilizeEnderDragonCollision(owner, null);
+                return true;
+            }
+
+            stabilizeEnderDragonCollision(owner, victim);
+            if (!owner.equals(victim)) {
+                CombatLogListener combatLogListener = plugin.getCombatLogListener();
+                if (combatLogListener != null) {
+                    combatLogListener.tagPlayers(owner, victim);
+                }
+                dismountEnderDragonForCombat(owner);
+                dismountEnderDragonForCombat(victim);
+                stabilizeEnderDragonCollision(owner, victim);
+            }
+        }
+        return true;
+    }
+
+    private void stabilizeEnderDragonCollision(Player owner, Player victim) {
+        stabilizeEnderDragonCollisionVelocity(owner, ENDER_SWORD_DRAGON_RIDER_COLLISION_MAX_HORIZONTAL, ENDER_SWORD_DRAGON_RIDER_COLLISION_MAX_VERTICAL);
+        if (victim != null && victim.isOnline()) {
+            stabilizeEnderDragonCollisionVelocity(victim, ENDER_SWORD_DRAGON_TARGET_COLLISION_MAX_HORIZONTAL, ENDER_SWORD_DRAGON_TARGET_COLLISION_MAX_VERTICAL);
+        }
+
+        for (int delay = 1; delay <= ENDER_SWORD_DRAGON_COLLISION_STABILIZE_TICKS; delay++) {
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                if (owner.isOnline()) {
+                    stabilizeEnderDragonCollisionVelocity(owner, ENDER_SWORD_DRAGON_RIDER_COLLISION_MAX_HORIZONTAL, ENDER_SWORD_DRAGON_RIDER_COLLISION_MAX_VERTICAL);
+                }
+                if (victim != null && victim.isOnline()) {
+                    stabilizeEnderDragonCollisionVelocity(victim, ENDER_SWORD_DRAGON_TARGET_COLLISION_MAX_HORIZONTAL, ENDER_SWORD_DRAGON_TARGET_COLLISION_MAX_VERTICAL);
+                }
+            }, delay);
+        }
+    }
+
+    private void stabilizeEnderDragonCollisionVelocity(Player player, double maxHorizontal, double maxVertical) {
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+
+        Vector velocity = player.getVelocity().clone();
+        double horizontalSquared = (velocity.getX() * velocity.getX()) + (velocity.getZ() * velocity.getZ());
+        double maxHorizontalSquared = maxHorizontal * maxHorizontal;
+        if (horizontalSquared > maxHorizontalSquared) {
+            double scale = maxHorizontal / Math.sqrt(horizontalSquared);
+            velocity.setX(velocity.getX() * scale);
+            velocity.setZ(velocity.getZ() * scale);
+        }
+        if (Math.abs(velocity.getY()) > maxVertical) {
+            velocity.setY(Math.copySign(maxVertical, velocity.getY()));
+        }
+        player.setVelocity(velocity);
+        player.setFallDistance(0.0f);
+    }
+
     private UUID enderDragonOwner(Entity entity) {
         if (entity instanceof EnderDragon dragon) {
             return enderDragonOwnerByDragon.get(dragon.getUniqueId());
         }
         if (entity instanceof EnderDragonPart part) {
-            return enderDragonOwnerByDragon.get(part.getParent().getUniqueId());
+            Entity parent = part.getParent();
+            return parent instanceof EnderDragon dragon ? enderDragonOwnerByDragon.get(dragon.getUniqueId()) : null;
         }
         return null;
     }
@@ -4087,7 +4454,7 @@ public final class LegendaryListener implements Listener {
         World world = target.getWorld();
         Location impact = target.getLocation().add(0.0, 1.0, 0.0);
         world.spawnParticle(Particle.ELECTRIC_SPARK, impact, 26, 0.35, 0.55, 0.35, 0.08);
-        world.spawnParticle(Particle.FLASH, impact, 1, 0.0, 0.0, 0.0, 0.0);
+        world.spawnParticle(Particle.FLASH, impact, 1, 0.0, 0.0, 0.0, 0.0, Color.YELLOW);
         world.playSound(impact, Sound.ENTITY_LIGHTNING_BOLT_THUNDER, 0.65f, 1.35f);
         attacker.sendActionBar(MM.deserialize(
             "<gold><bold>Thunder Strike</bold></gold> <gray>"
@@ -4186,65 +4553,6 @@ public final class LegendaryListener implements Listener {
         player.sendMessage(MessageUtil.success(
             "Cruel Sun scorched <white>" + targets.size() + "</white> nearby " + (targets.size() == 1 ? "enemy" : "enemies") + "."
         ));
-    }
-
-    private void useFaradaysMagnet(Player player, ItemStack magnet) {
-        ItemMeta meta = magnet.getItemMeta();
-        if (meta == null) {
-            return;
-        }
-
-        PersistentDataContainer pdc = meta.getPersistentDataContainer();
-        int uses = Math.max(0, pdc.getOrDefault(keyFaradayUses, PersistentDataType.INTEGER, FARADAY_SCAN_MAX_USES));
-        if (uses <= 0) {
-            breakFaradaysMagnet(player);
-            return;
-        }
-
-        Player nearest = null;
-        double nearestDistanceSquared = FARADAY_PLAYER_SCAN_RANGE * FARADAY_PLAYER_SCAN_RANGE;
-        Location playerLocation = player.getLocation();
-        for (Player other : player.getWorld().getPlayers()) {
-            if (other.equals(player) || !other.isOnline() || other.isDead() || other.getGameMode() == GameMode.SPECTATOR) {
-                continue;
-            }
-            double distanceSquared = other.getLocation().distanceSquared(playerLocation);
-            if (distanceSquared >= nearestDistanceSquared) {
-                continue;
-            }
-            nearest = other;
-            nearestDistanceSquared = distanceSquared;
-        }
-
-        if (nearest == null) {
-            player.sendMessage(MessageUtil.warn("Faraday's Magnet found no nearby player signature."));
-            player.playSound(player.getLocation(), Sound.BLOCK_RESPAWN_ANCHOR_DEPLETE, 0.7f, 1.35f);
-            return;
-        }
-
-        int nextUses = uses - 1;
-        if (nextUses <= 0) {
-            breakFaradaysMagnet(player);
-        } else {
-            pdc.set(keyFaradayUses, PersistentDataType.INTEGER, nextUses);
-            meta.lore(buildMagnetLore(meta, isMagnetActive(magnet), nextUses));
-            magnet.setItemMeta(meta);
-        }
-
-        Vector delta = nearest.getLocation().toVector().subtract(playerLocation.toVector());
-        long blocksAway = Math.max(1L, Math.round(Math.sqrt(nearestDistanceSquared)));
-        player.sendMessage(MessageUtil.info(
-            "Nearest player: <white>" + faradayDirection(delta) + " " + blocksAway + " blocks away</white>."
-        ));
-        player.playSound(player.getLocation(), Sound.ITEM_LODESTONE_COMPASS_LOCK, 0.85f, 1.15f);
-        player.getWorld().spawnParticle(Particle.ELECTRIC_SPARK, player.getEyeLocation(), 18, 0.15, 0.15, 0.15, 0.02);
-    }
-
-    private void breakFaradaysMagnet(Player player) {
-        player.getInventory().setItemInMainHand(new ItemStack(Material.AIR));
-        player.sendMessage(MessageUtil.warn("Faraday's Magnet ran out of charge and shattered."));
-        player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 0.9f);
-        refreshMagnetTracking(player);
     }
 
     private void useShadowBlade(Player player) {
@@ -5686,18 +5994,6 @@ public final class LegendaryListener implements Listener {
         }
     }
 
-    private String faradayDirection(Vector delta) {
-        Vector flat = delta.clone().setY(0.0);
-        if (flat.lengthSquared() <= 1.0E-6) {
-            return "Right here";
-        }
-        double angle = Math.toDegrees(Math.atan2(-flat.getX(), flat.getZ()));
-        angle = (angle + 360.0) % 360.0;
-        String[] directions = {"North", "Northeast", "East", "Southeast", "South", "Southwest", "West", "Northwest"};
-        int index = (int) Math.round(angle / 45.0) % directions.length;
-        return directions[index];
-    }
-
     private boolean onCooldown(Map<UUID, Long> map, UUID uuid) {
         long now = System.currentTimeMillis();
         long expiresAt = map.getOrDefault(uuid, 0L);
@@ -5829,6 +6125,12 @@ public final class LegendaryListener implements Listener {
 
     private boolean giveCraftedLegendary(Player player, LegendaryType type, String source) {
         Map<Material, Integer> ingredients = ingredientsFor(type);
+        ItemStack reward = createItem(type);
+        if (!canFitLegendaryRewardAfterRemovingMaterials(player, type, ingredients, reward)) {
+            player.sendMessage(MessageUtil.warn("Clear enough inventory space before crafting " + type.display + "<yellow>.</yellow>"));
+            return false;
+        }
+
         if (!removeRecipeMaterials(player, type, ingredients)) {
             player.sendMessage(MessageUtil.error(
                 "You do not have all the materials for " + type.display + "<red>.</red>"
@@ -5836,7 +6138,6 @@ public final class LegendaryListener implements Listener {
             return false;
         }
 
-        ItemStack reward = createItem(type);
         if (plugin.getItemAuditManager() != null) {
             plugin.getItemAuditManager().recordKnownAcquisition(
                 player,
@@ -5845,8 +6146,7 @@ public final class LegendaryListener implements Listener {
                 "Created " + type.display + " from " + source + "."
             );
         }
-        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(reward);
-        leftovers.values().forEach(item -> player.getWorld().dropItemNaturally(player.getLocation(), item));
+        player.getInventory().addItem(reward);
         registerLegendaryInstance(player, reward, "altar".equals(source));
         announceLegendaryCraft(player, type);
         String sourceText = "trade".equals(source) ? "Traded materials for " : "Crafted ";
@@ -5912,6 +6212,91 @@ public final class LegendaryListener implements Listener {
         return true;
     }
 
+    private boolean canFitLegendaryRewardAfterRemovingMaterials(
+        Player player,
+        LegendaryType type,
+        Map<Material, Integer> required,
+        ItemStack reward
+    ) {
+        if (reward == null || reward.getType().isAir()) {
+            return false;
+        }
+        ItemStack[] storage = cloneStorageContents(player.getInventory().getStorageContents());
+        RecipeOffhandHolder offhand = new RecipeOffhandHolder(cloneOrNull(player.getInventory().getItemInOffHand()));
+        if (!removeRecipeMaterialsFromCopies(storage, offhand, type, required)) {
+            return false;
+        }
+        return canFitItem(storage, reward);
+    }
+
+    private boolean removeRecipeMaterialsFromCopies(
+        ItemStack[] storage,
+        RecipeOffhandHolder offhand,
+        LegendaryType type,
+        Map<Material, Integer> required
+    ) {
+        for (Map.Entry<Material, Integer> entry : required.entrySet()) {
+            int remaining = entry.getValue();
+
+            for (int i = 0; i < storage.length && remaining > 0; i++) {
+                ItemStack item = storage[i];
+                if (!isValidRecipeMaterial(item, type, entry.getKey())) continue;
+
+                int take = Math.min(remaining, item.getAmount());
+                int left = item.getAmount() - take;
+                storage[i] = left <= 0 ? null : item.asQuantity(left);
+                remaining -= take;
+            }
+
+            if (remaining > 0 && isValidRecipeMaterial(offhand.item(), type, entry.getKey())) {
+                int take = Math.min(remaining, offhand.item().getAmount());
+                int left = offhand.item().getAmount() - take;
+                offhand.item(left <= 0 ? null : offhand.item().asQuantity(left));
+                remaining -= take;
+            }
+
+            if (remaining > 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private ItemStack[] cloneStorageContents(ItemStack[] contents) {
+        ItemStack[] clone = new ItemStack[contents.length];
+        for (int i = 0; i < contents.length; i++) {
+            clone[i] = cloneOrNull(contents[i]);
+        }
+        return clone;
+    }
+
+    private ItemStack cloneOrNull(ItemStack item) {
+        return item == null || item.getType().isAir() ? null : item.clone();
+    }
+
+    private boolean canFitItem(ItemStack[] storage, ItemStack item) {
+        int remaining = item.getAmount();
+        int maxStack = Math.max(1, item.getType().getMaxStackSize());
+        for (ItemStack existing : storage) {
+            if (remaining <= 0) {
+                return true;
+            }
+            if (existing == null || existing.getType().isAir() || !existing.isSimilar(item)) {
+                continue;
+            }
+            remaining -= Math.max(0, maxStack - existing.getAmount());
+        }
+        for (ItemStack existing : storage) {
+            if (remaining <= 0) {
+                return true;
+            }
+            if (existing == null || existing.getType().isAir()) {
+                remaining -= maxStack;
+            }
+        }
+        return remaining <= 0;
+    }
+
     private boolean isValidRecipeMaterial(ItemStack item, LegendaryType type, Material material) {
         if (type == LegendaryType.ENDER_SWORD && material == Material.BONE) {
             return isEnderBone(item);
@@ -5922,9 +6307,85 @@ public final class LegendaryListener implements Listener {
         if (type == LegendaryType.STRENGTH_SWORD && material == Material.HEART_OF_THE_SEA) {
             return plugin.getSuperpowerManager() != null && plugin.getSuperpowerManager().isWardenHeart(item);
         }
-        return item != null
-            && item.getType() == material
-            && typeOf(item) == null;
+        return isPlainLegendaryRecipeMaterial(item, material);
+    }
+
+    private boolean isPlainLegendaryRecipeMaterial(ItemStack item, Material material) {
+        if (item == null || item.getType() != material || item.getType().isAir() || item.getAmount() <= 0) {
+            return false;
+        }
+        if (typeOf(item) != null || isPluginManagedRecipeItem(item)) {
+            return false;
+        }
+
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return true;
+        }
+        if (hasPluginPersistentData(meta)) {
+            return false;
+        }
+        if (meta.hasDisplayName() || meta.hasLore() || !meta.getEnchants().isEmpty()
+            || meta.hasCustomModelDataComponent() || meta.hasItemModel()) {
+            return false;
+        }
+        return !(meta instanceof Damageable damageable) || damageable.getDamage() <= 0;
+    }
+
+    private boolean isPluginManagedRecipeItem(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return false;
+        }
+        if (plugin.getBackpackListener() != null && plugin.getBackpackListener().isBackpack(item)) {
+            return true;
+        }
+        if (plugin.getCustomToolListener() != null && plugin.getCustomToolListener().isCustomTool(item)) {
+            return true;
+        }
+        if (plugin.getSeasonRelicManager() != null && plugin.getSeasonRelicManager().isSeasonRelic(item)) {
+            return true;
+        }
+        if (plugin.getSustenanceTalismanListener() != null && plugin.getSustenanceTalismanListener().isTalisman(item)) {
+            return true;
+        }
+        if (plugin.getXpLecternListener() != null && plugin.getXpLecternListener().isLecternItem(item)) {
+            return true;
+        }
+        if (plugin.getSalvagingDepotListener() != null && plugin.getSalvagingDepotListener().isDepotItem(item)) {
+            return true;
+        }
+        if (plugin.getAgriculturalPylonListener() != null && plugin.getAgriculturalPylonListener().isPylonItem(item)) {
+            return true;
+        }
+        if (plugin.getBossPotionListener() != null && plugin.getBossPotionListener().isBossPotion(item)) {
+            return true;
+        }
+        if (plugin.getAwakeningTableListener() != null && plugin.getAwakeningTableListener().isAwakeningTableCustomItem(item)) {
+            return true;
+        }
+        if (plugin.getMythicForgeListener() != null
+            && (plugin.getMythicForgeListener().isMythicForgeItemStack(item)
+                || plugin.getMythicForgeListener().isAscendantCoreItem(item))) {
+            return true;
+        }
+        if (plugin.getBossManager() != null && plugin.getBossManager().isDominionCore(item)) {
+            return true;
+        }
+        return plugin.getSuperpowerManager() != null
+            && (plugin.getSuperpowerManager().isAncientScroll(item)
+                || plugin.getSuperpowerManager().isWardenHeart(item)
+                || plugin.getSuperpowerManager().isMotherNatureStick(item)
+                || plugin.getSuperpowerManager().isTheWorldClock(item)
+                || plugin.getSuperpowerManager().isDruidGrimoire(item));
+    }
+
+    private boolean hasPluginPersistentData(ItemMeta meta) {
+        if (meta == null) {
+            return false;
+        }
+        String namespace = plugin.getName().toLowerCase(java.util.Locale.ROOT);
+        return meta.getPersistentDataContainer().getKeys().stream()
+            .anyMatch(key -> namespace.equals(key.getNamespace()));
     }
 
     private String prettyRecipeMaterial(LegendaryType type, Material material) {
@@ -6336,14 +6797,13 @@ public final class LegendaryListener implements Listener {
         );
     }
 
-    private List<Component> buildMagnetLore(ItemMeta meta, boolean active, int uses) {
+    private List<Component> buildMagnetLore(ItemMeta meta, boolean active) {
         return buildLegendaryLore(
             meta,
             Material.RECOVERY_COMPASS,
             "UTILITY",
             List.of(
-                "<gray>Current State: " + (active ? "<green>ON</green>" : "<red>OFF</red>") + "</gray>",
-                "<gray>Player Scan Uses: <white>" + uses + "</white>/<white>" + FARADAY_SCAN_MAX_USES + "</white></gray>"
+                "<gray>Current State: " + (active ? "<green>ON</green>" : "<red>OFF</red>") + "</gray>"
             ),
             CustomLoreUtil.section(
                 "Passive",
@@ -6351,13 +6811,6 @@ public final class LegendaryListener implements Listener {
                 "<gray><white>Shift + Right-click</white> while holding to toggle the magnet.</gray>",
                 "<gray>When enabled, pulls dropped items within <white>" + MAGNET_RADIUS + "</white> blocks.</gray>",
                 "<gray>Works from anywhere in your inventory.</gray>"
-            ),
-            CustomLoreUtil.section(
-                "Item Ability",
-                "Player Trace",
-                "<gray><white>Right-click</white> to reveal the general direction of the nearest player.</gray>",
-                "<gray>Shows a result like <white>Northeast 500 blocks away</white>.</gray>",
-                "<gray>Each scan spends <white>1 use</white>. The magnet breaks at <white>0</white>.</gray>"
             )
         );
     }
@@ -6867,11 +7320,8 @@ public final class LegendaryListener implements Listener {
         ItemMeta meta = magnet.getItemMeta();
         if (meta == null) return;
         meta.getPersistentDataContainer().set(keyMagnetActive, PersistentDataType.BYTE, active ? (byte) 1 : (byte) 0);
-        int uses = Math.max(0, Math.min(
-            FARADAY_SCAN_MAX_USES,
-            meta.getPersistentDataContainer().getOrDefault(keyFaradayUses, PersistentDataType.INTEGER, FARADAY_SCAN_MAX_USES)
-        ));
-        meta.lore(buildMagnetLore(meta, active, uses));
+        meta.getPersistentDataContainer().remove(new NamespacedKey(plugin, "faraday_uses"));
+        meta.lore(buildMagnetLore(meta, active));
         magnet.setItemMeta(meta);
     }
 
@@ -7324,6 +7774,12 @@ public final class LegendaryListener implements Listener {
         }
 
         ItemMeta meta = item.getItemMeta();
+        if (meta instanceof BundleMeta bundleMeta) {
+            for (ItemStack nested : bundleMeta.getItems()) {
+                collectLegendaryOwnership(nested, heldLegendaryInstances, depth + 1);
+            }
+        }
+
         if (!(meta instanceof BlockStateMeta blockStateMeta)) {
             return;
         }
@@ -7342,6 +7798,58 @@ public final class LegendaryListener implements Listener {
         }
     }
 
+    private boolean containsStorageRestrictedLegendary(ItemStack item, int depth) {
+        if (item == null || item.getType() == Material.AIR || depth > LEGENDARY_ITEM_SCAN_MAX_DEPTH) {
+            return false;
+        }
+
+        LegendaryType type = typeOf(item);
+        if (isStorageRestrictedLegendaryType(type)) {
+            return true;
+        }
+
+        if (depth >= LEGENDARY_ITEM_SCAN_MAX_DEPTH) {
+            return false;
+        }
+
+        if (plugin.getBackpackListener() != null && plugin.getBackpackListener().isBackpack(item)) {
+            for (ItemStack nested : plugin.getBackpackListener().auditContents(null, item)) {
+                if (containsStorageRestrictedLegendary(nested, depth + 1)) {
+                    return true;
+                }
+            }
+        }
+
+        ItemMeta meta = item.getItemMeta();
+        if (meta instanceof BundleMeta bundleMeta) {
+            for (ItemStack nested : bundleMeta.getItems()) {
+                if (containsStorageRestrictedLegendary(nested, depth + 1)) {
+                    return true;
+                }
+            }
+        }
+
+        if (!(meta instanceof BlockStateMeta blockStateMeta)) {
+            return false;
+        }
+
+        BlockState state = blockStateMeta.getBlockState();
+        if (!(state instanceof InventoryHolder holder)) {
+            return false;
+        }
+
+        Inventory nestedInventory = holder.getInventory();
+        if (nestedInventory == null) {
+            return false;
+        }
+        for (ItemStack nested : nestedInventory.getContents()) {
+            if (containsStorageRestrictedLegendary(nested, depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void collectLegendaryCopies(Player player, Inventory inventory, Map<String, List<LegendaryCopy>> copiesByLegendaryId) {
         if (player == null || inventory == null) {
             return;
@@ -7350,12 +7858,14 @@ public final class LegendaryListener implements Listener {
         ItemStack[] contents = inventory.getContents();
         for (int slot = 0; slot < contents.length; slot++) {
             ItemStack item = contents[slot];
-            LegendaryType type = typeOf(item);
-            if (type == null || !isExclusiveLegendaryType(type)) {
-                continue;
-            }
-            copiesByLegendaryId.computeIfAbsent(type.id, ignored -> new ArrayList<>())
-                .add(new LegendaryCopy(player, inventory, slot, type, Math.max(1, item.getAmount()), false));
+            final int targetSlot = slot;
+            collectLegendaryCopies(
+                player,
+                item,
+                copiesByLegendaryId,
+                0,
+                replacement -> inventory.setItem(targetSlot, replacement)
+            );
         }
     }
 
@@ -7365,24 +7875,154 @@ public final class LegendaryListener implements Listener {
         }
 
         ItemStack cursor = player.getOpenInventory().getCursor();
-        LegendaryType type = typeOf(cursor);
-        if (type == null || !isExclusiveLegendaryType(type)) {
+        collectLegendaryCopies(player, cursor, copiesByLegendaryId, 0, player::setItemOnCursor);
+    }
+
+    private void collectLegendaryCopies(
+        Player player,
+        ItemStack item,
+        Map<String, List<LegendaryCopy>> copiesByLegendaryId,
+        int depth,
+        Consumer<ItemStack> replacementSink
+    ) {
+        if (player == null || copiesByLegendaryId == null || item == null || item.getType() == Material.AIR || depth > LEGENDARY_ITEM_SCAN_MAX_DEPTH) {
             return;
         }
 
-        copiesByLegendaryId.computeIfAbsent(type.id, ignored -> new ArrayList<>())
-            .add(new LegendaryCopy(player, null, -1, type, Math.max(1, cursor.getAmount()), true));
+        LegendaryType type = typeOf(item);
+        if (type != null && isExclusiveLegendaryType(type)) {
+            copiesByLegendaryId.computeIfAbsent(type.id, ignored -> new ArrayList<>())
+                .add(new LegendaryCopy(
+                    player,
+                    type,
+                    Math.max(1, item.getAmount()),
+                    () -> replacementSink.accept(null)
+                ));
+            return;
+        }
+
+        if (depth >= LEGENDARY_ITEM_SCAN_MAX_DEPTH) {
+            return;
+        }
+
+        collectBackpackLegendaryCopies(player, item, copiesByLegendaryId, depth, replacementSink);
+        collectBundleLegendaryCopies(player, item, copiesByLegendaryId, depth, replacementSink);
+        collectBlockStateLegendaryCopies(player, item, copiesByLegendaryId, depth, replacementSink);
+    }
+
+    private void collectBackpackLegendaryCopies(
+        Player player,
+        ItemStack item,
+        Map<String, List<LegendaryCopy>> copiesByLegendaryId,
+        int depth,
+        Consumer<ItemStack> replacementSink
+    ) {
+        if (plugin.getBackpackListener() == null || !plugin.getBackpackListener().isBackpack(item)) {
+            return;
+        }
+        List<ItemStack> nested = plugin.getBackpackListener().auditContents(null, item);
+        if (nested.isEmpty()) {
+            return;
+        }
+        ItemStack[] contents = nested.toArray(new ItemStack[0]);
+        for (int slot = 0; slot < contents.length; slot++) {
+            final int nestedSlot = slot;
+            collectLegendaryCopies(player, contents[slot], copiesByLegendaryId, depth + 1, replacement -> {
+                contents[nestedSlot] = replacement == null ? null : replacement.clone();
+                if (plugin.getBackpackListener().rewriteAuditContents(item, contents)) {
+                    replacementSink.accept(item);
+                }
+            });
+        }
+    }
+
+    private void collectBundleLegendaryCopies(
+        Player player,
+        ItemStack item,
+        Map<String, List<LegendaryCopy>> copiesByLegendaryId,
+        int depth,
+        Consumer<ItemStack> replacementSink
+    ) {
+        ItemMeta meta = item.getItemMeta();
+        if (!(meta instanceof BundleMeta bundleMeta)) {
+            return;
+        }
+        List<ItemStack> contents = new ArrayList<>(bundleMeta.getItems());
+        for (int slot = 0; slot < contents.size(); slot++) {
+            final int nestedSlot = slot;
+            collectLegendaryCopies(player, contents.get(slot), copiesByLegendaryId, depth + 1, replacement -> {
+                contents.set(nestedSlot, replacement == null ? null : replacement.clone());
+                ItemMeta currentMeta = item.getItemMeta();
+                if (!(currentMeta instanceof BundleMeta currentBundleMeta)) {
+                    return;
+                }
+                currentBundleMeta.setItems(nonEmptyCopies(contents));
+                item.setItemMeta(currentBundleMeta);
+                replacementSink.accept(item);
+            });
+        }
+    }
+
+    private void collectBlockStateLegendaryCopies(
+        Player player,
+        ItemStack item,
+        Map<String, List<LegendaryCopy>> copiesByLegendaryId,
+        int depth,
+        Consumer<ItemStack> replacementSink
+    ) {
+        ItemMeta meta = item.getItemMeta();
+        if (!(meta instanceof BlockStateMeta blockStateMeta)) {
+            return;
+        }
+        BlockState state = blockStateMeta.getBlockState();
+        if (!(state instanceof InventoryHolder holder)) {
+            return;
+        }
+
+        Inventory nestedInventory = holder.getInventory();
+        if (nestedInventory == null) {
+            return;
+        }
+        ItemStack[] contents = nestedInventory.getContents();
+        for (int slot = 0; slot < contents.length; slot++) {
+            final int nestedSlot = slot;
+            collectLegendaryCopies(player, contents[slot], copiesByLegendaryId, depth + 1, replacement -> {
+                contents[nestedSlot] = replacement == null ? null : replacement.clone();
+                nestedInventory.setContents(contents);
+                blockStateMeta.setBlockState(state);
+                item.setItemMeta(blockStateMeta);
+                replacementSink.accept(item);
+            });
+        }
+    }
+
+    private List<ItemStack> nonEmptyCopies(List<ItemStack> contents) {
+        List<ItemStack> cleaned = new ArrayList<>();
+        if (contents == null) {
+            return cleaned;
+        }
+        for (ItemStack item : contents) {
+            if (item == null || item.getType() == Material.AIR) {
+                continue;
+            }
+            cleaned.add(item.clone());
+        }
+        return cleaned;
     }
 
     private boolean isExclusiveLegendaryType(LegendaryType type) {
         return type != null && type != LegendaryType.FARADAYS_MAGNET;
     }
 
+    private boolean isStorageRestrictedLegendaryType(LegendaryType type) {
+        return type != null && maxServerCopiesForLegendary(type) != Integer.MAX_VALUE;
+    }
+
     private int maxServerCopiesForLegendary(LegendaryType type) {
         if (type == null || type == LegendaryType.FARADAYS_MAGNET) {
             return Integer.MAX_VALUE;
         }
-        return isMythicForgeSourceLegendary(type) ? 2 : 1;
+        return 1;
     }
 
     private boolean isMythicForgeSourceLegendary(LegendaryType type) {
@@ -7427,17 +8067,7 @@ public final class LegendaryListener implements Listener {
     private void refundAndRemoveDuplicateLegendaries(String legendaryId, List<LegendaryCopy> copies, int allowedCopies) {
         Map<UUID, Map<LegendaryType, Integer>> refundsByPlayer = new LinkedHashMap<>();
         Map<UUID, Player> playersById = new HashMap<>();
-        List<LegendaryCopy> copiesToRemove = new ArrayList<>();
-        int keptCopies = 0;
-
-        for (LegendaryCopy copy : copies) {
-            int amount = Math.max(1, copy.amount());
-            if (keptCopies + amount <= allowedCopies) {
-                keptCopies += amount;
-                continue;
-            }
-            copiesToRemove.add(copy);
-        }
+        List<LegendaryCopy> copiesToRemove = new ArrayList<>(copies);
 
         for (LegendaryCopy copy : copiesToRemove) {
             removeLegendaryCopy(copy);
@@ -7460,23 +8090,16 @@ public final class LegendaryListener implements Listener {
         }
 
         plugin.getLogger().warning(
-            "Removed excess legendary copies for " + legendaryId + " above the server cap and refunded recipe materials."
+            "Removed all legendary copies for " + legendaryId + " after it exceeded the server cap of " + allowedCopies
+                + " and refunded recipe materials."
         );
     }
 
     private void removeLegendaryCopy(LegendaryCopy copy) {
-        if (copy == null || copy.player() == null) {
+        if (copy == null || copy.player() == null || copy.remover() == null) {
             return;
         }
-
-        if (copy.cursor()) {
-            copy.player().setItemOnCursor(null);
-            return;
-        }
-
-        if (copy.inventory() != null && copy.slot() >= 0) {
-            copy.inventory().setItem(copy.slot(), null);
-        }
+        copy.remover().run();
     }
 
     private void refundLegendaryMaterials(Player player, LegendaryType type, int copiesRemoved) {
@@ -7527,25 +8150,46 @@ public final class LegendaryListener implements Listener {
             return false;
         }
 
+        LegendaryType leftType = LegendaryType.fromId(recipe.leftId());
+        LegendaryType rightType = LegendaryType.fromId(recipe.rightId());
+        if (leftType == null || rightType == null) {
+            return false;
+        }
+
         List<ItemStack> refundStacks = new ArrayList<>();
+        if (!appendRecipeMaterialRefund(refundStacks, leftType, copiesRemoved)
+            || !appendRecipeMaterialRefund(refundStacks, rightType, copiesRemoved)) {
+            return false;
+        }
         for (int i = 0; i < copiesRemoved; i++) {
-            ItemStack left = createLegendaryById(recipe.leftId());
-            ItemStack right = createLegendaryById(recipe.rightId());
-            ItemStack catalyst = forge.createAscendantCoreItem();
-            if (left == null || right == null) {
-                return false;
-            }
-            refundStacks.add(left);
-            refundStacks.add(right);
-            refundStacks.add(catalyst);
+            refundStacks.add(forge.createAscendantCoreItem());
         }
 
         Map<Integer, ItemStack> leftovers = player.getInventory().addItem(refundStacks.toArray(new ItemStack[0]));
         leftovers.values().forEach(item -> player.getWorld().dropItemNaturally(player.getLocation(), item));
         player.sendMessage(MessageUtil.warn(
-            "Duplicate " + type.display + "<yellow> was removed. Refunded the Mythic Forge inputs for <white>"
+            "Duplicate " + type.display + "<yellow> was removed. Refunded the source relic materials and Ascendant Core for <white>"
                 + copiesRemoved + "</white> copy/copies.</yellow>"
         ));
+        return true;
+    }
+
+    private boolean appendRecipeMaterialRefund(List<ItemStack> refundStacks, LegendaryType type, int copiesRemoved) {
+        Map<Material, Integer> ingredients = ingredientsFor(type);
+        if (ingredients.isEmpty()) {
+            return false;
+        }
+
+        for (Map.Entry<Material, Integer> ingredient : ingredients.entrySet()) {
+            int remaining = ingredient.getValue() * copiesRemoved;
+            ItemStack baseItem = recipeIngredientBaseItem(type, ingredient.getKey());
+            int maxStack = Math.max(1, baseItem.getType().getMaxStackSize());
+            while (remaining > 0) {
+                int amount = Math.min(remaining, maxStack);
+                refundStacks.add(recipeIngredientBaseItem(type, ingredient.getKey()).asQuantity(amount));
+                remaining -= amount;
+            }
+        }
         return true;
     }
 
@@ -7649,6 +8293,9 @@ public final class LegendaryListener implements Listener {
         }
 
         boolean changed = migrateLegendaryItem(item);
+        changed |= migrateBackpackLegendaryItems(item, depth);
+        changed |= migrateBundleLegendaryItems(item, depth);
+
         ItemMeta meta = item.getItemMeta();
         if (!(meta instanceof BlockStateMeta blockStateMeta)) {
             return changed;
@@ -7668,6 +8315,54 @@ public final class LegendaryListener implements Listener {
         return true;
     }
 
+    private boolean migrateBackpackLegendaryItems(ItemStack item, int depth) {
+        if (depth >= LEGENDARY_ITEM_SCAN_MAX_DEPTH || plugin.getBackpackListener() == null || !plugin.getBackpackListener().isBackpack(item)) {
+            return false;
+        }
+
+        List<ItemStack> nested = plugin.getBackpackListener().auditContents(null, item);
+        if (nested.isEmpty()) {
+            return false;
+        }
+
+        boolean changed = false;
+        ItemStack[] contents = nested.toArray(new ItemStack[0]);
+        for (int slot = 0; slot < contents.length; slot++) {
+            if (migrateLegendaryItemTree(contents[slot], depth + 1)) {
+                changed = true;
+            }
+        }
+        return changed && plugin.getBackpackListener().rewriteAuditContents(item, contents);
+    }
+
+    private boolean migrateBundleLegendaryItems(ItemStack item, int depth) {
+        if (depth >= LEGENDARY_ITEM_SCAN_MAX_DEPTH) {
+            return false;
+        }
+
+        ItemMeta meta = item.getItemMeta();
+        if (!(meta instanceof BundleMeta bundleMeta)) {
+            return false;
+        }
+
+        List<ItemStack> contents = new ArrayList<>(bundleMeta.getItems());
+        boolean changed = false;
+        for (int slot = 0; slot < contents.size(); slot++) {
+            ItemStack nested = contents.get(slot);
+            if (migrateLegendaryItemTree(nested, depth + 1)) {
+                contents.set(slot, nested);
+                changed = true;
+            }
+        }
+        if (!changed) {
+            return false;
+        }
+
+        bundleMeta.setItems(nonEmptyCopies(contents));
+        item.setItemMeta(bundleMeta);
+        return true;
+    }
+
     private boolean migrateLegendaryItem(ItemStack item) {
         if (refreshEnderBonePresentation(item) || refreshOrbOfTheMysticsPresentation(item)) {
             return true;
@@ -7675,6 +8370,7 @@ public final class LegendaryListener implements Listener {
 
         LegendaryType type = typeOf(item);
         if (type == null) return false;
+        lockDiscoveredExclusiveLegendary(type);
 
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return false;
@@ -7695,6 +8391,16 @@ public final class LegendaryListener implements Listener {
         applyLegendaryTypeState(meta, type);
         item.setItemMeta(meta);
         return true;
+    }
+
+    private void lockDiscoveredExclusiveLegendary(LegendaryType type) {
+        if (!isExclusiveLegendaryType(type)) {
+            return;
+        }
+        LegendaryAltarManager altarManager = plugin.getLegendaryAltarManager();
+        if (altarManager != null) {
+            altarManager.retireLegendaryFromCycle(type.id, null);
+        }
     }
 
     private void refreshLegendaryPresentation(ItemStack item) {
@@ -7814,13 +8520,9 @@ public final class LegendaryListener implements Listener {
             case WAR_PICK -> applyWarPickState(meta);
             case FARADAYS_MAGNET -> {
                 boolean active = pdc.getOrDefault(keyMagnetActive, PersistentDataType.BYTE, (byte) 0) == (byte) 1;
-                int uses = Math.max(0, Math.min(
-                    FARADAY_SCAN_MAX_USES,
-                    pdc.getOrDefault(keyFaradayUses, PersistentDataType.INTEGER, FARADAY_SCAN_MAX_USES)
-                ));
                 pdc.set(keyMagnetActive, PersistentDataType.BYTE, active ? (byte) 1 : (byte) 0);
-                pdc.set(keyFaradayUses, PersistentDataType.INTEGER, uses);
-                meta.lore(buildMagnetLore(meta, active, uses));
+                pdc.remove(new NamespacedKey(plugin, "faraday_uses"));
+                meta.lore(buildMagnetLore(meta, active));
             }
             case WIND_CHARGE_CANNON -> {
                 int charges = clampWindChargeCannonCharges(
@@ -8261,6 +8963,21 @@ public final class LegendaryListener implements Listener {
         return false;
     }
 
+    private boolean usesOnlyPlainNormalRecipeIngredients(ItemStack[] matrix) {
+        if (matrix == null) {
+            return false;
+        }
+        for (ItemStack item : matrix) {
+            if (item == null || item.getType().isAir()) {
+                continue;
+            }
+            if (!isPlainLegendaryRecipeMaterial(item, item.getType())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private boolean isLegendaryIngredient(ItemStack item) {
         if (typeOf(item) != null) return true;
 
@@ -8302,10 +9019,8 @@ public final class LegendaryListener implements Listener {
     }
 
     private boolean handleLegendaryCraftClick(InventoryClickEvent event, Player player) {
-        if (event.getClickedInventory() == null) return false;
         if (!(event.getView().getTopInventory() instanceof CraftingInventory inv)) return false;
-        if (event.getClickedInventory() != event.getView().getTopInventory()) return false;
-        if (event.getSlotType() != InventoryType.SlotType.RESULT) return false;
+        if (!isCraftResultSlot(event)) return false;
 
         LegendaryType out = typeOf(event.getCurrentItem());
         LegendaryRecipe recipe = findRecipe(inv.getMatrix());
@@ -8321,6 +9036,12 @@ public final class LegendaryListener implements Listener {
                 "Use <white>/reliquary</white> to view custom recipes. Legendary items are crafted at the altar."
             ));
         return true;
+    }
+
+    private boolean isCraftResultSlot(InventoryClickEvent event) {
+        return event.getView().getTopInventory() instanceof CraftingInventory
+            && (event.getClickedInventory() == event.getView().getTopInventory() || event.getRawSlot() == 0)
+            && (event.getSlotType() == InventoryType.SlotType.RESULT || event.getRawSlot() == 0);
     }
 
     @SafeVarargs
@@ -8561,7 +9282,21 @@ public final class LegendaryListener implements Listener {
         }
     }
 
+    private record AgriculturalPylonRecipeHolder() implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
     private record XpLecternRecipeHolder() implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
+    private record AwakeningTableInfoHolder() implements InventoryHolder {
         @Override
         public Inventory getInventory() {
             return null;
@@ -8583,6 +9318,13 @@ public final class LegendaryListener implements Listener {
     }
 
     private record MythicFusionMenuHolder() implements InventoryHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
+    private record MythicFusionRecipeHolder(String outputId) implements InventoryHolder {
         @Override
         public Inventory getInventory() {
             return null;
@@ -8655,7 +9397,23 @@ public final class LegendaryListener implements Listener {
     private record FrostScytheFreezeState(long expiresAt, int previousFreezeTicks, boolean previousFreezeLocked) {}
     private record RhittaBurnState(UUID attackerId, long expiresAt) {}
 
-    private record LegendaryCopy(Player player, Inventory inventory, int slot, LegendaryType type, int amount, boolean cursor) {}
+    private record LegendaryCopy(Player player, LegendaryType type, int amount, Runnable remover) {}
+
+    private static final class RecipeOffhandHolder {
+        private ItemStack item;
+
+        private RecipeOffhandHolder(ItemStack item) {
+            this.item = item;
+        }
+
+        private ItemStack item() {
+            return item;
+        }
+
+        private void item(ItemStack item) {
+            this.item = item;
+        }
+    }
 
     private record LegendaryRecipe(LegendaryType type, Map<Material, Integer> ingredients) {}
     private record ChronoState(Location loc, long readyAt) {}

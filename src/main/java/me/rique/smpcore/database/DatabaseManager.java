@@ -312,6 +312,7 @@ public final class DatabaseManager {
                 boss_damage  INTEGER NOT NULL DEFAULT 0,
                 boss_fights  INTEGER NOT NULL DEFAULT 0,
                 mob_kills    INTEGER NOT NULL DEFAULT 0,
+                playtime_seconds INTEGER NOT NULL DEFAULT 0,
                 updated_at   INTEGER NOT NULL DEFAULT 0
             )""";
 
@@ -343,6 +344,11 @@ public final class DatabaseManager {
         String leaderboardBossFights = """
             CREATE INDEX IF NOT EXISTS idx_leaderboard_boss_fights
             ON leaderboard_stats(boss_fights DESC)
+            """;
+
+        String leaderboardPlaytime = """
+            CREATE INDEX IF NOT EXISTS idx_leaderboard_playtime
+            ON leaderboard_stats(playtime_seconds DESC)
             """;
 
         String bossFights = """
@@ -415,8 +421,10 @@ public final class DatabaseManager {
             ensureColumn(conn, "legendary_instances", "source_key", "TEXT");
             ensureColumn(conn, "leaderboard_stats", "boss_damage", "INTEGER NOT NULL DEFAULT 0");
             ensureColumn(conn, "leaderboard_stats", "boss_fights", "INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(conn, "leaderboard_stats", "playtime_seconds", "INTEGER NOT NULL DEFAULT 0");
             stmt.executeUpdate(leaderboardBossDamage);
             stmt.executeUpdate(leaderboardBossFights);
+            stmt.executeUpdate(leaderboardPlaytime);
         }
     }
 
@@ -1065,6 +1073,27 @@ public final class DatabaseManager {
         }, executor);
     }
 
+    public CompletableFuture<Set<String>> loadClaimedLegendaryIds() {
+        return CompletableFuture.supplyAsync(() -> {
+            Set<String> ids = new LinkedHashSet<>();
+            String sql = "SELECT legendary_id FROM legendary_claimed";
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql);
+                 ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String legendaryId = rs.getString("legendary_id");
+                    if (legendaryId != null && !legendaryId.isBlank()) {
+                        ids.add(legendaryId.trim().toLowerCase(Locale.ROOT));
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadClaimedLegendaryIds: " + e.getMessage());
+                throw new RuntimeException("loadClaimedLegendaryIds failed", e);
+            }
+            return ids;
+        }, executor);
+    }
+
     public CompletableFuture<Map<String, LegendaryClaimedInstanceRecord>> loadClaimedLegendaryInstances() {
         return CompletableFuture.supplyAsync(() -> {
             Map<String, LegendaryClaimedInstanceRecord> instances = new LinkedHashMap<>();
@@ -1107,21 +1136,29 @@ public final class DatabaseManager {
 
     public CompletableFuture<Void> saveClaimedLegendaryOwner(String legendaryId, UUID claimedBy) {
         return CompletableFuture.runAsync(() -> {
-            if (legendaryId == null || legendaryId.isBlank() || claimedBy == null) {
+            if (legendaryId == null || legendaryId.isBlank()) {
                 return;
             }
             String sql = """
                 INSERT INTO legendary_claimed (legendary_id, claimed_at, claimed_by)
                 VALUES (?, ?, ?)
                 ON CONFLICT(legendary_id) DO UPDATE SET
-                    claimed_at = excluded.claimed_at,
-                    claimed_by = excluded.claimed_by
+                    claimed_at = CASE
+                        WHEN excluded.claimed_by IS NULL AND legendary_claimed.claimed_by IS NOT NULL
+                            THEN legendary_claimed.claimed_at
+                        ELSE excluded.claimed_at
+                    END,
+                    claimed_by = COALESCE(excluded.claimed_by, legendary_claimed.claimed_by)
                 """;
             try (Connection conn = connection();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, legendaryId.trim().toLowerCase(Locale.ROOT));
                 ps.setLong(2, System.currentTimeMillis());
-                ps.setString(3, claimedBy.toString());
+                if (claimedBy == null) {
+                    ps.setNull(3, Types.VARCHAR);
+                } else {
+                    ps.setString(3, claimedBy.toString());
+                }
                 ps.executeUpdate();
             } catch (SQLException e) {
                 plugin.getLogger().severe("saveClaimedLegendaryOwner: " + e.getMessage());
@@ -1579,6 +1616,76 @@ public final class DatabaseManager {
         }, executor);
     }
 
+    public CompletableFuture<Long> loadLeaderboardStat(UUID playerUuid, String statColumn) {
+        return CompletableFuture.supplyAsync(() -> {
+            String column = leaderboardColumn(statColumn);
+            if (playerUuid == null || column == null) {
+                return 0L;
+            }
+
+            String sql = "SELECT " + column + " AS value FROM leaderboard_stats WHERE player_uuid = ?";
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, playerUuid.toString());
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next() ? Math.max(0L, rs.getLong("value")) : 0L;
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadLeaderboardStat: " + e.getMessage());
+                throw new RuntimeException("loadLeaderboardStat failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Map<UUID, LeaderboardStatsRecord>> loadLeaderboardStats(Collection<UUID> playerUuids) {
+        return CompletableFuture.supplyAsync(() -> {
+            Map<UUID, LeaderboardStatsRecord> records = new HashMap<>();
+            if (playerUuids == null || playerUuids.isEmpty()) {
+                return records;
+            }
+
+            List<UUID> ids = new ArrayList<>(new LinkedHashSet<>(playerUuids));
+            String sqlPrefix = """
+                SELECT player_uuid, player_name, player_kills, deaths, boss_kills, mob_kills, boss_damage, boss_fights, playtime_seconds
+                FROM leaderboard_stats
+                WHERE player_uuid IN (
+                """;
+            try (Connection conn = connection()) {
+                for (int offset = 0; offset < ids.size(); offset += 900) {
+                    List<UUID> chunk = ids.subList(offset, Math.min(ids.size(), offset + 900));
+                    String placeholders = String.join(",", Collections.nCopies(chunk.size(), "?"));
+                    try (PreparedStatement ps = conn.prepareStatement(sqlPrefix + placeholders + ")")) {
+                        for (int i = 0; i < chunk.size(); i++) {
+                            ps.setString(i + 1, chunk.get(i).toString());
+                        }
+                        try (ResultSet rs = ps.executeQuery()) {
+                            while (rs.next()) {
+                                UUID playerUuid = parseUuid(rs.getString("player_uuid"));
+                                if (playerUuid == null) {
+                                    continue;
+                                }
+                                records.put(playerUuid, new LeaderboardStatsRecord(
+                                    playerUuid,
+                                    rs.getString("player_name"),
+                                    rs.getLong("player_kills"),
+                                    rs.getLong("deaths"),
+                                    rs.getLong("boss_kills"),
+                                    rs.getLong("mob_kills"),
+                                    rs.getLong("boss_damage"),
+                                    rs.getLong("boss_fights"),
+                                    rs.getLong("playtime_seconds")
+                                ));
+                            }
+                        }
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadLeaderboardStats: " + e.getMessage());
+                throw new RuntimeException("loadLeaderboardStats failed", e);
+            }
+            return records;
+        }, executor);
+    }
+
     private static String leaderboardColumn(String statColumn) {
         if (statColumn == null) {
             return null;
@@ -1590,6 +1697,7 @@ public final class DatabaseManager {
             case "boss_damage", "bossdamage", "damage" -> "boss_damage";
             case "boss_fights", "bossfights", "fights" -> "boss_fights";
             case "mob_kills", "mobs" -> "mob_kills";
+            case "playtime_seconds", "playtime", "time_played", "timeplayed" -> "playtime_seconds";
             default -> null;
         };
     }
@@ -1852,6 +1960,17 @@ public final class DatabaseManager {
         String details
     ) {}
     public record LeaderboardEntry(UUID playerUuid, String playerName, long value) {}
+    public record LeaderboardStatsRecord(
+        UUID playerUuid,
+        String playerName,
+        long playerKills,
+        long deaths,
+        long bossKills,
+        long mobKills,
+        long bossDamage,
+        long bossFights,
+        long playtimeSeconds
+    ) {}
     public record BossFightRecord(
         String fightId,
         String bossId,

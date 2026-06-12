@@ -5,6 +5,7 @@ import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -60,6 +61,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 public final class CustomToolListener implements Listener {
+
+    private static final MiniMessage MM = MiniMessage.miniMessage();
 
     public static final String ADVANCED_PICKAXE_ID = "advanced_pickaxe";
     public static final String GRAPPLE_HOOK_ID = "grapple_hook";
@@ -301,10 +304,10 @@ public final class CustomToolListener implements Listener {
     }
 
     public boolean isPlainVanillaItem(ItemStack item, Material material) {
-        return item != null
-            && item.getType() == material
-            && !isCustomTool(item)
-            && (plugin.getLegendaryListener() == null || !plugin.getLegendaryListener().isLegendaryItem(item));
+        if (item == null || item.getType() != material || item.getType().isAir()) {
+            return false;
+        }
+        return isPlainRecipeIngredient(item);
     }
 
     @EventHandler
@@ -326,6 +329,11 @@ public final class CustomToolListener implements Listener {
         Recipe recipe = event.getRecipe();
         if (!(recipe instanceof org.bukkit.Keyed keyed)) return;
 
+        if (isCustomToolRecipeKey(keyed.getKey()) && !usesOnlyPlainRecipeIngredients(event.getInventory().getMatrix())) {
+            event.getInventory().setResult(null);
+            return;
+        }
+
         if (advancedPickaxeRecipeKey.equals(keyed.getKey())) {
             Player viewer = event.getViewers().stream()
                 .filter(Player.class::isInstance)
@@ -346,6 +354,14 @@ public final class CustomToolListener implements Listener {
         if (!(event.getInventory() instanceof CraftingInventory crafting)) return;
         Recipe recipe = event.getRecipe();
         if (!(recipe instanceof org.bukkit.Keyed keyed)) return;
+
+        if (isCustomToolRecipeKey(keyed.getKey()) && !usesOnlyPlainRecipeIngredients(crafting.getMatrix())) {
+            event.setCancelled(true);
+            if (event.getWhoClicked() instanceof Player player) {
+                player.sendMessage(MessageUtil.warn("Use plain vanilla ingredients for custom tool recipes."));
+            }
+            return;
+        }
 
         if (advancedPickaxeRecipeKey.equals(keyed.getKey()) && !plugin.getConfigManager().advancedPickaxeEnabled) {
             event.setCancelled(true);
@@ -485,9 +501,7 @@ public final class CustomToolListener implements Listener {
         if (readyAt > now) {
             long remainingMillis = readyAt - now;
             long remainingSeconds = Math.max(1L, (remainingMillis + 999L) / 1000L);
-            player.sendMessage(MessageUtil.warn(
-                "Skyhook cooldown: <white>" + remainingSeconds + "s</white>."
-            ));
+            player.sendActionBar(MM.deserialize("<red>Skyhook ready in <white>" + remainingSeconds + "s</white>.</red>"));
             return;
         }
 
@@ -623,6 +637,58 @@ public final class CustomToolListener implements Listener {
     private boolean hasSmeltingTouch(ItemStack tool) {
         return plugin.getCustomEnchantListener() != null
             && plugin.getCustomEnchantListener().hasSmeltingTouchEnchant(tool);
+    }
+
+    private boolean isCustomToolRecipeKey(NamespacedKey key) {
+        return advancedPickaxeRecipeKey.equals(key)
+            || grappleHookRecipeKey.equals(key)
+            || spelunkerLanternRecipeKey.equals(key)
+            || surveyorsLensRecipeKey.equals(key)
+            || mendersKitRecipeKey.equals(key);
+    }
+
+    private boolean usesOnlyPlainRecipeIngredients(ItemStack[] matrix) {
+        if (matrix == null) {
+            return true;
+        }
+        for (ItemStack item : matrix) {
+            if (!isPlainRecipeIngredient(item)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isPlainRecipeIngredient(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return true;
+        }
+        if (isCustomTool(item)) {
+            return false;
+        }
+        if (plugin.getLegendaryListener() != null && plugin.getLegendaryListener().isLegendaryItem(item)) {
+            return false;
+        }
+        if (plugin.getBackpackListener() != null && plugin.getBackpackListener().isBackpack(item)) {
+            return false;
+        }
+
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return true;
+        }
+        String namespace = plugin.getName().toLowerCase(java.util.Locale.ROOT);
+        boolean hasPluginData = meta.getPersistentDataContainer().getKeys().stream()
+            .anyMatch(key -> namespace.equals(key.getNamespace()));
+        if (hasPluginData
+            || meta.hasDisplayName()
+            || meta.hasLore()
+            || meta.hasEnchants()
+            || meta.hasCustomModelDataComponent()
+            || meta.hasItemModel()) {
+            return false;
+        }
+        return !(meta instanceof Damageable damageable) || damageable.getDamage() <= 0;
     }
 
     private ItemStack createAdvancedPickaxe() {
@@ -998,7 +1064,7 @@ public final class CustomToolListener implements Listener {
         long readyAt = pdc.getOrDefault(keySurveyorLensCooldownUntil, PersistentDataType.LONG, 0L);
         if (readyAt > now) {
             long remainingSeconds = Math.max(1L, ((readyAt - now) + 999L) / 1000L);
-            player.sendMessage(MessageUtil.warn("Surveyor's Lens cooldown: <white>" + remainingSeconds + "s</white>."));
+            player.sendActionBar(MM.deserialize("<red>Surveyor's Lens ready in <white>" + remainingSeconds + "s</white>.</red>"));
             return;
         }
 

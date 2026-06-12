@@ -117,6 +117,9 @@ public final class PlayerManager {
         for (Player online : org.bukkit.Bukkit.getOnlinePlayers()) {
             online.showPlayer(plugin, target);
         }
+        if (plugin.getPlayerVisualListener() != null) {
+            plugin.getPlayerVisualListener().refreshPlayerFinderDefense();
+        }
     }
 
     // ── /back ─────────────────────────────────────────────────────────────────

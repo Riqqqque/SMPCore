@@ -26,6 +26,7 @@ smp-start:
   started: false
   started-at: 0
   pre-start-border-diameter: 75.0
+  # Used only when /startsmp runs. After the SMP has started, manual /worldborder changes persist through restarts.
   started-border-diameter: 10000.0
   border-expand-seconds: 0
   post-start-grace-minutes: 60
@@ -54,7 +55,7 @@ back:
 
 death-chest:
   enabled: true
-  disable-in-player-combat: true
+  disable-in-player-combat: false
   lifetime-minutes: 90
   search-radius: 4
   vertical-search-radius: 4
@@ -68,7 +69,7 @@ death-chest:
   notify-chat: true
   chest-name: "<gold><bold>{player}'s Death Chest</bold></gold>"
   chat-message: "<yellow>Your death chest is at <white>{world} {x}, {y}, {z}</white> and expires in <white>{minutes} minutes</white>.</yellow>"
-  no-space-message: "<red>No space was found for a death chest, so your items dropped normally.</red>"
+  no-space-message: "<red>The death chest emergency fallback failed, so your items dropped normally.</red>"
   note:
     enabled: true
     drop-if-inventory-full: true
@@ -77,6 +78,34 @@ death-chest:
       - "<gray>World: <white>{world}</white>"
       - "<gray>Coords: <white>{x}, {y}, {z}</white>"
       - "<gray>Expires in: <white>{minutes} minutes</white>"
+
+salvaging-depot:
+  # Gear sits in this safe cancel window before it locks and starts recycling.
+  cancel-window-seconds: 10
+  processing-seconds: 6
+  # 0.66 means roughly 66% of the base materials, scaled down by item damage.
+  return-rate: 0.66
+
+agricultural-pylon:
+  enabled: true
+  # Radius from the pylon block. 5 horizontal and 5 vertical is a 10x10x10 farm-protection zone.
+  horizontal-radius: 5
+  vertical-radius: 5
+
+player-shops:
+  enabled: true
+  max-amount-per-purchase: 64
+  max-price: 4096
+  allow-owner-purchases: false
+
+player-finder-defense:
+  # Hides enemy players from clients when they are too far away or behind blocks.
+  # This makes client-side player finder HUD mods much less useful without breaking close PvP.
+  enabled: true
+  always-show-radius: 24.0
+  line-of-sight-radius: 96.0
+  hide-same-team: false
+  ignore-ops: true
 
 spawner:
   silk-touch-enabled: true
@@ -222,6 +251,7 @@ bosses:
     timezone: "America/Denver"
     start-hour: 16
     end-hour: 18
+    ending-warning-minutes: 10
 
 awakening-table:
   enabled: true

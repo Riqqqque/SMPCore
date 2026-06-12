@@ -125,6 +125,11 @@ public final class ConfigManager {
     public int enderSwordDismountDespawnSeconds;
     public boolean enderSwordRequireOpenSky;
     public int frostScytheAbilityCooldownSeconds;
+    public boolean bossDoubleDropsEnabled;
+    public String bossDoubleDropsTimezone;
+    public int bossDoubleDropsStartHour;
+    public int bossDoubleDropsEndHour;
+    public int bossDoubleDropsEndingWarningMinutes;
 
     public boolean awakeningTableEnabled;
     public double awakeningTableRiftSeraphDropChance;
@@ -176,6 +181,21 @@ public final class ConfigManager {
     public int sustenanceTalismanHungerGain;
     public double sustenanceTalismanHealHearts;
     public int rewardLanternCooldownSeconds;
+    public int salvagingDepotCancelWindowSeconds;
+    public int salvagingDepotProcessingSeconds;
+    public double salvagingDepotReturnRate;
+    public boolean agriculturalPylonEnabled;
+    public int agriculturalPylonHorizontalRadius;
+    public int agriculturalPylonVerticalRadius;
+    public boolean playerShopsEnabled;
+    public int playerShopsMaxAmountPerPurchase;
+    public int playerShopsMaxPrice;
+    public boolean playerShopsAllowOwnerPurchases;
+    public boolean playerFinderDefenseEnabled;
+    public double playerFinderDefenseAlwaysShowRadius;
+    public double playerFinderDefenseLineOfSightRadius;
+    public boolean playerFinderDefenseHideSameTeam;
+    public boolean playerFinderDefenseIgnoreOps;
 
     public ConfigManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -321,7 +341,7 @@ public final class ConfigManager {
         backOnTeleport = c.getBoolean("back.on-teleport", true);
 
         deathChestEnabled = c.getBoolean("death-chest.enabled", true);
-        deathChestDisableInPlayerCombat = c.getBoolean("death-chest.disable-in-player-combat", true);
+        deathChestDisableInPlayerCombat = c.getBoolean("death-chest.disable-in-player-combat", false);
         deathChestLifetimeMinutes = clamp(c.getInt("death-chest.lifetime-minutes", 90), 1, 24 * 60);
         deathChestSearchRadius = clamp(c.getInt("death-chest.search-radius", 4), 0, 16);
         deathChestVerticalSearchRadius = clamp(c.getInt("death-chest.vertical-search-radius", 4), 0, 16);
@@ -342,7 +362,7 @@ public final class ConfigManager {
         );
         deathChestNoSpaceMessage = c.getString(
             "death-chest.no-space-message",
-            "<red>No space was found for a death chest, so your items dropped normally.</red>"
+            "<red>The death chest emergency fallback failed, so your items dropped normally.</red>"
         );
         deathChestNoteTitle = c.getString("death-chest.note.title", "<gold><bold>Death Chest</bold></gold>");
         deathChestNoteLore = c.getStringList("death-chest.note.lore");
@@ -409,6 +429,24 @@ public final class ConfigManager {
         enderSwordDismountDespawnSeconds = Math.max(0, c.getInt("ender-sword.dragon.dismount-despawn-seconds", 10));
         frostScytheAbilityCooldownSeconds = Math.max(0, c.getInt("frost-scythe.ability-cooldown-seconds", 15));
         enderSwordRequireOpenSky = c.getBoolean("ender-sword.require-open-sky", true);
+
+        boolean bossConfigChanged = false;
+        if (!c.contains("bosses.double-drops.ending-warning-minutes")) {
+            c.set("bosses.double-drops.ending-warning-minutes", 10);
+            bossConfigChanged = true;
+        }
+        if (bossConfigChanged) {
+            plugin.saveConfig();
+        }
+
+        bossDoubleDropsEnabled = c.getBoolean("bosses.double-drops.enabled", true);
+        bossDoubleDropsTimezone = c.getString("bosses.double-drops.timezone", "America/Denver");
+        if (bossDoubleDropsTimezone == null || bossDoubleDropsTimezone.isBlank()) {
+            bossDoubleDropsTimezone = "America/Denver";
+        }
+        bossDoubleDropsStartHour = clamp(c.getInt("bosses.double-drops.start-hour", 16), 0, 23);
+        bossDoubleDropsEndHour = clamp(c.getInt("bosses.double-drops.end-hour", 18), 0, 24);
+        bossDoubleDropsEndingWarningMinutes = clamp(c.getInt("bosses.double-drops.ending-warning-minutes", 10), 1, 180);
 
         boolean awakeningTableConfigChanged = false;
         if (c.contains("awakening-table.loot-chance")) {
@@ -502,6 +540,109 @@ public final class ConfigManager {
         sustenanceTalismanHealHearts = clamp(c.getDouble("talisman-of-sustenance.heal-hearts", 1.0), 0.0, 20.0);
 
         rewardLanternCooldownSeconds = Math.max(1, c.getInt("reward-soul-lantern.cooldown-seconds", 1800));
+
+        boolean salvagingDepotConfigChanged = false;
+        if (!c.contains("salvaging-depot.cancel-window-seconds")) {
+            c.set("salvaging-depot.cancel-window-seconds", 10);
+            salvagingDepotConfigChanged = true;
+        }
+        if (!c.contains("salvaging-depot.processing-seconds")) {
+            c.set("salvaging-depot.processing-seconds", 6);
+            salvagingDepotConfigChanged = true;
+        }
+        if (!c.contains("salvaging-depot.return-rate")) {
+            c.set("salvaging-depot.return-rate", 0.66);
+            salvagingDepotConfigChanged = true;
+        }
+        if (salvagingDepotConfigChanged) {
+            plugin.saveConfig();
+        }
+
+        salvagingDepotCancelWindowSeconds = clamp(c.getInt("salvaging-depot.cancel-window-seconds", 10), 1, 300);
+        salvagingDepotProcessingSeconds = clamp(c.getInt("salvaging-depot.processing-seconds", 6), 1, 300);
+        salvagingDepotReturnRate = clamp(c.getDouble("salvaging-depot.return-rate", 0.66), 0.0, 1.0);
+
+        boolean agriculturalPylonConfigChanged = false;
+        if (!c.contains("agricultural-pylon.enabled")) {
+            c.set("agricultural-pylon.enabled", true);
+            agriculturalPylonConfigChanged = true;
+        }
+        if (!c.contains("agricultural-pylon.horizontal-radius")) {
+            c.set("agricultural-pylon.horizontal-radius", 5);
+            agriculturalPylonConfigChanged = true;
+        }
+        if (!c.contains("agricultural-pylon.vertical-radius")) {
+            c.set("agricultural-pylon.vertical-radius", 5);
+            agriculturalPylonConfigChanged = true;
+        }
+        if (agriculturalPylonConfigChanged) {
+            plugin.saveConfig();
+        }
+
+        agriculturalPylonEnabled = c.getBoolean("agricultural-pylon.enabled", true);
+        agriculturalPylonHorizontalRadius = clamp(c.getInt("agricultural-pylon.horizontal-radius", 5), 1, 64);
+        agriculturalPylonVerticalRadius = clamp(c.getInt("agricultural-pylon.vertical-radius", 5), 1, 64);
+
+        boolean playerShopsConfigChanged = false;
+        if (!c.contains("player-shops.enabled")) {
+            c.set("player-shops.enabled", true);
+            playerShopsConfigChanged = true;
+        }
+        if (!c.contains("player-shops.max-amount-per-purchase")) {
+            c.set("player-shops.max-amount-per-purchase", 64);
+            playerShopsConfigChanged = true;
+        }
+        if (!c.contains("player-shops.max-price")) {
+            c.set("player-shops.max-price", 4096);
+            playerShopsConfigChanged = true;
+        }
+        if (!c.contains("player-shops.allow-owner-purchases")) {
+            c.set("player-shops.allow-owner-purchases", false);
+            playerShopsConfigChanged = true;
+        }
+        if (playerShopsConfigChanged) {
+            plugin.saveConfig();
+        }
+
+        playerShopsEnabled = c.getBoolean("player-shops.enabled", true);
+        playerShopsMaxAmountPerPurchase = clamp(c.getInt("player-shops.max-amount-per-purchase", 64), 1, 2304);
+        playerShopsMaxPrice = clamp(c.getInt("player-shops.max-price", 4096), 1, 1000000);
+        playerShopsAllowOwnerPurchases = c.getBoolean("player-shops.allow-owner-purchases", false);
+
+        boolean playerFinderDefenseConfigChanged = false;
+        if (!c.contains("player-finder-defense.enabled")) {
+            c.set("player-finder-defense.enabled", true);
+            playerFinderDefenseConfigChanged = true;
+        }
+        if (!c.contains("player-finder-defense.always-show-radius")) {
+            c.set("player-finder-defense.always-show-radius", 24.0);
+            playerFinderDefenseConfigChanged = true;
+        }
+        if (!c.contains("player-finder-defense.line-of-sight-radius")) {
+            c.set("player-finder-defense.line-of-sight-radius", 96.0);
+            playerFinderDefenseConfigChanged = true;
+        }
+        if (!c.contains("player-finder-defense.hide-same-team")) {
+            c.set("player-finder-defense.hide-same-team", false);
+            playerFinderDefenseConfigChanged = true;
+        }
+        if (!c.contains("player-finder-defense.ignore-ops")) {
+            c.set("player-finder-defense.ignore-ops", true);
+            playerFinderDefenseConfigChanged = true;
+        }
+        if (playerFinderDefenseConfigChanged) {
+            plugin.saveConfig();
+        }
+
+        playerFinderDefenseEnabled = c.getBoolean("player-finder-defense.enabled", true);
+        playerFinderDefenseAlwaysShowRadius = clamp(c.getDouble("player-finder-defense.always-show-radius", 24.0), 4.0, 256.0);
+        playerFinderDefenseLineOfSightRadius = clamp(
+            c.getDouble("player-finder-defense.line-of-sight-radius", 96.0),
+            playerFinderDefenseAlwaysShowRadius,
+            512.0
+        );
+        playerFinderDefenseHideSameTeam = c.getBoolean("player-finder-defense.hide-same-team", false);
+        playerFinderDefenseIgnoreOps = c.getBoolean("player-finder-defense.ignore-ops", true);
     }
 
     public void setBlockNetheriteArmorUpgrade(boolean value) {

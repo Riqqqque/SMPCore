@@ -41,6 +41,7 @@ import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerAnimationEvent;
 import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.EquipmentSlotGroup;
@@ -95,6 +96,7 @@ public final class SeasonRelicManager implements Listener {
     private static final int PASSIVE_NIGHT_VISION_TICKS = 600;
     private static final double TRUE_SIGHT_RADIUS = 48.0;
     private static final long BEDROCK_RELIC_ACTIVATION_DEBOUNCE_MS = 650L;
+    private static final String REMOVED_OATHGLASS_COMPASS_ID = "oathglass_compass";
 
     private final SMPCore plugin;
     private final NamespacedKey keyRelicId;
@@ -128,6 +130,7 @@ public final class SeasonRelicManager implements Listener {
             passiveTask.cancel();
         }
         passiveTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickPassives, PASSIVE_TICKS, PASSIVE_TICKS);
+        Bukkit.getScheduler().runTask(plugin, () -> Bukkit.getOnlinePlayers().forEach(this::refundRemovedOathglassCompasses));
     }
 
     public void shutdown() {
@@ -163,6 +166,11 @@ public final class SeasonRelicManager implements Listener {
     }
 
     public String relicId(ItemStack item) {
+        String id = rawRelicId(item);
+        return relics.containsKey(id) ? id : null;
+    }
+
+    private String rawRelicId(ItemStack item) {
         if (item == null || item.getType().isAir()) {
             return null;
         }
@@ -170,8 +178,7 @@ public final class SeasonRelicManager implements Listener {
         if (meta == null) {
             return null;
         }
-        String id = meta.getPersistentDataContainer().get(keyRelicId, PersistentDataType.STRING);
-        return relics.containsKey(id) ? id : null;
+        return meta.getPersistentDataContainer().get(keyRelicId, PersistentDataType.STRING);
     }
 
     public boolean isSeasonRelic(ItemStack item) {
@@ -502,6 +509,65 @@ public final class SeasonRelicManager implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onRemovedOathglassClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+
+        int removed = removeLegacyOathglassStack(event.getCursor());
+        if (removed > 0) {
+            player.setItemOnCursor(null);
+        }
+
+        int currentRemoved = removeLegacyOathglassStack(event.getCurrentItem());
+        if (currentRemoved > 0) {
+            event.setCurrentItem(null);
+            removed += currentRemoved;
+        }
+
+        boolean hotbarIsClickedSlot = event.getClickedInventory() == player.getInventory()
+            && event.getSlot() == event.getHotbarButton();
+        if (event.getHotbarButton() >= 0 && !hotbarIsClickedSlot) {
+            ItemStack hotbar = player.getInventory().getItem(event.getHotbarButton());
+            int hotbarRemoved = removeLegacyOathglassStack(hotbar);
+            if (hotbarRemoved > 0) {
+                player.getInventory().setItem(event.getHotbarButton(), null);
+                removed += hotbarRemoved;
+            }
+        }
+
+        if (removed <= 0) {
+            return;
+        }
+
+        event.setCancelled(true);
+        refundRemovedOathglass(player, removed);
+        player.updateInventory();
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onRemovedOathglassDrag(InventoryDragEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+
+        int removed = removeLegacyOathglassStack(event.getOldCursor());
+        if (removed <= 0) {
+            return;
+        }
+
+        event.setCancelled(true);
+        player.setItemOnCursor(null);
+        refundRemovedOathglass(player, removed);
+        player.updateInventory();
+    }
+
+    @EventHandler
+    public void onRelicPlayerJoin(PlayerJoinEvent event) {
+        refundRemovedOathglassCompasses(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onMenuClick(InventoryClickEvent event) {
         if (!(event.getView().getTopInventory().getHolder() instanceof SeasonMenuHolder holder)) {
             return;
@@ -586,6 +652,12 @@ public final class SeasonRelicManager implements Listener {
             return;
         }
         Player player = event.getPlayer();
+        if (isRemovedOathglassCompass(event.getItem())) {
+            event.setCancelled(true);
+            refundRemovedOathglassCompasses(player);
+            return;
+        }
+
         String id = relicId(event.getItem());
         if (id == null) {
             return;
@@ -601,7 +673,8 @@ public final class SeasonRelicManager implements Listener {
             }
             return;
         }
-        if (event.getHand() != EquipmentSlot.HAND) {
+        EquipmentSlot hand = event.getHand() == null ? EquipmentSlot.HAND : event.getHand();
+        if (hand != EquipmentSlot.HAND && definition.activeAbility() != ActiveAbility.SAINT_WHETSTONE) {
             return;
         }
         if (definition.activeAbility() == ActiveAbility.NONE) {
@@ -611,7 +684,7 @@ public final class SeasonRelicManager implements Listener {
             return;
         }
         event.setCancelled(true);
-        activateUtility(player, definition, player.isSneaking());
+        activateUtility(player, definition, player.isSneaking(), hand);
     }
 
     @EventHandler(priority = EventPriority.HIGH)
@@ -630,7 +703,7 @@ public final class SeasonRelicManager implements Listener {
         if (!markBedrockRelicActivation(player)) {
             return;
         }
-        activateUtility(player, definition, player.isSneaking());
+        activateUtility(player, definition, player.isSneaking(), EquipmentSlot.HAND);
     }
 
     @EventHandler
@@ -851,7 +924,7 @@ public final class SeasonRelicManager implements Listener {
         return true;
     }
 
-    private void activateUtility(Player player, RelicDefinition definition, boolean sneaking) {
+    private void activateUtility(Player player, RelicDefinition definition, boolean sneaking, EquipmentSlot hand) {
         if (definition.activeAbility() == ActiveAbility.RIFT_ANCHOR && sneaking) {
             activateRiftAnchor(player, true);
             return;
@@ -876,7 +949,7 @@ public final class SeasonRelicManager implements Listener {
                 player.getWorld().spawnParticle(Particle.HAPPY_VILLAGER, player.getLocation().add(0.0, 1.0, 0.0), 18, 0.35, 0.35, 0.35, 0.02);
                 yield true;
             }
-            case SAINT_WHETSTONE -> activateWhetstone(player);
+            case SAINT_WHETSTONE -> activateWhetstone(player, hand);
             case ABYSSAL_CONCH -> {
                 applyPotion(player, PotionEffectType.WATER_BREATHING, 120 * 20, 0);
                 applyPotion(player, PotionEffectType.DOLPHINS_GRACE, 90 * 20, 0);
@@ -890,7 +963,6 @@ public final class SeasonRelicManager implements Listener {
                 player.getWorld().spawnParticle(Particle.DUST, player.getLocation().add(0.0, 1.0, 0.0), 28, 0.55, 0.45, 0.55, 0.0, new Particle.DustOptions(Color.fromRGB(150, 150, 170), 1.25f));
                 yield true;
             }
-            case OATHGLASS_COMPASS -> activateOathglassCompass(player);
             case WARPED_KEY -> activateWarpedKey(player);
             case NULL_BELL -> activateNullBell(player);
             case RIFTWARD_LENS -> activateRiftwardLens(player);
@@ -901,6 +973,9 @@ public final class SeasonRelicManager implements Listener {
         };
         if (success) {
             setCooldown(player, definition.id(), definition.activeCooldownSeconds());
+            if (definition.activeAbility() == ActiveAbility.SAINT_WHETSTONE) {
+                consumeRelicInHand(player, hand, definition.id());
+            }
         }
     }
 
@@ -949,23 +1024,80 @@ public final class SeasonRelicManager implements Listener {
         return true;
     }
 
-    private boolean activateWhetstone(Player player) {
-        ItemStack held = player.getInventory().getItemInMainHand();
-        if (held.getType().isAir() || !(held.getItemMeta() instanceof Damageable damageable) || damageable.getDamage() <= 0) {
-            player.sendMessage(MessageUtil.warn("Hold a damaged tool, weapon, or armor piece in your main hand."));
+    private boolean activateWhetstone(Player player, EquipmentSlot whetstoneHand) {
+        PlayerInventory inventory = player.getInventory();
+        EquipmentSlot hand = whetstoneHand == null ? EquipmentSlot.HAND : whetstoneHand;
+
+        ItemStack oppositeHand = hand == EquipmentSlot.OFF_HAND ? inventory.getItemInMainHand() : inventory.getItemInOffHand();
+        if (repairWhetstoneTarget(oppositeHand, player)) {
+            return true;
+        }
+
+        if (hand == EquipmentSlot.HAND) {
+            ItemStack[] armor = inventory.getArmorContents();
+            for (int i = 0; i < armor.length; i++) {
+                if (repairWhetstoneTarget(armor[i], player)) {
+                    inventory.setArmorContents(armor);
+                    return true;
+                }
+            }
+
+            int heldSlot = inventory.getHeldItemSlot();
+            for (int slot = 0; slot < 36; slot++) {
+                if (slot == heldSlot) {
+                    continue;
+                }
+                ItemStack item = inventory.getItem(slot);
+                if (repairWhetstoneTarget(item, player)) {
+                    inventory.setItem(slot, item);
+                    return true;
+                }
+            }
+        }
+
+        player.sendMessage(MessageUtil.warn("Hold a damaged tool, weapon, or armor piece with the whetstone."));
+        return false;
+    }
+
+    private boolean repairWhetstoneTarget(ItemStack item, Player player) {
+        if (item == null || item.getType().isAir() || !(item.getItemMeta() instanceof Damageable damageable) || damageable.getDamage() <= 0) {
             return false;
         }
-        int maxDamage = damageable.hasMaxDamage() ? damageable.getMaxDamage() : held.getType().getMaxDurability();
+        int maxDamage = damageable.hasMaxDamage() ? damageable.getMaxDamage() : item.getType().getMaxDurability();
         if (maxDamage <= 0) {
             player.sendMessage(MessageUtil.warn("That item cannot be repaired by the whetstone."));
             return false;
         }
         int repair = Math.max(1, maxDamage / 4);
         damageable.setDamage(Math.max(0, damageable.getDamage() - repair));
-        held.setItemMeta(damageable);
+        item.setItemMeta(damageable);
         player.getWorld().spawnParticle(Particle.CRIT, player.getLocation().add(0.0, 1.0, 0.0), 18, 0.35, 0.30, 0.35, 0.02);
         player.playSound(player.getLocation(), Sound.BLOCK_ANVIL_USE, 0.8f, 1.35f);
+        player.sendActionBar(MM.deserialize("<gold>Saint's Whetstone repaired your gear and crumbled.</gold>"));
         return true;
+    }
+
+    private void consumeRelicInHand(Player player, EquipmentSlot hand, String expectedId) {
+        PlayerInventory inventory = player.getInventory();
+        EquipmentSlot targetHand = hand == EquipmentSlot.OFF_HAND ? EquipmentSlot.OFF_HAND : EquipmentSlot.HAND;
+        ItemStack stack = targetHand == EquipmentSlot.OFF_HAND ? inventory.getItemInOffHand() : inventory.getItemInMainHand();
+        if (stack == null || stack.getType().isAir() || !expectedId.equals(relicId(stack))) {
+            return;
+        }
+        if (stack.getAmount() <= 1) {
+            if (targetHand == EquipmentSlot.OFF_HAND) {
+                inventory.setItemInOffHand(null);
+            } else {
+                inventory.setItemInMainHand(null);
+            }
+            return;
+        }
+        stack.setAmount(stack.getAmount() - 1);
+        if (targetHand == EquipmentSlot.OFF_HAND) {
+            inventory.setItemInOffHand(stack);
+        } else {
+            inventory.setItemInMainHand(stack);
+        }
     }
 
     private boolean activateRootSigil(Player player) {
@@ -981,31 +1113,6 @@ public final class SeasonRelicManager implements Listener {
             target.getWorld().spawnParticle(Particle.HAPPY_VILLAGER, target.getLocation().add(0.0, 1.0, 0.0), 14, 0.35, 0.35, 0.35, 0.02);
         }
         player.playSound(player.getLocation(), Sound.BLOCK_AMETHYST_BLOCK_CHIME, 0.8f, 0.8f);
-        return true;
-    }
-
-    private boolean activateOathglassCompass(Player player) {
-        Player nearest = null;
-        double nearestDistance = Double.MAX_VALUE;
-        for (Player candidate : player.getWorld().getPlayers()) {
-            if (candidate.equals(player) || candidate.getGameMode() == GameMode.SPECTATOR || candidate.getGameMode() == GameMode.CREATIVE) {
-                continue;
-            }
-            double distance = candidate.getLocation().distance(player.getLocation());
-            if (distance < nearestDistance) {
-                nearest = candidate;
-                nearestDistance = distance;
-            }
-        }
-        if (nearest == null) {
-            player.sendMessage(MessageUtil.warn("The Oathglass found no nearby living signatures in this world."));
-            return false;
-        }
-        Vector delta = nearest.getLocation().toVector().subtract(player.getLocation().toVector());
-        String direction = cardinalDirection(delta);
-        int rounded = Math.max(25, (int) Math.round(nearestDistance / 25.0) * 25);
-        player.sendMessage(MessageUtil.info("The Oathglass points <white>" + direction + "</white>, roughly <white>" + rounded + "</white> blocks away."));
-        player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 0.8f, 1.1f);
         return true;
     }
 
@@ -1236,16 +1343,20 @@ public final class SeasonRelicManager implements Listener {
                 return 0;
             }
         }
-        for (RecipeIngredient ingredient : definition.recipe()) {
-            removeIngredient(storage, ingredient);
-        }
-        inventory.setStorageContents(storage);
         ItemStack reward = createRelicItem(definition.id());
+        ItemStack[] nextStorage = cloneStorageContents(storage);
+        for (RecipeIngredient ingredient : definition.recipe()) {
+            removeIngredient(nextStorage, ingredient);
+        }
+        if (!canFitReward(nextStorage, reward)) {
+            player.sendMessage(MessageUtil.warn("Clear enough inventory space before crafting <white>" + definition.name() + "</white>."));
+            return 0;
+        }
+        inventory.setStorageContents(nextStorage);
         if (plugin.getItemAuditManager() != null) {
             plugin.getItemAuditManager().recordKnownAcquisition(player, reward, "season_craft", "Crafted from the Covenant Armory.");
         }
-        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(reward);
-        leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
+        player.getInventory().addItem(reward);
         player.updateInventory();
         player.sendMessage(MessageUtil.success("Crafted <white>" + definition.name() + "</white>."));
         if (definition.rarity() == CustomLoreUtil.Rarity.MYTHIC) {
@@ -1257,6 +1368,41 @@ public final class SeasonRelicManager implements Listener {
         player.playSound(player.getLocation(), Sound.BLOCK_SMITHING_TABLE_USE, 0.9f, 0.9f);
         openRelicDetails(player, definition.id());
         return 1;
+    }
+
+    private ItemStack[] cloneStorageContents(ItemStack[] contents) {
+        ItemStack[] clone = new ItemStack[contents.length];
+        for (int i = 0; i < contents.length; i++) {
+            ItemStack item = contents[i];
+            clone[i] = item == null || item.getType().isAir() ? null : item.clone();
+        }
+        return clone;
+    }
+
+    private boolean canFitReward(ItemStack[] storage, ItemStack reward) {
+        if (reward == null || reward.getType().isAir()) {
+            return false;
+        }
+        int remaining = reward.getAmount();
+        int maxStack = Math.max(1, reward.getType().getMaxStackSize());
+        for (ItemStack item : storage) {
+            if (remaining <= 0) {
+                return true;
+            }
+            if (item == null || item.getType().isAir() || !item.isSimilar(reward)) {
+                continue;
+            }
+            remaining -= Math.max(0, maxStack - item.getAmount());
+        }
+        for (ItemStack item : storage) {
+            if (remaining <= 0) {
+                return true;
+            }
+            if (item == null || item.getType().isAir()) {
+                remaining -= maxStack;
+            }
+        }
+        return remaining <= 0;
     }
 
     private int countIngredient(ItemStack[] storage, RecipeIngredient ingredient) {
@@ -1282,6 +1428,78 @@ public final class SeasonRelicManager implements Listener {
             if (item.getAmount() <= 0) {
                 storage[i] = null;
             }
+        }
+    }
+
+    private int refundRemovedOathglassCompasses(Player player) {
+        if (player == null || !player.isOnline()) {
+            return 0;
+        }
+
+        int removed = 0;
+        PlayerInventory inventory = player.getInventory();
+        ItemStack[] storage = inventory.getStorageContents();
+        for (int i = 0; i < storage.length; i++) {
+            int stackAmount = removeLegacyOathglassStack(storage[i]);
+            if (stackAmount <= 0) {
+                continue;
+            }
+            storage[i] = null;
+            removed += stackAmount;
+        }
+        inventory.setStorageContents(storage);
+
+        int offhandAmount = removeLegacyOathglassStack(inventory.getItemInOffHand());
+        if (offhandAmount > 0) {
+            inventory.setItemInOffHand(null);
+            removed += offhandAmount;
+        }
+
+        if (removed > 0) {
+            refundRemovedOathglass(player, removed);
+            player.updateInventory();
+        }
+        return removed;
+    }
+
+    private int removeLegacyOathglassStack(ItemStack item) {
+        if (!isRemovedOathglassCompass(item)) {
+            return 0;
+        }
+        return Math.max(1, item.getAmount());
+    }
+
+    private boolean isRemovedOathglassCompass(ItemStack item) {
+        return REMOVED_OATHGLASS_COMPASS_ID.equals(rawRelicId(item));
+    }
+
+    private void refundRemovedOathglass(Player player, int amount) {
+        if (amount <= 0) {
+            return;
+        }
+
+        refundStack(player, createRelicItem("oathbound_plate"), amount * 3);
+        refundStack(player, new ItemStack(Material.RECOVERY_COMPASS), amount);
+        refundStack(player, new ItemStack(Material.AMETHYST_SHARD), amount * 16);
+        player.sendMessage(MessageUtil.info("Oathglass Compass was retired, so its recipe materials were refunded."));
+    }
+
+    private void refundStack(Player player, ItemStack base, int amount) {
+        if (player == null || base == null || base.getType().isAir() || amount <= 0) {
+            return;
+        }
+
+        int maxStack = Math.max(1, base.getMaxStackSize());
+        int remaining = amount;
+        while (remaining > 0) {
+            int giveAmount = Math.min(maxStack, remaining);
+            ItemStack stack = base.clone();
+            stack.setAmount(giveAmount);
+            Map<Integer, ItemStack> leftovers = player.getInventory().addItem(stack);
+            for (ItemStack leftover : leftovers.values()) {
+                player.getWorld().dropItemNaturally(player.getLocation(), leftover);
+            }
+            remaining -= giveAmount;
         }
     }
 
@@ -1466,6 +1684,21 @@ public final class SeasonRelicManager implements Listener {
     private boolean isProtectedCustomIngredient(ItemStack item) {
         if (item == null || item.getType().isAir()) {
             return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            String namespace = plugin.getName().toLowerCase(Locale.ROOT);
+            if (meta.getPersistentDataContainer().getKeys().stream()
+                .anyMatch(key -> namespace.equals(key.getNamespace()))) {
+                return true;
+            }
+            if (meta.hasDisplayName() || meta.hasLore() || !meta.getEnchants().isEmpty()
+                || meta.hasCustomModelDataComponent() || meta.hasItemModel()) {
+                return true;
+            }
+            if (meta instanceof Damageable damageable && damageable.getDamage() > 0) {
+                return true;
+            }
         }
         if (relicId(item) != null) {
             return true;
@@ -1728,14 +1961,6 @@ public final class SeasonRelicManager implements Listener {
             && floor.getType() != Material.LAVA;
     }
 
-    private String cardinalDirection(Vector delta) {
-        double angle = Math.atan2(-delta.getX(), delta.getZ());
-        double degrees = Math.toDegrees(angle);
-        if (degrees < 0) degrees += 360.0;
-        String[] directions = {"South", "Southwest", "West", "Northwest", "North", "Northeast", "East", "Southeast"};
-        return directions[(int) Math.round(degrees / 45.0) % directions.length];
-    }
-
     private static String sanitizeKey(String id) {
         return id.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_]+", "_");
     }
@@ -1932,8 +2157,8 @@ public final class SeasonRelicManager implements Listener {
         add(out, utility("widow_antidote", Material.POTION, "Widow Antidote", CustomLoreUtil.Rarity.RARE, ActiveAbility.WIDOW_ANTIDOTE, 75,
             "A bitter cure made from the poison that taught it.",
             List.of(relic("widow_silk", 2), mat(Material.MILK_BUCKET, 1), mat(Material.SPIDER_EYE, 8))));
-        add(out, utility("saints_whetstone", Material.POLISHED_BLACKSTONE, "Saint's Whetstone", CustomLoreUtil.Rarity.EPIC, ActiveAbility.SAINT_WHETSTONE, 300,
-            "Repairs a held item by roughly a quarter of max durability.",
+        add(out, utility("saints_whetstone", Material.POLISHED_BLACKSTONE, "Saint's Whetstone", CustomLoreUtil.Rarity.EPIC, ActiveAbility.SAINT_WHETSTONE, 0,
+            "A single-use repair stone that restores roughly a quarter of an item's max durability.",
             List.of(relic("saint_alloy", 1), relic("titan_gear", 4), mat(Material.GRINDSTONE, 1))));
         add(out, utility("abyssal_conch", Material.NAUTILUS_SHELL, "Abyssal Conch", CustomLoreUtil.Rarity.EPIC, ActiveAbility.ABYSSAL_CONCH, 100,
             "A shell that lets the drowned road open for you.",
@@ -1944,9 +2169,6 @@ public final class SeasonRelicManager implements Listener {
         add(out, utility("titan_charm", Material.HEAVY_CORE, "Titan Charm", CustomLoreUtil.Rarity.LEGENDARY, ActiveAbility.TITAN_CHARM, 120,
             "A compact order to stop moving.",
             List.of(relic("titan_gear", 6), mat(Material.HEAVY_CORE, 1), mat(Material.IRON_BLOCK, 8))));
-        add(out, utility("oathglass_compass", Material.RECOVERY_COMPASS, "Oathglass Compass", CustomLoreUtil.Rarity.EPIC, ActiveAbility.OATHGLASS_COMPASS, 180,
-            "Points toward the nearest living player in broad strokes.",
-            List.of(relic("oathbound_plate", 3), mat(Material.RECOVERY_COMPASS, 1), mat(Material.AMETHYST_SHARD, 16))));
         add(out, utility("warped_key", Material.TRIAL_KEY, "Warped Key", CustomLoreUtil.Rarity.EPIC, ActiveAbility.WARPED_KEY, 30,
             "A short-range blink key with just enough mercy.",
             List.of(relic("rift_lens", 3), mat(Material.TRIAL_KEY, 1), mat(Material.ENDER_PEARL, 12))));
@@ -2032,14 +2254,19 @@ public final class SeasonRelicManager implements Listener {
         String line,
         List<RecipeIngredient> recipe
     ) {
+        List<CustomLoreUtil.LoreSection> sections = new ArrayList<>();
+        sections.add(CustomLoreUtil.section("Ability", ability.label(), ability.description()));
+        if (cooldown > 0) {
+            sections.add(CustomLoreUtil.section("Cooldown", cooldown + " seconds", "<gray>Cooldowns are saved on the player, so relogging does not reset them.</gray>"));
+        } else if (ability == ActiveAbility.SAINT_WHETSTONE) {
+            sections.add(CustomLoreUtil.section("Use Limit", "Single Use", "<gray>Consumed only after it successfully repairs damaged gear.</gray>"));
+        }
+
         return new RelicDefinition(
             id, material, name, rarity, RelicKind.UTILITY, RelicCategory.UTILITIES,
             null, null, 0, WeaponEffect.NONE, ability, cooldown,
             List.of("<gray>" + line + "</gray>"),
-            List.of(
-                CustomLoreUtil.section("Ability", ability.label(), ability.description()),
-                CustomLoreUtil.section("Cooldown", cooldown + " seconds", "<gray>Cooldowns are saved on the player, so relogging does not reset them.</gray>")
-            ),
+            sections,
             List.of(), recipe, Set.of(commandToken(name))
         );
     }
@@ -2243,7 +2470,7 @@ public final class SeasonRelicManager implements Listener {
             "Covenant Utility",
             Material.RECOVERY_COMPASS,
             "<gradient:#c084fc:#fb7185><bold>Utility Relics</bold></gradient>",
-            List.of("<gray>Fifteen tactical tools for teams, travel, cleansing, repairs, and scouting.</gray>")
+            List.of("<gray>Fourteen tactical tools for teams, travel, cleansing, repairs, and survival.</gray>")
         ),
         MATERIALS(
             "materials",
@@ -2366,11 +2593,10 @@ public final class SeasonRelicManager implements Listener {
         RIFT_ANCHOR("Bound Rift", "<gray>Sneak-right-click to bind. Right-click to teleport back.</gray>"),
         EMBER_VIAL("Last Ember", "<gray>Fire Resistance and extinguishes the caster.</gray>"),
         WIDOW_ANTIDOTE("Black Antidote", "<gray>Cleanses poison, wither, and slowness.</gray>"),
-        SAINT_WHETSTONE("Saint's Repair", "<gray>Repairs the held damaged item by about 25%.</gray>"),
+        SAINT_WHETSTONE("Saint's Repair", "<gray>Repairs damaged gear by about 25%, then crumbles.</gray>"),
         ABYSSAL_CONCH("Drowned Breath", "<gray>Water Breathing and Dolphin's Grace.</gray>"),
         ROOT_SIGIL("Root Mercy", "<gray>Regeneration and Absorption aura for the caster and nearby teammates.</gray>"),
         TITAN_CHARM("Titan Brace", "<gray>Resistance II and Absorption II for a short window.</gray>"),
-        OATHGLASS_COMPASS("Oathglass Reading", "<gray>Shows a broad direction and distance to the nearest player.</gray>"),
         WARPED_KEY("Warp Step", "<gray>Short-range blink with safe-location checks.</gray>"),
         NULL_BELL("Nullbell Peal", "<gray>Cleanses harmful effects from the caster and nearby teammates.</gray>"),
         RIFTWARD_LENS("Riftward Sight", "<gray>Briefly reveals nearby threats through invisibility.</gray>"),

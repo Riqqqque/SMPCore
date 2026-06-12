@@ -1,15 +1,18 @@
 package me.rique.smpcore.team;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.command.MainMenuCommand;
 import me.rique.smpcore.database.DatabaseManager;
+import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
 import io.papermc.paper.registry.RegistryAccess;
 import io.papermc.paper.registry.RegistryKey;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
-import org.bukkit.GameMode;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.enchantments.Enchantment;
@@ -26,15 +29,19 @@ import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerKickEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.components.EquippableComponent;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.scoreboard.Team;
 
@@ -44,6 +51,8 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -58,17 +67,29 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class TeamManager implements Listener {
 
+    private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final long INVITE_DURATION_MS = 120_000L;
     private static final int TEAM_VAULT_SIZE = 54;
+    private static final int TEAM_BROWSER_SIZE = 54;
     private static final String SCOREBOARD_TEAM_PREFIX = "smpct_";
     private static final String SCOREBOARD_NO_TEAM_ID = SCOREBOARD_TEAM_PREFIX + "none";
     private static final String TEAMS_LOADING_MESSAGE = "Teams are still loading. Try again in a moment.";
     private static final int CROWN_MIN_TEAM_MEMBERS = 3;
+    private static final int TEAM_BROWSER_BACK_SLOT = 45;
+    private static final int TEAM_BROWSER_VAULT_SLOT = 49;
+    private static final int TEAM_BROWSER_REFRESH_SLOT = 53;
+    private static final int[] TEAM_BROWSER_TEAM_SLOTS = {
+        10, 11, 12, 13, 14, 15, 16,
+        19, 20, 21, 22, 23, 24, 25,
+        28, 29, 30, 31, 32, 33, 34
+    };
+    private static final TeamStats EMPTY_TEAM_STATS = new TeamStats(0L, 0L, 0L, 0L, 0L, 0L, 0L);
 
     private final SMPCore plugin;
     private final NamespacedKey keyTeamCrown;
     private final NamespacedKey keyTeamCrownOwner;
     private final NamespacedKey keyTeamCrownTeam;
+    private final NamespacedKey keyTeamCrownEquipmentModel;
     private final Enchantment enchantProtection;
     private final Enchantment enchantAquaAffinity;
     private final Enchantment enchantRespiration;
@@ -79,6 +100,7 @@ public final class TeamManager implements Listener {
     private final Map<String, TeamVaultSession> teamVaultsByKey = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<TeamVaultSession>> vaultLoadingByTeamKey = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<Void>> vaultSaveChainsByTeamKey = new ConcurrentHashMap<>();
+    private final Map<String, BukkitTask> vaultAutosaveTasksByTeamKey = new ConcurrentHashMap<>();
     private final Set<UUID> pendingCrownReturns = ConcurrentHashMap.newKeySet();
     private final Set<String> renamingTeamKeys = ConcurrentHashMap.newKeySet();
     private volatile boolean teamsLoaded;
@@ -89,6 +111,7 @@ public final class TeamManager implements Listener {
         this.keyTeamCrown = new NamespacedKey(plugin, "team_crown");
         this.keyTeamCrownOwner = new NamespacedKey(plugin, "team_crown_owner");
         this.keyTeamCrownTeam = new NamespacedKey(plugin, "team_crown_team");
+        this.keyTeamCrownEquipmentModel = new NamespacedKey(plugin, "team_leader_crown");
         this.enchantProtection = requireEnchantment("protection");
         this.enchantAquaAffinity = requireEnchantment("aqua_affinity");
         this.enchantRespiration = requireEnchantment("respiration");
@@ -182,7 +205,7 @@ public final class TeamManager implements Listener {
         event.getPlayer().sendMessage(MessageUtil.warn("Team crowns cannot be dropped."));
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    @EventHandler(priority = EventPriority.LOWEST)
     public void onCrownDeath(PlayerDeathEvent event) {
         if (event.getKeepInventory()) {
             return;
@@ -217,10 +240,18 @@ public final class TeamManager implements Listener {
     }
 
     @EventHandler
+    public void onKick(PlayerKickEvent event) {
+        flushOpenTeamVault(event.getPlayer(), "kick");
+    }
+
+    @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         invitesByTarget.remove(event.getPlayer().getUniqueId());
+        flushOpenTeamVault(event.getPlayer(), "quit");
+    }
 
-        if (!(event.getPlayer().getOpenInventory().getTopInventory().getHolder() instanceof TeamVaultHolder holder)) {
+    private void flushOpenTeamVault(Player player, String reason) {
+        if (!(player.getOpenInventory().getTopInventory().getHolder() instanceof TeamVaultHolder holder)) {
             return;
         }
 
@@ -229,11 +260,12 @@ public final class TeamManager implements Listener {
             return;
         }
 
-        auditTeamVault(event.getPlayer(), session, "quit");
+        auditTeamVault(player, session, reason);
+        cancelVaultAutosave(session.teamKey());
         syncTeamVaultLegendaryClaims(session);
-        syncPlayerLegendaryClaims(event.getPlayer());
+        syncPlayerLegendaryClaims(player);
         saveTeamVault(session).exceptionally(ex -> {
-            plugin.getLogger().severe("Failed to save team vault for " + session.displayName() + " on quit: " + ex.getMessage());
+            plugin.getLogger().severe("Failed to save team vault for " + session.displayName() + " on " + reason + ": " + ex.getMessage());
             return null;
         });
     }
@@ -248,6 +280,7 @@ public final class TeamManager implements Listener {
         if (event.getPlayer() instanceof Player player) {
             auditTeamVault(player, session, "close");
         }
+        cancelVaultAutosave(session.teamKey());
         syncTeamVaultLegendaryClaims(session);
         if (event.getPlayer() instanceof Player player) {
             syncPlayerLegendaryClaims(player);
@@ -263,11 +296,27 @@ public final class TeamManager implements Listener {
         if (!(event.getView().getTopInventory().getHolder() instanceof TeamVaultHolder holder)) {
             return;
         }
-        if (event.getAction() == InventoryAction.CLONE_STACK || event.getClick() == ClickType.CREATIVE) {
+        if (isUnsafeTeamVaultClick(event)) {
             event.setCancelled(true);
             return;
         }
-        scheduleTeamVaultLegendaryClaimSync(holder.teamKey());
+        scheduleTeamVaultSyncAndSave(holder.teamKey(), "click");
+    }
+
+    private boolean isUnsafeTeamVaultClick(InventoryClickEvent event) {
+        InventoryAction action = event.getAction();
+        String actionName = action == null ? "" : action.name();
+        return action == InventoryAction.CLONE_STACK
+            || action == InventoryAction.COLLECT_TO_CURSOR
+            || "HOTBAR_MOVE_AND_READD".equals(actionName)
+            || action == InventoryAction.HOTBAR_SWAP
+            || action == InventoryAction.UNKNOWN
+            || event.getClick() == ClickType.CREATIVE
+            || event.getClick() == ClickType.DOUBLE_CLICK
+            || event.getClick() == ClickType.MIDDLE
+            || event.getClick() == ClickType.NUMBER_KEY
+            || event.getClick() == ClickType.SWAP_OFFHAND
+            || event.getClick() == ClickType.UNKNOWN;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -316,20 +365,15 @@ public final class TeamManager implements Listener {
         if (!(event.getView().getTopInventory().getHolder() instanceof TeamVaultHolder holder)) {
             return;
         }
-        if (!(event.getWhoClicked() instanceof Player player)) {
-            return;
-        }
 
         int topSize = event.getView().getTopInventory().getSize();
-        if (player.getGameMode() == GameMode.CREATIVE) {
-            for (int rawSlot : event.getRawSlots()) {
-                if (rawSlot < topSize) {
-                    event.setCancelled(true);
-                    return;
-                }
+        for (int rawSlot : event.getRawSlots()) {
+            if (rawSlot < topSize) {
+                event.setCancelled(true);
+                return;
             }
         }
-        scheduleTeamVaultLegendaryClaimSync(holder.teamKey());
+        scheduleTeamVaultSyncAndSave(holder.teamKey(), "drag");
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -368,9 +412,63 @@ public final class TeamManager implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onTeamBrowserClick(InventoryClickEvent event) {
+        if (!(event.getView().getTopInventory().getHolder() instanceof TeamBrowserHolder holder)) {
+            return;
+        }
+
+        event.setCancelled(true);
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+        if (event.getClickedInventory() == null || event.getClickedInventory().getType() == InventoryType.PLAYER) {
+            return;
+        }
+
+        int slot = event.getRawSlot();
+        if (slot == TEAM_BROWSER_BACK_SLOT) {
+            if (holder.fromMainMenu()) {
+                MainMenuCommand.openMenu(plugin, player);
+            } else {
+                player.closeInventory();
+            }
+            return;
+        }
+        if (slot == TEAM_BROWSER_VAULT_SLOT) {
+            openTeamVault(player);
+            return;
+        }
+        if (slot == TEAM_BROWSER_REFRESH_SLOT) {
+            openTeamsMenu(player, holder.search(), holder.fromMainMenu());
+            return;
+        }
+
+        String teamKey = holder.teamBySlot(slot);
+        if (teamKey == null) {
+            return;
+        }
+        TeamData team = teamsByKey.get(teamKey);
+        if (team == null) {
+            player.sendMessage(MessageUtil.warn("That team no longer exists."));
+            openTeamsMenu(player, holder.search(), holder.fromMainMenu());
+            return;
+        }
+        player.sendMessage(teamSummaryMessage(team));
+        player.playSound(player.getLocation(), org.bukkit.Sound.UI_BUTTON_CLICK, 0.45f, 1.25f);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onTeamBrowserDrag(InventoryDragEvent event) {
+        if (event.getView().getTopInventory().getHolder() instanceof TeamBrowserHolder) {
+            event.setCancelled(true);
+        }
+    }
+
     public void shutdown() {
         List<CompletableFuture<Void>> saves = new ArrayList<>();
         for (TeamVaultSession session : teamVaultsByKey.values()) {
+            cancelVaultAutosave(session.teamKey());
             syncTeamVaultLegendaryClaims(session);
             saves.add(saveTeamVault(session).exceptionally(ex -> {
                 plugin.getLogger().severe("Failed to save team vault for " + session.displayName() + ": " + ex.getMessage());
@@ -386,6 +484,8 @@ public final class TeamManager implements Listener {
 
         vaultLoadingByTeamKey.clear();
         vaultSaveChainsByTeamKey.clear();
+        vaultAutosaveTasksByTeamKey.values().forEach(BukkitTask::cancel);
+        vaultAutosaveTasksByTeamKey.clear();
         teamVaultsByKey.clear();
         unregisterAllScoreboardTeams();
     }
@@ -809,8 +909,424 @@ public final class TeamManager implements Listener {
                 "<gray>| Owner: <white>" + ownerName + "</white> " +
                 "| Color: <" + team.color.id + ">" + team.color.display + "</" + team.color.id + "> " +
                 "| Members: <white>" + team.members.size() + "</white> " +
-                "| List: <white>" + String.join(", ", memberNames) + "</white></gray>"
+            "| List: <white>" + String.join(", ", memberNames) + "</white></gray>"
         );
+    }
+
+    public void openTeamsMenu(Player player) {
+        openTeamsMenu(player, null, false);
+    }
+
+    public void openTeamsMenu(Player player, String rawSearch, boolean fromMainMenu) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) {
+            player.sendMessage(MessageUtil.error(unavailable));
+            return;
+        }
+
+        String search = normalizeTeamSearch(rawSearch);
+        List<TeamSnapshot> snapshots = teamBrowserSnapshots(search);
+        Set<UUID> memberIds = new LinkedHashSet<>();
+        for (TeamSnapshot snapshot : snapshots) {
+            memberIds.addAll(snapshot.members());
+        }
+
+        TeamBrowserHolder holder = new TeamBrowserHolder(search, fromMainMenu);
+        Inventory inventory = Bukkit.createInventory(
+            holder,
+            TEAM_BROWSER_SIZE,
+            BedrockCompat.menuTitle(player, MM.deserialize("<gradient:#22d3ee:#facc15><bold>Teams</bold></gradient>"), "Teams")
+        );
+        renderTeamBrowserLoading(inventory, search, fromMainMenu);
+        player.openInventory(inventory);
+
+        plugin.getDatabase().loadLeaderboardStats(memberIds).whenComplete((records, ex) ->
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) {
+                    return;
+                }
+                if (!(player.getOpenInventory().getTopInventory().getHolder() instanceof TeamBrowserHolder current)
+                    || current != holder) {
+                    return;
+                }
+                if (ex != null) {
+                    plugin.getLogger().severe("Failed to load team browser stats: " + ex.getMessage());
+                    renderTeamBrowserError(inventory, search, fromMainMenu);
+                    return;
+                }
+                renderTeamBrowser(player, inventory, holder, snapshots, records == null ? Map.of() : records);
+            })
+        );
+    }
+
+    private void renderTeamBrowserLoading(Inventory inventory, String search, boolean fromMainMenu) {
+        decorateTeamBrowser(inventory);
+        inventory.setItem(4, teamBrowserButton(
+            Material.NETHER_STAR,
+            MM.deserialize("<gradient:#22d3ee:#facc15><bold>Teams</bold></gradient>"),
+            List.of(
+                muted("Loading team stats..."),
+                muted(search.isBlank() ? "Use /teams <name> to search." : "Search: " + search)
+            )
+        ));
+        inventory.setItem(22, teamBrowserButton(
+            Material.CLOCK,
+            MM.deserialize("<yellow><bold>Loading</bold></yellow>"),
+            List.of(muted("Pulling team totals from the database."))
+        ));
+        applyTeamBrowserFooter(inventory, search, fromMainMenu);
+    }
+
+    private void renderTeamBrowserError(Inventory inventory, String search, boolean fromMainMenu) {
+        decorateTeamBrowser(inventory);
+        inventory.setItem(22, teamBrowserButton(
+            Material.BARRIER,
+            MM.deserialize("<red><bold>Stats unavailable</bold></red>"),
+            List.of(
+                muted("Teams loaded, but stat totals failed."),
+                muted("Try again in a moment.")
+            )
+        ));
+        applyTeamBrowserFooter(inventory, search, fromMainMenu);
+    }
+
+    private void renderTeamBrowser(
+        Player viewer,
+        Inventory inventory,
+        TeamBrowserHolder holder,
+        List<TeamSnapshot> snapshots,
+        Map<UUID, DatabaseManager.LeaderboardStatsRecord> records
+    ) {
+        holder.clearSlots();
+        decorateTeamBrowser(inventory);
+
+        long totalMembers = snapshots.stream().mapToLong(snapshot -> snapshot.members().size()).sum();
+        long onlineMembers = snapshots.stream().mapToLong(TeamSnapshot::onlineMembers).sum();
+        inventory.setItem(4, teamBrowserButton(
+            Material.NETHER_STAR,
+            MM.deserialize("<gradient:#22d3ee:#facc15><bold>Teams</bold></gradient>"),
+            List.of(
+                muted("Browse every team and compare server stats."),
+                statLine("Teams", snapshots.size()),
+                statLine("Members shown", totalMembers),
+                statLine("Online shown", onlineMembers),
+                muted(holder.search().isBlank() ? "Search with /teams <name>." : "Search: " + holder.search())
+            )
+        ));
+
+        if (snapshots.isEmpty()) {
+            inventory.setItem(22, teamBrowserButton(
+                Material.OAK_SIGN,
+                MM.deserialize("<yellow><bold>No teams found</bold></yellow>"),
+                List.of(
+                    muted(holder.search().isBlank()
+                        ? "No teams exist yet."
+                        : "No team matched that search."),
+                    muted("Use /team create \"name\" [color].")
+                )
+            ));
+        } else {
+            int count = Math.min(snapshots.size(), TEAM_BROWSER_TEAM_SLOTS.length);
+            for (int i = 0; i < count; i++) {
+                TeamSnapshot snapshot = snapshots.get(i);
+                TeamStats stats = teamStats(snapshot.members(), records, System.currentTimeMillis());
+                int slot = TEAM_BROWSER_TEAM_SLOTS[i];
+                holder.putTeam(slot, snapshot.key());
+                inventory.setItem(slot, teamBrowserTeamItem(snapshot, stats, viewer.getUniqueId()));
+            }
+        }
+
+        applyTeamBrowserFooter(inventory, holder.search(), holder.fromMainMenu());
+    }
+
+    private void applyTeamBrowserFooter(Inventory inventory, String search, boolean fromMainMenu) {
+        inventory.setItem(TEAM_BROWSER_BACK_SLOT, teamBrowserButton(
+            Material.ARROW,
+            Component.text(fromMainMenu ? "Back to Menu" : "Close", NamedTextColor.YELLOW, TextDecoration.BOLD),
+            List.of(muted(fromMainMenu ? "Return to /menu." : "Close this browser."))
+        ));
+        inventory.setItem(TEAM_BROWSER_VAULT_SLOT, teamBrowserButton(
+            Material.BARREL,
+            MM.deserialize("<green><bold>Your Team Vault</bold></green>"),
+            List.of(
+                muted("Open your team's shared double chest."),
+                muted("Requires you to be in a team.")
+            )
+        ));
+        inventory.setItem(TEAM_BROWSER_REFRESH_SLOT, teamBrowserButton(
+            Material.COMPASS,
+            MM.deserialize("<aqua><bold>Refresh</bold></aqua>"),
+            List.of(
+                muted(search.isBlank() ? "Reload all teams." : "Reload search: " + search),
+                muted("Stats update as players earn them.")
+            )
+        ));
+    }
+
+    private List<TeamSnapshot> teamBrowserSnapshots(String search) {
+        List<TeamSnapshot> all = new ArrayList<>();
+        for (TeamData team : teamsByKey.values()) {
+            List<UUID> members = new ArrayList<>(team.members);
+            members.sort((a, b) -> playerName(a).compareToIgnoreCase(playerName(b)));
+            int online = 0;
+            for (UUID member : members) {
+                Player player = Bukkit.getPlayer(member);
+                if (player != null && player.isOnline()) {
+                    online++;
+                }
+            }
+            all.add(new TeamSnapshot(
+                team.key,
+                team.displayName,
+                team.color,
+                team.owner,
+                List.copyOf(members),
+                online,
+                teamSearchScore(team.displayName, search)
+            ));
+        }
+
+        if (search.isBlank()) {
+            all.sort((a, b) -> {
+                int memberCompare = Integer.compare(b.members().size(), a.members().size());
+                if (memberCompare != 0) return memberCompare;
+                return a.displayName().compareToIgnoreCase(b.displayName());
+            });
+            return limitTeamSnapshots(all);
+        }
+
+        List<TeamSnapshot> matches = new ArrayList<>();
+        for (TeamSnapshot snapshot : all) {
+            if (snapshot.searchScore() < 1000) {
+                matches.add(snapshot);
+            }
+        }
+        List<TeamSnapshot> result = matches.isEmpty() ? all : matches;
+        result.sort((a, b) -> {
+            int scoreCompare = Integer.compare(a.searchScore(), b.searchScore());
+            if (scoreCompare != 0) return scoreCompare;
+            return a.displayName().compareToIgnoreCase(b.displayName());
+        });
+        return limitTeamSnapshots(result);
+    }
+
+    private List<TeamSnapshot> limitTeamSnapshots(List<TeamSnapshot> snapshots) {
+        if (snapshots.size() <= TEAM_BROWSER_TEAM_SLOTS.length) {
+            return snapshots;
+        }
+        return new ArrayList<>(snapshots.subList(0, TEAM_BROWSER_TEAM_SLOTS.length));
+    }
+
+    private int teamSearchScore(String teamName, String search) {
+        if (search == null || search.isBlank()) {
+            return 0;
+        }
+        String name = normalizeTeamSearch(teamName);
+        if (name.equals(search)) return 0;
+        if (name.startsWith(search)) return 10 + Math.max(0, name.length() - search.length());
+        int contains = name.indexOf(search);
+        if (contains >= 0) return 100 + contains;
+        int ordered = orderedSearchScore(name, search);
+        return ordered >= 0 ? 300 + ordered : 1000 + Math.abs(name.length() - search.length());
+    }
+
+    private int orderedSearchScore(String name, String search) {
+        int lastIndex = -1;
+        int score = 0;
+        for (int i = 0; i < search.length(); i++) {
+            int index = name.indexOf(search.charAt(i), lastIndex + 1);
+            if (index < 0) {
+                return -1;
+            }
+            score += Math.max(0, index - lastIndex - 1);
+            lastIndex = index;
+        }
+        return score;
+    }
+
+    private String normalizeTeamSearch(String raw) {
+        return raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private TeamStats teamStats(List<UUID> members, Map<UUID, DatabaseManager.LeaderboardStatsRecord> records, long now) {
+        if (members == null || members.isEmpty()) {
+            return EMPTY_TEAM_STATS;
+        }
+        long kills = 0L;
+        long deaths = 0L;
+        long bossKills = 0L;
+        long mobKills = 0L;
+        long bossDamage = 0L;
+        long bossFights = 0L;
+        long playtime = 0L;
+        for (UUID member : members) {
+            DatabaseManager.LeaderboardStatsRecord record = records == null ? null : records.get(member);
+            if (record != null) {
+                kills += Math.max(0L, record.playerKills());
+                deaths += Math.max(0L, record.deaths());
+                bossKills += Math.max(0L, record.bossKills());
+                mobKills += Math.max(0L, record.mobKills());
+                bossDamage += Math.max(0L, record.bossDamage());
+                bossFights += Math.max(0L, record.bossFights());
+                playtime += Math.max(0L, record.playtimeSeconds());
+            }
+            if (plugin.getLeaderboardManager() != null) {
+                playtime += plugin.getLeaderboardManager().liveSessionSeconds(member, now);
+            }
+        }
+        return new TeamStats(kills, deaths, bossKills, mobKills, bossDamage, bossFights, playtime);
+    }
+
+    private ItemStack teamBrowserTeamItem(TeamSnapshot snapshot, TeamStats stats, UUID viewerId) {
+        List<Component> lore = new ArrayList<>();
+        lore.add(muted("Owner: ").append(Component.text(playerName(snapshot.owner()), NamedTextColor.WHITE)));
+        lore.add(muted("Members: ").append(Component.text(snapshot.members().size(), NamedTextColor.WHITE))
+            .append(muted(" | Online: ")).append(Component.text(snapshot.onlineMembers(), NamedTextColor.GREEN)));
+        lore.add(muted("Color: ").append(Component.text(snapshot.color().display, snapshot.color().textColor)));
+        lore.add(Component.empty());
+        lore.add(statLine("Player Kills", stats.playerKills()));
+        lore.add(statLine("Deaths", stats.deaths()));
+        lore.add(statLine("K/D", formatRatio(stats.playerKills(), stats.deaths())));
+        lore.add(statLine("Boss Kills", stats.bossKills()));
+        lore.add(statLine("Boss Damage", stats.bossDamage()));
+        lore.add(statLine("Playtime", formatPlaytime(stats.playtimeSeconds())));
+        lore.add(Component.empty());
+        lore.add(muted("Members: ").append(Component.text(memberPreview(snapshot.members()), NamedTextColor.WHITE)));
+        if (snapshot.members().contains(viewerId)) {
+            lore.add(Component.empty());
+            lore.add(Component.text("This is your team.", NamedTextColor.GREEN).decoration(TextDecoration.ITALIC, false));
+        }
+        lore.add(muted("Click for a chat summary."));
+
+        return teamBrowserButton(
+            Material.SHIELD,
+            Component.text(snapshot.displayName(), snapshot.color().textColor, TextDecoration.BOLD),
+            lore
+        );
+    }
+
+    private Component teamSummaryMessage(TeamData team) {
+        List<String> members = new ArrayList<>();
+        for (UUID member : team.members) {
+            members.add(playerName(member));
+        }
+        members.sort(String.CASE_INSENSITIVE_ORDER);
+        return MessageUtil.prefixedRaw(
+            "<gold>Team</gold> <" + team.color.id + ">" + team.displayName + "</" + team.color.id + "> " +
+                "<gray>| Owner: <white>" + playerName(team.owner) + "</white> " +
+                "| Members: <white>" + team.members.size() + "</white> " +
+                "| List: <white>" + String.join(", ", members) + "</white></gray>"
+        );
+    }
+
+    private String memberPreview(List<UUID> members) {
+        if (members == null || members.isEmpty()) {
+            return "none";
+        }
+        List<String> names = new ArrayList<>();
+        int limit = Math.min(5, members.size());
+        for (int i = 0; i < limit; i++) {
+            names.add(playerName(members.get(i)));
+        }
+        if (members.size() > limit) {
+            names.add("+" + (members.size() - limit) + " more");
+        }
+        return String.join(", ", names);
+    }
+
+    private String playerName(UUID playerId) {
+        if (playerId == null) {
+            return "Unknown";
+        }
+        Player online = Bukkit.getPlayer(playerId);
+        if (online != null) {
+            return online.getName();
+        }
+        String name = Bukkit.getOfflinePlayer(playerId).getName();
+        return name == null || name.isBlank() ? playerId.toString().substring(0, 8) : name;
+    }
+
+    private String formatNumber(long value) {
+        return String.format(Locale.ROOT, "%,d", Math.max(0L, value));
+    }
+
+    private String formatRatio(long kills, long deaths) {
+        if (deaths <= 0L) {
+            return kills <= 0L ? "0.00" : formatNumber(kills);
+        }
+        return String.format(Locale.ROOT, "%.2f", kills / (double) deaths);
+    }
+
+    private String formatPlaytime(long seconds) {
+        long clamped = Math.max(0L, seconds);
+        long days = clamped / 86_400L;
+        long hours = (clamped % 86_400L) / 3_600L;
+        long minutes = (clamped % 3_600L) / 60L;
+        if (days > 0L) {
+            return days + "d " + hours + "h";
+        }
+        if (hours > 0L) {
+            return hours + "h " + minutes + "m";
+        }
+        return minutes + "m";
+    }
+
+    private Component statLine(String label, long value) {
+        return statLine(label, formatNumber(value));
+    }
+
+    private Component statLine(String label, String value) {
+        return muted(label + ": ").append(Component.text(value, NamedTextColor.WHITE).decoration(TextDecoration.ITALIC, false));
+    }
+
+    private Component muted(String text) {
+        return Component.text(text, NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false);
+    }
+
+    private ItemStack teamBrowserButton(Material material, Component name, List<Component> lore) {
+        ItemStack item = new ItemStack(material);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        meta.displayName(name.decoration(TextDecoration.ITALIC, false));
+        meta.lore(lore.stream()
+            .map(line -> line.decoration(TextDecoration.ITALIC, false))
+            .toList());
+        meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES, ItemFlag.HIDE_ENCHANTS, ItemFlag.HIDE_UNBREAKABLE);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private void decorateTeamBrowser(Inventory inventory) {
+        inventory.clear();
+        ItemStack filler = teamBrowserPane(Material.BLACK_STAINED_GLASS_PANE);
+        ItemStack accent = teamBrowserPane(Material.CYAN_STAINED_GLASS_PANE);
+        ItemStack gold = teamBrowserPane(Material.ORANGE_STAINED_GLASS_PANE);
+        int lastRow = (inventory.getSize() / 9) - 1;
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            int row = slot / 9;
+            int col = slot % 9;
+            if (row == 0 || row == lastRow || col == 0 || col == 8) {
+                inventory.setItem(slot, filler);
+            }
+        }
+        for (int slot : List.of(1, 7, 9, 17, 36, 44, 46, 52)) {
+            inventory.setItem(slot, accent);
+        }
+        for (int slot : List.of(2, 6, 18, 26, 27, 35, 47, 51)) {
+            inventory.setItem(slot, gold);
+        }
+    }
+
+    private ItemStack teamBrowserPane(Material material) {
+        ItemStack item = new ItemStack(material);
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            meta.displayName(Component.empty());
+            item.setItemMeta(meta);
+        }
+        return item;
     }
 
     public void openTeamVault(Player player) {
@@ -908,17 +1424,32 @@ public final class TeamManager implements Listener {
         return names;
     }
 
-    public void resyncAllTeamVaultLegendaryClaims() {
-        if (!teamsLoaded) {
+    public boolean isTeamVaultInventory(Inventory inventory) {
+        return inventory != null && inventory.getHolder() instanceof TeamVaultHolder;
+    }
+
+    public void requestTeamVaultSave(Inventory inventory, String reason) {
+        if (!(inventory != null && inventory.getHolder() instanceof TeamVaultHolder holder)) {
             return;
         }
-        for (TeamData team : List.copyOf(teamsByKey.values())) {
-            loadTeamVault(team).thenAccept(this::syncTeamVaultLegendaryClaims)
-                .exceptionally(ex -> {
-                    plugin.getLogger().severe("Failed to sync legendary claims for team vault " + team.displayName + ": " + ex.getMessage());
-                    return null;
-                });
+        scheduleTeamVaultSyncAndSave(holder.teamKey(), reason == null || reason.isBlank() ? "external" : reason);
+    }
+
+    public CompletableFuture<Void> resyncAllTeamVaultLegendaryClaims() {
+        if (!teamsLoaded) {
+            return CompletableFuture.completedFuture(null);
         }
+        List<CompletableFuture<Void>> syncs = new ArrayList<>();
+        for (TeamData team : List.copyOf(teamsByKey.values())) {
+            CompletableFuture<Void> sync = loadTeamVault(team).thenAccept(this::syncTeamVaultLegendaryClaims);
+            sync.whenComplete((ignored, ex) -> {
+                if (ex != null) {
+                    plugin.getLogger().severe("Failed to sync legendary claims for team vault " + team.displayName + ": " + ex.getMessage());
+                }
+            });
+            syncs.add(sync);
+        }
+        return CompletableFuture.allOf(syncs.toArray(CompletableFuture[]::new));
     }
 
     public boolean inTeam(UUID playerId) {
@@ -937,10 +1468,18 @@ public final class TeamManager implements Listener {
             return playerName;
         }
 
-        return Component.text("[", NamedTextColor.DARK_GRAY)
+        Component nameplate = Component.text("[", NamedTextColor.DARK_GRAY)
             .append(Component.text(team.displayName, team.color.textColor))
             .append(Component.text("] ", NamedTextColor.DARK_GRAY))
             .append(playerName);
+        if (!team.owner.equals(player.getUniqueId())) {
+            return nameplate;
+        }
+
+        return Component.text("Team Leader", NamedTextColor.GOLD)
+            .decorate(TextDecoration.BOLD)
+            .append(Component.newline())
+            .append(nameplate);
     }
 
     public boolean sameTeam(UUID firstPlayerId, UUID secondPlayerId) {
@@ -957,6 +1496,9 @@ public final class TeamManager implements Listener {
         return List.of(
             "<gold><bold>Team Commands</bold></gold>",
             "<gray><white>/team create \"name\" [color]</white> - Create a team</gray>",
+            "<gray><white>/teams [search]</white> - Browse every team and compare stats</gray>",
+            "<gray><white>/team list</white> - Open the team browser</gray>",
+            "<gray><white>/team search <name></white> - Search teams by best match</gray>",
             "<gray><white>/team colors</white> - View team colors</gray>",
             "<gray><white>/team color <color></white> - Change team color (owner)</gray>",
             "<gray><white>/team rename \"name\"</white> - Rename your team (owner)</gray>",
@@ -993,6 +1535,9 @@ public final class TeamManager implements Listener {
         if (cached != null) {
             return CompletableFuture.completedFuture(cached);
         }
+        if (renamingTeamKeys.contains(team.key)) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Team settings are updating."));
+        }
 
         CompletableFuture<TeamVaultSession> inFlight = vaultLoadingByTeamKey.get(team.key);
         if (inFlight != null) {
@@ -1014,8 +1559,15 @@ public final class TeamManager implements Listener {
 
             Bukkit.getScheduler().runTask(plugin, () -> {
                 try {
+                    if (future.isDone()) {
+                        return;
+                    }
                     if (ex != null) {
                         future.completeExceptionally(ex);
+                        return;
+                    }
+                    if (renamingTeamKeys.contains(team.key)) {
+                        future.completeExceptionally(new IllegalStateException("Team settings are updating."));
                         return;
                     }
 
@@ -1066,7 +1618,11 @@ public final class TeamManager implements Listener {
                 if (teamVaultsByKey.get(teamKey) != session) {
                     return CompletableFuture.completedFuture(null);
                 }
-                return plugin.getDatabase().saveTeamVault(session.displayName(), snapshot);
+                TeamData current = teamsByKey.get(teamKey);
+                if (current == null) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                return plugin.getDatabase().saveTeamVault(current.displayName, snapshot);
             });
         });
         save.whenComplete((ignored, ignoredEx) -> vaultSaveChainsByTeamKey.remove(session.teamKey(), save));
@@ -1101,6 +1657,48 @@ public final class TeamManager implements Listener {
         });
     }
 
+    private void scheduleTeamVaultSyncAndSave(String teamKey, String reason) {
+        if (teamKey == null || teamKey.isBlank()) {
+            return;
+        }
+
+        BukkitTask previous = vaultAutosaveTasksByTeamKey.remove(teamKey);
+        if (previous != null) {
+            previous.cancel();
+        }
+
+        BukkitTask task = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            vaultAutosaveTasksByTeamKey.remove(teamKey);
+            TeamVaultSession session = teamVaultsByKey.get(teamKey);
+            if (session == null) {
+                return;
+            }
+
+            syncTeamVaultLegendaryClaims(session);
+            for (var viewer : List.copyOf(session.inventory().getViewers())) {
+                if (viewer instanceof Player player) {
+                    syncPlayerLegendaryClaims(player);
+                }
+            }
+            saveTeamVault(session).exceptionally(ex -> {
+                plugin.getLogger().severe("Failed to autosave team vault for " + session.displayName()
+                    + " after " + reason + ": " + ex.getMessage());
+                return null;
+            });
+        }, 10L);
+        vaultAutosaveTasksByTeamKey.put(teamKey, task);
+    }
+
+    private void cancelVaultAutosave(String teamKey) {
+        if (teamKey == null || teamKey.isBlank()) {
+            return;
+        }
+        BukkitTask task = vaultAutosaveTasksByTeamKey.remove(teamKey);
+        if (task != null) {
+            task.cancel();
+        }
+    }
+
     private void syncTeamVaultLegendaryClaims(TeamVaultSession session) {
         if (session == null || plugin.getLegendaryListener() == null) {
             return;
@@ -1130,10 +1728,11 @@ public final class TeamManager implements Listener {
     }
 
     private CompletableFuture<Void> saveAndDiscardVaultForRename(TeamData team) {
+        cancelVaultAutosave(team.key);
+        cancelVaultLoad(team.key, "Team is being renamed.");
         TeamVaultSession session = teamVaultsByKey.get(team.key);
         if (session == null) {
             clearTeamVaultLegendaryClaims(team.key);
-            vaultLoadingByTeamKey.remove(team.key);
             return CompletableFuture.completedFuture(null);
         }
 
@@ -1146,7 +1745,6 @@ public final class TeamManager implements Listener {
             .thenCompose(ignored -> runOnMainThread(() -> {
                 clearTeamVaultLegendaryClaims(team.key);
                 teamVaultsByKey.remove(team.key, session);
-                vaultLoadingByTeamKey.remove(team.key);
                 return null;
             }));
     }
@@ -1252,13 +1850,21 @@ public final class TeamManager implements Listener {
     }
 
     private void discardTeamVault(String teamKey) {
-        vaultLoadingByTeamKey.remove(teamKey);
+        cancelVaultAutosave(teamKey);
+        cancelVaultLoad(teamKey, "Team vault was discarded.");
         clearTeamVaultLegendaryClaims(teamKey);
         TeamVaultSession session = teamVaultsByKey.remove(teamKey);
         if (session == null) return;
 
         for (var viewer : List.copyOf(session.inventory().getViewers())) {
             viewer.closeInventory();
+        }
+    }
+
+    private void cancelVaultLoad(String teamKey, String reason) {
+        CompletableFuture<TeamVaultSession> loading = vaultLoadingByTeamKey.remove(teamKey);
+        if (loading != null) {
+            loading.completeExceptionally(new IllegalStateException(reason));
         }
     }
 
@@ -1427,12 +2033,18 @@ public final class TeamManager implements Listener {
         }
 
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.LEGENDARY, owner.getName() + "'s Crown"));
+        meta.setItemModel(keyTeamCrownEquipmentModel);
         meta.setUnbreakable(true);
         meta.addEnchant(enchantProtection, 4, true);
         meta.addEnchant(enchantAquaAffinity, 1, true);
         meta.addEnchant(enchantRespiration, 3, true);
         meta.addItemFlags(ItemFlag.HIDE_UNBREAKABLE);
         CustomLoreUtil.applyStyledItemFlags(meta);
+        EquippableComponent equippable = meta.getEquippable();
+        equippable.setSlot(EquipmentSlot.HEAD);
+        equippable.setModel(keyTeamCrownEquipmentModel);
+        equippable.setDispensable(false);
+        meta.setEquippable(equippable);
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.NETHERITE_HELMET,
@@ -1569,6 +2181,26 @@ public final class TeamManager implements Listener {
         return copy;
     }
 
+    private record TeamSnapshot(
+        String key,
+        String displayName,
+        TeamColor color,
+        UUID owner,
+        List<UUID> members,
+        int onlineMembers,
+        int searchScore
+    ) {}
+
+    private record TeamStats(
+        long playerKills,
+        long deaths,
+        long bossKills,
+        long mobKills,
+        long bossDamage,
+        long bossFights,
+        long playtimeSeconds
+    ) {}
+
     private static final class TeamData {
         private String key;
         private String displayName;
@@ -1628,6 +2260,42 @@ public final class TeamManager implements Listener {
 
     private record InviteData(String teamKey, UUID inviter, long expiresAt) {}
     private record TeamVaultSession(String teamKey, String displayName, Inventory inventory) {}
+
+    private static final class TeamBrowserHolder implements InventoryHolder {
+        private final String search;
+        private final boolean fromMainMenu;
+        private final Map<Integer, String> teamKeysBySlot = new HashMap<>();
+
+        private TeamBrowserHolder(String search, boolean fromMainMenu) {
+            this.search = search == null ? "" : search;
+            this.fromMainMenu = fromMainMenu;
+        }
+
+        private String search() {
+            return search;
+        }
+
+        private boolean fromMainMenu() {
+            return fromMainMenu;
+        }
+
+        private void putTeam(int slot, String teamKey) {
+            teamKeysBySlot.put(slot, teamKey);
+        }
+
+        private String teamBySlot(int slot) {
+            return teamKeysBySlot.get(slot);
+        }
+
+        private void clearSlots() {
+            teamKeysBySlot.clear();
+        }
+
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
 
     private record TeamVaultHolder(String teamKey) implements InventoryHolder {
         @Override

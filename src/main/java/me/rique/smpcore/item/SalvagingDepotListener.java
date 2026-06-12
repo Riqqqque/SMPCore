@@ -2,49 +2,71 @@ package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.MessageUtil;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.Color;
+import org.bukkit.Keyed;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Particle;
 import org.bukkit.Sound;
+import org.bukkit.Tag;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Chest;
+import org.bukkit.block.Container;
+import org.bukkit.block.DoubleChest;
 import org.bukkit.block.TileState;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.Display;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.Item;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.CraftItemEvent;
+import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
+import org.bukkit.event.inventory.InventoryPickupItemEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
+import org.bukkit.event.inventory.PrepareItemCraftEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.PlayerDropItemEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerKickEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.ChunkUnloadEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.Recipe;
+import org.bukkit.inventory.RecipeChoice;
 import org.bukkit.inventory.ShapedRecipe;
+import org.bukkit.inventory.ShapelessRecipe;
 import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
@@ -52,10 +74,13 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -64,9 +89,7 @@ public final class SalvagingDepotListener implements Listener {
     public static final String ITEM_ID = "salvaging_depot";
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
-    private static final long PROCESS_TICKS = 20L * 6L;
-    private static final long PROCESS_MILLIS = 6_000L;
-    private static final double RETURN_RATE = 0.66D;
+    private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final BlockFace[] HORIZONTAL_FACES = {
         BlockFace.NORTH,
         BlockFace.EAST,
@@ -81,10 +104,15 @@ public final class SalvagingDepotListener implements Listener {
     private final NamespacedKey keyDepotHologramBlock;
     private final NamespacedKey keyProcessingId;
     private final NamespacedKey keyProcessingReadyAt;
+    private final NamespacedKey keyQueueReadyAt;
     private final NamespacedKey recipeKey;
     private final Map<String, UUID> hologramsByBlock = new ConcurrentHashMap<>();
+    private final Set<String> knownDepotBlocks = ConcurrentHashMap.newKeySet();
+    private final Map<Inventory, String> depotBlocksByInventory = Collections.synchronizedMap(new IdentityHashMap<>());
+    private final Map<UUID, String> pendingDepotOpensByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, BukkitTask> processingTasks = new ConcurrentHashMap<>();
     private BukkitTask maintenanceTask;
+    private BukkitTask quickScanTask;
 
     public SalvagingDepotListener(SMPCore plugin) {
         this.plugin = plugin;
@@ -94,6 +122,7 @@ public final class SalvagingDepotListener implements Listener {
         this.keyDepotHologramBlock = new NamespacedKey(plugin, "salvaging_depot_hologram_block");
         this.keyProcessingId = new NamespacedKey(plugin, "salvage_processing_id");
         this.keyProcessingReadyAt = new NamespacedKey(plugin, "salvage_ready_at");
+        this.keyQueueReadyAt = new NamespacedKey(plugin, "salvage_queue_ready_at");
         this.recipeKey = new NamespacedKey(plugin, ITEM_ID);
     }
 
@@ -106,12 +135,17 @@ public final class SalvagingDepotListener implements Listener {
             syncLoadedDepots();
         });
         maintenanceTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncLoadedDepots, 100L, 200L);
+        quickScanTask = Bukkit.getScheduler().runTaskTimer(plugin, this::scanKnownDepots, 20L, 20L);
     }
 
     public void shutdown() {
         if (maintenanceTask != null) {
             maintenanceTask.cancel();
             maintenanceTask = null;
+        }
+        if (quickScanTask != null) {
+            quickScanTask.cancel();
+            quickScanTask = null;
         }
         for (BukkitTask task : processingTasks.values()) {
             task.cancel();
@@ -124,6 +158,9 @@ public final class SalvagingDepotListener implements Listener {
             }
         }
         hologramsByBlock.clear();
+        knownDepotBlocks.clear();
+        depotBlocksByInventory.clear();
+        pendingDepotOpensByPlayer.clear();
     }
 
     public ItemStack createDepotItem() {
@@ -145,15 +182,16 @@ public final class SalvagingDepotListener implements Listener {
             List.of(
                 CustomLoreUtil.section(
                     "Use",
-                    "Six-Second Salvage",
-                    "<gray>Put vanilla armor, weapons, or tools inside.</gray>",
-                    "<gray>After <white>6s</white>, the item is consumed and returns about <white>66%</white> of its base materials.</gray>",
+                    "Cancelable Salvage",
+                    "<gray>Put armor, weapons, or tools inside.</gray>",
+                    "<gray>Items queue for <white>" + cancelWindowSeconds() + "s</white>; remove them during that window to cancel.</gray>",
+                    "<gray>Once locked, salvaging takes <white>" + processingSeconds() + "s</white> and returns about <white>" + returnRatePercent() + "%</white> of its base materials.</gray>",
                     "<gray>Damaged items return less.</gray>"
                 ),
                 CustomLoreUtil.section(
                     "Safety",
                     "No Relic Recycling",
-                    "<gray>Custom items, legendaries, backpacks, boss relics, and power items are ignored.</gray>",
+                    "<gray>Unique relics, legendaries, backpacks, stations, and power items are ignored.</gray>",
                     "<gray>Processing items cannot be pulled out by players or hoppers.</gray>"
                 )
             )
@@ -181,9 +219,96 @@ public final class SalvagingDepotListener implements Listener {
         return ingredients;
     }
 
+    private int cancelWindowSeconds() {
+        return plugin.getConfigManager() == null
+            ? 10
+            : Math.max(1, plugin.getConfigManager().salvagingDepotCancelWindowSeconds);
+    }
+
+    private long cancelWindowMillis() {
+        return cancelWindowSeconds() * 1000L;
+    }
+
+    private long cancelWindowTicks() {
+        return cancelWindowSeconds() * 20L;
+    }
+
+    private int processingSeconds() {
+        return plugin.getConfigManager() == null
+            ? 6
+            : Math.max(1, plugin.getConfigManager().salvagingDepotProcessingSeconds);
+    }
+
+    private long processingMillis() {
+        return processingSeconds() * 1000L;
+    }
+
+    private long processingTicks() {
+        return processingSeconds() * 20L;
+    }
+
+    private double returnRate() {
+        if (plugin.getConfigManager() == null) {
+            return 0.66D;
+        }
+        return Math.max(0.0D, Math.min(1.0D, plugin.getConfigManager().salvagingDepotReturnRate));
+    }
+
+    private String returnRatePercent() {
+        double percent = returnRate() * 100.0D;
+        if (Math.abs(percent - Math.rint(percent)) < 0.0001D) {
+            return Long.toString(Math.round(percent));
+        }
+        return String.format(java.util.Locale.ROOT, "%.1f", percent);
+    }
+
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         event.getPlayer().discoverRecipe(recipeKey);
+        purgeQueuedItemsOutsideDepot(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onPrepareCraft(PrepareItemCraftEvent event) {
+        if (isManagedRecipe(event.getRecipe()) && !usesOnlyPlainRecipeIngredients(event.getInventory().getMatrix())) {
+            event.getInventory().setResult(null);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onCraft(CraftItemEvent event) {
+        if (!isManagedRecipe(event.getRecipe()) || usesOnlyPlainRecipeIngredients(event.getInventory().getMatrix())) {
+            return;
+        }
+        event.setCancelled(true);
+        if (event.getWhoClicked() instanceof Player player) {
+            player.sendMessage(MessageUtil.warn("Use plain vanilla ingredients for Salvaging Depot recipes."));
+        }
+    }
+
+    @EventHandler
+    public void onKick(PlayerKickEvent event) {
+        purgeQueuedItemsOutsideDepot(event.getPlayer());
+    }
+
+    @EventHandler
+    public void onQuit(PlayerQuitEvent event) {
+        purgeQueuedItemsOutsideDepot(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onDrop(PlayerDropItemEvent event) {
+        cleanDroppedDepotState(event.getItemDrop());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPickup(EntityPickupItemEvent event) {
+        cleanDroppedDepotState(event.getItem());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onInventoryPickup(InventoryPickupItemEvent event) {
+        cleanDroppedDepotState(event.getItem());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -208,6 +333,23 @@ public final class SalvagingDepotListener implements Listener {
         Bukkit.getScheduler().runTask(plugin, () -> setupPlacedDepot(block));
     }
 
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onInteract(PlayerInteractEvent event) {
+        if (event.getAction() != Action.RIGHT_CLICK_BLOCK || event.getClickedBlock() == null) {
+            return;
+        }
+        Block block = event.getClickedBlock();
+        if (!isDepotBlock(block)) {
+            return;
+        }
+
+        String key = blockKey(block);
+        UUID playerId = event.getPlayer().getUniqueId();
+        pendingDepotOpensByPlayer.put(playerId, key);
+        scheduleBlockScan(block);
+        Bukkit.getScheduler().runTaskLater(plugin, () -> pendingDepotOpensByPlayer.remove(playerId, key), 60L);
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBreak(BlockBreakEvent event) {
         Block block = event.getBlock();
@@ -222,18 +364,13 @@ public final class SalvagingDepotListener implements Listener {
         }
 
         event.setDropItems(false);
-        removeHologram(block);
         Inventory inventory = depotInventory(block);
+        ItemStack[] contents = inventory == null ? new ItemStack[0] : cloneContents(inventory.getStorageContents());
         if (inventory != null) {
-            for (ItemStack item : inventory.getStorageContents()) {
-                if (item == null || item.getType().isAir()) {
-                    continue;
-                }
-                block.getWorld().dropItemNaturally(block.getLocation().add(0.5, 0.6, 0.5), item.clone());
-            }
             inventory.clear();
         }
-        block.getWorld().dropItemNaturally(block.getLocation().add(0.5, 0.6, 0.5), createDepotItem());
+        removeHologram(block);
+        Bukkit.getScheduler().runTask(plugin, () -> finishBreak(block, contents));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -246,14 +383,19 @@ public final class SalvagingDepotListener implements Listener {
         event.blockList().removeIf(this::isDepotBlock);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onInventoryClick(InventoryClickEvent event) {
         Inventory top = event.getView().getTopInventory();
-        if (!isDepotInventory(top)) {
+        if (!resolveDepotInventory(event.getWhoClicked() instanceof Player player ? player : null, top)) {
             return;
         }
 
         if (event.getRawSlot() >= 0 && event.getRawSlot() < top.getSize()) {
+            if (isUnsafeDepotClick(event)) {
+                event.setCancelled(true);
+                scheduleScan(top);
+                return;
+            }
             ItemStack current = event.getCurrentItem();
             if (isProcessing(current)) {
                 event.setCancelled(true);
@@ -263,11 +405,11 @@ public final class SalvagingDepotListener implements Listener {
                 scheduleScan(top);
                 return;
             }
-            if (!salvageOutputs(current).isEmpty()) {
-                event.setCancelled(true);
-                scanDepot(top);
+            if (isQueued(current)) {
+                event.setCurrentItem(cleanQueuedItem(current));
+                scheduleScan(top);
                 if (event.getWhoClicked() instanceof Player player) {
-                    player.sendMessage(MessageUtil.warn("That item is being salvaged now."));
+                    Bukkit.getScheduler().runTask(plugin, () -> purgeQueuedItemsOutsideDepot(player, true));
                 }
                 return;
             }
@@ -276,39 +418,55 @@ public final class SalvagingDepotListener implements Listener {
         scheduleScan(top);
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.MONITOR)
     public void onInventoryDrag(InventoryDragEvent event) {
         Inventory top = event.getView().getTopInventory();
-        if (isDepotInventory(top)) {
+        if (resolveDepotInventory(event.getWhoClicked() instanceof Player player ? player : null, top)) {
             scheduleScan(top);
         }
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onInventoryClose(InventoryCloseEvent event) {
-        if (isDepotInventory(event.getInventory())) {
+        if (resolveDepotInventory(event.getPlayer() instanceof Player player ? player : null, event.getInventory())) {
             scanDepot(event.getInventory());
+            if (event.getPlayer() instanceof Player closingPlayer) {
+                purgeQueuedItemsOutsideDepot(closingPlayer);
+            }
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.MONITOR)
     public void onInventoryOpen(InventoryOpenEvent event) {
-        if (isDepotInventory(event.getInventory())) {
+        if (resolveDepotInventory(event.getPlayer() instanceof Player player ? player : null, event.getInventory())) {
             scheduleScan(event.getInventory());
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onInventoryMoveItem(InventoryMoveItemEvent event) {
-        if (isDepotInventory(event.getSource())
-            && (isProcessing(event.getItem()) || !salvageOutputs(event.getItem()).isEmpty())) {
-            event.setCancelled(true);
+        if (isDepotInventory(event.getSource())) {
+            if (isProcessing(event.getItem()) || isQueued(event.getItem()) || !salvageOutputs(event.getItem()).isEmpty()) {
+                event.setCancelled(true);
+            }
+            scheduleScan(event.getSource());
             return;
         }
 
         if (isDepotInventory(event.getDestination())) {
             scheduleScan(event.getDestination());
         }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onDeath(PlayerDeathEvent event) {
+        for (int i = 0; i < event.getDrops().size(); i++) {
+            ItemStack item = event.getDrops().get(i);
+            if (isQueued(item) || isProcessing(item)) {
+                event.getDrops().set(i, cleanDepotState(item));
+            }
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> purgeQueuedItemsOutsideDepot(event.getPlayer()));
     }
 
     @EventHandler
@@ -333,6 +491,33 @@ public final class SalvagingDepotListener implements Listener {
         Bukkit.addRecipe(recipe);
     }
 
+    private boolean isManagedRecipe(Recipe recipe) {
+        return recipe instanceof Keyed keyed && recipeKey.equals(keyed.getKey());
+    }
+
+    private boolean usesOnlyPlainRecipeIngredients(ItemStack[] matrix) {
+        if (matrix == null) {
+            return false;
+        }
+        for (ItemStack item : matrix) {
+            if (item == null || item.getType().isAir()) {
+                continue;
+            }
+            if (!InventoryRecipeUtil.isPlainMaterial(plugin, item, item.getType())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isUnsafeDepotClick(InventoryClickEvent event) {
+        return event.getAction() == InventoryAction.CLONE_STACK
+            || event.getAction() == InventoryAction.UNKNOWN
+            || event.getClick() == org.bukkit.event.inventory.ClickType.CREATIVE
+            || event.getClick() == org.bukkit.event.inventory.ClickType.MIDDLE
+            || event.getClick() == org.bukkit.event.inventory.ClickType.UNKNOWN;
+    }
+
     private void setupPlacedDepot(Block block) {
         if (block.getType() != Material.CHEST) {
             return;
@@ -348,10 +533,32 @@ public final class SalvagingDepotListener implements Listener {
             chest.getPersistentDataContainer().set(keyDepotBlock, PersistentDataType.STRING, ITEM_ID);
             chest.update(true, false);
         }
+        knownDepotBlocks.add(blockKey(block));
         ensureHologram(block);
         scanDepot(block);
         block.getWorld().playSound(block.getLocation().add(0.5, 0.5, 0.5), Sound.BLOCK_ANVIL_PLACE, 0.75f, 1.35f);
         block.getWorld().spawnParticle(Particle.ELECTRIC_SPARK, block.getLocation().add(0.5, 1.1, 0.5), 18, 0.28, 0.24, 0.28, 0.03);
+    }
+
+    private void finishBreak(Block block, ItemStack[] contents) {
+        if (isDepotBlock(block)) {
+            Inventory inventory = depotInventory(block);
+            if (inventory != null) {
+                inventory.setStorageContents(fitToInventory(contents, inventory.getStorageContents().length));
+            }
+            ensureHologram(block);
+            return;
+        }
+
+        knownDepotBlocks.remove(blockKey(block));
+        Location dropLocation = block.getLocation().add(0.5, 0.6, 0.5);
+        for (ItemStack item : contents) {
+            if (item == null || item.getType().isAir()) {
+                continue;
+            }
+            block.getWorld().dropItemNaturally(dropLocation, cleanDepotState(item));
+        }
+        block.getWorld().dropItemNaturally(dropLocation, createDepotItem());
     }
 
     private void syncLoadedDepots() {
@@ -359,6 +566,36 @@ public final class SalvagingDepotListener implements Listener {
             for (Chunk chunk : world.getLoadedChunks()) {
                 syncChunkDepots(chunk);
             }
+        }
+    }
+
+    private void scanKnownDepots() {
+        List<String> blockKeys = new ArrayList<>(knownDepotBlocks);
+        for (String blockKey : hologramsByBlock.keySet()) {
+            if (!knownDepotBlocks.contains(blockKey)) {
+                blockKeys.add(blockKey);
+            }
+        }
+
+        for (String blockKey : blockKeys) {
+            Location location = locationFromBlockKey(blockKey);
+            if (location == null || location.getWorld() == null || !location.isChunkLoaded()) {
+                continue;
+            }
+
+            Block block = location.getBlock();
+            if (!isDepotBlock(block)) {
+                knownDepotBlocks.remove(blockKey);
+                UUID displayId = hologramsByBlock.remove(blockKey);
+                Entity display = displayId == null ? null : Bukkit.getEntity(displayId);
+                if (display != null && display.isValid()) {
+                    display.remove();
+                }
+                continue;
+            }
+
+            knownDepotBlocks.add(blockKey);
+            scanDepot(block);
         }
     }
 
@@ -372,63 +609,140 @@ public final class SalvagingDepotListener implements Listener {
             if (!isDepotBlock(block)) {
                 continue;
             }
+            knownDepotBlocks.add(blockKey(block));
+            ensureDepotBlockMarker(block);
             ensureHologram(block);
             scanDepot(block);
         }
     }
 
     private void scanDepot(Block block) {
+        ensureDepotBlockMarker(block);
         Inventory inventory = depotInventory(block);
         if (inventory != null) {
-            scanDepot(inventory);
+            rememberDepotInventory(inventory, block);
+            scanDepot(block, inventory);
         }
     }
 
     private void scanDepot(Inventory inventory) {
         Block block = depotBlock(inventory);
-        if (block == null || !isDepotBlock(block)) {
+        if (block == null) {
             return;
         }
+        scanDepot(block, inventory);
+    }
 
+    private void scanDepot(Block block, Inventory inventory) {
+        if (block == null || !isDepotBlock(block) || inventory == null) {
+            return;
+        }
+        ensureDepotBlockMarker(block);
+        rememberDepotInventory(inventory, block);
         ItemStack[] contents = inventory.getStorageContents();
         for (int slot = 0; slot < contents.length; slot++) {
-            ItemStack item = contents[slot];
-            if (item == null || item.getType().isAir()) {
-                continue;
+            try {
+                scanDepotSlot(inventory, block, slot, contents[slot]);
+            } catch (RuntimeException ex) {
+                plugin.getLogger().warning("Skipped a Salvaging Depot slot at " + blockKey(block)
+                    + " because " + describeItem(contents[slot]) + " could not be scanned: " + ex.getMessage());
             }
-            if (isProcessing(item)) {
-                UUID processId = processingId(item);
-                long readyAt = processingReadyAt(item);
-                if (processId != null) {
-                    scheduleCompletion(blockKey(block), processId, readyAt);
-                }
-                continue;
-            }
-            List<ItemStack> outputs = salvageOutputs(item);
-            if (outputs.isEmpty()) {
-                continue;
-            }
-
-            UUID processId = UUID.randomUUID();
-            long readyAt = System.currentTimeMillis() + PROCESS_MILLIS;
-            inventory.setItem(slot, markProcessing(item, processId, readyAt));
-            scheduleCompletion(blockKey(block), processId, readyAt);
-            block.getWorld().playSound(block.getLocation().add(0.5, 0.6, 0.5), Sound.BLOCK_GRINDSTONE_USE, 0.7f, 1.15f);
-            block.getWorld().spawnParticle(Particle.WAX_OFF, block.getLocation().add(0.5, 1.05, 0.5), 12, 0.24, 0.18, 0.24, 0.02);
         }
     }
 
+    private void scanDepotSlot(Inventory inventory, Block block, int slot, ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return;
+        }
+        if (isProcessing(item)) {
+            UUID processId = processingId(item);
+            long readyAt = processingReadyAt(item);
+            if (processId != null) {
+                if (readyAt <= System.currentTimeMillis()) {
+                    finishProcessing(blockKey(block), processId);
+                    return;
+                }
+                scheduleCompletion(blockKey(block), processId, readyAt);
+            }
+            return;
+        }
+        if (isQueued(item)) {
+            long readyAt = queueReadyAt(item);
+            ItemStack cleanItem = cleanQueuedItem(item);
+            List<ItemStack> outputs = salvageOutputs(cleanItem);
+            if (outputs.isEmpty()) {
+                inventory.setItem(slot, cleanItem);
+                return;
+            }
+            if (readyAt > System.currentTimeMillis()) {
+                scheduleQueueScan(blockKey(block), readyAt);
+                return;
+            }
+            startProcessing(inventory, block, slot, cleanItem);
+            return;
+        }
+        List<ItemStack> outputs = salvageOutputs(item);
+        if (outputs.isEmpty()) {
+            return;
+        }
+
+        long readyAt = System.currentTimeMillis() + cancelWindowMillis();
+        inventory.setItem(slot, markQueued(item, readyAt));
+        scheduleQueueScan(blockKey(block), readyAt);
+        notifyDepotViewers(inventory, "<gold>Queued for salvage.</gold> <gray>Remove it within <white>" + cancelWindowSeconds() + "s</white> to cancel.</gray>");
+        block.getWorld().playSound(block.getLocation().add(0.5, 0.6, 0.5), Sound.BLOCK_COMPARATOR_CLICK, 0.55f, 1.45f);
+        block.getWorld().spawnParticle(Particle.WAX_ON, block.getLocation().add(0.5, 1.05, 0.5), 8, 0.20, 0.14, 0.20, 0.01);
+    }
+
+    private void startProcessing(Inventory inventory, Block block, int slot, ItemStack item) {
+        UUID processId = UUID.randomUUID();
+        long readyAt = System.currentTimeMillis() + processingMillis();
+        inventory.setItem(slot, markProcessing(item, processId, readyAt));
+        scheduleCompletion(blockKey(block), processId, readyAt);
+        block.getWorld().playSound(block.getLocation().add(0.5, 0.6, 0.5), Sound.BLOCK_GRINDSTONE_USE, 0.7f, 1.15f);
+        block.getWorld().spawnParticle(Particle.WAX_OFF, block.getLocation().add(0.5, 1.05, 0.5), 12, 0.24, 0.18, 0.24, 0.02);
+    }
+
     private void scheduleScan(Inventory inventory) {
+        Bukkit.getScheduler().runTask(plugin, () -> scanScheduledInventory(inventory));
+        Bukkit.getScheduler().runTaskLater(plugin, () -> scanScheduledInventory(inventory), 2L);
+        Bukkit.getScheduler().runTaskLater(plugin, () -> scanScheduledInventory(inventory), 10L);
+    }
+
+    private void scanScheduledInventory(Inventory inventory) {
+        Block block = depotBlock(inventory);
+        if (block != null) {
+            scanDepot(block, inventory);
+        }
+    }
+
+    private void scheduleBlockScan(Block block) {
+        if (block == null) {
+            return;
+        }
         Bukkit.getScheduler().runTask(plugin, () -> {
-            if (isDepotInventory(inventory)) {
-                scanDepot(inventory);
+            if (isDepotBlock(block)) {
+                scanDepot(block);
             }
         });
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
-            if (isDepotInventory(inventory)) {
-                scanDepot(inventory);
+            if (block != null) {
+                scanDepot(block);
             }
-        }, 2L);
+        }, 10L);
+    }
+
+    private void scheduleQueueScan(String blockKey, long readyAt) {
+        long delay = readyAt <= 0L
+            ? cancelWindowTicks()
+            : Math.max(1L, (readyAt - System.currentTimeMillis() + 49L) / 50L);
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            Location location = locationFromBlockKey(blockKey);
+            if (location == null || location.getWorld() == null || !location.isChunkLoaded()) {
+                return;
+            }
+            scanDepot(location.getBlock());
+        }, delay);
     }
 
     private void scheduleCompletion(String blockKey, UUID processId, long readyAt) {
@@ -436,13 +750,28 @@ public final class SalvagingDepotListener implements Listener {
             return;
         }
         long delay = readyAt <= 0L
-            ? PROCESS_TICKS
+            ? processingTicks()
             : Math.max(1L, (readyAt - System.currentTimeMillis() + 49L) / 50L);
         BukkitTask task = Bukkit.getScheduler().runTaskLater(plugin, () -> {
             processingTasks.remove(processId);
             finishProcessing(blockKey, processId);
         }, delay);
         processingTasks.put(processId, task);
+    }
+
+    private ItemStack markQueued(ItemStack item, long readyAt) {
+        ItemStack marked = item.clone();
+        ItemMeta meta = marked.getItemMeta();
+        if (meta == null) {
+            return marked;
+        }
+        meta.getPersistentDataContainer().set(keyQueueReadyAt, PersistentDataType.LONG, readyAt);
+        List<Component> lore = mutableLore(meta);
+        lore.add(Component.empty());
+        lore.add(MM.deserialize("<yellow>Queued for salvage...</yellow> <dark_gray>take it back within " + cancelWindowSeconds() + "s to cancel</dark_gray>"));
+        meta.lore(lore);
+        marked.setItemMeta(meta);
+        return marked;
     }
 
     private void finishProcessing(String blockKey, UUID processId) {
@@ -464,14 +793,19 @@ public final class SalvagingDepotListener implements Listener {
                 continue;
             }
 
-            List<ItemStack> outputs = salvageOutputs(item);
-            inventory.setItem(slot, null);
-            if (!outputs.isEmpty()) {
-                Map<Integer, ItemStack> leftovers = inventory.addItem(outputs.toArray(ItemStack[]::new));
-                leftovers.values().forEach(leftover ->
-                    block.getWorld().dropItemNaturally(block.getLocation().add(0.5, 0.8, 0.5), leftover)
-                );
+            ItemStack cleanItem = cleanProcessingItem(item);
+            List<ItemStack> outputs = salvageOutputs(cleanItem);
+            if (outputs.isEmpty()) {
+                inventory.setItem(slot, cleanItem);
+                plugin.getLogger().warning("Restored a Salvaging Depot item because no safe salvage output could be calculated at " + blockKey + ".");
+                return;
             }
+
+            inventory.setItem(slot, null);
+            Map<Integer, ItemStack> leftovers = inventory.addItem(outputs.toArray(ItemStack[]::new));
+            leftovers.values().forEach(leftover ->
+                block.getWorld().dropItemNaturally(block.getLocation().add(0.5, 0.8, 0.5), leftover)
+            );
             block.getWorld().playSound(block.getLocation().add(0.5, 0.6, 0.5), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 0.65f, 1.55f);
             block.getWorld().spawnParticle(Particle.END_ROD, block.getLocation().add(0.5, 1.0, 0.5), 16, 0.22, 0.22, 0.22, 0.015);
             return;
@@ -485,18 +819,181 @@ public final class SalvagingDepotListener implements Listener {
             return marked;
         }
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        pdc.remove(keyQueueReadyAt);
         pdc.set(keyProcessingId, PersistentDataType.STRING, processId.toString());
         pdc.set(keyProcessingReadyAt, PersistentDataType.LONG, readyAt);
-        List<Component> lore = meta.lore() == null ? new ArrayList<>() : new ArrayList<>(meta.lore());
+        List<Component> lore = removeDepotStateLore(mutableLore(meta), "Queued for salvage...");
         lore.add(Component.empty());
-        lore.add(MM.deserialize("<yellow>Salvaging...</yellow> <dark_gray>6s</dark_gray>"));
+        lore.add(MM.deserialize("<yellow>Salvaging...</yellow> <dark_gray>" + processingSeconds() + "s</dark_gray>"));
         meta.lore(lore);
         marked.setItemMeta(meta);
         return marked;
     }
 
+    private void cleanDroppedDepotState(Item itemEntity) {
+        if (itemEntity == null || !itemEntity.isValid()) {
+            return;
+        }
+        ItemStack stack = itemEntity.getItemStack();
+        if (!isQueued(stack) && !isProcessing(stack)) {
+            return;
+        }
+        itemEntity.setItemStack(cleanDepotState(stack));
+    }
+
+    private ItemStack cleanDepotState(ItemStack item) {
+        return cleanProcessingItem(cleanQueuedItem(item));
+    }
+
+    private ItemStack cleanQueuedItem(ItemStack item) {
+        ItemStack clean = item == null ? null : item.clone();
+        if (clean == null || clean.getType().isAir()) {
+            return clean;
+        }
+
+        ItemMeta meta = clean.getItemMeta();
+        if (meta == null) {
+            return clean;
+        }
+
+        meta.getPersistentDataContainer().remove(keyQueueReadyAt);
+        List<Component> lore = meta.lore();
+        if (lore != null && !lore.isEmpty()) {
+            meta.lore(removeDepotStateLore(lore, "Queued for salvage..."));
+        }
+        clean.setItemMeta(meta);
+        return clean;
+    }
+
+    private ItemStack cleanProcessingItem(ItemStack item) {
+        ItemStack clean = item == null ? null : item.clone();
+        if (clean == null || clean.getType().isAir()) {
+            return clean;
+        }
+
+        ItemMeta meta = clean.getItemMeta();
+        if (meta == null) {
+            return clean;
+        }
+
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        pdc.remove(keyProcessingId);
+        pdc.remove(keyProcessingReadyAt);
+
+        List<Component> lore = meta.lore();
+        if (lore != null && !lore.isEmpty()) {
+            meta.lore(removeDepotStateLore(lore, "Salvaging..."));
+        }
+
+        clean.setItemMeta(meta);
+        return clean;
+    }
+
+    private List<Component> mutableLore(ItemMeta meta) {
+        List<Component> lore = meta == null ? null : meta.lore();
+        return lore == null ? new ArrayList<>() : new ArrayList<>(lore);
+    }
+
+    private List<Component> removeDepotStateLore(List<Component> lore, String marker) {
+        List<Component> cleanedLore = lore == null ? new ArrayList<>() : new ArrayList<>(lore);
+        int last = cleanedLore.size() - 1;
+        if (last < 0) {
+            return cleanedLore;
+        }
+        String lastPlain = PLAIN.serialize(cleanedLore.get(last));
+        if (lastPlain.contains(marker)) {
+            cleanedLore.remove(last);
+            if (!cleanedLore.isEmpty()) {
+                int spacer = cleanedLore.size() - 1;
+                if (PLAIN.serialize(cleanedLore.get(spacer)).isBlank()) {
+                    cleanedLore.remove(spacer);
+                }
+            }
+        }
+        return cleanedLore;
+    }
+
     private boolean isProcessing(ItemStack item) {
         return processingId(item) != null;
+    }
+
+    private boolean isQueued(ItemStack item) {
+        return queueReadyAt(item) > 0L;
+    }
+
+    private void purgeQueuedItemsOutsideDepot(Player player) {
+        purgeQueuedItemsOutsideDepot(player, false);
+    }
+
+    private void purgeQueuedItemsOutsideDepot(Player player, boolean notifyPlayer) {
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+
+        boolean changed = false;
+        Inventory inventory = player.getInventory();
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            ItemStack item = inventory.getItem(slot);
+            if (!isQueued(item)) {
+                continue;
+            }
+            inventory.setItem(slot, cleanQueuedItem(item));
+            changed = true;
+        }
+
+        ItemStack offhand = player.getInventory().getItemInOffHand();
+        if (isQueued(offhand)) {
+            player.getInventory().setItemInOffHand(cleanQueuedItem(offhand));
+            changed = true;
+        }
+
+        ItemStack[] armor = player.getInventory().getArmorContents();
+        boolean armorChanged = false;
+        for (int i = 0; i < armor.length; i++) {
+            if (!isQueued(armor[i])) {
+                continue;
+            }
+            armor[i] = cleanQueuedItem(armor[i]);
+            armorChanged = true;
+            changed = true;
+        }
+        if (armorChanged) {
+            player.getInventory().setArmorContents(armor);
+        }
+
+        ItemStack cursor = player.getItemOnCursor();
+        if (isQueued(cursor)) {
+            player.setItemOnCursor(cleanQueuedItem(cursor));
+            changed = true;
+        }
+
+        if (changed) {
+            if (notifyPlayer) {
+                player.sendActionBar(MM.deserialize("<green>Salvage canceled.</green> <gray>Your item was returned safely.</gray>"));
+            }
+            player.updateInventory();
+        }
+    }
+
+    private void notifyDepotViewers(Inventory inventory, String message) {
+        Component component = MM.deserialize(message);
+        for (var viewer : inventory.getViewers()) {
+            if (viewer instanceof Player player) {
+                player.sendActionBar(component);
+            }
+        }
+    }
+
+    private long queueReadyAt(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return 0L;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return 0L;
+        }
+        Long readyAt = meta.getPersistentDataContainer().get(keyQueueReadyAt, PersistentDataType.LONG);
+        return readyAt == null ? 0L : readyAt;
     }
 
     private UUID processingId(ItemStack item) {
@@ -527,33 +1024,149 @@ public final class SalvagingDepotListener implements Listener {
             return 0L;
         }
         Long readyAt = meta.getPersistentDataContainer().get(keyProcessingReadyAt, PersistentDataType.LONG);
-        return readyAt == null ? System.currentTimeMillis() + PROCESS_MILLIS : readyAt;
+        return readyAt == null ? System.currentTimeMillis() + processingMillis() : readyAt;
     }
 
     private List<ItemStack> salvageOutputs(ItemStack item) {
-        if (item == null || item.getType().isAir() || item.getAmount() != 1 || isPluginManagedItem(item)) {
+        if (item == null || item.getType().isAir()) {
             return List.of();
         }
 
-        Map<Material, Integer> base = baseMaterials(item.getType());
+        Material type = item.getType();
+        if (!isSalvageableGear(item)) {
+            return List.of();
+        }
+        if (isPluginManagedItem(item)) {
+            return List.of();
+        }
+
+        Map<Material, Integer> base = baseMaterials(type);
+        if (base.isEmpty()) {
+            base.putAll(estimatedBaseMaterials(type));
+        }
+        if (base.isEmpty()) {
+            Material fallback = preferredFallbackMaterial(type);
+            if (fallback != null) {
+                base.put(fallback, 1);
+            }
+        }
         if (base.isEmpty()) {
             return List.of();
         }
 
-        double durabilityFactor = durabilityFactor(item);
+        double durabilityFactor = salvageDurabilityFactor(item);
+        double rate = returnRate();
+        int itemCount = Math.max(1, Math.min(64, item.getAmount()));
         List<ItemStack> outputs = new ArrayList<>();
+        Material primaryMaterial = fallbackMaterial(base, type);
         for (Map.Entry<Material, Integer> entry : base.entrySet()) {
-            int count = returnedCount(entry.getValue(), durabilityFactor);
+            int count = returnedCount(entry.getValue() * itemCount, durabilityFactor, rate);
+            if (count <= 0
+                && rate > 0.0D
+                && durabilityFactor > 0.0D
+                && entry.getKey() == primaryMaterial) {
+                count = itemCount;
+            }
             if (count <= 0) {
                 continue;
             }
             addOutput(outputs, entry.getKey(), count);
         }
+        if (outputs.isEmpty() && primaryMaterial != null && rate > 0.0D) {
+            addOutput(outputs, primaryMaterial, itemCount);
+        }
+        if (outputs.isEmpty()) {
+            Material minimumFallback = preferredFallbackMaterial(type);
+            if (minimumFallback != null && rate > 0.0D) {
+                addOutput(outputs, minimumFallback, itemCount);
+            }
+        }
         return outputs;
     }
 
-    private int returnedCount(int baseCount, double durabilityFactor) {
-        double exact = baseCount * RETURN_RATE * durabilityFactor;
+    private boolean isSalvageableGear(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return false;
+        }
+        Material material = item.getType();
+        if (isGearMaterial(material)) {
+            return true;
+        }
+        if (!(item.getItemMeta() instanceof Damageable)) {
+            return false;
+        }
+        return material.getMaxDurability() > 0 && material.isItem() && preferredFallbackMaterial(material) != null;
+    }
+
+    private boolean isGearMaterial(Material material) {
+        if (material == null) {
+            return false;
+        }
+        if (!material.isItem()) {
+            return false;
+        }
+        if (isTaggedArmor(material) || isTaggedWeaponOrTool(material)) {
+            return true;
+        }
+        EquipmentSlot slot = material.getEquipmentSlot();
+        if (slot != null && material.getMaxDurability() > 0) {
+            return true;
+        }
+
+        String name = material.name();
+        return name.endsWith("_HELMET")
+            || name.endsWith("_CHESTPLATE")
+            || name.endsWith("_LEGGINGS")
+            || name.endsWith("_BOOTS")
+            || name.endsWith("_SWORD")
+            || name.endsWith("_PICKAXE")
+            || name.endsWith("_AXE")
+            || name.endsWith("_SHOVEL")
+            || name.endsWith("_HOE")
+            || name.endsWith("_HORSE_ARMOR")
+            || name.endsWith("_NAUTILUS_ARMOR")
+            || material == Material.BOW
+            || material == Material.CROSSBOW
+            || material == Material.FISHING_ROD
+            || material == Material.SHIELD
+            || material == Material.SHEARS
+            || material == Material.FLINT_AND_STEEL
+            || material == Material.BRUSH
+            || material == Material.ELYTRA
+            || material == Material.TRIDENT
+            || material == Material.MACE
+            || material == Material.WOLF_ARMOR
+            || material == Material.CARROT_ON_A_STICK
+            || material == Material.WARPED_FUNGUS_ON_A_STICK;
+    }
+
+    private boolean isTaggedArmor(Material material) {
+        return Tag.ITEMS_ENCHANTABLE_ARMOR.isTagged(material)
+            || Tag.ITEMS_HEAD_ARMOR.isTagged(material)
+            || Tag.ITEMS_CHEST_ARMOR.isTagged(material)
+            || Tag.ITEMS_LEG_ARMOR.isTagged(material)
+            || Tag.ITEMS_FOOT_ARMOR.isTagged(material)
+            || Tag.ITEMS_TRIMMABLE_ARMOR.isTagged(material);
+    }
+
+    private boolean isTaggedWeaponOrTool(Material material) {
+        return Tag.ITEMS_SWORDS.isTagged(material)
+            || Tag.ITEMS_AXES.isTagged(material)
+            || Tag.ITEMS_PICKAXES.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_WEAPON.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_MELEE_WEAPON.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_SHARP_WEAPON.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_BOW.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_CROSSBOW.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_TRIDENT.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_MACE.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_MINING.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_FISHING.isTagged(material)
+            || Tag.ITEMS_ENCHANTABLE_DURABILITY.isTagged(material);
+    }
+
+    private int returnedCount(int baseCount, double durabilityFactor, double rate) {
+        double exact = baseCount * rate * durabilityFactor;
         int count = (int) Math.floor(exact);
         if (count == 0 && exact >= 0.50D) {
             count = 1;
@@ -561,13 +1174,132 @@ public final class SalvagingDepotListener implements Listener {
         return Math.max(0, count);
     }
 
+    private double salvageDurabilityFactor(ItemStack item) {
+        double factor = durabilityFactor(item);
+        if (factor <= 0.0D || !(item.getItemMeta() instanceof Damageable damageable)) {
+            return factor;
+        }
+
+        double max = damageable.hasMaxDamage()
+            ? damageable.getMaxDamage()
+            : item.getType().getMaxDurability();
+        if (max <= 0.0D) {
+            return factor;
+        }
+
+        double remaining = Math.max(0.0D, max - damageable.getDamage());
+        if (remaining <= 0.0D) {
+            return 0.08D;
+        }
+        return Math.max(0.08D, factor);
+    }
+
     private double durabilityFactor(ItemStack item) {
-        if (!(item.getItemMeta() instanceof Damageable damageable) || item.getType().getMaxDurability() <= 0) {
+        if (!(item.getItemMeta() instanceof Damageable damageable)) {
             return 1.0D;
         }
-        double max = item.getType().getMaxDurability();
+        double max = damageable.hasMaxDamage()
+            ? damageable.getMaxDamage()
+            : item.getType().getMaxDurability();
+        if (max <= 0.0D) {
+            return 1.0D;
+        }
         double remaining = Math.max(0.0D, max - damageable.getDamage());
         return Math.max(0.0D, Math.min(1.0D, remaining / max));
+    }
+
+    private Material fallbackMaterial(Map<Material, Integer> base, Material sourceType) {
+        Material preferred = preferredFallbackMaterial(sourceType);
+        if (preferred != null && base.containsKey(preferred)) {
+            return preferred;
+        }
+
+        Material fallback = null;
+        int bestCount = 0;
+        for (Map.Entry<Material, Integer> entry : base.entrySet()) {
+            if (entry.getValue() > bestCount) {
+                fallback = entry.getKey();
+                bestCount = entry.getValue();
+            }
+        }
+        return fallback;
+    }
+
+    private Material preferredFallbackMaterial(Material sourceType) {
+        if (sourceType == null) {
+            return null;
+        }
+        return switch (sourceType) {
+            case LEATHER_HELMET, LEATHER_CHESTPLATE, LEATHER_LEGGINGS, LEATHER_BOOTS, LEATHER_HORSE_ARMOR -> Material.LEATHER;
+            case GOLDEN_HELMET, GOLDEN_CHESTPLATE, GOLDEN_LEGGINGS, GOLDEN_BOOTS,
+                GOLDEN_SWORD, GOLDEN_PICKAXE, GOLDEN_AXE, GOLDEN_SHOVEL, GOLDEN_HOE,
+                GOLDEN_HORSE_ARMOR, GOLDEN_NAUTILUS_ARMOR -> Material.GOLD_INGOT;
+            case IRON_HELMET, IRON_CHESTPLATE, IRON_LEGGINGS, IRON_BOOTS,
+                IRON_SWORD, IRON_PICKAXE, IRON_AXE, IRON_SHOVEL, IRON_HOE,
+                IRON_HORSE_ARMOR, CHAINMAIL_HELMET, CHAINMAIL_CHESTPLATE, CHAINMAIL_LEGGINGS,
+                CHAINMAIL_BOOTS, IRON_NAUTILUS_ARMOR, SHEARS, FLINT_AND_STEEL -> Material.IRON_INGOT;
+            case COPPER_HELMET, COPPER_CHESTPLATE, COPPER_LEGGINGS, COPPER_BOOTS,
+                COPPER_SWORD, COPPER_PICKAXE, COPPER_AXE, COPPER_SHOVEL, COPPER_HOE,
+                COPPER_HORSE_ARMOR, COPPER_NAUTILUS_ARMOR, BRUSH -> Material.COPPER_INGOT;
+            case DIAMOND_HELMET, DIAMOND_CHESTPLATE, DIAMOND_LEGGINGS, DIAMOND_BOOTS,
+                DIAMOND_SWORD, DIAMOND_PICKAXE, DIAMOND_AXE, DIAMOND_SHOVEL, DIAMOND_HOE,
+                DIAMOND_HORSE_ARMOR, DIAMOND_NAUTILUS_ARMOR, NETHERITE_HELMET, NETHERITE_CHESTPLATE, NETHERITE_LEGGINGS,
+                NETHERITE_BOOTS, NETHERITE_SWORD, NETHERITE_PICKAXE, NETHERITE_AXE,
+                NETHERITE_SHOVEL, NETHERITE_HOE, NETHERITE_HORSE_ARMOR, NETHERITE_NAUTILUS_ARMOR -> Material.DIAMOND;
+            case TURTLE_HELMET -> Material.TURTLE_SCUTE;
+            case ELYTRA -> Material.PHANTOM_MEMBRANE;
+            case TRIDENT -> Material.PRISMARINE_SHARD;
+            case MACE -> Material.HEAVY_CORE;
+            case WOLF_ARMOR -> Material.ARMADILLO_SCUTE;
+            case CARROT_ON_A_STICK, WARPED_FUNGUS_ON_A_STICK -> Material.STICK;
+            default -> genericFallbackMaterial(sourceType);
+        };
+    }
+
+    private Material genericFallbackMaterial(Material sourceType) {
+        if (sourceType == null) {
+            return null;
+        }
+        String name = sourceType.name();
+        if (name.startsWith("LEATHER_")) return Material.LEATHER;
+        if (name.startsWith("CHAINMAIL_") || name.startsWith("IRON_")) return Material.IRON_INGOT;
+        if (name.startsWith("COPPER_")) return Material.COPPER_INGOT;
+        if (name.startsWith("GOLDEN_")) return Material.GOLD_INGOT;
+        if (name.startsWith("DIAMOND_") || name.startsWith("NETHERITE_")) return Material.DIAMOND;
+        if (name.startsWith("WOODEN_")) return Material.OAK_PLANKS;
+        if (name.startsWith("STONE_")) return Material.COBBLESTONE;
+        return null;
+    }
+
+    private Map<Material, Integer> estimatedBaseMaterials(Material material) {
+        Map<Material, Integer> result = new LinkedHashMap<>();
+        Material fallback = preferredFallbackMaterial(material);
+        if (fallback == null) {
+            return result;
+        }
+
+        String name = material.name();
+        if (name.endsWith("_HELMET")) {
+            put(result, fallback, 5);
+        } else if (name.endsWith("_CHESTPLATE")) {
+            put(result, fallback, 8);
+        } else if (name.endsWith("_LEGGINGS")) {
+            put(result, fallback, 7);
+        } else if (name.endsWith("_BOOTS")) {
+            put(result, fallback, 4);
+        } else if (name.endsWith("_SWORD")) {
+            put(result, fallback, 2, Material.STICK, 1);
+        } else if (name.endsWith("_PICKAXE") || name.endsWith("_AXE")) {
+            put(result, fallback, 3, Material.STICK, 2);
+        } else if (name.endsWith("_SHOVEL")) {
+            put(result, fallback, 1, Material.STICK, 2);
+        } else if (name.endsWith("_HOE")) {
+            put(result, fallback, 2, Material.STICK, 2);
+        } else if (name.endsWith("_HORSE_ARMOR") || name.endsWith("_NAUTILUS_ARMOR")) {
+            put(result, fallback, 5);
+        }
+
+        return result;
     }
 
     private void addOutput(List<ItemStack> outputs, Material material, int amount) {
@@ -579,8 +1311,30 @@ public final class SalvagingDepotListener implements Listener {
         }
     }
 
+    private ItemStack[] cloneContents(ItemStack[] contents) {
+        if (contents == null) {
+            return new ItemStack[0];
+        }
+        ItemStack[] cloned = new ItemStack[contents.length];
+        for (int i = 0; i < contents.length; i++) {
+            cloned[i] = contents[i] == null ? null : contents[i].clone();
+        }
+        return cloned;
+    }
+
+    private ItemStack[] fitToInventory(ItemStack[] contents, int size) {
+        ItemStack[] fitted = new ItemStack[Math.max(0, size)];
+        if (contents == null) {
+            return fitted;
+        }
+        for (int i = 0; i < Math.min(contents.length, fitted.length); i++) {
+            fitted[i] = contents[i] == null ? null : contents[i].clone();
+        }
+        return fitted;
+    }
+
     private Map<Material, Integer> baseMaterials(Material material) {
-        Map<Material, Integer> result = new HashMap<>();
+        Map<Material, Integer> result = new LinkedHashMap<>();
         switch (material) {
             case LEATHER_HELMET -> put(result, Material.LEATHER, 5);
             case LEATHER_CHESTPLATE -> put(result, Material.LEATHER, 8);
@@ -590,6 +1344,10 @@ public final class SalvagingDepotListener implements Listener {
             case CHAINMAIL_CHESTPLATE, IRON_CHESTPLATE -> put(result, Material.IRON_INGOT, 8);
             case CHAINMAIL_LEGGINGS, IRON_LEGGINGS -> put(result, Material.IRON_INGOT, 7);
             case CHAINMAIL_BOOTS, IRON_BOOTS -> put(result, Material.IRON_INGOT, 4);
+            case COPPER_HELMET -> put(result, Material.COPPER_INGOT, 5);
+            case COPPER_CHESTPLATE -> put(result, Material.COPPER_INGOT, 8);
+            case COPPER_LEGGINGS -> put(result, Material.COPPER_INGOT, 7);
+            case COPPER_BOOTS -> put(result, Material.COPPER_INGOT, 4);
             case GOLDEN_HELMET -> put(result, Material.GOLD_INGOT, 5);
             case GOLDEN_CHESTPLATE -> put(result, Material.GOLD_INGOT, 8);
             case GOLDEN_LEGGINGS -> put(result, Material.GOLD_INGOT, 7);
@@ -611,6 +1369,10 @@ public final class SalvagingDepotListener implements Listener {
             case STONE_PICKAXE, STONE_AXE -> put(result, Material.COBBLESTONE, 3, Material.STICK, 2);
             case STONE_SHOVEL -> put(result, Material.COBBLESTONE, 1, Material.STICK, 2);
             case STONE_HOE -> put(result, Material.COBBLESTONE, 2, Material.STICK, 2);
+            case COPPER_SWORD -> put(result, Material.COPPER_INGOT, 2, Material.STICK, 1);
+            case COPPER_PICKAXE, COPPER_AXE -> put(result, Material.COPPER_INGOT, 3, Material.STICK, 2);
+            case COPPER_SHOVEL -> put(result, Material.COPPER_INGOT, 1, Material.STICK, 2);
+            case COPPER_HOE -> put(result, Material.COPPER_INGOT, 2, Material.STICK, 2);
             case IRON_SWORD -> put(result, Material.IRON_INGOT, 2, Material.STICK, 1);
             case IRON_PICKAXE, IRON_AXE -> put(result, Material.IRON_INGOT, 3, Material.STICK, 2);
             case IRON_SHOVEL -> put(result, Material.IRON_INGOT, 1, Material.STICK, 2);
@@ -637,16 +1399,146 @@ public final class SalvagingDepotListener implements Listener {
             case MACE -> put(result, Material.HEAVY_CORE, 1, Material.BREEZE_ROD, 1);
             case TRIDENT -> put(result, Material.PRISMARINE_SHARD, 6, Material.DIAMOND, 1);
             case ELYTRA -> put(result, Material.PHANTOM_MEMBRANE, 6);
+            case WOLF_ARMOR -> put(result, Material.ARMADILLO_SCUTE, 6);
+            case CARROT_ON_A_STICK -> put(result, Material.STICK, 3, Material.STRING, 2, Material.CARROT, 1);
+            case WARPED_FUNGUS_ON_A_STICK -> put(result, Material.STICK, 3, Material.STRING, 2, Material.WARPED_FUNGUS, 1);
             case LEATHER_HORSE_ARMOR -> put(result, Material.LEATHER, 7);
             case IRON_HORSE_ARMOR -> put(result, Material.IRON_INGOT, 5);
             case GOLDEN_HORSE_ARMOR -> put(result, Material.GOLD_INGOT, 5);
             case DIAMOND_HORSE_ARMOR -> put(result, Material.DIAMOND, 5);
             case NETHERITE_HORSE_ARMOR -> put(result, Material.DIAMOND, 5, Material.NETHERITE_INGOT, 1);
             case COPPER_HORSE_ARMOR -> put(result, Material.COPPER_INGOT, 5);
+            case IRON_NAUTILUS_ARMOR -> put(result, Material.IRON_INGOT, 5);
+            case GOLDEN_NAUTILUS_ARMOR -> put(result, Material.GOLD_INGOT, 5);
+            case DIAMOND_NAUTILUS_ARMOR -> put(result, Material.DIAMOND, 5);
+            case NETHERITE_NAUTILUS_ARMOR -> put(result, Material.DIAMOND, 5, Material.NETHERITE_INGOT, 1);
+            case COPPER_NAUTILUS_ARMOR -> put(result, Material.COPPER_INGOT, 5);
             default -> {
             }
         }
+        if (!result.isEmpty() || !isRecipeSalvageCandidate(material)) {
+            return result;
+        }
+        result.putAll(vanillaRecipeMaterials(material));
+        if (result.isEmpty()) {
+            Material fallback = preferredFallbackMaterial(material);
+            if (fallback != null) {
+                put(result, fallback, 1);
+            }
+        }
         return result;
+    }
+
+    private boolean isRecipeSalvageCandidate(Material material) {
+        if (material == null) {
+            return false;
+        }
+        return isGearMaterial(material)
+            || (material.getMaxDurability() > 0 && material.isItem() && preferredFallbackMaterial(material) != null);
+    }
+
+    private Map<Material, Integer> vanillaRecipeMaterials(Material material) {
+        Map<Material, Integer> result = new LinkedHashMap<>();
+        Iterator<Recipe> recipes = Bukkit.recipeIterator();
+        while (recipes.hasNext()) {
+            Recipe recipe = recipes.next();
+            if (!(recipe instanceof Keyed keyed) || !"minecraft".equals(keyed.getKey().getNamespace())) {
+                continue;
+            }
+            ItemStack output = recipe.getResult();
+            if (output == null || output.getType() != material) {
+                continue;
+            }
+            Map<Material, Integer> ingredients = recipeIngredients(recipe);
+            if (ingredients.isEmpty()) {
+                continue;
+            }
+            int resultAmount = Math.max(1, output.getAmount());
+            if (resultAmount <= 1) {
+                return ingredients;
+            }
+            for (Map.Entry<Material, Integer> entry : ingredients.entrySet()) {
+                int count = (int) Math.ceil(entry.getValue() / (double) resultAmount);
+                if (count > 0) {
+                    result.put(entry.getKey(), count);
+                }
+            }
+            return result;
+        }
+        return result;
+    }
+
+    private Map<Material, Integer> recipeIngredients(Recipe recipe) {
+        Map<Material, Integer> ingredients = new LinkedHashMap<>();
+        if (recipe instanceof ShapedRecipe shaped) {
+            Map<Character, RecipeChoice> choices = shaped.getChoiceMap();
+            for (String row : shaped.getShape()) {
+                for (int i = 0; i < row.length(); i++) {
+                    char key = row.charAt(i);
+                    if (key == ' ') {
+                        continue;
+                    }
+                    addRecipeChoice(ingredients, choices.get(key));
+                }
+            }
+            return ingredients;
+        }
+
+        if (recipe instanceof ShapelessRecipe shapeless) {
+            for (RecipeChoice choice : shapeless.getChoiceList()) {
+                addRecipeChoice(ingredients, choice);
+            }
+        }
+        return ingredients;
+    }
+
+    private void addRecipeChoice(Map<Material, Integer> ingredients, RecipeChoice choice) {
+        Material material = materialFromChoice(choice);
+        if (material != null && !material.isAir()) {
+            ingredients.merge(material, 1, Integer::sum);
+        }
+    }
+
+    private Material materialFromChoice(RecipeChoice choice) {
+        if (choice == null) {
+            return null;
+        }
+        if (choice instanceof RecipeChoice.MaterialChoice materialChoice) {
+            List<Material> choices = materialChoice.getChoices();
+            if (choices == null || choices.isEmpty()) {
+                return null;
+            }
+            if (choices.contains(Material.OAK_PLANKS)) {
+                return Material.OAK_PLANKS;
+            }
+            if (choices.contains(Material.COBBLESTONE)) {
+                return Material.COBBLESTONE;
+            }
+            if (choices.contains(Material.IRON_INGOT)) {
+                return Material.IRON_INGOT;
+            }
+            if (choices.contains(Material.GOLD_INGOT)) {
+                return Material.GOLD_INGOT;
+            }
+            if (choices.contains(Material.COPPER_INGOT)) {
+                return Material.COPPER_INGOT;
+            }
+            if (choices.contains(Material.DIAMOND)) {
+                return Material.DIAMOND;
+            }
+            return choices.get(0);
+        }
+
+        if (choice instanceof RecipeChoice.ExactChoice exactChoice) {
+            List<ItemStack> choices = exactChoice.getChoices();
+            if (choices == null || choices.isEmpty()) {
+                return null;
+            }
+            ItemStack stack = choices.get(0);
+            return stack == null ? null : stack.getType();
+        }
+
+        return null;
     }
 
     private void put(Map<Material, Integer> result, Object... pairs) {
@@ -661,13 +1553,13 @@ public final class SalvagingDepotListener implements Listener {
         if (isDepotItem(item)) {
             return true;
         }
+        if (plugin.getAgriculturalPylonListener() != null && plugin.getAgriculturalPylonListener().isPylonItem(item)) {
+            return true;
+        }
         if (plugin.getLegendaryListener() != null
             && (plugin.getLegendaryListener().isLegendaryItem(item)
                 || plugin.getLegendaryListener().isEnderBoneItem(item)
                 || plugin.getLegendaryListener().isOrbOfTheMysticsItem(item))) {
-            return true;
-        }
-        if (plugin.getCustomToolListener() != null && plugin.getCustomToolListener().isCustomTool(item)) {
             return true;
         }
         if (plugin.getBackpackListener() != null && plugin.getBackpackListener().isBackpack(item)) {
@@ -702,6 +1594,13 @@ public final class SalvagingDepotListener implements Listener {
                 || plugin.getSuperpowerManager().isMotherNatureStick(item)
                 || plugin.getSuperpowerManager().isTheWorldClock(item)
                 || plugin.getSuperpowerManager().isDruidGrimoire(item));
+    }
+
+    private String describeItem(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return "air";
+        }
+        return item.getType().name() + "x" + Math.max(1, item.getAmount());
     }
 
     private boolean hasAdjacentChest(Block block) {
@@ -740,21 +1639,120 @@ public final class SalvagingDepotListener implements Listener {
             return false;
         }
         BlockState state = block.getState();
-        return state instanceof TileState tile
-            && ITEM_ID.equals(tile.getPersistentDataContainer().get(keyDepotBlock, PersistentDataType.STRING));
+        if (state instanceof TileState tile
+            && ITEM_ID.equals(tile.getPersistentDataContainer().get(keyDepotBlock, PersistentDataType.STRING))) {
+            return true;
+        }
+        return state instanceof Chest chest && isLegacyDepotName(chest.customName());
+    }
+
+    private boolean resolveDepotInventory(Player player, Inventory inventory) {
+        if (depotBlock(inventory) != null) {
+            return true;
+        }
+        return tryBindPendingDepotInventory(player, inventory);
     }
 
     private boolean isDepotInventory(Inventory inventory) {
-        return depotBlock(inventory) != null;
+        return resolveDepotInventory(null, inventory);
     }
 
     private Block depotBlock(Inventory inventory) {
         if (inventory == null) {
             return null;
         }
-        InventoryHolder holder = inventory.getHolder(false);
+        Block block = depotBlock(inventory.getHolder(false));
+        if (block != null) {
+            rememberDepotInventory(inventory, block);
+            return block;
+        }
+        block = depotBlock(inventory.getHolder());
+        if (block != null) {
+            rememberDepotInventory(inventory, block);
+            return block;
+        }
+
+        Location location = inventory.getLocation();
+        if (location != null && location.getWorld() != null) {
+            block = location.getBlock();
+            if (isDepotBlock(block)) {
+                rememberDepotInventory(inventory, block);
+                return block;
+            }
+        }
+
+        String cachedKey = depotBlocksByInventory.get(inventory);
+        Location cachedLocation = locationFromBlockKey(cachedKey);
+        block = cachedLocation == null ? null : cachedLocation.getBlock();
+        if (isDepotBlock(block)) {
+            return block;
+        }
+        if (cachedKey != null) {
+            depotBlocksByInventory.remove(inventory);
+        }
+        return null;
+    }
+
+    private void rememberDepotInventory(Inventory inventory, Block block) {
+        if (inventory == null || block == null || !isDepotBlock(block)) {
+            return;
+        }
+        String blockKey = blockKey(block);
+        knownDepotBlocks.add(blockKey);
+        depotBlocksByInventory.put(inventory, blockKey);
+    }
+
+    private boolean tryBindPendingDepotInventory(Player player, Inventory inventory) {
+        if (player == null || inventory == null) {
+            return false;
+        }
+        Block block = pendingDepotBlock(player);
+        if (block == null || !isDepotBlock(block)) {
+            return false;
+        }
+        rememberDepotInventory(inventory, block);
+        return true;
+    }
+
+    private Block pendingDepotBlock(Player player) {
+        if (player == null) {
+            return null;
+        }
+        String key = pendingDepotOpensByPlayer.get(player.getUniqueId());
+        Location location = locationFromBlockKey(key);
+        if (location == null || location.getWorld() == null || !location.isChunkLoaded()) {
+            if (key != null) {
+                pendingDepotOpensByPlayer.remove(player.getUniqueId(), key);
+            }
+            return null;
+        }
+        Block block = location.getBlock();
+        if (!isDepotBlock(block)) {
+            pendingDepotOpensByPlayer.remove(player.getUniqueId(), key);
+            return null;
+        }
+        return block;
+    }
+
+    private Block depotBlock(InventoryHolder holder) {
+        Block direct = singleDepotBlock(holder);
+        if (direct != null) {
+            return direct;
+        }
+        if (holder instanceof DoubleChest doubleChest) {
+            Block left = singleDepotBlock(doubleChest.getLeftSide());
+            if (left != null) return left;
+            return singleDepotBlock(doubleChest.getRightSide());
+        }
+        return null;
+    }
+
+    private Block singleDepotBlock(InventoryHolder holder) {
         if (holder instanceof Chest chest && isDepotBlock(chest.getBlock())) {
             return chest.getBlock();
+        }
+        if (holder instanceof Container container && isDepotBlock(container.getBlock())) {
+            return container.getBlock();
         }
         return null;
     }
@@ -763,8 +1761,42 @@ public final class SalvagingDepotListener implements Listener {
         if (!isDepotBlock(block)) {
             return null;
         }
+        ensureDepotBlockMarker(block);
         BlockState state = block.getState();
-        return state instanceof Chest chest ? chest.getBlockInventory() : null;
+        if (!(state instanceof Chest chest)) {
+            return null;
+        }
+        Inventory inventory = chest.getBlockInventory();
+        rememberDepotInventory(inventory, block);
+        return inventory;
+    }
+
+    private void ensureDepotBlockMarker(Block block) {
+        if (block == null || block.getType() != Material.CHEST) {
+            return;
+        }
+        BlockState state = block.getState();
+        if (!(state instanceof Chest chest)) {
+            return;
+        }
+        PersistentDataContainer pdc = chest.getPersistentDataContainer();
+        if (ITEM_ID.equals(pdc.get(keyDepotBlock, PersistentDataType.STRING))) {
+            return;
+        }
+        if (!isLegacyDepotName(chest.customName())) {
+            return;
+        }
+        pdc.set(keyDepotBlock, PersistentDataType.STRING, ITEM_ID);
+        chest.customName(MM.deserialize("<gradient:#74ee15:#22c55e><bold>Salvaging Depot</bold></gradient>"));
+        chest.update(true, false);
+        knownDepotBlocks.add(blockKey(block));
+    }
+
+    private boolean isLegacyDepotName(Component name) {
+        if (name == null) {
+            return false;
+        }
+        return "salvaging depot".equals(PLAIN.serialize(name).strip().toLowerCase(java.util.Locale.ROOT));
     }
 
     private void ensureHologram(Block block) {
@@ -772,6 +1804,7 @@ public final class SalvagingDepotListener implements Listener {
             return;
         }
         String blockKey = blockKey(block);
+        knownDepotBlocks.add(blockKey);
         UUID existingId = hologramsByBlock.get(blockKey);
         Entity existing = existingId == null ? null : Bukkit.getEntity(existingId);
         if (existing instanceof TextDisplay display && display.isValid()) {
@@ -806,7 +1839,7 @@ public final class SalvagingDepotListener implements Listener {
         return Component.empty()
             .append(MM.deserialize("<gradient:#74ee15:#22c55e><bold>Salvaging Depot</bold></gradient>"))
             .append(Component.newline())
-            .append(MM.deserialize("<gray>Recycles vanilla gear in <white>6s</white></gray>"));
+            .append(MM.deserialize("<gray>" + cancelWindowSeconds() + "s cancel window, then <white>" + processingSeconds() + "s</white> salvage</gray>"));
     }
 
     private Location hologramLocation(Block block) {

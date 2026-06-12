@@ -123,6 +123,7 @@ public final class LegendaryCommands {
         if (audit != null) {
             audit.recordKnownAcquisition(target, item, sender, "admin_legendary_give", "Given via /legendary give.");
         }
+        legendary.registerLegendaryInstance(target, item, false);
         Map<Integer, ItemStack> leftovers = target.getInventory().addItem(item);
         leftovers.values().forEach(left -> target.getWorld().dropItemNaturally(target.getLocation(), left));
         legendary.resyncLegendaryOwnership(target);

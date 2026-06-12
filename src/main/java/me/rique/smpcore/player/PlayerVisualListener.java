@@ -5,6 +5,7 @@ import me.rique.smpcore.team.TeamManager;
 import me.rique.smpcore.util.MessageUtil;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.GameMode;
@@ -38,21 +39,30 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class PlayerVisualListener implements Listener {
 
     private static final long SYNC_PERIOD_TICKS = 5L;
-    private static final int GLOW_REFRESH_TICKS = 40;
+    private static final int GLOW_REFRESH_TICKS = 80;
 
     private final SMPCore plugin;
     private final NamespacedKey keyNameHologram;
     private final NamespacedKey keyNameHologramOwner;
+    private final NamespacedKey keyTeamGlowMarker;
+    private final NamespacedKey keyTeamGlowViewer;
+    private final NamespacedKey keyTeamGlowTarget;
     private final Map<UUID, UUID> nameDisplaysByPlayer = new ConcurrentHashMap<>();
     private final Set<UUID> teamGlowViewers = ConcurrentHashMap.newKeySet();
     private final Map<UUID, Set<UUID>> glowingTargetsByViewer = new ConcurrentHashMap<>();
+    private final Map<UUID, Map<UUID, UUID>> teamGlowMarkersByViewer = new ConcurrentHashMap<>();
+    private final Map<UUID, Set<UUID>> playerFinderHiddenTargetsByViewer = new ConcurrentHashMap<>();
     private BukkitTask task;
     private int glowTickCounter;
+    private int playerFinderTickCounter;
 
     public PlayerVisualListener(SMPCore plugin) {
         this.plugin = plugin;
         this.keyNameHologram = new NamespacedKey(plugin, "player_name_hologram");
         this.keyNameHologramOwner = new NamespacedKey(plugin, "player_name_hologram_owner");
+        this.keyTeamGlowMarker = new NamespacedKey(plugin, "team_glow_marker");
+        this.keyTeamGlowViewer = new NamespacedKey(plugin, "team_glow_viewer");
+        this.keyTeamGlowTarget = new NamespacedKey(plugin, "team_glow_target");
     }
 
     public void start() {
@@ -67,6 +77,7 @@ public final class PlayerVisualListener implements Listener {
             task.cancel();
             task = null;
         }
+        clearPlayerFinderDefense();
         for (UUID viewerId : new ArrayList<>(glowingTargetsByViewer.keySet())) {
             Player viewer = Bukkit.getPlayer(viewerId);
             if (viewer != null) {
@@ -74,6 +85,7 @@ public final class PlayerVisualListener implements Listener {
             }
         }
         teamGlowViewers.clear();
+        removeAllTeamGlowMarkers();
         removeAllNameDisplays();
     }
 
@@ -95,8 +107,13 @@ public final class PlayerVisualListener implements Listener {
                 return;
             }
             teamGlowViewers.add(playerId);
-            syncTeamGlow(player);
+            int highlighted = syncTeamGlow(player);
             player.sendMessage(MessageUtil.success("Teammate glow enabled. Only you can see it."));
+            if (highlighted == 0) {
+                player.sendMessage(MessageUtil.info("No online teammates in your current world are available to highlight yet."));
+            } else {
+                player.sendMessage(MessageUtil.info("Highlighted <white>" + highlighted + "</white> online teammate" + (highlighted == 1 ? "" : "s") + "."));
+            }
             return;
         }
 
@@ -109,8 +126,18 @@ public final class PlayerVisualListener implements Listener {
         return teamGlowViewers.contains(player.getUniqueId());
     }
 
+    public void refreshPlayerFinderDefense() {
+        syncPlayerFinderDefense();
+    }
+
     private void tickVisuals() {
         syncNameDisplays();
+        syncTeamGlowMarkerPositions();
+        playerFinderTickCounter += SYNC_PERIOD_TICKS;
+        if (playerFinderTickCounter >= 10) {
+            playerFinderTickCounter = 0;
+            syncPlayerFinderDefense();
+        }
         glowTickCounter += SYNC_PERIOD_TICKS;
         if (glowTickCounter < 20) {
             return;
@@ -125,6 +152,163 @@ public final class PlayerVisualListener implements Listener {
             }
             syncTeamGlow(viewer);
         }
+    }
+
+    private void syncPlayerFinderDefense() {
+        if (plugin.getConfigManager() == null || !plugin.getConfigManager().playerFinderDefenseEnabled) {
+            clearPlayerFinderDefense();
+            return;
+        }
+
+        ArrayList<Player> players = new ArrayList<>(Bukkit.getOnlinePlayers());
+        Set<UUID> onlineIds = new HashSet<>();
+        for (Player player : players) {
+            onlineIds.add(player.getUniqueId());
+        }
+
+        for (UUID viewerId : new ArrayList<>(playerFinderHiddenTargetsByViewer.keySet())) {
+            if (!onlineIds.contains(viewerId)) {
+                playerFinderHiddenTargetsByViewer.remove(viewerId);
+            }
+        }
+
+        TeamManager teams = plugin.getTeamManager();
+        for (Player viewer : players) {
+            syncPlayerFinderDefense(viewer, players, teams);
+        }
+    }
+
+    private void syncPlayerFinderDefense(Player viewer, ArrayList<Player> players, TeamManager teams) {
+        if (viewer == null || !viewer.isOnline()) {
+            return;
+        }
+
+        Set<UUID> desiredHidden = new HashSet<>();
+        for (Player target : players) {
+            if (shouldHideForPlayerFinderDefense(viewer, target, teams)) {
+                desiredHidden.add(target.getUniqueId());
+            }
+        }
+
+        UUID viewerId = viewer.getUniqueId();
+        Set<UUID> hidden = playerFinderHiddenTargetsByViewer.computeIfAbsent(viewerId, ignored -> ConcurrentHashMap.newKeySet());
+        for (UUID targetId : new ArrayList<>(hidden)) {
+            if (!desiredHidden.contains(targetId)) {
+                showPlayerFinderDefenseTarget(viewer, targetId);
+                hidden.remove(targetId);
+            }
+        }
+
+        for (Player target : players) {
+            UUID targetId = target.getUniqueId();
+            if (!desiredHidden.contains(targetId) || hidden.contains(targetId)) {
+                continue;
+            }
+            viewer.hidePlayer(plugin, target);
+            hidden.add(targetId);
+            clearFakeGlow(viewer, target);
+            removeTeamGlowMarker(viewerId, targetId);
+        }
+
+        if (hidden.isEmpty()) {
+            playerFinderHiddenTargetsByViewer.remove(viewerId);
+        }
+    }
+
+    private boolean shouldHideForPlayerFinderDefense(Player viewer, Player target, TeamManager teams) {
+        if (viewer == null || target == null || viewer.equals(target)) {
+            return false;
+        }
+        if (!viewer.isOnline() || !target.isOnline() || target.isDead() || !target.isValid()) {
+            return false;
+        }
+        if (viewer.getWorld() != target.getWorld() || target.getGameMode() == GameMode.SPECTATOR) {
+            return false;
+        }
+        if (isVanishedFromViewer(viewer, target)) {
+            return false;
+        }
+        if (plugin.getConfigManager().playerFinderDefenseIgnoreOps && (viewer.isOp() || target.isOp())) {
+            return false;
+        }
+        if (!plugin.getConfigManager().playerFinderDefenseHideSameTeam
+            && teams != null
+            && teams.sameTeam(viewer.getUniqueId(), target.getUniqueId())) {
+            return false;
+        }
+
+        double closeRadius = plugin.getConfigManager().playerFinderDefenseAlwaysShowRadius;
+        double distanceSquared = viewer.getLocation().distanceSquared(target.getLocation());
+        if (distanceSquared <= closeRadius * closeRadius) {
+            return false;
+        }
+
+        double lineOfSightRadius = plugin.getConfigManager().playerFinderDefenseLineOfSightRadius;
+        if (distanceSquared <= lineOfSightRadius * lineOfSightRadius && viewer.hasLineOfSight(target)) {
+            return false;
+        }
+        return true;
+    }
+
+    private boolean isVanishedFromViewer(Player viewer, Player target) {
+        return plugin.getPlayerManager() != null
+            && plugin.getPlayerManager().isVanished(target.getUniqueId())
+            && !viewer.hasPermission("smpcore.vanish.see");
+    }
+
+    private void showPlayerFinderDefenseTarget(Player viewer, UUID targetId) {
+        if (viewer == null || !viewer.isOnline() || targetId == null) {
+            return;
+        }
+        Player target = Bukkit.getPlayer(targetId);
+        if (target == null || !target.isOnline() || isVanishedFromViewer(viewer, target)) {
+            return;
+        }
+        viewer.showPlayer(plugin, target);
+    }
+
+    private void clearPlayerFinderDefenseForViewer(Player viewer) {
+        if (viewer == null) {
+            return;
+        }
+        Set<UUID> hidden = playerFinderHiddenTargetsByViewer.remove(viewer.getUniqueId());
+        if (hidden == null) {
+            return;
+        }
+        for (UUID targetId : hidden) {
+            showPlayerFinderDefenseTarget(viewer, targetId);
+        }
+    }
+
+    private void clearPlayerFinderDefenseForTarget(UUID targetId) {
+        if (targetId == null) {
+            return;
+        }
+        for (UUID viewerId : new ArrayList<>(playerFinderHiddenTargetsByViewer.keySet())) {
+            Set<UUID> hidden = playerFinderHiddenTargetsByViewer.get(viewerId);
+            if (hidden == null || !hidden.remove(targetId)) {
+                continue;
+            }
+            Player viewer = Bukkit.getPlayer(viewerId);
+            if (viewer != null) {
+                showPlayerFinderDefenseTarget(viewer, targetId);
+            }
+            if (hidden.isEmpty()) {
+                playerFinderHiddenTargetsByViewer.remove(viewerId);
+            }
+        }
+    }
+
+    private void clearPlayerFinderDefense() {
+        for (UUID viewerId : new ArrayList<>(playerFinderHiddenTargetsByViewer.keySet())) {
+            Player viewer = Bukkit.getPlayer(viewerId);
+            if (viewer == null) {
+                playerFinderHiddenTargetsByViewer.remove(viewerId);
+                continue;
+            }
+            clearPlayerFinderDefenseForViewer(viewer);
+        }
+        playerFinderHiddenTargetsByViewer.clear();
     }
 
     private void syncNameDisplays() {
@@ -256,17 +440,17 @@ public final class PlayerVisualListener implements Listener {
         }
     }
 
-    private void syncTeamGlow(Player viewer) {
+    private int syncTeamGlow(Player viewer) {
         if (!teamGlowViewers.contains(viewer.getUniqueId())) {
             clearViewerGlow(viewer);
-            return;
+            return 0;
         }
 
         TeamManager teams = plugin.getTeamManager();
         if (teams == null || !teams.inTeam(viewer.getUniqueId())) {
             teamGlowViewers.remove(viewer.getUniqueId());
             clearViewerGlow(viewer);
-            return;
+            return 0;
         }
 
         Set<UUID> desired = new HashSet<>();
@@ -279,6 +463,7 @@ public final class PlayerVisualListener implements Listener {
                 target,
                 new PotionEffect(PotionEffectType.GLOWING, GLOW_REFRESH_TICKS, 0, false, false, false)
             );
+            syncTeamGlowMarker(viewer, target);
         }
 
         Set<UUID> current = glowingTargetsByViewer.computeIfAbsent(viewer.getUniqueId(), ignored -> ConcurrentHashMap.newKeySet());
@@ -288,10 +473,12 @@ public final class PlayerVisualListener implements Listener {
                 if (target != null) {
                     clearFakeGlow(viewer, target);
                 }
+                removeTeamGlowMarker(viewer.getUniqueId(), targetId);
                 current.remove(targetId);
             }
         }
         current.addAll(desired);
+        return desired.size();
     }
 
     private boolean shouldGlowForViewer(Player viewer, Player target, TeamManager teams) {
@@ -312,15 +499,15 @@ public final class PlayerVisualListener implements Listener {
 
     private void clearViewerGlow(Player viewer) {
         Set<UUID> current = glowingTargetsByViewer.remove(viewer.getUniqueId());
-        if (current == null) {
-            return;
-        }
-        for (UUID targetId : current) {
-            Player target = Bukkit.getPlayer(targetId);
-            if (target != null) {
-                clearFakeGlow(viewer, target);
+        if (current != null) {
+            for (UUID targetId : current) {
+                Player target = Bukkit.getPlayer(targetId);
+                if (target != null) {
+                    clearFakeGlow(viewer, target);
+                }
             }
         }
+        removeTeamGlowMarkersForViewer(viewer.getUniqueId());
     }
 
     private void clearFakeGlow(Player viewer, Player target) {
@@ -333,33 +520,175 @@ public final class PlayerVisualListener implements Listener {
         viewer.sendPotionEffectChangeRemove(target, PotionEffectType.GLOWING);
     }
 
+    private void syncTeamGlowMarker(Player viewer, Player target) {
+        Map<UUID, UUID> byTarget = teamGlowMarkersByViewer.computeIfAbsent(viewer.getUniqueId(), ignored -> new ConcurrentHashMap<>());
+        UUID existingId = byTarget.get(target.getUniqueId());
+        Entity existing = existingId == null ? null : Bukkit.getEntity(existingId);
+        TextDisplay display = existing instanceof TextDisplay textDisplay && textDisplay.isValid() ? textDisplay : null;
+        if (display == null) {
+            if (existing != null) {
+                existing.remove();
+            }
+            display = target.getWorld().spawn(teamGlowMarkerLocation(target), TextDisplay.class, marker -> {
+                marker.setPersistent(false);
+                marker.setGravity(false);
+                marker.setInvulnerable(true);
+                marker.setBillboard(Display.Billboard.CENTER);
+                marker.setAlignment(TextDisplay.TextAlignment.CENTER);
+                marker.setSeeThrough(true);
+                marker.setShadowed(true);
+                marker.setDefaultBackground(false);
+                marker.setBackgroundColor(Color.fromARGB(0, 0, 0, 0));
+                marker.setTextOpacity((byte) 255);
+                marker.setLineWidth(160);
+                marker.setViewRange(VisualRangeUtil.blocksToDisplayViewRange(VisualRangeUtil.HOLOGRAM_VIEW_RANGE_BLOCKS));
+                marker.setGlowing(true);
+                marker.setGlowColorOverride(Color.AQUA);
+                marker.getPersistentDataContainer().set(keyTeamGlowMarker, PersistentDataType.BYTE, (byte) 1);
+                marker.getPersistentDataContainer().set(keyTeamGlowViewer, PersistentDataType.STRING, viewer.getUniqueId().toString());
+                marker.getPersistentDataContainer().set(keyTeamGlowTarget, PersistentDataType.STRING, target.getUniqueId().toString());
+            });
+            byTarget.put(target.getUniqueId(), display.getUniqueId());
+        }
+
+        display.teleport(teamGlowMarkerLocation(target));
+        display.text(teamGlowText(target));
+        showTeamGlowMarkerOnlyToViewer(viewer.getUniqueId(), display);
+    }
+
+    private void syncTeamGlowMarkerPositions() {
+        TeamManager teams = plugin.getTeamManager();
+        if (teams == null) {
+            removeAllTeamGlowMarkers();
+            glowingTargetsByViewer.clear();
+            return;
+        }
+        for (UUID viewerId : new ArrayList<>(teamGlowMarkersByViewer.keySet())) {
+            Player viewer = Bukkit.getPlayer(viewerId);
+            if (viewer == null || !viewer.isOnline() || !teamGlowViewers.contains(viewerId)) {
+                removeTeamGlowMarkersForViewer(viewerId);
+                continue;
+            }
+            Map<UUID, UUID> markers = teamGlowMarkersByViewer.get(viewerId);
+            if (markers == null) {
+                continue;
+            }
+            for (UUID targetId : new ArrayList<>(markers.keySet())) {
+                Player target = Bukkit.getPlayer(targetId);
+                Entity entity = Bukkit.getEntity(markers.get(targetId));
+                if (!(entity instanceof TextDisplay display) || !shouldGlowForViewer(viewer, target, teams)) {
+                    removeTeamGlowMarker(viewerId, targetId);
+                    continue;
+                }
+                display.teleport(teamGlowMarkerLocation(target));
+                display.text(teamGlowText(target));
+                showTeamGlowMarkerOnlyToViewer(viewerId, display);
+            }
+        }
+    }
+
+    private Component teamGlowText(Player target) {
+        Component targetName = target.displayName() == null ? Component.text(target.getName(), NamedTextColor.WHITE) : target.displayName();
+        return Component.text("[ALLY] ", NamedTextColor.AQUA)
+            .append(targetName)
+            .append(Component.text(" [ALLY]", NamedTextColor.AQUA));
+    }
+
+    private Location teamGlowMarkerLocation(Player target) {
+        return target.getLocation().clone().add(0.0, Math.max(2.25, target.getHeight() + 0.75), 0.0);
+    }
+
+    private void removeTeamGlowMarker(UUID viewerId, UUID targetId) {
+        Map<UUID, UUID> markers = teamGlowMarkersByViewer.get(viewerId);
+        if (markers == null) {
+            return;
+        }
+        UUID markerId = markers.remove(targetId);
+        Entity entity = markerId == null ? null : Bukkit.getEntity(markerId);
+        if (entity != null) {
+            entity.remove();
+        }
+        if (markers.isEmpty()) {
+            teamGlowMarkersByViewer.remove(viewerId);
+        }
+    }
+
+    private void removeTeamGlowMarkersForViewer(UUID viewerId) {
+        Map<UUID, UUID> markers = teamGlowMarkersByViewer.remove(viewerId);
+        if (markers == null) {
+            return;
+        }
+        for (UUID markerId : markers.values()) {
+            Entity entity = markerId == null ? null : Bukkit.getEntity(markerId);
+            if (entity != null) {
+                entity.remove();
+            }
+        }
+    }
+
+    private void removeAllTeamGlowMarkers() {
+        for (UUID viewerId : new ArrayList<>(teamGlowMarkersByViewer.keySet())) {
+            removeTeamGlowMarkersForViewer(viewerId);
+        }
+        for (World world : Bukkit.getWorlds()) {
+            for (TextDisplay display : world.getEntitiesByClass(TextDisplay.class)) {
+                if (display.getPersistentDataContainer().has(keyTeamGlowMarker, PersistentDataType.BYTE)) {
+                    display.remove();
+                }
+            }
+        }
+    }
+
+    private void showTeamGlowMarkerOnlyToViewer(UUID viewerId, Entity display) {
+        if (display == null) {
+            return;
+        }
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            if (online.getUniqueId().equals(viewerId)) {
+                online.showEntity(plugin, display);
+            } else {
+                online.hideEntity(plugin, display);
+            }
+        }
+    }
+
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         Bukkit.getScheduler().runTask(plugin, () -> {
             syncNameDisplay(event.getPlayer());
             syncTeamGlow(event.getPlayer());
+            syncTeamGlowMarkerPositions();
+            syncPlayerFinderDefense();
         });
     }
 
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         UUID playerId = event.getPlayer().getUniqueId();
+        clearPlayerFinderDefenseForViewer(event.getPlayer());
+        clearPlayerFinderDefenseForTarget(playerId);
         removeNameDisplay(playerId);
         teamGlowViewers.remove(playerId);
         glowingTargetsByViewer.remove(playerId);
+        removeTeamGlowMarkersForViewer(playerId);
         for (Set<UUID> targets : glowingTargetsByViewer.values()) {
             targets.remove(playerId);
+        }
+        for (UUID viewerId : new ArrayList<>(teamGlowMarkersByViewer.keySet())) {
+            removeTeamGlowMarker(viewerId, playerId);
         }
     }
 
     @EventHandler
     public void onDeath(PlayerDeathEvent event) {
+        clearPlayerFinderDefenseForTarget(event.getPlayer().getUniqueId());
         removeNameDisplay(event.getPlayer().getUniqueId());
         for (Player viewer : Bukkit.getOnlinePlayers()) {
             if (viewer.equals(event.getPlayer())) {
                 continue;
             }
             clearFakeGlow(viewer, event.getPlayer());
+            removeTeamGlowMarker(viewer.getUniqueId(), event.getPlayer().getUniqueId());
             Set<UUID> targets = glowingTargetsByViewer.get(viewer.getUniqueId());
             if (targets != null) {
                 targets.remove(event.getPlayer().getUniqueId());
@@ -369,11 +698,16 @@ public final class PlayerVisualListener implements Listener {
 
     @EventHandler
     public void onRespawn(PlayerRespawnEvent event) {
-        Bukkit.getScheduler().runTask(plugin, () -> syncNameDisplay(event.getPlayer()));
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            syncNameDisplay(event.getPlayer());
+            syncPlayerFinderDefense();
+        });
     }
 
     @EventHandler
     public void onWorldChange(PlayerChangedWorldEvent event) {
+        clearPlayerFinderDefenseForViewer(event.getPlayer());
+        clearPlayerFinderDefenseForTarget(event.getPlayer().getUniqueId());
         removeNameDisplay(event.getPlayer().getUniqueId());
         Bukkit.getScheduler().runTask(plugin, () -> {
             syncNameDisplay(event.getPlayer());
@@ -381,15 +715,24 @@ public final class PlayerVisualListener implements Listener {
             for (Player viewer : Bukkit.getOnlinePlayers()) {
                 syncTeamGlow(viewer);
             }
+            syncPlayerFinderDefense();
         });
     }
 
     @EventHandler
     public void onTeleport(PlayerTeleportEvent event) {
-        if (event.getFrom().getWorld() == event.getTo().getWorld()) {
+        Location to = event.getTo();
+        if (to == null) {
             return;
         }
-        removeNameDisplay(event.getPlayer().getUniqueId());
-        Bukkit.getScheduler().runTask(plugin, () -> syncNameDisplay(event.getPlayer()));
+        if (event.getFrom().getWorld() != to.getWorld()) {
+            clearPlayerFinderDefenseForViewer(event.getPlayer());
+            clearPlayerFinderDefenseForTarget(event.getPlayer().getUniqueId());
+            removeNameDisplay(event.getPlayer().getUniqueId());
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            syncNameDisplay(event.getPlayer());
+            syncPlayerFinderDefense();
+        });
     }
 }

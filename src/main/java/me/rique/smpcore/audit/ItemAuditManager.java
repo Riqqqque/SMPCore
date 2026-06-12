@@ -5,6 +5,7 @@ import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.backpack.BackpackListener;
 import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.database.DatabaseManager;
+import me.rique.smpcore.item.AgriculturalPylonListener;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.RewardLanternListener;
@@ -178,10 +179,15 @@ public final class ItemAuditManager implements Listener {
         options.add("custom:reward_soul_lantern");
         options.add("custom:talisman_of_sustenance");
         options.add("custom:salvaging_depot");
+        options.add("custom:agricultural_pylon");
         options.add("custom:xp_lectern");
-        options.add("custom_enchant:kingslayer");
-        options.add("custom_enchant:soul_siphon");
-        options.add("custom_enchant:echoing");
+
+        CustomEnchantListener enchants = plugin.getCustomEnchantListener();
+        if (enchants != null) {
+            for (String enchantId : enchants.managedEnchantIds()) {
+                options.add("custom_enchant:" + enchantId);
+            }
+        }
 
         CustomToolListener tools = plugin.getCustomToolListener();
         if (tools != null) {
@@ -424,7 +430,11 @@ public final class ItemAuditManager implements Listener {
 
         scanInventory(player, player.getInventory(), "inventory", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true, true);
         scanInventory(player, player.getEnderChest(), "ender_chest", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true, true);
-        scanItem(player, player.getItemOnCursor(), "cursor", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true, true);
+        ItemStack cursor = player.getItemOnCursor();
+        scanItem(player, cursor, "cursor", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true, true);
+        if (shouldWriteBackScannedItem(cursor)) {
+            player.setItemOnCursor(cursor);
+        }
         finishAudit(player, reason, seenInstanceLocations, legendaryCounts);
     }
 
@@ -477,8 +487,17 @@ public final class ItemAuditManager implements Listener {
         }
         ItemStack[] contents = inventory.getContents();
         for (int slot = 0; slot < contents.length; slot++) {
-            scanItem(owner, contents[slot], scope + "[" + slot + "]", seenInstanceLocations, legendaryCounts, backpackTrail, canMutateIdentity, updateOwner);
+            ItemStack item = contents[slot];
+            scanItem(owner, item, scope + "[" + slot + "]", seenInstanceLocations, legendaryCounts, backpackTrail, canMutateIdentity, updateOwner);
+            if (canMutateIdentity && shouldWriteBackScannedItem(item)) {
+                inventory.setItem(slot, item);
+            }
         }
+    }
+
+    private boolean shouldWriteBackScannedItem(ItemStack item) {
+        ManagedItemDescriptor descriptor = describe(item);
+        return descriptor != null && descriptor.instanceTracked() && currentInstanceId(item) != null;
     }
 
     private void scanItem(
@@ -670,16 +689,16 @@ public final class ItemAuditManager implements Listener {
                 return new ManagedItemDescriptor("legendary:" + normalized, defaultDisplay(displayName, normalized), true);
             }
             if (legendary.isEnderBoneItem(item)) {
-                return new ManagedItemDescriptor("special:ender_bone", "Ender Bone", true);
+                return new ManagedItemDescriptor("special:ender_bone", "Ender Bone", false);
             }
             if (legendary.isOrbOfTheMysticsItem(item)) {
-                return new ManagedItemDescriptor("special:orb_of_the_mystics", "Orb of the Mystics", true);
+                return new ManagedItemDescriptor("special:orb_of_the_mystics", "Orb of the Mystics", false);
             }
         }
 
         BackpackListener backpacks = plugin.getBackpackListener();
         if (backpacks != null && backpacks.isBackpack(item)) {
-            return new ManagedItemDescriptor("custom:backpack", "Backpack", true);
+            return new ManagedItemDescriptor("custom:backpack", backpacks.backpackDisplayName(item), true);
         }
 
         CustomEnchantListener enchants = plugin.getCustomEnchantListener();
@@ -729,6 +748,11 @@ public final class ItemAuditManager implements Listener {
             return new ManagedItemDescriptor("custom:salvaging_depot", "Salvaging Depot", false);
         }
 
+        AgriculturalPylonListener pylon = plugin.getAgriculturalPylonListener();
+        if (pylon != null && pylon.isPylonItem(item)) {
+            return new ManagedItemDescriptor("custom:agricultural_pylon", "Agricultural Pylon", false);
+        }
+
         XpLecternListener xpLectern = plugin.getXpLecternListener();
         if (xpLectern != null && xpLectern.isLecternItem(item)) {
             return new ManagedItemDescriptor("custom:xp_lectern", "XP Lectern", false);
@@ -737,7 +761,7 @@ public final class ItemAuditManager implements Listener {
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers != null) {
             if (powers.isAncientScroll(item)) {
-                return new ManagedItemDescriptor("power:" + SuperpowerManager.ANCIENT_SCROLL_ITEM_ID, "Ancient Scroll", true);
+                return new ManagedItemDescriptor("power:" + SuperpowerManager.ANCIENT_SCROLL_ITEM_ID, "Ancient Scroll", false);
             }
             if (powers.isWardenHeart(item)) {
                 return new ManagedItemDescriptor("relic:" + SuperpowerManager.WARDEN_HEART_ITEM_ID, "Warden Heart", false);
@@ -810,6 +834,7 @@ public final class ItemAuditManager implements Listener {
             || "custom:mythic_forge".equals(itemKey)
             || "custom:talisman_of_sustenance".equals(itemKey)
             || "custom:salvaging_depot".equals(itemKey)
+            || "custom:agricultural_pylon".equals(itemKey)
             || "custom:xp_lectern".equals(itemKey)
             || ("power:" + SuperpowerManager.ANCIENT_SCROLL_ITEM_ID).equals(itemKey);
     }

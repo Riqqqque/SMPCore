@@ -15,6 +15,7 @@ import me.rique.smpcore.audit.ItemAuditManager;
 import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.backpack.BackpackListener;
 import me.rique.smpcore.boss.BossManager;
+import me.rique.smpcore.item.AgriculturalPylonListener;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.ReplenishListener;
@@ -30,7 +31,10 @@ import me.rique.smpcore.season.SeasonRelicManager;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
+import org.bukkit.Color;
 import org.bukkit.OfflinePlayer;
+import org.bukkit.Particle;
+import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
 import org.bukkit.ban.ProfileBanList;
@@ -61,6 +65,7 @@ public final class AdminCommands {
     private static final String ASCENDANT_CORE_ITEM_ID = MythicForgeListener.ASCENDANT_CORE_ITEM_ID;
     private static final String TALISMAN_OF_SUSTENANCE_ITEM_ID = SustenanceTalismanListener.ITEM_ID;
     private static final String SALVAGING_DEPOT_ITEM_ID = SalvagingDepotListener.ITEM_ID;
+    private static final String AGRICULTURAL_PYLON_ITEM_ID = AgriculturalPylonListener.ITEM_ID;
     private static final String XP_LECTERN_ITEM_ID = XpLecternListener.ITEM_ID;
     private static final String ANCIENT_SCROLL_ITEM_ID = SuperpowerManager.ANCIENT_SCROLL_ITEM_ID;
     private static final String WARDEN_HEART_ITEM_ID = SuperpowerManager.WARDEN_HEART_ITEM_ID;
@@ -80,6 +85,7 @@ public final class AdminCommands {
         ASCENDANT_CORE_ITEM_ID,
         TALISMAN_OF_SUSTENANCE_ITEM_ID,
         SALVAGING_DEPOT_ITEM_ID,
+        AGRICULTURAL_PYLON_ITEM_ID,
         XP_LECTERN_ITEM_ID,
         ANCIENT_SCROLL_ITEM_ID,
         WARDEN_HEART_ITEM_ID,
@@ -107,6 +113,8 @@ public final class AdminCommands {
         registerInvSee(commands, plugin);
         registerSetSpawn(commands, plugin);
         registerAnnounce(commands);
+        registerSmite(commands);
+        registerFreeze(commands, plugin);
         registerUnban(commands);
         registerReplenishBook(commands, plugin);
         registerDelicateBook(commands, plugin);
@@ -282,6 +290,99 @@ public final class AdminCommands {
             "Broadcast an announcement to the whole server",
             List.of("broadcast")
         );
+    }
+
+    private static void registerSmite(Commands commands) {
+        commands.register(
+            Commands.literal("smite")
+                .requires(src -> src.getSender().hasPermission("smpcore.smite"))
+                .then(Commands.argument("target", ArgumentTypes.player())
+                    .executes(ctx -> {
+                        List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                            .resolve(ctx.getSource());
+                        if (targets.isEmpty()) {
+                            ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
+                            return 0;
+                        }
+                        for (Player target : targets) {
+                            smitePlayer(target);
+                        }
+                        ctx.getSource().getSender().sendMessage(MessageUtil.success("Smote <white>" + targets.size() + "</white> player(s)."));
+                        return Command.SINGLE_SUCCESS;
+                    }))
+                .build(),
+            "Strike a player with harmless lightning effects"
+        );
+    }
+
+    private static void registerFreeze(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("freeze")
+                .requires(src -> src.getSender().hasPermission("smpcore.freeze"))
+                .then(Commands.argument("target", ArgumentTypes.player())
+                    .executes(ctx -> {
+                        List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                            .resolve(ctx.getSource());
+                        return setFrozen(plugin, ctx.getSource().getSender(), targets, null);
+                    })
+                    .then(Commands.literal("on")
+                        .executes(ctx -> {
+                            List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                                .resolve(ctx.getSource());
+                            return setFrozen(plugin, ctx.getSource().getSender(), targets, true);
+                        }))
+                    .then(Commands.literal("off")
+                        .executes(ctx -> {
+                            List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                                .resolve(ctx.getSource());
+                            return setFrozen(plugin, ctx.getSource().getSender(), targets, false);
+                        })))
+                .build(),
+            "Freeze or unfreeze an online player"
+        );
+        commands.register(
+            Commands.literal("unfreeze")
+                .requires(src -> src.getSender().hasPermission("smpcore.freeze"))
+                .then(Commands.argument("target", ArgumentTypes.player())
+                    .executes(ctx -> {
+                        List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                            .resolve(ctx.getSource());
+                        return setFrozen(plugin, ctx.getSource().getSender(), targets, false);
+                    }))
+                .build(),
+            "Unfreeze an online player"
+        );
+    }
+
+    private static void smitePlayer(Player target) {
+        var location = target.getLocation();
+        target.getWorld().strikeLightningEffect(location);
+        target.getWorld().spawnParticle(Particle.FLASH, location.add(0, 1.0, 0), 1, 0.0, 0.0, 0.0, 0.0, Color.WHITE);
+        target.getWorld().spawnParticle(Particle.ELECTRIC_SPARK, target.getLocation().add(0, 1.0, 0), 28, 0.35, 0.6, 0.35, 0.04);
+        target.getWorld().playSound(target.getLocation(), Sound.ENTITY_LIGHTNING_BOLT_THUNDER, 0.9f, 1.15f);
+        target.setFireTicks(0);
+        target.sendMessage(MessageUtil.warn("You have been smitten. Dramatically, not lethally."));
+    }
+
+    private static int setFrozen(SMPCore plugin, CommandSender sender, List<Player> targets, Boolean state) {
+        if (targets == null || targets.isEmpty()) {
+            sender.sendMessage(MessageUtil.error("Player not found."));
+            return 0;
+        }
+        if (plugin.getPlayerControlListener() == null) {
+            sender.sendMessage(MessageUtil.error("Player controls are not ready yet."));
+            return 0;
+        }
+
+        for (Player target : targets) {
+            boolean frozen = state == null
+                ? plugin.getPlayerControlListener().toggleFrozen(target)
+                : plugin.getPlayerControlListener().setFrozen(target, state);
+            sender.sendMessage(MessageUtil.success(
+                "<white>" + target.getName() + "</white> is now <white>" + (frozen ? "frozen" : "unfrozen") + "</white>."
+            ));
+        }
+        return Command.SINGLE_SUCCESS;
     }
 
     private static void registerSpeed(Commands commands, SMPCore plugin) {
@@ -887,6 +988,16 @@ public final class AdminCommands {
             case DOUBLE_JUMP -> listener.createDoubleJumpBook();
             case DASH -> listener.createDashBook();
         };
+        ItemAuditManager audit = plugin.getItemAuditManager();
+        if (audit != null) {
+            audit.recordKnownAcquisition(
+                target,
+                book,
+                sender,
+                "admin_custom_enchant_give",
+                "Given via custom enchant admin command."
+            );
+        }
         var leftovers = target.getInventory().addItem(book);
         leftovers.values().forEach(left -> target.getWorld().dropItemNaturally(target.getLocation(), left));
 
@@ -996,6 +1107,7 @@ public final class AdminCommands {
             case ASCENDANT_CORE_ITEM_ID -> createAscendantCoreAdminItem(plugin, sender);
             case TALISMAN_OF_SUSTENANCE_ITEM_ID -> createTalismanOfSustenanceAdminItem(plugin, sender);
             case SALVAGING_DEPOT_ITEM_ID -> createSalvagingDepotAdminItem(plugin, sender);
+            case AGRICULTURAL_PYLON_ITEM_ID -> createAgriculturalPylonAdminItem(plugin, sender);
             case XP_LECTERN_ITEM_ID -> createXpLecternAdminItem(plugin, sender);
             case ANCIENT_SCROLL_ITEM_ID -> createAncientScrollAdminItem(plugin, sender);
             case WARDEN_HEART_ITEM_ID -> createWardenHeartAdminItem(plugin, sender);
@@ -1132,6 +1244,15 @@ public final class AdminCommands {
             return null;
         }
         return new AdminGiveItem(depot.createDepotItem(), "Salvaging Depot");
+    }
+
+    private static AdminGiveItem createAgriculturalPylonAdminItem(SMPCore plugin, CommandSender sender) {
+        AgriculturalPylonListener pylon = plugin.getAgriculturalPylonListener();
+        if (pylon == null) {
+            sender.sendMessage(MessageUtil.error("Agricultural Pylon system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(pylon.createPylonItem(), "Agricultural Pylon");
     }
 
     private static AdminGiveItem createXpLecternAdminItem(SMPCore plugin, CommandSender sender) {
@@ -1428,6 +1549,7 @@ public final class AdminCommands {
             case "mothernature", "mother_nature", "mothernaturestick", "mother_nature_stick", "naturestick" -> MOTHER_NATURE_STICK_ITEM_ID;
             case "orb", "mystic_orb", "orb_of_mystics", "orb_of_the_mystic", "orbofthemystics" -> ORB_OF_THE_MYSTICS_ITEM_ID;
             case "salvage", "salvaging", "salvagingdepot", "salvaging_depot", "depot", "recycler" -> SALVAGING_DEPOT_ITEM_ID;
+            case "agricultural", "agriculturalpylon", "agricultural_pylon", "farm_pylon", "farmpylon", "pylon", "rootguard" -> AGRICULTURAL_PYLON_ITEM_ID;
             case "xp", "xplectern", "xp_lectern", "experiencelectern", "experience_lectern", "levelbank", "level_bank" -> XP_LECTERN_ITEM_ID;
             case "talisman", "sustenance_talisman", "talisman_of_sustenance" -> TALISMAN_OF_SUSTENANCE_ITEM_ID;
             case "theworld", "the_world", "worldclock", "world_clock", "clock" -> THE_WORLD_CLOCK_ITEM_ID;

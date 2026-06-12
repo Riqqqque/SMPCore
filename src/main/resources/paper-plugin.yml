@@ -48,6 +48,9 @@ permissions:
   smpcore.menu:
     description: Use /menu and /smpmenu
     default: true
+  smpcore.settings:
+    description: Use /settings, /playersettings, and personal menu settings
+    default: true
   smpcore.leaderboard:
     description: Use /leaderboards, /leaderboard, /lb, and /topstats
     default: true
@@ -80,6 +83,9 @@ permissions:
     default: true
   smpcore.wiki:
     description: Use /wiki, /guide, and /smpwiki
+    default: true
+  smpcore.shop:
+    description: Use /shops and create player chest shops
     default: true
 
   # Admin
@@ -158,6 +164,12 @@ permissions:
   smpcore.announce:
     description: Use /announce
     default: op
+  smpcore.smite:
+    description: Use /smite for harmless lightning effects
+    default: op
+  smpcore.freeze:
+    description: Use /freeze and /unfreeze
+    default: op
   smpcore.unban:
     description: Use /unban
     default: op
@@ -193,4 +205,7 @@ permissions:
     default: op
   smpcore.reward.admin:
     description: Use /admin reward
+    default: op
+  smpcore.shop.admin:
+    description: Manage and remove any player shop
     default: op
