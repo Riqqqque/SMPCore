@@ -167,6 +167,19 @@ public final class DatabaseManager {
             ON team_members(player_uuid)
             """;
 
+        String teamAllies = """
+            CREATE TABLE IF NOT EXISTS team_allies (
+                team_name TEXT NOT NULL COLLATE NOCASE,
+                ally_name TEXT NOT NULL COLLATE NOCASE,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (team_name, ally_name)
+            )""";
+
+        String teamAlliesByAlly = """
+            CREATE INDEX IF NOT EXISTS idx_team_allies_ally
+            ON team_allies(ally_name)
+            """;
+
         String teamVaults = """
             CREATE TABLE IF NOT EXISTS team_vaults (
                 team_name TEXT PRIMARY KEY COLLATE NOCASE,
@@ -392,6 +405,8 @@ public final class DatabaseManager {
             stmt.executeUpdate(teams);
             stmt.executeUpdate(teamMembers);
             stmt.executeUpdate(teamMembersByPlayer);
+            stmt.executeUpdate(teamAllies);
+            stmt.executeUpdate(teamAlliesByAlly);
             stmt.executeUpdate(teamVaults);
             stmt.executeUpdate(waystones);
             stmt.executeUpdate(waystoneNames);
@@ -787,7 +802,7 @@ public final class DatabaseManager {
                         String name = rs.getString("name");
                         UUID owner = UUID.fromString(rs.getString("owner_uuid"));
                         String color = rs.getString("color");
-                        byName.put(name.toLowerCase(Locale.ROOT), new TeamRecord(name, owner, color, new LinkedHashSet<>()));
+                        byName.put(name.toLowerCase(Locale.ROOT), new TeamRecord(name, owner, color, new LinkedHashSet<>(), new LinkedHashSet<>()));
                     }
                 }
 
@@ -799,6 +814,18 @@ public final class DatabaseManager {
                         TeamRecord record = byName.get(teamName.toLowerCase(Locale.ROOT));
                         if (record != null) {
                             record.members().add(member);
+                        }
+                    }
+                }
+
+                try (PreparedStatement ps = conn.prepareStatement("SELECT team_name, ally_name FROM team_allies");
+                     ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        String teamName = rs.getString("team_name");
+                        String allyName = rs.getString("ally_name");
+                        TeamRecord record = byName.get(teamName.toLowerCase(Locale.ROOT));
+                        if (record != null && byName.containsKey(allyName.toLowerCase(Locale.ROOT))) {
+                            record.allies().add(allyName);
                         }
                     }
                 }
@@ -835,10 +862,14 @@ public final class DatabaseManager {
             try (Connection conn = connection()) {
                 conn.setAutoCommit(false);
                 try (PreparedStatement psMembers = conn.prepareStatement("DELETE FROM team_members WHERE team_name=?");
+                     PreparedStatement psAllies = conn.prepareStatement("DELETE FROM team_allies WHERE team_name=? OR ally_name=?");
                      PreparedStatement psVault = conn.prepareStatement("DELETE FROM team_vaults WHERE team_name=?");
                      PreparedStatement psTeam = conn.prepareStatement("DELETE FROM teams WHERE name=?")) {
                     psMembers.setString(1, name);
                     psMembers.executeUpdate();
+                    psAllies.setString(1, name);
+                    psAllies.setString(2, name);
+                    psAllies.executeUpdate();
                     psVault.setString(1, name);
                     psVault.executeUpdate();
                     psTeam.setString(1, name);
@@ -918,13 +949,65 @@ public final class DatabaseManager {
         }, executor);
     }
 
+    public CompletableFuture<Void> addTeamAlliance(String firstTeamName, String secondTeamName) {
+        return CompletableFuture.runAsync(() -> {
+            String sql = "INSERT OR IGNORE INTO team_allies (team_name, ally_name, created_at) VALUES (?, ?, ?)";
+            try (Connection conn = connection()) {
+                conn.setAutoCommit(false);
+                long now = System.currentTimeMillis();
+                try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                    ps.setString(1, firstTeamName);
+                    ps.setString(2, secondTeamName);
+                    ps.setLong(3, now);
+                    ps.executeUpdate();
+
+                    ps.setString(1, secondTeamName);
+                    ps.setString(2, firstTeamName);
+                    ps.setLong(3, now);
+                    ps.executeUpdate();
+                    conn.commit();
+                } catch (SQLException e) {
+                    conn.rollback();
+                    throw e;
+                } finally {
+                    conn.setAutoCommit(true);
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("addTeamAlliance: " + e.getMessage());
+                throw new RuntimeException("addTeamAlliance failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Void> removeTeamAlliance(String firstTeamName, String secondTeamName) {
+        return CompletableFuture.runAsync(() -> {
+            String sql = """
+                DELETE FROM team_allies
+                WHERE (team_name=? AND ally_name=?) OR (team_name=? AND ally_name=?)
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, firstTeamName);
+                ps.setString(2, secondTeamName);
+                ps.setString(3, secondTeamName);
+                ps.setString(4, firstTeamName);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("removeTeamAlliance: " + e.getMessage());
+                throw new RuntimeException("removeTeamAlliance failed", e);
+            }
+        }, executor);
+    }
+
     public CompletableFuture<Boolean> renameTeam(String oldName, String newName) {
         return CompletableFuture.supplyAsync(() -> {
             try (Connection conn = connection()) {
                 conn.setAutoCommit(false);
                 try (PreparedStatement psTeam = conn.prepareStatement("UPDATE teams SET name=? WHERE name=?");
                      PreparedStatement psMembers = conn.prepareStatement("UPDATE team_members SET team_name=? WHERE team_name=?");
-                     PreparedStatement psVault = conn.prepareStatement("UPDATE team_vaults SET team_name=? WHERE team_name=?")) {
+                     PreparedStatement psVault = conn.prepareStatement("UPDATE team_vaults SET team_name=? WHERE team_name=?");
+                     PreparedStatement psAlliesTeam = conn.prepareStatement("UPDATE team_allies SET team_name=? WHERE team_name=?");
+                     PreparedStatement psAlliesAlly = conn.prepareStatement("UPDATE team_allies SET ally_name=? WHERE ally_name=?")) {
                     psTeam.setString(1, newName);
                     psTeam.setString(2, oldName);
                     int updated = psTeam.executeUpdate();
@@ -940,6 +1023,14 @@ public final class DatabaseManager {
                     psVault.setString(1, newName);
                     psVault.setString(2, oldName);
                     psVault.executeUpdate();
+
+                    psAlliesTeam.setString(1, newName);
+                    psAlliesTeam.setString(2, oldName);
+                    psAlliesTeam.executeUpdate();
+
+                    psAlliesAlly.setString(1, newName);
+                    psAlliesAlly.setString(2, oldName);
+                    psAlliesAlly.executeUpdate();
 
                     conn.commit();
                     return true;
@@ -1932,7 +2023,7 @@ public final class DatabaseManager {
         return "23000".equals(state) || e.getMessage().toLowerCase(Locale.ROOT).contains("constraint");
     }
 
-    public record TeamRecord(String name, UUID ownerUuid, String color, Set<UUID> members) {}
+    public record TeamRecord(String name, UUID ownerUuid, String color, Set<UUID> members, Set<String> allies) {}
     public record LegendaryClaimedInstanceRecord(String instanceId, String legendaryId, UUID ownerUuid, String sourceKey) {}
     public record ManagedItemInstanceRecord(
         String instanceId,

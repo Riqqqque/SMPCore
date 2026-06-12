@@ -12,10 +12,14 @@
 - `/leaderboards`, `/leaderboard`, `/lb`, `/topstats` - opens persistent server leaderboards.
 - `/wiki`, `/guide`, `/smpwiki` - shows the clickable wiki link.
 - `/shops`, `/shop` - shows how to create chest-based player shops.
-- `/team` - team management commands. Leaders can use `/team color <color>` and `/team rename "new name"`.
+- `/team` - team management commands. Leaders can use `/team color <color>`, `/team rename "new name"`, and `/team ally ...`.
 - `/teams [search]`, `/team list`, `/team search <name>` - opens the searchable team browser with member counts, online counts, deaths, kills, boss stats, and playtime.
 - `/tvault`, `/teamvault` - opens team vault storage.
-- `/teamglow`, `/allyglow`, `/teammateglow` - privately highlights only your teammates for your client with a glowing ally marker.
+- `/team ally add <team>` - request an alliance with another team. Owner only.
+- `/team ally accept <team>` or `/team ally deny <team>` - accept or deny an alliance request. Owner only.
+- `/team ally remove <team>` - end an alliance. Owner only.
+- `/team allies` - view current allied teams and pending alliance requests.
+- `/teamglow`, `/allyglow`, `/teammateglow` - privately highlights teammates and allied teams for your client with a glowing ally marker.
 - `/powerinfo` - opens superpower information.
 - `/stormcaller on|off|toggle|status` - Stormcaller-only lightning strike toggle.
 - `/home`, `/sethome`, `/delhome`, `/homes` - home system.
