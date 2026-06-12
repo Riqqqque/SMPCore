@@ -69,6 +69,7 @@ public final class TeamManager implements Listener {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final long INVITE_DURATION_MS = 120_000L;
+    private static final long ALLY_INVITE_DURATION_MS = 300_000L;
     private static final int TEAM_VAULT_SIZE = 54;
     private static final int TEAM_BROWSER_SIZE = 54;
     private static final String SCOREBOARD_TEAM_PREFIX = "smpct_";
@@ -96,6 +97,7 @@ public final class TeamManager implements Listener {
     private final Map<String, TeamData> teamsByKey = new ConcurrentHashMap<>();
     private final Map<UUID, String> teamByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, InviteData> invitesByTarget = new ConcurrentHashMap<>();
+    private final Map<String, AllyInviteData> allyInvitesByTargetTeam = new ConcurrentHashMap<>();
     private final Map<String, String> scoreboardIdByTeamKey = new ConcurrentHashMap<>();
     private final Map<String, TeamVaultSession> teamVaultsByKey = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<TeamVaultSession>> vaultLoadingByTeamKey = new ConcurrentHashMap<>();
@@ -153,6 +155,7 @@ public final class TeamManager implements Listener {
         teamsByKey.clear();
         teamByPlayer.clear();
         invitesByTarget.clear();
+        allyInvitesByTargetTeam.clear();
         scoreboardIdByTeamKey.clear();
 
         for (DatabaseManager.TeamRecord row : rows) {
@@ -163,6 +166,12 @@ public final class TeamManager implements Listener {
             TeamColor color = TeamColor.fromId(row.color());
             TeamData data = new TeamData(key, displayName, row.ownerUuid(), color);
             data.members.addAll(row.members());
+            for (String allyName : row.allies()) {
+                String allyKey = key(allyName);
+                if (!allyKey.isEmpty() && !allyKey.equals(key)) {
+                    data.allies.add(allyKey);
+                }
+            }
             if (!data.members.contains(row.ownerUuid())) {
                 data.members.add(row.ownerUuid());
                 plugin.getDatabase().addTeamMember(displayName, row.ownerUuid())
@@ -665,6 +674,14 @@ public final class TeamManager implements Listener {
                 invitesByTarget.replaceAll((targetId, invite) -> invite.teamKey().equals(oldKey)
                     ? new InviteData(newKey, invite.inviter(), invite.expiresAt())
                     : invite);
+                for (TeamData other : teamsByKey.values()) {
+                    if (other.allies.remove(oldKey)) {
+                        other.allies.add(newKey);
+                    }
+                }
+                current.allies.remove(oldKey);
+                allyInvitesByTargetTeam.entrySet().removeIf(entry ->
+                    entry.getKey().equals(oldKey) || entry.getValue().teamKey().equals(oldKey));
                 refreshTeamVisuals(current);
                 loadTeamVault(current).thenAccept(this::syncTeamVaultLegendaryClaims)
                     .exceptionally(ex -> {
@@ -800,6 +817,7 @@ public final class TeamManager implements Listener {
                     if (current.members.isEmpty()) {
                         discardTeamVault(current.key);
                         teamsByKey.remove(current.key);
+                        removeTeamFromAllies(current.key);
                         unregisterScoreboardTeam(current.key);
                         plugin.getDatabase().deleteTeam(current.displayName)
                             .exceptionally(ex -> {
@@ -807,6 +825,8 @@ public final class TeamManager implements Listener {
                                 return null;
                             });
                         invitesByTarget.entrySet().removeIf(entry -> entry.getValue().teamKey().equals(current.key));
+                        allyInvitesByTargetTeam.entrySet().removeIf(entry ->
+                            entry.getKey().equals(current.key) || entry.getValue().teamKey().equals(current.key));
                         return null;
                     }
 
@@ -863,6 +883,7 @@ public final class TeamManager implements Listener {
                     discardTeamVault(teamKey);
                     TeamData current = teamsByKey.remove(teamKey);
                     if (current == null) return null;
+                    removeTeamFromAllies(teamKey);
 
                     for (UUID member : current.members) {
                         teamByPlayer.remove(member);
@@ -877,10 +898,176 @@ public final class TeamManager implements Listener {
                     }
 
                     invitesByTarget.entrySet().removeIf(entry -> entry.getValue().teamKey().equals(teamKey));
+                    allyInvitesByTargetTeam.entrySet().removeIf(entry ->
+                        entry.getKey().equals(teamKey) || entry.getValue().teamKey().equals(teamKey));
                     unregisterScoreboardTeam(teamKey);
                     return (String) null;
                 });
             });
+    }
+
+    public String requestAlly(Player owner, String rawTeamName) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) return unavailable;
+
+        TeamData team = teamOf(owner.getUniqueId());
+        if (team == null) return "You are not in a team.";
+        if (!team.owner.equals(owner.getUniqueId())) return "Only the team owner can manage allies.";
+        if (renamingTeamKeys.contains(team.key)) return "Team settings are updating. Try again in a moment.";
+
+        TeamData target = teamsByKey.get(key(normalizeDisplayName(rawTeamName)));
+        if (target == null) return "That team does not exist.";
+        if (target.key.equals(team.key)) return "You cannot ally your own team.";
+        if (team.allies.contains(target.key)) return "Your team is already allied with <white>" + target.displayName + "</white>.";
+        if (renamingTeamKeys.contains(target.key)) return "That team is updating settings. Try again in a moment.";
+
+        allyInvitesByTargetTeam.put(target.key, new AllyInviteData(team.key, owner.getUniqueId(), System.currentTimeMillis() + ALLY_INVITE_DURATION_MS));
+        notifyTeam(target, MessageUtil.info(
+            "<white>" + team.displayName + "</white> requested an alliance. The owner can use <white>/team ally accept "
+                + team.displayName + "</white> or <white>/team ally deny " + team.displayName + "</white>."));
+        return null;
+    }
+
+    public CompletableFuture<String> acceptAlly(Player owner, String rawTeamName) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) return CompletableFuture.completedFuture(unavailable);
+
+        TeamData target = teamOf(owner.getUniqueId());
+        if (target == null) return CompletableFuture.completedFuture("You are not in a team.");
+        if (!target.owner.equals(owner.getUniqueId())) return CompletableFuture.completedFuture("Only the team owner can manage allies.");
+        if (renamingTeamKeys.contains(target.key)) return CompletableFuture.completedFuture("Team settings are updating. Try again in a moment.");
+
+        String sourceKey = key(normalizeDisplayName(rawTeamName));
+        AllyInviteData invite = allyInvitesByTargetTeam.get(target.key);
+        if (invite == null || !invite.teamKey().equals(sourceKey)) {
+            return CompletableFuture.completedFuture("No pending alliance request from that team.");
+        }
+        if (invite.expiresAt() < System.currentTimeMillis()) {
+            allyInvitesByTargetTeam.remove(target.key, invite);
+            return CompletableFuture.completedFuture("That alliance request expired.");
+        }
+
+        TeamData source = teamsByKey.get(sourceKey);
+        if (source == null) {
+            allyInvitesByTargetTeam.remove(target.key, invite);
+            return CompletableFuture.completedFuture("That team no longer exists.");
+        }
+        if (source.key.equals(target.key)) {
+            allyInvitesByTargetTeam.remove(target.key, invite);
+            return CompletableFuture.completedFuture("You cannot ally your own team.");
+        }
+        if (source.allies.contains(target.key)) {
+            allyInvitesByTargetTeam.remove(target.key, invite);
+            return CompletableFuture.completedFuture("Your teams are already allied.");
+        }
+
+        return plugin.getDatabase().addTeamAlliance(source.displayName, target.displayName)
+            .handle((ignored, ex) -> {
+                if (ex == null) return null;
+                plugin.getLogger().severe("addTeamAlliance failed: " + ex.getMessage());
+                return "Could not create that alliance right now.";
+            })
+            .thenCompose(error -> runOnMainThread(() -> {
+                if (error != null) return error;
+                TeamData currentTarget = teamsByKey.get(target.key);
+                TeamData currentSource = teamsByKey.get(source.key);
+                if (currentTarget == null || currentSource == null) {
+                    return "One of those teams no longer exists.";
+                }
+                currentTarget.allies.add(currentSource.key);
+                currentSource.allies.add(currentTarget.key);
+                allyInvitesByTargetTeam.remove(currentTarget.key, invite);
+                notifyTeam(currentTarget, MessageUtil.success("Your team allied with <white>" + currentSource.displayName + "</white>."));
+                notifyTeam(currentSource, MessageUtil.success("<white>" + currentTarget.displayName + "</white> accepted your alliance."));
+                return (String) null;
+            }));
+    }
+
+    public String denyAlly(Player owner, String rawTeamName) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) return unavailable;
+
+        TeamData target = teamOf(owner.getUniqueId());
+        if (target == null) return "You are not in a team.";
+        if (!target.owner.equals(owner.getUniqueId())) return "Only the team owner can manage allies.";
+
+        String sourceKey = key(normalizeDisplayName(rawTeamName));
+        AllyInviteData invite = allyInvitesByTargetTeam.get(target.key);
+        if (invite == null || !invite.teamKey().equals(sourceKey)) {
+            return "No pending alliance request from that team.";
+        }
+
+        allyInvitesByTargetTeam.remove(target.key, invite);
+        TeamData source = teamsByKey.get(sourceKey);
+        if (source != null) {
+            notifyTeam(source, MessageUtil.warn("<white>" + target.displayName + "</white> denied your alliance request."));
+        }
+        return null;
+    }
+
+    public CompletableFuture<String> removeAlly(Player owner, String rawTeamName) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) return CompletableFuture.completedFuture(unavailable);
+
+        TeamData team = teamOf(owner.getUniqueId());
+        if (team == null) return CompletableFuture.completedFuture("You are not in a team.");
+        if (!team.owner.equals(owner.getUniqueId())) return CompletableFuture.completedFuture("Only the team owner can manage allies.");
+        if (renamingTeamKeys.contains(team.key)) return CompletableFuture.completedFuture("Team settings are updating. Try again in a moment.");
+
+        TeamData ally = teamsByKey.get(key(normalizeDisplayName(rawTeamName)));
+        if (ally == null) return CompletableFuture.completedFuture("That team does not exist.");
+        if (!team.allies.contains(ally.key)) return CompletableFuture.completedFuture("Your team is not allied with <white>" + ally.displayName + "</white>.");
+
+        return plugin.getDatabase().removeTeamAlliance(team.displayName, ally.displayName)
+            .handle((ignored, ex) -> {
+                if (ex == null) return null;
+                plugin.getLogger().severe("removeTeamAlliance failed: " + ex.getMessage());
+                return "Could not remove that alliance right now.";
+            })
+            .thenCompose(error -> runOnMainThread(() -> {
+                if (error != null) return error;
+                TeamData currentTeam = teamsByKey.get(team.key);
+                TeamData currentAlly = teamsByKey.get(ally.key);
+                if (currentTeam != null) {
+                    currentTeam.allies.remove(ally.key);
+                }
+                if (currentAlly != null) {
+                    currentAlly.allies.remove(team.key);
+                }
+                if (currentTeam != null) {
+                    notifyTeam(currentTeam, MessageUtil.warn("Your alliance with <white>" + ally.displayName + "</white> ended."));
+                }
+                if (currentAlly != null) {
+                    notifyTeam(currentAlly, MessageUtil.warn("<white>" + team.displayName + "</white> ended your alliance."));
+                }
+                return (String) null;
+            }));
+    }
+
+    public Component alliesMessage(UUID playerId) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) {
+            return MessageUtil.info(unavailable);
+        }
+
+        TeamData team = teamOf(playerId);
+        if (team == null) {
+            return MessageUtil.info("You are not in a team.");
+        }
+
+        String allies = allyDisplayNames(team);
+        AllyInviteData pending = allyInvitesByTargetTeam.get(team.key);
+        String pendingText = "";
+        if (pending != null && pending.expiresAt() >= System.currentTimeMillis()) {
+            TeamData source = teamsByKey.get(pending.teamKey());
+            if (source != null) {
+                pendingText = " <gray>| Pending from: <white>" + source.displayName + "</white></gray>";
+            }
+        }
+
+        return MessageUtil.prefixedRaw(
+            "<gold>Allies</gold> <gray>| Current: <white>" + allies + "</white></gray>" + pendingText
+        );
     }
 
     public Component infoMessage(UUID playerId) {
@@ -905,10 +1092,11 @@ public final class TeamManager implements Listener {
         if (ownerName == null) ownerName = team.owner.toString();
 
         return MessageUtil.prefixedRaw(
-            "<gold>Team</gold> <white>" + team.displayName + "</white> " +
+                "<gold>Team</gold> <white>" + team.displayName + "</white> " +
                 "<gray>| Owner: <white>" + ownerName + "</white> " +
                 "| Color: <" + team.color.id + ">" + team.color.display + "</" + team.color.id + "> " +
                 "| Members: <white>" + team.members.size() + "</white> " +
+                "| Allies: <white>" + allyDisplayNames(team) + "</white> " +
             "| List: <white>" + String.join(", ", memberNames) + "</white></gray>"
         );
     }
@@ -1489,7 +1677,12 @@ public final class TeamManager implements Listener {
 
         String firstTeam = teamByPlayer.get(firstPlayerId);
         if (firstTeam == null) return false;
-        return firstTeam.equals(teamByPlayer.get(secondPlayerId));
+        String secondTeam = teamByPlayer.get(secondPlayerId);
+        if (secondTeam == null) return false;
+        if (firstTeam.equals(secondTeam)) return true;
+
+        TeamData first = teamsByKey.get(firstTeam);
+        return first != null && first.allies.contains(secondTeam);
     }
 
     public List<String> teamHelpLines() {
@@ -1504,6 +1697,10 @@ public final class TeamManager implements Listener {
             "<gray><white>/team rename \"name\"</white> - Rename your team (owner)</gray>",
             "<gray><white>/team invite <player></white> - Invite a player</gray>",
             "<gray><white>/team accept</white> / <white>/team deny</white> - Handle invites</gray>",
+            "<gray><white>/team ally add <team></white> - Request an alliance (owner)</gray>",
+            "<gray><white>/team ally accept <team></white> / <white>/team ally deny <team></white> - Handle alliance requests</gray>",
+            "<gray><white>/team ally remove <team></white> - End an alliance (owner)</gray>",
+            "<gray><white>/team allies</white> - View your team's allies</gray>",
             "<gray><white>/team leave</white> - Leave your team</gray>",
             "<gray><white>/team disband</white> - Disband your team (owner)</gray>",
             "<gray><white>/team info</white> - View your team info</gray>",
@@ -1523,6 +1720,46 @@ public final class TeamManager implements Listener {
 
     public boolean isTeamColor(String raw) {
         return TeamColor.fromId(raw) != null;
+    }
+
+    private void notifyTeam(TeamData team, Component message) {
+        if (team == null || message == null) {
+            return;
+        }
+        for (UUID memberId : team.members) {
+            Player member = Bukkit.getPlayer(memberId);
+            if (member != null && member.isOnline()) {
+                member.sendMessage(message);
+            }
+        }
+    }
+
+    private void removeTeamFromAllies(String teamKey) {
+        if (teamKey == null || teamKey.isBlank()) {
+            return;
+        }
+        for (TeamData other : teamsByKey.values()) {
+            other.allies.remove(teamKey);
+        }
+    }
+
+    private String allyDisplayNames(TeamData team) {
+        if (team == null || team.allies.isEmpty()) {
+            return "none";
+        }
+
+        List<String> names = new ArrayList<>();
+        for (String allyKey : team.allies) {
+            TeamData ally = teamsByKey.get(allyKey);
+            if (ally != null) {
+                names.add(ally.displayName);
+            }
+        }
+        if (names.isEmpty()) {
+            return "none";
+        }
+        names.sort(String.CASE_INSENSITIVE_ORDER);
+        return String.join(", ", names);
     }
 
     private TeamData teamOf(UUID playerId) {
@@ -2201,12 +2438,15 @@ public final class TeamManager implements Listener {
         long playtimeSeconds
     ) {}
 
+    private record AllyInviteData(String teamKey, UUID requester, long expiresAt) {}
+
     private static final class TeamData {
         private String key;
         private String displayName;
         private TeamColor color;
         private UUID owner;
         private final Set<UUID> members = ConcurrentHashMap.newKeySet();
+        private final Set<String> allies = ConcurrentHashMap.newKeySet();
 
         private TeamData(String key, String displayName, UUID owner, TeamColor color) {
             this.key = key;

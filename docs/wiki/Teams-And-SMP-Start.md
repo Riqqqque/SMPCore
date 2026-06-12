@@ -37,7 +37,7 @@ Teams support:
 - Owner-controlled team color changes.
 - A searchable team browser through `/teams`.
 - Team vault storage through `/tvault` or `/teamvault`.
-- Teammate protection hooks for compatible abilities.
+- Team alliances that count as friendly for protections and ally glow without sharing vaults.
 - Owner crown unlocks when team size requirements are met.
 
 Useful team commands:
@@ -51,10 +51,17 @@ Useful team commands:
 - `/team rename "new name"` - rename your team. Owner only.
 - `/team name "new name"` - alias for `/team rename`.
 - `/team invite <player>` - invite a player. Owner only.
+- `/team ally add <team>` - request an alliance with another team. Owner only.
+- `/team ally accept <team>` - accept an incoming alliance request. Owner only.
+- `/team ally deny <team>` - deny an incoming alliance request. Owner only.
+- `/team ally remove <team>` - end an alliance. Owner only.
+- `/team allies` - show allies and pending alliance requests.
 - `/team leave` - leave your current team.
 - `/team disband` - disband your team. Owner only.
-- `/team info` - view team members, owner, and color.
+- `/team info` - view team members, owner, color, and allies.
 - `/tvault` or `/teamvault` - open your team vault.
+
+Allies are treated as friendly for team-safe plugin systems such as protection checks and private ally glow. They do not get access to your `/tvault`, and your team does not get access to theirs.
 
 ## Team Browser
 

@@ -2,6 +2,8 @@ package me.rique.smpcore.command;
 
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import io.papermc.paper.command.brigadier.argument.resolvers.selector.PlayerSelectorArgumentResolver;
@@ -13,6 +15,7 @@ import org.bukkit.entity.Player;
 
 import java.util.Locale;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 @SuppressWarnings("UnstableApiUsage")
 public final class TeamCommands {
@@ -162,6 +165,97 @@ public final class TeamCommands {
                         player.sendMessage(MessageUtil.info("Team invite denied."));
                         return Command.SINGLE_SUCCESS;
                     }))
+                .then(Commands.literal("ally")
+                    .then(Commands.literal("add")
+                        .then(Commands.argument("team", StringArgumentType.greedyString())
+                            .suggests((ctx, builder) -> suggestTeams(plugin, builder))
+                            .executes(ctx -> {
+                                Player player = (Player) ctx.getSource().getSender();
+                                String team = StringArgumentType.getString(ctx, "team");
+                                String error = plugin.getTeamManager().requestAlly(player, team);
+                                if (error != null) {
+                                    player.sendMessage(MessageUtil.error(error));
+                                    return 0;
+                                }
+                                player.sendMessage(MessageUtil.success("Alliance request sent to <white>" + team + "</white>."));
+                                return Command.SINGLE_SUCCESS;
+                            })))
+                    .then(Commands.literal("accept")
+                        .then(Commands.argument("team", StringArgumentType.greedyString())
+                            .suggests((ctx, builder) -> suggestTeams(plugin, builder))
+                            .executes(ctx -> {
+                                Player player = (Player) ctx.getSource().getSender();
+                                String team = StringArgumentType.getString(ctx, "team");
+                                plugin.getTeamManager().acceptAlly(player, team)
+                                    .thenAccept(error ->
+                                        Bukkit.getScheduler().runTask(plugin, () -> {
+                                            if (!player.isOnline()) return;
+                                            if (error != null) {
+                                                player.sendMessage(MessageUtil.error(error));
+                                                return;
+                                            }
+                                            player.sendMessage(MessageUtil.success("Alliance accepted."));
+                                        })
+                                    )
+                                    .exceptionally(ex -> {
+                                        plugin.getLogger().severe("team ally accept failed: " + ex.getMessage());
+                                        Bukkit.getScheduler().runTask(plugin, () -> {
+                                            if (player.isOnline()) {
+                                                player.sendMessage(MessageUtil.error("Could not accept that alliance right now."));
+                                            }
+                                        });
+                                        return null;
+                                    });
+                                return Command.SINGLE_SUCCESS;
+                            })))
+                    .then(Commands.literal("deny")
+                        .then(Commands.argument("team", StringArgumentType.greedyString())
+                            .suggests((ctx, builder) -> suggestTeams(plugin, builder))
+                            .executes(ctx -> {
+                                Player player = (Player) ctx.getSource().getSender();
+                                String team = StringArgumentType.getString(ctx, "team");
+                                String error = plugin.getTeamManager().denyAlly(player, team);
+                                if (error != null) {
+                                    player.sendMessage(MessageUtil.error(error));
+                                    return 0;
+                                }
+                                player.sendMessage(MessageUtil.info("Alliance request denied."));
+                                return Command.SINGLE_SUCCESS;
+                            })))
+                    .then(Commands.literal("remove")
+                        .then(Commands.argument("team", StringArgumentType.greedyString())
+                            .suggests((ctx, builder) -> suggestTeams(plugin, builder))
+                            .executes(ctx -> {
+                                Player player = (Player) ctx.getSource().getSender();
+                                String team = StringArgumentType.getString(ctx, "team");
+                                plugin.getTeamManager().removeAlly(player, team)
+                                    .thenAccept(error ->
+                                        Bukkit.getScheduler().runTask(plugin, () -> {
+                                            if (!player.isOnline()) return;
+                                            if (error != null) {
+                                                player.sendMessage(MessageUtil.error(error));
+                                                return;
+                                            }
+                                            player.sendMessage(MessageUtil.success("Alliance removed."));
+                                        })
+                                    )
+                                    .exceptionally(ex -> {
+                                        plugin.getLogger().severe("team ally remove failed: " + ex.getMessage());
+                                        Bukkit.getScheduler().runTask(plugin, () -> {
+                                            if (player.isOnline()) {
+                                                player.sendMessage(MessageUtil.error("Could not remove that alliance right now."));
+                                            }
+                                        });
+                                        return null;
+                                    });
+                                return Command.SINGLE_SUCCESS;
+                            }))))
+                .then(Commands.literal("allies")
+                    .executes(ctx -> {
+                        Player player = (Player) ctx.getSource().getSender();
+                        player.sendMessage(plugin.getTeamManager().alliesMessage(player.getUniqueId()));
+                        return Command.SINGLE_SUCCESS;
+                    }))
                 .then(Commands.literal("leave")
                     .executes(ctx -> {
                         Player player = (Player) ctx.getSource().getSender();
@@ -278,6 +372,16 @@ public final class TeamCommands {
         }
         plugin.getTeamManager().openTeamsMenu(player, search, false);
         return Command.SINGLE_SUCCESS;
+    }
+
+    private static CompletableFuture<Suggestions> suggestTeams(SMPCore plugin, SuggestionsBuilder builder) {
+        String input = builder.getRemainingLowerCase();
+        for (String name : plugin.getTeamManager().teamNames()) {
+            if (name.toLowerCase(Locale.ROOT).startsWith(input)) {
+                builder.suggest(name);
+            }
+        }
+        return builder.buildFuture();
     }
 
     private static TeamCreateInput parseCreateInput(String raw, TeamManager teamManager) {
