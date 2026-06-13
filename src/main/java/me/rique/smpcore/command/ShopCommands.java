@@ -17,7 +17,8 @@ public final class ShopCommands {
     public static void register(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("shops")
-                .requires(source -> source.getSender().hasPermission("smpcore.shop"))
+                .requires(source -> source.getSender().hasPermission("smpcore.shop")
+                    || source.getSender().hasPermission("smpcore.shop.admin"))
                 .executes(ctx -> {
                     sendHelp(ctx.getSource().getSender(), plugin);
                     return Command.SINGLE_SUCCESS;
@@ -38,6 +39,6 @@ public final class ShopCommands {
             return;
         }
         sender.sendMessage(MessageUtil.prefixedRaw("<gradient:#22c55e:#facc15><bold>Player Shops</bold></gradient>"));
-        plugin.getPlayerShopListener().helpLines().forEach(sender::sendMessage);
+        plugin.getPlayerShopListener().helpLines(sender.hasPermission("smpcore.shop.admin")).forEach(sender::sendMessage);
     }
 }
