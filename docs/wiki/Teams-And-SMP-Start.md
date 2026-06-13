@@ -27,6 +27,21 @@ Useful staff commands:
 - `/startsmp lock` - re-enables lockdown if staff need to reset before launch.
 - `/startsmp reset` - clears the started state.
 
+## Spawn Protection
+
+Spawn has its own permanent anti-grief protection after the SMP starts. By default, the configured spawn world is protected in a 150 block horizontal radius around the world spawn point.
+
+Protected actions include block breaking, block placing, bucket use, fluid flow, fire spread, block burn, explosions, pistons moving blocks into or out of the area, endermen and other entity block changes, item frames, paintings, armor stands, and similar decorative entity edits.
+
+OPs and players with `smpcore.spawnprotect.bypass` can build there. Staff can also allow specific non-OP players:
+
+- `/spawnprotect` - show current status.
+- `/spawnprotect allow <player>` - allow that player to build and edit protected spawn.
+- `/spawnprotect remove <player>` - remove their spawn build access.
+- `/spawnprotect list` - list allowed builders.
+- `/spawnprotect radius <blocks>` - change the protected radius.
+- `/spawnprotect on` or `/spawnprotect off` - toggle protection.
+
 ## Teams
 
 Teams support:
