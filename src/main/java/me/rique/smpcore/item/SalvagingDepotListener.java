@@ -90,6 +90,8 @@ public final class SalvagingDepotListener implements Listener {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
+    private static final long LOADED_DEPOT_RECONCILE_TICKS = 20L * 60L;
+    private static final long KNOWN_DEPOT_SCAN_TICKS = 20L * 5L;
     private static final BlockFace[] HORIZONTAL_FACES = {
         BlockFace.NORTH,
         BlockFace.EAST,
@@ -134,8 +136,8 @@ public final class SalvagingDepotListener implements Listener {
             }
             syncLoadedDepots();
         });
-        maintenanceTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncLoadedDepots, 100L, 200L);
-        quickScanTask = Bukkit.getScheduler().runTaskTimer(plugin, this::scanKnownDepots, 20L, 20L);
+        maintenanceTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncLoadedDepots, 100L, LOADED_DEPOT_RECONCILE_TICKS);
+        quickScanTask = Bukkit.getScheduler().runTaskTimer(plugin, this::scanKnownDepots, 20L, KNOWN_DEPOT_SCAN_TICKS);
     }
 
     public void shutdown() {

@@ -52,6 +52,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class RareDropVisualListener implements Listener {
 
     private static final double HOLOGRAM_HEIGHT = 0.70;
+    private static final long HOLOGRAM_TICK_INTERVAL_TICKS = 10L;
+    private static final long RECONCILE_INTERVAL_TICKS = 20L * 30L;
     private static final String TEAM_PREFIX = "smpd_";
     private static final NamedTextColor[] GLOW_COLORS = {
         NamedTextColor.GOLD,
@@ -90,8 +92,8 @@ public final class RareDropVisualListener implements Listener {
             }
             syncLoadedRareDisplays();
         });
-        hologramTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickRareDisplays, 5L, 5L);
-        reconcileTask = Bukkit.getScheduler().runTaskTimer(plugin, this::reconcileLoadedRareItems, 40L, 100L);
+        hologramTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickRareDisplays, 5L, HOLOGRAM_TICK_INTERVAL_TICKS);
+        reconcileTask = Bukkit.getScheduler().runTaskTimer(plugin, this::reconcileLoadedRareItems, 40L, RECONCILE_INTERVAL_TICKS);
     }
 
     public void shutdown() {
@@ -279,7 +281,10 @@ public final class RareDropVisualListener implements Listener {
         Entity existing = existingId == null ? null : Bukkit.getEntity(existingId);
         if (existing instanceof TextDisplay display && display.isValid()) {
             display.teleport(hologramLocation(itemEntity));
-            display.text(buildRareHologramText(itemEntity.getItemStack(), profile));
+            Component text = buildRareHologramText(itemEntity.getItemStack(), profile);
+            if (!Objects.equals(display.text(), text)) {
+                display.text(text);
+            }
             VisualRangeUtil.applyHologramRange(display);
             return;
         }
