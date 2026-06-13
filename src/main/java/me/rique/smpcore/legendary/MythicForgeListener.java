@@ -69,6 +69,11 @@ public final class MythicForgeListener implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final Component MENU_TITLE =
         MM.deserialize("<gradient:#8a2be2:#ff4df0><bold>Mythic Forge</bold></gradient>");
+    private static final Component FORGE_HOLOGRAM_TEXT = MM.deserialize(
+        CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.MYTHIC, "Mythic Forge")
+            + "\n<gray>Right-click to fuse relics</gray>"
+    );
+    private static final long HOLOGRAM_SYNC_TICKS = 20L * 5L;
     private static final int MENU_SIZE = 27;
     private static final int STATUS_SLOT = 4;
     private static final int LEFT_SLOT = 10;
@@ -122,7 +127,7 @@ public final class MythicForgeListener implements Listener {
             }
         });
         if (hologramTask == null) {
-            hologramTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncForgeHolograms, 1L, 40L);
+            hologramTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncForgeHolograms, 1L, HOLOGRAM_SYNC_TICKS);
         }
     }
 
@@ -427,11 +432,9 @@ public final class MythicForgeListener implements Listener {
         }
 
         display.teleport(forgeHologramLocation(crystal));
-        VisualRangeUtil.applyHologramRange(display);
-        display.text(MM.deserialize(
-            CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.MYTHIC, "Mythic Forge")
-                + "\n<gray>Right-click to fuse relics</gray>"
-        ));
+        if (!FORGE_HOLOGRAM_TEXT.equals(display.text())) {
+            display.text(FORGE_HOLOGRAM_TEXT);
+        }
     }
 
     private Location forgeHologramLocation(EnderCrystal crystal) {

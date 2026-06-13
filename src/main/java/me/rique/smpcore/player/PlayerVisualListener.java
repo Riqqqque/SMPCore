@@ -32,6 +32,7 @@ import org.bukkit.scheduler.BukkitTask;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -39,6 +40,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class PlayerVisualListener implements Listener {
 
     private static final long SYNC_PERIOD_TICKS = 5L;
+    private static final long PLAYER_FINDER_PERIOD_TICKS = 20L;
     private static final int GLOW_REFRESH_TICKS = 80;
 
     private final SMPCore plugin;
@@ -52,6 +54,7 @@ public final class PlayerVisualListener implements Listener {
     private final Map<UUID, Set<UUID>> glowingTargetsByViewer = new ConcurrentHashMap<>();
     private final Map<UUID, Map<UUID, UUID>> teamGlowMarkersByViewer = new ConcurrentHashMap<>();
     private final Map<UUID, Set<UUID>> playerFinderHiddenTargetsByViewer = new ConcurrentHashMap<>();
+    private final Map<UUID, Component> lastNameplateTexts = new ConcurrentHashMap<>();
     private BukkitTask task;
     private int glowTickCounter;
     private int playerFinderTickCounter;
@@ -134,7 +137,7 @@ public final class PlayerVisualListener implements Listener {
         syncNameDisplays();
         syncTeamGlowMarkerPositions();
         playerFinderTickCounter += SYNC_PERIOD_TICKS;
-        if (playerFinderTickCounter >= 10) {
+        if (playerFinderTickCounter >= PLAYER_FINDER_PERIOD_TICKS) {
             playerFinderTickCounter = 0;
             syncPlayerFinderDefense();
         }
@@ -183,8 +186,6 @@ public final class PlayerVisualListener implements Listener {
             return;
         }
 
-        restorePlayerFinderTabEntries(viewer, players);
-
         Set<UUID> desiredHidden = new HashSet<>();
         for (Player target : players) {
             if (shouldHideForPlayerFinderDefense(viewer, target, teams)) {
@@ -214,15 +215,6 @@ public final class PlayerVisualListener implements Listener {
 
         if (hidden.isEmpty()) {
             playerFinderHiddenTargetsByViewer.remove(viewerId);
-        }
-    }
-
-    private void restorePlayerFinderTabEntries(Player viewer, ArrayList<Player> players) {
-        for (Player target : players) {
-            if (viewer.equals(target) || isVanishedFromViewer(viewer, target)) {
-                continue;
-            }
-            viewer.showPlayer(plugin, target);
         }
     }
 
@@ -358,8 +350,11 @@ public final class PlayerVisualListener implements Listener {
         }
 
         display.teleport(target);
-        display.text(nameplateText(player));
-        VisualRangeUtil.applyHologramRange(display);
+        Component text = nameplateText(player);
+        if (!Objects.equals(lastNameplateTexts.get(player.getUniqueId()), text) || !Objects.equals(display.text(), text)) {
+            display.text(text);
+            lastNameplateTexts.put(player.getUniqueId(), text);
+        }
         player.hideEntity(plugin, display);
     }
 
@@ -433,6 +428,7 @@ public final class PlayerVisualListener implements Listener {
             return;
         }
         UUID displayId = nameDisplaysByPlayer.remove(playerId);
+        lastNameplateTexts.remove(playerId);
         Entity display = displayId == null ? null : Bukkit.getEntity(displayId);
         if (display != null) {
             display.remove();
@@ -537,6 +533,7 @@ public final class PlayerVisualListener implements Listener {
         UUID existingId = byTarget.get(target.getUniqueId());
         Entity existing = existingId == null ? null : Bukkit.getEntity(existingId);
         TextDisplay display = existing instanceof TextDisplay textDisplay && textDisplay.isValid() ? textDisplay : null;
+        boolean created = false;
         if (display == null) {
             if (existing != null) {
                 existing.remove();
@@ -561,11 +558,17 @@ public final class PlayerVisualListener implements Listener {
                 marker.getPersistentDataContainer().set(keyTeamGlowTarget, PersistentDataType.STRING, target.getUniqueId().toString());
             });
             byTarget.put(target.getUniqueId(), display.getUniqueId());
+            created = true;
         }
 
         display.teleport(teamGlowMarkerLocation(target));
-        display.text(teamGlowText(target));
-        showTeamGlowMarkerOnlyToViewer(viewer.getUniqueId(), display);
+        Component text = teamGlowText(target);
+        if (!Objects.equals(display.text(), text)) {
+            display.text(text);
+        }
+        if (created) {
+            showTeamGlowMarkerOnlyToViewer(viewer.getUniqueId(), display);
+        }
     }
 
     private void syncTeamGlowMarkerPositions() {
@@ -593,8 +596,10 @@ public final class PlayerVisualListener implements Listener {
                     continue;
                 }
                 display.teleport(teamGlowMarkerLocation(target));
-                display.text(teamGlowText(target));
-                showTeamGlowMarkerOnlyToViewer(viewerId, display);
+                Component text = teamGlowText(target);
+                if (!Objects.equals(display.text(), text)) {
+                    display.text(text);
+                }
             }
         }
     }
@@ -664,11 +669,33 @@ public final class PlayerVisualListener implements Listener {
         }
     }
 
+    private void syncTeamGlowMarkerVisibilityFor(Player player) {
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        for (Map.Entry<UUID, Map<UUID, UUID>> entry : teamGlowMarkersByViewer.entrySet()) {
+            boolean shouldSee = entry.getKey().equals(playerId);
+            for (UUID markerId : entry.getValue().values()) {
+                Entity marker = markerId == null ? null : Bukkit.getEntity(markerId);
+                if (marker == null) {
+                    continue;
+                }
+                if (shouldSee) {
+                    player.showEntity(plugin, marker);
+                } else {
+                    player.hideEntity(plugin, marker);
+                }
+            }
+        }
+    }
+
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         Bukkit.getScheduler().runTask(plugin, () -> {
             syncNameDisplay(event.getPlayer());
             syncTeamGlow(event.getPlayer());
+            syncTeamGlowMarkerVisibilityFor(event.getPlayer());
             syncTeamGlowMarkerPositions();
             syncPlayerFinderDefense();
         });
