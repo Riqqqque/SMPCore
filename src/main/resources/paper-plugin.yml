@@ -207,5 +207,5 @@ permissions:
     description: Use /admin reward
     default: op
   smpcore.shop.admin:
-    description: Manage and remove any player shop
+    description: Manage shops and create infinite admin shops
     default: op

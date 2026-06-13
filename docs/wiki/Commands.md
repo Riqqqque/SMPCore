@@ -11,7 +11,7 @@
 - `/bossbrews`, `/bosspotions`, `/brews` - opens the boss-material potion guide.
 - `/leaderboards`, `/leaderboard`, `/lb`, `/topstats` - opens persistent server leaderboards.
 - `/wiki`, `/guide`, `/smpwiki` - shows the clickable wiki link.
-- `/shops`, `/shop` - shows how to create chest-based player shops.
+- `/shops`, `/shop` - shows how to create chest-based player shops. OPs and `smpcore.shop.admin` also see admin-shop setup help.
 - `/team` - team management commands. Leaders can use `/team color <color>`, `/team rename "new name"`, and `/team ally ...`.
 - `/teams [search]`, `/team list`, `/team search <name>` - opens the searchable team browser with member counts, online counts, deaths, kills, boss stats, and playtime.
 - `/tvault`, `/teamvault` - opens team vault storage.

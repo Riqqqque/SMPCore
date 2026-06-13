@@ -4,6 +4,8 @@ Player shops let players sell items from a protected chest by attaching a wall s
 
 Use `/shops` or `/shop` in game to see the short setup reminder.
 
+Admins can also create infinite server shops with `[adminshop]` or `[ashop]`. Admin shops use the same chest/sign protection, but they do not consume stock and do not store buyer payments.
+
 ## Quick Setup
 
 1. Place a chest or trapped chest.
@@ -37,6 +39,8 @@ Line 2 options:
 - A vanilla item id such as `diamond`, `iron_ingot`, `oak_log`, or `netherite_sword`.
 
 Use `chest` for custom items, renamed items, enchanted items, damaged gear, or anything with special metadata. That stores the exact item type from the chest.
+
+Legendary items cannot be sold through shops.
 
 ## Currencies
 
@@ -82,6 +86,39 @@ Currency items must be plain vanilla items. Custom items that happen to use diam
 
 If any check fails, nothing should be moved.
 
+## Admin Shops
+
+Admin shops are for server-run shops with infinite stock.
+
+Requirements:
+
+- The creator must be OP or have `smpcore.shop.admin`.
+- Line 1 must be `[adminshop]` or `[ashop]`.
+- Line 2 can use a vanilla item id, or `chest` to copy the first item in the chest.
+- Custom item samples work through `chest`.
+- Legendary item samples are blocked.
+
+Example:
+
+```text
+[adminshop]
+chest
+1
+5 diamond
+```
+
+When an admin shop is created from a chest sample, matching sample items are returned to the admin or dropped at their feet if their inventory is full. The shop chest stays as a protected marker only.
+
+Buying from an admin shop:
+
+1. Right-click the admin shop sign.
+2. The plugin checks that the buyer has enough plain currency.
+3. The plugin checks that the buyer has inventory room.
+4. The plugin removes the payment from the buyer.
+5. The plugin creates the bought item and gives it to the buyer.
+
+Admin shop payments are removed from the game. They do not collect in the chest, so admin shops cannot fill up or run out of stock.
+
 ## Restocking
 
 The shop owner can open the shop chest directly and add more of the exact sold item. For custom items or gear, the restocked item must match the item stored by the shop.
@@ -115,6 +152,7 @@ Active shop signs and shop chests are protected:
 - `Line 3 must be the amount sold per purchase.`: line 3 needs a number, such as `1`, `8`, or `64`.
 - `Line 4 must be like: 5 diamond, 8 iron, or 1 netherite.`: line 4 needs a positive number and one supported currency.
 - `Put the sold item in the chest, then use 'chest' on line 2.`: the plugin could not find a valid item to sell.
+- `Legendary items cannot be sold through shops.`: the shop item is a legendary item.
 - `That chest already has a shop.`: break the existing shop first.
 - `That shop is out of stock.`: add more matching stock to the shop chest.
 - `Clear inventory space before buying this.`: the buyer does not have enough room after paying.
@@ -132,4 +170,4 @@ Current default config:
 Permissions:
 
 - `smpcore.shop`: use `/shops` and create player shops.
-- `smpcore.shop.admin`: manage or remove any player shop.
+- `smpcore.shop.admin`: manage or remove any shop, and create infinite admin shops.

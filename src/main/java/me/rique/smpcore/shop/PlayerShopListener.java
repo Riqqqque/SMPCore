@@ -54,6 +54,8 @@ public final class PlayerShopListener implements Listener {
 
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final String SHOP_HEADER = "[shop]";
+    private static final String ADMIN_SHOP_HEADER = "[adminshop]";
+    private static final String ADMIN_SHOP_SHORT_HEADER = "[ashop]";
     private static final Set<Material> CHEST_TYPES = Set.of(Material.CHEST, Material.TRAPPED_CHEST);
 
     private final SMPCore plugin;
@@ -67,6 +69,7 @@ public final class PlayerShopListener implements Listener {
     private final NamespacedKey keyAmount;
     private final NamespacedKey keyPrice;
     private final NamespacedKey keyCurrency;
+    private final NamespacedKey keyAdminShop;
 
     public PlayerShopListener(SMPCore plugin) {
         this.plugin = plugin;
@@ -80,6 +83,7 @@ public final class PlayerShopListener implements Listener {
         this.keyAmount = new NamespacedKey(plugin, "player_shop_amount");
         this.keyPrice = new NamespacedKey(plugin, "player_shop_price");
         this.keyCurrency = new NamespacedKey(plugin, "player_shop_currency");
+        this.keyAdminShop = new NamespacedKey(plugin, "player_shop_admin");
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -88,11 +92,17 @@ public final class PlayerShopListener implements Listener {
             return;
         }
         String header = cleanLine(eventLine(event, 0));
-        if (!SHOP_HEADER.equalsIgnoreCase(header)) {
+        boolean adminShop = isAdminShopHeader(header);
+        if (!SHOP_HEADER.equalsIgnoreCase(header) && !adminShop) {
             return;
         }
         Player player = event.getPlayer();
-        if (!player.hasPermission("smpcore.shop")) {
+        if (adminShop && !player.hasPermission("smpcore.shop.admin")) {
+            event.setCancelled(true);
+            player.sendMessage(MessageUtil.error("You do not have permission to create admin shops."));
+            return;
+        }
+        if (!player.hasPermission("smpcore.shop") && !player.hasPermission("smpcore.shop.admin")) {
             event.setCancelled(true);
             player.sendMessage(MessageUtil.error("You do not have permission to create shops."));
             return;
@@ -138,13 +148,21 @@ public final class PlayerShopListener implements Listener {
         }
 
         Inventory inventory = shopInventory(chestBlock);
-        ItemStack prototype = prototypeFromLine(eventLine(event, 1), inventory);
+        String itemLine = eventLine(event, 1);
+        boolean usesChestPrototype = usesChestPrototype(itemLine);
+        ItemStack prototype = prototypeFromLine(itemLine, inventory);
         if (prototype == null || prototype.getType().isAir()) {
             markSignError(event, "No item found");
             player.sendMessage(MessageUtil.warn("Put the sold item in the chest, then use 'chest' on line 2."));
             return;
         }
         prototype = prototype.asOne();
+        if (isLegendaryPrototype(prototype)) {
+            markSignError(event, "No legends");
+            player.sendMessage(MessageUtil.warn("Legendary items cannot be sold through shops."));
+            return;
+        }
+        final ItemStack shopPrototype = prototype;
         String encoded = encodeItem(prototype);
         if (encoded == null) {
             markSignError(event, "Bad item");
@@ -161,7 +179,8 @@ public final class PlayerShopListener implements Listener {
             displayName(prototype),
             amount,
             price,
-            currency
+            currency,
+            adminShop
         );
         writeShopSignLines(event, data);
         Bukkit.getScheduler().runTask(plugin, () -> {
@@ -169,7 +188,12 @@ public final class PlayerShopListener implements Listener {
                 player.sendMessage(MessageUtil.error("Could not finish creating that shop."));
                 return;
             }
-            player.sendMessage(MessageUtil.success("Shop created. Players buy by right-clicking the sign."));
+            if (adminShop && usesChestPrototype) {
+                returnMatchingSamples(player, inventory, shopPrototype);
+            }
+            player.sendMessage(MessageUtil.success(adminShop
+                ? "Admin shop created. Buyers pay from their inventory and stock is infinite."
+                : "Shop created. Players buy by right-clicking the sign."));
             signBlock.getWorld().playSound(signBlock.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 0.8f, 1.4f);
         });
     }
@@ -288,7 +312,7 @@ public final class PlayerShopListener implements Listener {
             buyer.sendMessage(MessageUtil.error("That shop is missing data. Ask the owner to recreate it."));
             return;
         }
-        if (!plugin.getConfigManager().playerShopsAllowOwnerPurchases && buyer.getUniqueId().equals(data.ownerUuid())) {
+        if (!data.adminShop() && !plugin.getConfigManager().playerShopsAllowOwnerPurchases && buyer.getUniqueId().equals(data.ownerUuid())) {
             buyer.sendMessage(MessageUtil.warn("You cannot buy from your own shop."));
             return;
         }
@@ -301,10 +325,14 @@ public final class PlayerShopListener implements Listener {
             clearShop(signBlock);
             return;
         }
+        if (isLegendaryPrototype(prototype)) {
+            buyer.sendMessage(MessageUtil.warn("Legendary items cannot be sold through shops."));
+            return;
+        }
 
         List<ItemStack> boughtItems = stacksOf(prototype, data.amount());
         List<ItemStack> paymentItems = stacksOf(new ItemStack(data.currency().material()), data.price());
-        if (countSimilar(shopInventory.getStorageContents(), prototype) < data.amount()) {
+        if (!data.adminShop() && countSimilar(shopInventory.getStorageContents(), prototype) < data.amount()) {
             buyer.sendMessage(MessageUtil.warn("That shop is out of stock."));
             return;
         }
@@ -316,17 +344,21 @@ public final class PlayerShopListener implements Listener {
             buyer.sendMessage(MessageUtil.warn("Clear inventory space before buying this."));
             return;
         }
-        if (!canShopFitAfterStockRemoval(shopInventory, prototype, data.amount(), paymentItems)) {
+        if (!data.adminShop() && !canShopFitAfterStockRemoval(shopInventory, prototype, data.amount(), paymentItems)) {
             buyer.sendMessage(MessageUtil.warn("That shop's payment storage is full."));
             return;
         }
 
-        removeSimilar(shopInventory, prototype, data.amount());
+        if (!data.adminShop()) {
+            removeSimilar(shopInventory, prototype, data.amount());
+        }
         removeMaterial(buyer.getInventory(), data.currency().material(), data.price());
-        for (ItemStack payment : paymentItems) {
-            shopInventory.addItem(payment).values().forEach(leftover ->
-                chestBlock.getWorld().dropItemNaturally(chestBlock.getLocation().add(0.5, 0.8, 0.5), leftover)
-            );
+        if (!data.adminShop()) {
+            for (ItemStack payment : paymentItems) {
+                shopInventory.addItem(payment).values().forEach(leftover ->
+                    chestBlock.getWorld().dropItemNaturally(chestBlock.getLocation().add(0.5, 0.8, 0.5), leftover)
+                );
+            }
         }
         boughtItems.forEach(item -> buyer.getInventory().addItem(item).values().forEach(leftover ->
             buyer.getWorld().dropItemNaturally(buyer.getLocation(), leftover)
@@ -354,6 +386,7 @@ public final class PlayerShopListener implements Listener {
                 pdc.set(keyOwnerUuid, PersistentDataType.STRING, data.ownerUuid().toString());
                 pdc.set(keyOwnerName, PersistentDataType.STRING, data.ownerName());
                 pdc.set(keySignBlock, PersistentDataType.STRING, data.signBlock());
+                pdc.set(keyAdminShop, PersistentDataType.BYTE, data.adminShop() ? (byte) 1 : (byte) 0);
                 tile.update(true, false);
             }
         }
@@ -371,6 +404,7 @@ public final class PlayerShopListener implements Listener {
         pdc.set(keyAmount, PersistentDataType.INTEGER, data.amount());
         pdc.set(keyPrice, PersistentDataType.INTEGER, data.price());
         pdc.set(keyCurrency, PersistentDataType.STRING, data.currency().name());
+        pdc.set(keyAdminShop, PersistentDataType.BYTE, data.adminShop() ? (byte) 1 : (byte) 0);
     }
 
     private ShopData readShopData(Block signBlock) {
@@ -392,6 +426,7 @@ public final class PlayerShopListener implements Listener {
                 return null;
             }
             ItemStack prototype = decodeItem(item);
+            boolean adminShop = pdc.getOrDefault(keyAdminShop, PersistentDataType.BYTE, (byte) 0) == (byte) 1;
             return new ShopData(
                 UUID.fromString(ownerRaw),
                 pdc.getOrDefault(keyOwnerName, PersistentDataType.STRING, "Unknown"),
@@ -401,7 +436,8 @@ public final class PlayerShopListener implements Listener {
                 prototype == null ? "Unknown Item" : displayName(prototype),
                 amount,
                 price,
-                ShopCurrency.valueOf(currencyRaw)
+                ShopCurrency.valueOf(currencyRaw),
+                adminShop
             );
         } catch (IllegalArgumentException ignored) {
             return null;
@@ -446,6 +482,7 @@ public final class PlayerShopListener implements Listener {
         pdc.remove(keyAmount);
         pdc.remove(keyPrice);
         pdc.remove(keyCurrency);
+        pdc.remove(keyAdminShop);
     }
 
     private boolean canManageShop(Player player, Block block) {
@@ -577,7 +614,7 @@ public final class PlayerShopListener implements Listener {
 
     private ItemStack prototypeFromLine(String itemLine, Inventory inventory) {
         String token = cleanLine(itemLine).toLowerCase(Locale.ROOT);
-        if (token.isBlank() || token.equals("chest") || token.equals("item") || token.equals("this")) {
+        if (usesChestPrototype(token)) {
             return firstChestItem(inventory);
         }
         Material material = Material.matchMaterial(token);
@@ -585,6 +622,11 @@ public final class PlayerShopListener implements Listener {
             material = Material.matchMaterial(token.toUpperCase(Locale.ROOT));
         }
         return material == null || material.isAir() ? firstChestItem(inventory) : new ItemStack(material);
+    }
+
+    private boolean usesChestPrototype(String itemLine) {
+        String token = cleanLine(itemLine).toLowerCase(Locale.ROOT);
+        return token.isBlank() || token.equals("chest") || token.equals("item") || token.equals("this");
     }
 
     private ItemStack firstChestItem(Inventory inventory) {
@@ -661,6 +703,33 @@ public final class PlayerShopListener implements Listener {
             remaining -= take;
         }
         inventory.setStorageContents(contents);
+    }
+
+    private void returnMatchingSamples(Player player, Inventory inventory, ItemStack prototype) {
+        if (player == null || inventory == null || prototype == null || prototype.getType().isAir()) {
+            return;
+        }
+        ItemStack[] contents = inventory.getStorageContents();
+        List<ItemStack> returned = new ArrayList<>();
+        for (int i = 0; i < contents.length; i++) {
+            ItemStack item = contents[i];
+            if (item == null || !item.isSimilar(prototype)) {
+                continue;
+            }
+            returned.add(item.clone());
+            contents[i] = null;
+        }
+        if (returned.isEmpty()) {
+            return;
+        }
+        inventory.setStorageContents(contents);
+        Location dropLocation = player.getLocation();
+        for (ItemStack item : returned) {
+            player.getInventory().addItem(item).values().forEach(leftover ->
+                player.getWorld().dropItemNaturally(dropLocation, leftover)
+            );
+        }
+        player.updateInventory();
     }
 
     private void removeMaterial(PlayerInventory inventory, Material material, int amount) {
@@ -774,16 +843,16 @@ public final class PlayerShopListener implements Listener {
     }
 
     private void writeShopSignLines(SignChangeEvent event, ShopData data) {
-        event.line(0, Component.text("[Shop]", NamedTextColor.DARK_GREEN));
+        event.line(0, Component.text(data.adminShop() ? "[AdminShop]" : "[Shop]", data.adminShop() ? NamedTextColor.DARK_PURPLE : NamedTextColor.DARK_GREEN));
         event.line(1, Component.text(trimSign(data.itemName()), NamedTextColor.BLACK));
-        event.line(2, Component.text(data.amount() + "x", NamedTextColor.DARK_BLUE));
+        event.line(2, Component.text(data.adminShop() ? data.amount() + "x Inf" : data.amount() + "x", NamedTextColor.DARK_BLUE));
         event.line(3, Component.text(data.price() + " " + data.currency().shortName(), NamedTextColor.DARK_RED));
     }
 
     private void writeStoredSignLines(Sign sign, ShopData data) {
-        sign.getSide(Side.FRONT).line(0, Component.text("[Shop]", NamedTextColor.DARK_GREEN));
+        sign.getSide(Side.FRONT).line(0, Component.text(data.adminShop() ? "[AdminShop]" : "[Shop]", data.adminShop() ? NamedTextColor.DARK_PURPLE : NamedTextColor.DARK_GREEN));
         sign.getSide(Side.FRONT).line(1, Component.text(trimSign(data.itemName()), NamedTextColor.BLACK));
-        sign.getSide(Side.FRONT).line(2, Component.text(data.amount() + "x", NamedTextColor.DARK_BLUE));
+        sign.getSide(Side.FRONT).line(2, Component.text(data.adminShop() ? data.amount() + "x Inf" : data.amount() + "x", NamedTextColor.DARK_BLUE));
         sign.getSide(Side.FRONT).line(3, Component.text(data.price() + " " + data.currency().shortName(), NamedTextColor.DARK_RED));
     }
 
@@ -875,6 +944,17 @@ public final class PlayerShopListener implements Listener {
         return line == null ? "" : line.trim();
     }
 
+    private boolean isAdminShopHeader(String header) {
+        String clean = cleanLine(header).toLowerCase(Locale.ROOT);
+        return ADMIN_SHOP_HEADER.equals(clean) || ADMIN_SHOP_SHORT_HEADER.equals(clean);
+    }
+
+    private boolean isLegendaryPrototype(ItemStack item) {
+        return item != null
+            && plugin.getLegendaryListener() != null
+            && plugin.getLegendaryListener().isLegendaryItem(item);
+    }
+
     private String eventLine(SignChangeEvent event, int line) {
         Component component = event.line(line);
         return component == null ? "" : PLAIN.serialize(component);
@@ -898,13 +978,22 @@ public final class PlayerShopListener implements Listener {
     }
 
     public List<Component> helpLines() {
-        return List.of(
+        return helpLines(false);
+    }
+
+    public List<Component> helpLines(boolean includeAdminHelp) {
+        List<Component> lines = new ArrayList<>(List.of(
             MessageUtil.info("Player shops use a wall sign attached to a chest or double chest."),
             MessageUtil.info("Line 1: <white>[shop]</white>"),
             MessageUtil.info("Line 2: <white>chest</white> for the first item in the chest, or a vanilla item id."),
             MessageUtil.info("Line 3: amount sold per purchase, like <white>4</white>."),
             MessageUtil.info("Line 4: price and currency, like <white>5 diamond</white>, <white>12 iron</white>, or <white>1 netherite</white>.")
-        );
+        ));
+        if (includeAdminHelp) {
+            lines.add(MessageUtil.info("Admin shops: use <white>[adminshop]</white> or <white>[ashop]</white> on line 1. They have infinite stock, remove buyer payment, and do not store stock or payment."));
+            lines.add(MessageUtil.info("Admin shops support custom item samples from the chest, but legendary items are blocked."));
+        }
+        return lines;
     }
 
     private record ShopData(
@@ -916,7 +1005,8 @@ public final class PlayerShopListener implements Listener {
         String itemName,
         int amount,
         int price,
-        ShopCurrency currency
+        ShopCurrency currency,
+        boolean adminShop
     ) {}
 
     private enum ShopCurrency {
