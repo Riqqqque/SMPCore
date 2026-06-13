@@ -45,6 +45,11 @@ homes:
 
 spawn:
   world: "world"
+  protection:
+    enabled: true
+    radius: 150
+    allowed-builders: []
+    deny-message: "<red>Spawn is protected. Ask staff if you need build access here.</red>"
 
 world-rules:
   force-hard-difficulty: true

@@ -21,6 +21,14 @@
 - `/itemaudit <player> [item]` checks item origin logs.
 - OPs and players with `smpcore.staff` receive live audit alerts for suspicious tracked custom item activity.
 
+## Spawn Protection
+
+- `/spawnprotect` shows the protected world, radius, and allowed builders.
+- `/spawnprotect allow <player>` lets a non-OP player build and edit protected spawn.
+- `/spawnprotect remove <player>` removes that access.
+- `/spawnprotect radius <blocks>` changes the protected radius. Default is 150 blocks.
+- `/spawnprotect on` or `/spawnprotect off` toggles the system.
+
 ## Covenant Relic Admin Examples
 
 - `/customitem give ashen_verdict Rique`

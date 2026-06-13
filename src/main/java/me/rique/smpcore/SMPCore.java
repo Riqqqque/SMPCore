@@ -22,6 +22,7 @@ import me.rique.smpcore.command.SMPCoreCommand;
 import me.rique.smpcore.command.ServerUtilityCommands;
 import me.rique.smpcore.command.ShopCommands;
 import me.rique.smpcore.command.SpawnerAdminCommand;
+import me.rique.smpcore.command.SpawnProtectionCommand;
 import me.rique.smpcore.command.SmpStartCommand;
 import me.rique.smpcore.command.TeamCommands;
 import me.rique.smpcore.command.WikiCommand;
@@ -52,6 +53,7 @@ import me.rique.smpcore.player.PlayerControlListener;
 import me.rique.smpcore.player.PlayerManager;
 import me.rique.smpcore.player.PlayerSettingsManager;
 import me.rique.smpcore.player.PlayerVisualListener;
+import me.rique.smpcore.player.SpawnProtectionListener;
 import me.rique.smpcore.player.WorldRulesListener;
 import me.rique.smpcore.motd.MotdListener;
 import me.rique.smpcore.season.SeasonRelicManager;
@@ -113,6 +115,7 @@ public final class SMPCore extends JavaPlugin {
     private PlayerSettingsManager playerSettingsManager;
     private PlayerControlListener playerControlListener;
     private PlayerShopListener playerShopListener;
+    private SpawnProtectionListener spawnProtectionListener;
 
     @Override
     public void onEnable() {
@@ -174,6 +177,7 @@ public final class SMPCore extends JavaPlugin {
         if (leaderboardManager != null) leaderboardManager.shutdown();
         if (playerSettingsManager != null) playerSettingsManager.shutdown();
         if (playerVisualListener != null) playerVisualListener.shutdown();
+        if (spawnProtectionListener != null) spawnProtectionListener.shutdown();
         if (teamManager != null) teamManager.shutdown();
         if (databaseManager != null) databaseManager.close();
         getLogger().info("SMPCore disabled.");
@@ -199,6 +203,8 @@ public final class SMPCore extends JavaPlugin {
         worldRulesListener = new WorldRulesListener(this);
         pm.registerEvents(worldRulesListener, this);
         worldRulesListener.applyConfiguredWorldRules();
+        spawnProtectionListener = new SpawnProtectionListener(this);
+        pm.registerEvents(spawnProtectionListener, this);
         smpStartManager = new SmpStartManager(this);
         pm.registerEvents(smpStartManager, this);
         smpStartManager.applyConfiguredState();
@@ -303,6 +309,7 @@ public final class SMPCore extends JavaPlugin {
             ShopCommands.register(commands, this);
             WikiCommand.register(commands, this);
             MainMenuCommand.register(commands, this);
+            SpawnProtectionCommand.register(commands, this);
 
             SMPCoreCommand.register(commands, this);
         });
@@ -345,4 +352,5 @@ public final class SMPCore extends JavaPlugin {
     public PlayerSettingsManager getPlayerSettingsManager() { return playerSettingsManager; }
     public PlayerControlListener getPlayerControlListener() { return playerControlListener; }
     public PlayerShopListener getPlayerShopListener() { return playerShopListener; }
+    public SpawnProtectionListener getSpawnProtectionListener() { return spawnProtectionListener; }
 }

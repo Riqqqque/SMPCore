@@ -146,6 +146,12 @@ permissions:
   smpcore.setspawn:
     description: Use /setspawn
     default: op
+  smpcore.spawnprotect.admin:
+    description: Use /spawnprotect to manage spawn build access
+    default: op
+  smpcore.spawnprotect.bypass:
+    description: Bypass spawn grief protection
+    default: op
   smpcore.startsmp:
     description: Use /startsmp
     default: op

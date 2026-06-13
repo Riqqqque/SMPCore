@@ -4,8 +4,10 @@ import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Material;
 
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * Typed wrapper around config.yml - reloadable via /smpcore reload.
@@ -50,6 +52,11 @@ public final class ConfigManager {
     public int homeMultipleMax;
 
     public String spawnWorld;
+    public boolean spawnProtectionEnabled;
+    public int spawnProtectionRadius;
+    public List<String> spawnProtectionAllowedBuilders;
+    public Set<String> spawnProtectionAllowedBuilderSet;
+    public String spawnProtectionDenyMessage;
     public boolean forceHardDifficulty;
 
     public boolean backOnDeath;
@@ -334,6 +341,39 @@ public final class ConfigManager {
         spawnWorld = c.getString("spawn.world", "world");
         if (spawnWorld == null || spawnWorld.isBlank()) {
             spawnWorld = "world";
+        }
+        boolean spawnProtectionConfigChanged = false;
+        if (!c.contains("spawn.protection.enabled")) {
+            c.set("spawn.protection.enabled", true);
+            spawnProtectionConfigChanged = true;
+        }
+        if (!c.contains("spawn.protection.radius")) {
+            c.set("spawn.protection.radius", 150);
+            spawnProtectionConfigChanged = true;
+        }
+        if (!c.contains("spawn.protection.allowed-builders")) {
+            c.set("spawn.protection.allowed-builders", List.of());
+            spawnProtectionConfigChanged = true;
+        }
+        if (!c.contains("spawn.protection.deny-message")) {
+            c.set("spawn.protection.deny-message", "<red>Spawn is protected. Ask staff if you need build access here.</red>");
+            spawnProtectionConfigChanged = true;
+        }
+
+        spawnProtectionEnabled = c.getBoolean("spawn.protection.enabled", true);
+        spawnProtectionRadius = clamp(c.getInt("spawn.protection.radius", 150), 1, 10_000);
+        spawnProtectionAllowedBuilders = normaliseTokens(c.getStringList("spawn.protection.allowed-builders"));
+        spawnProtectionAllowedBuilderSet = Set.copyOf(spawnProtectionAllowedBuilders);
+        if (!spawnProtectionAllowedBuilders.equals(c.getStringList("spawn.protection.allowed-builders"))) {
+            c.set("spawn.protection.allowed-builders", spawnProtectionAllowedBuilders);
+            spawnProtectionConfigChanged = true;
+        }
+        spawnProtectionDenyMessage = c.getString(
+            "spawn.protection.deny-message",
+            "<red>Spawn is protected. Ask staff if you need build access here.</red>"
+        );
+        if (spawnProtectionConfigChanged) {
+            plugin.saveConfig();
         }
         forceHardDifficulty = c.getBoolean("world-rules.force-hard-difficulty", true);
 
@@ -657,6 +697,58 @@ public final class ConfigManager {
         return next;
     }
 
+    public void setSpawnProtectionEnabled(boolean value) {
+        spawnProtectionEnabled = value;
+        plugin.getConfig().set("spawn.protection.enabled", value);
+        plugin.saveConfig();
+    }
+
+    public void setSpawnProtectionRadius(int radius) {
+        spawnProtectionRadius = clamp(radius, 1, 10_000);
+        plugin.getConfig().set("spawn.protection.radius", spawnProtectionRadius);
+        plugin.saveConfig();
+    }
+
+    public boolean addSpawnProtectionBuilder(String rawName) {
+        String token = normaliseToken(rawName);
+        if (token == null) {
+            return false;
+        }
+        Set<String> tokens = new LinkedHashSet<>(spawnProtectionAllowedBuilders);
+        if (!tokens.add(token)) {
+            return false;
+        }
+        spawnProtectionAllowedBuilders = List.copyOf(tokens);
+        spawnProtectionAllowedBuilderSet = Set.copyOf(spawnProtectionAllowedBuilders);
+        plugin.getConfig().set("spawn.protection.allowed-builders", spawnProtectionAllowedBuilders);
+        plugin.saveConfig();
+        return true;
+    }
+
+    public boolean removeSpawnProtectionBuilder(String rawName) {
+        String token = normaliseToken(rawName);
+        if (token == null) {
+            return false;
+        }
+        Set<String> tokens = new LinkedHashSet<>(spawnProtectionAllowedBuilders);
+        boolean removed = tokens.remove(token);
+        if (!removed) {
+            return false;
+        }
+        spawnProtectionAllowedBuilders = List.copyOf(tokens);
+        spawnProtectionAllowedBuilderSet = Set.copyOf(spawnProtectionAllowedBuilders);
+        plugin.getConfig().set("spawn.protection.allowed-builders", spawnProtectionAllowedBuilders);
+        plugin.saveConfig();
+        return true;
+    }
+
+    public boolean isSpawnProtectionBuilder(String playerName, String uuid) {
+        String nameToken = normaliseToken(playerName);
+        String uuidToken = normaliseToken(uuid);
+        return (nameToken != null && spawnProtectionAllowedBuilderSet.contains(nameToken))
+            || (uuidToken != null && spawnProtectionAllowedBuilderSet.contains(uuidToken));
+    }
+
     private Material material(String raw, Material fallback) {
         if (raw == null || raw.isBlank()) return fallback;
         try {
@@ -680,5 +772,24 @@ public final class ConfigManager {
             return clamp(config.getDouble(weightPath, fallback), 0.0, 1.0);
         }
         return clamp(config.getDouble("custom-tools.advanced-pickaxe.bonus-chances." + id, fallback), 0.0, 1.0);
+    }
+
+    private List<String> normaliseTokens(List<String> rawTokens) {
+        LinkedHashSet<String> tokens = new LinkedHashSet<>();
+        for (String raw : rawTokens) {
+            String token = normaliseToken(raw);
+            if (token != null) {
+                tokens.add(token);
+            }
+        }
+        return List.copyOf(tokens);
+    }
+
+    private String normaliseToken(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String token = raw.trim().toLowerCase(Locale.ROOT);
+        return token.isBlank() ? null : token;
     }
 }

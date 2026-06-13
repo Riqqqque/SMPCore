@@ -57,6 +57,11 @@
 - `/freeze <player> [on|off]` - freezes or toggles an online player.
 - `/unfreeze <player>` - unfreezes an online player.
 - `/viewteamvault <team>`, `/teamvaultsee <team>`, `/tvaultsee <team>` - owner-only safe team vault inspector.
+- `/spawnprotect` - show spawn protection status.
+- `/spawnprotect allow <player>` - let a non-OP player build and edit inside protected spawn.
+- `/spawnprotect remove <player>` - remove a player from the spawn build allowlist.
+- `/spawnprotect radius <blocks>` - change the protected spawn radius.
+- `/spawnprotect on` or `/spawnprotect off` - enable or disable spawn protection.
 - `/startsmp [graceMinutes]` - expands the world border and starts grace timing. The optional number controls PvP grace for this launch.
 - `/startsmp reset` - resets the start state.
 - `/startsmp lock` - puts the world back into the pre-start lockdown.
