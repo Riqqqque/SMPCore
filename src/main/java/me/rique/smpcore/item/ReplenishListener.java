@@ -1,7 +1,9 @@
 package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.compat.CrossplayManager.AnvilRecipe;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.ItemModelUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -11,6 +13,7 @@ import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
+import org.bukkit.Particle;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.Ageable;
 import org.bukkit.block.data.BlockData;
@@ -61,6 +64,7 @@ public final class ReplenishListener implements Listener {
         if (meta == null) return book;
 
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.RARE, "Replenish Book"));
+        ItemModelUtil.apply(meta, "replenish_book");
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.ENCHANTED_BOOK,
@@ -78,6 +82,19 @@ public final class ReplenishListener implements Listener {
         meta.getPersistentDataContainer().set(keyReplenishBook, PersistentDataType.BYTE, (byte) 1);
         book.setItemMeta(meta);
         return book;
+    }
+
+    public AnvilRecipe crossplayAnvilRecipe(ItemStack left, ItemStack right) {
+        if (!isReplenishBook(right) || !isHoe(left) || hasReplenish(left)) {
+            return null;
+        }
+        return new AnvilRecipe(
+            applyReplenish(left.clone()),
+            REPLENISH_ANVIL_COST,
+            "Applied <white>Replenish I</white>.",
+            "Applied Replenish I through the crossplay custom anvil.",
+            false
+        );
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -184,6 +201,10 @@ public final class ReplenishListener implements Listener {
             if (!consumeSeedDrop(harvestDrops, seedMaterial) && !consumeOneFromInventory(player, seedMaterial)) {
                 return;
             }
+            if (plugin.getCustomEnchantListener() != null
+                && plugin.getCustomEnchantListener().applyHarvestingBonus(player, tool, harvestDrops)) {
+                player.getWorld().spawnParticle(Particle.HAPPY_VILLAGER, block.getLocation().add(0.5, 0.8, 0.5), 5, 0.25, 0.25, 0.25, 0.01);
+            }
             drops = harvestDrops;
         }
 
@@ -197,7 +218,7 @@ public final class ReplenishListener implements Listener {
         });
     }
 
-    private ItemStack applyReplenish(ItemStack hoe) {
+    public ItemStack applyReplenish(ItemStack hoe) {
         ItemMeta meta = hoe.getItemMeta();
         if (meta == null) return hoe;
 

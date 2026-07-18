@@ -1,0 +1,20 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "SMPCore - Season of the Veil",
+    "description": "Bedrock textures for SMPCore custom items.",
+    "uuid": "5571ce94-5dbd-4b16-8530-1b7c35b6288e",
+    "version": [1, 0, 0],
+    "min_engine_version": [1, 21, 130]
+  },
+  "modules": [
+    {
+      "type": "resources",
+      "uuid": "056f8b6a-f2f0-49de-a240-5d8a52604f24",
+      "version": [1, 0, 0]
+    }
+  ],
+  "metadata": {
+    "authors": ["Rique"]
+  }
+}

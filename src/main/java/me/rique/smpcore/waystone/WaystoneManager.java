@@ -1,6 +1,10 @@
 package me.rique.smpcore.waystone;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.BedrockCompat;
+import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.LocationUtil;
+import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -39,6 +43,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class WaystoneManager {
 
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
+    private static final String LANDING_TOGGLE_ACTION = "__landing_toggle__";
 
     private final SMPCore plugin;
     private final NamespacedKey waystoneMenuTargetKey;
@@ -203,6 +208,10 @@ public final class WaystoneManager {
     }
 
     public void openWaystoneMenu(Player player, List<WaystoneEntry> waystones) {
+        openWaystoneMenu(player, waystones, false);
+    }
+
+    private void openWaystoneMenu(Player player, List<WaystoneEntry> waystones, boolean topOfGlowstone) {
         List<WaystoneEntry> valid = filterValidWaystones(waystones);
         if (valid.isEmpty()) {
             player.sendMessage(MessageUtil.info("You do not know any waystones yet."));
@@ -215,9 +224,14 @@ public final class WaystoneManager {
             valid = new ArrayList<>(valid.subList(0, maxEntries));
         }
 
-        Inventory inventory = Bukkit.createInventory(new WaystoneMenuHolder(), 54, Component.text("Waystones"));
+        List<WaystoneEntry> shown = List.copyOf(valid);
+        Inventory inventory = Bukkit.createInventory(
+            new WaystoneMenuHolder(shown, topOfGlowstone),
+            54,
+            BedrockCompat.menuTitle(player, Component.text("Waystones"), "Waystones")
+        );
         for (int i = 0; i < valid.size(); i++) {
-            inventory.setItem(i, createMenuItem(valid.get(i)));
+            inventory.setItem(i, createMenuItem(player, valid.get(i), topOfGlowstone));
         }
 
         if (truncated) {
@@ -225,11 +239,14 @@ public final class WaystoneManager {
             ItemMeta meta = more.getItemMeta();
             if (meta != null) {
                 meta.displayName(Component.text("More waystones exist", NamedTextColor.YELLOW));
-                meta.lore(List.of(Component.text("Only the first 45 are shown here.", NamedTextColor.GRAY)));
+                meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
+                    Component.text("Only the first 45 are shown here.", NamedTextColor.GRAY)
+                )));
                 more.setItemMeta(meta);
             }
             inventory.setItem(49, more);
         }
+        inventory.setItem(53, createLandingToggle(topOfGlowstone));
 
         player.openInventory(inventory);
     }
@@ -238,15 +255,21 @@ public final class WaystoneManager {
         return inventory != null && inventory.getHolder() instanceof WaystoneMenuHolder;
     }
 
-    public void handleWaystoneMenuClick(Player player, ItemStack clicked, boolean topOfGlowstone) {
+    public void handleWaystoneMenuClick(Player player, Inventory inventory, ItemStack clicked) {
         if (clicked == null || clicked.getType() == Material.AIR) return;
+        if (!(inventory.getHolder(false) instanceof WaystoneMenuHolder holder)) return;
         ItemMeta meta = clicked.getItemMeta();
         if (meta == null) return;
         String key = meta.getPersistentDataContainer().get(waystoneMenuTargetKey, PersistentDataType.STRING);
         if (key == null || key.isBlank()) return;
 
+        if (LANDING_TOGGLE_ACTION.equals(key)) {
+            openWaystoneMenu(player, holder.waystones(), !holder.topOfGlowstone());
+            return;
+        }
+
         player.closeInventory();
-        teleportKnownByKey(player, key, topOfGlowstone);
+        teleportKnownByKey(player, key, holder.topOfGlowstone());
     }
 
     public void teleportKnownByKey(Player player, String key) {
@@ -255,6 +278,7 @@ public final class WaystoneManager {
 
     public void teleportKnownByKey(Player player, String key, boolean topOfGlowstone) {
         if (!player.isOnline()) return;
+        if (isInPlayerCombat(player)) return;
         if (!player.hasPermission("smpcore.waystone.use")) {
             player.sendMessage(MessageUtil.error("You do not have permission to use waystones."));
             return;
@@ -286,6 +310,21 @@ public final class WaystoneManager {
                         player.sendMessage(MessageUtil.error("You have not unlocked that waystone."));
                         return;
                     }
+                    if (waystonesByKey.get(key) != current) {
+                        player.sendMessage(MessageUtil.error("That waystone no longer exists."));
+                        return;
+                    }
+                    StructureStatus latestStatus = structureStatus(current);
+                    if (latestStatus == StructureStatus.BROKEN) {
+                        removeWaystone(current);
+                        player.sendMessage(MessageUtil.error("That waystone was destroyed."));
+                        return;
+                    }
+                    if (latestStatus == StructureStatus.WORLD_UNAVAILABLE) {
+                        player.sendMessage(MessageUtil.error("Waystone world is not loaded."));
+                        return;
+                    }
+                    if (isInPlayerCombat(player)) return;
                     teleport(player, current, topOfGlowstone);
                 })
             )
@@ -315,20 +354,36 @@ public final class WaystoneManager {
         return valid;
     }
 
-    private ItemStack createMenuItem(WaystoneEntry entry) {
+    private ItemStack createMenuItem(Player player, WaystoneEntry entry, boolean topOfGlowstone) {
         ItemStack item = new ItemStack(Material.LODESTONE);
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return item;
 
         meta.displayName(Component.text(entry.name(), NamedTextColor.AQUA));
-        meta.lore(List.of(
+        meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
             Component.text("World: " + entry.world(), NamedTextColor.GRAY),
             Component.text("X: " + entry.x() + " Y: " + entry.y() + " Z: " + entry.z(), NamedTextColor.GRAY),
-            Component.text("Left-click: Normal teleport", NamedTextColor.DARK_GRAY),
-            Component.text("Right-click: Teleport to the glowstone top", NamedTextColor.DARK_GRAY)
-        ));
+            Component.text("Landing: " + (topOfGlowstone ? "Glowstone top" : "Safest nearby spot"), NamedTextColor.DARK_GRAY),
+            Component.text(BedrockCompat.menuActionWord(player) + " to teleport", NamedTextColor.YELLOW)
+        )));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         meta.getPersistentDataContainer().set(waystoneMenuTargetKey, PersistentDataType.STRING, entry.key());
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private ItemStack createLandingToggle(boolean topOfGlowstone) {
+        ItemStack item = new ItemStack(Material.COMPASS);
+        ItemMeta meta = item.getItemMeta();
+        meta.displayName(Component.text(
+            "Landing: " + (topOfGlowstone ? "Glowstone top" : "Safest spot"),
+            NamedTextColor.YELLOW
+        ));
+        meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
+            Component.text("Tap to change where waystones place you.", NamedTextColor.GRAY),
+            Component.text("This replaces unreliable left/right menu clicks.", NamedTextColor.DARK_GRAY)
+        )));
+        meta.getPersistentDataContainer().set(waystoneMenuTargetKey, PersistentDataType.STRING, LANDING_TOGGLE_ACTION);
         item.setItemMeta(meta);
         return item;
     }
@@ -357,6 +412,7 @@ public final class WaystoneManager {
     }
 
     private void teleport(Player player, WaystoneEntry entry, boolean topOfGlowstone) {
+        if (isInPlayerCombat(player)) return;
         Location destination = topOfGlowstone ? glowstoneTopLocation(entry) : null;
         if (destination == null) {
             destination = teleportLocation(entry);
@@ -377,6 +433,14 @@ public final class WaystoneManager {
                 }
             })
         );
+    }
+
+    private boolean isInPlayerCombat(Player player) {
+        if (plugin.getCombatLogListener() == null || !plugin.getCombatLogListener().isInPlayerCombat(player)) {
+            return false;
+        }
+        player.sendMessage(MessageUtil.warn("You cannot teleport while in combat."));
+        return true;
     }
 
     private Location glowstoneTopLocation(WaystoneEntry entry) {
@@ -490,12 +554,7 @@ public final class WaystoneManager {
     }
 
     private static boolean isSafe(World world, int x, int y, int z) {
-        if (y < world.getMinHeight() || y + 1 >= world.getMaxHeight()) return false;
-        Block feet = world.getBlockAt(x, y, z);
-        Block head = world.getBlockAt(x, y + 1, z);
-        Block below = world.getBlockAt(x, y - 1, z);
-        if (feet.getType() != Material.AIR || head.getType() != Material.AIR) return false;
-        return below.getType().isSolid();
+        return LocationUtil.isSafeStandingLocation(centered(world, x, y, z));
     }
 
     private static Location centered(World world, int x, int y, int z) {
@@ -566,7 +625,10 @@ public final class WaystoneManager {
         WORLD_UNAVAILABLE
     }
 
-    private record WaystoneMenuHolder() implements InventoryHolder {
+    private record WaystoneMenuHolder(
+        List<WaystoneEntry> waystones,
+        boolean topOfGlowstone
+    ) implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;

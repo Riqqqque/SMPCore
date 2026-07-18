@@ -16,9 +16,11 @@ import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.backpack.BackpackListener;
 import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.item.AgriculturalPylonListener;
+import me.rique.smpcore.item.CorruptionManager;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.ReplenishListener;
+import me.rique.smpcore.item.ReforgeManager;
 import me.rique.smpcore.item.RewardLanternListener;
 import me.rique.smpcore.item.SalvagingDepotListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
@@ -35,7 +37,6 @@ import org.bukkit.Color;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.Particle;
 import org.bukkit.Sound;
-import org.bukkit.World;
 import org.bukkit.command.CommandSender;
 import org.bukkit.ban.ProfileBanList;
 import org.bukkit.entity.Player;
@@ -73,6 +74,8 @@ public final class AdminCommands {
     private static final String THE_WORLD_CLOCK_ITEM_ID = SuperpowerManager.THE_WORLD_CLOCK_ITEM_ID;
     private static final String DRUID_GRIMOIRE_ITEM_ID = SuperpowerManager.DRUID_GRIMOIRE_ITEM_ID;
     private static final String DOMINION_CORE_ITEM_ID = BossManager.DOMINION_CORE_ITEM_ID;
+    private static final String REFORGE_STONE_ITEM_ID = ReforgeManager.STONE_ID;
+    private static final String CORRUPTION_ANCHOR_ITEM_ID = CorruptionManager.STATION_ITEM_ID;
     private static final Set<String> ABSOLUTE_OWNER_ACCOUNTS = Set.of("riqqqque");
     private static final List<String> CUSTOM_ITEM_IDS = List.of(
         BACKPACK_ITEM_ID,
@@ -93,6 +96,8 @@ public final class AdminCommands {
         THE_WORLD_CLOCK_ITEM_ID,
         DRUID_GRIMOIRE_ITEM_ID,
         DOMINION_CORE_ITEM_ID,
+        REFORGE_STONE_ITEM_ID,
+        CORRUPTION_ANCHOR_ITEM_ID,
         CustomToolListener.ADVANCED_PICKAXE_ID,
         CustomToolListener.GRAPPLE_HOOK_ID,
         CustomToolListener.SPELUNKER_LANTERN_ID,
@@ -132,7 +137,7 @@ public final class AdminCommands {
         registerItemAudit(commands, plugin);
     }
 
-    // ── /fly [player] ────────────────────────────────────────────────────────
+    // /fly [player]
 
     private static void registerFly(Commands commands, SMPCore plugin) {
         commands.register(
@@ -169,7 +174,7 @@ public final class AdminCommands {
         }
     }
 
-    // ── /vanish [player] ─────────────────────────────────────────────────────
+    // /vanish [player]
 
     private static void registerVanish(Commands commands, SMPCore plugin) {
         commands.register(
@@ -189,7 +194,7 @@ public final class AdminCommands {
         );
     }
 
-    // ── /heal [player] ───────────────────────────────────────────────────────
+    // /heal [player]
 
     private static void registerHeal(Commands commands, SMPCore plugin) {
         commands.register(
@@ -228,7 +233,7 @@ public final class AdminCommands {
         p.setFireTicks(0);
     }
 
-    // ── /feed [player] ───────────────────────────────────────────────────────
+    // /feed [player]
 
     private static void registerFeed(Commands commands, SMPCore plugin) {
         commands.register(
@@ -265,7 +270,7 @@ public final class AdminCommands {
         p.setExhaustion(0f);
     }
 
-    // ── /speed <walk|fly> <0.1‑10> [player] ──────────────────────────────────
+    // /speed <walk|fly> <0.1-10> [player]
 
     private static void registerAnnounce(Commands commands) {
         commands.register(
@@ -440,7 +445,7 @@ public final class AdminCommands {
         return Math.min(1.0f, defaultInternal * value);
     }
 
-    // ── /god [player] ────────────────────────────────────────────────────────
+    // /god [player]
 
     private static void registerGod(Commands commands, SMPCore plugin) {
         commands.register(
@@ -472,9 +477,9 @@ public final class AdminCommands {
         );
     }
 
-    // ── /hat ─────────────────────────────────────────────────────────────────
+    // /hat
 
-    // ── /nick <name|off> ─────────────────────────────────────────────────────
+    // /nick <name|off>
 
     private static void registerNick(Commands commands, SMPCore plugin) {
         commands.register(
@@ -487,17 +492,16 @@ public final class AdminCommands {
 
                         if (input.equalsIgnoreCase("off") || input.equalsIgnoreCase("reset")) {
                             player.displayName(net.kyori.adventure.text.Component.text(player.getName()));
-                            player.playerListName(net.kyori.adventure.text.Component.text(player.getName()));
                             plugin.getDatabase().setNickname(player.getUniqueId(), player.getName(), null);
                             player.sendMessage(MessageUtil.success("Nickname removed."));
                         } else {
                             // Allow MiniMessage formatting in nicknames
                             var component = MM.deserialize(input);
                             player.displayName(component);
-                            player.playerListName(component);
                             plugin.getDatabase().setNickname(player.getUniqueId(), player.getName(), input);
                             player.sendMessage(MessageUtil.success("Nickname set to " + input + "."));
                         }
+                        if (plugin.getTabListManager() != null) plugin.getTabListManager().requestRefresh();
                         return Command.SINGLE_SUCCESS;
                     }))
                 .build(),
@@ -506,7 +510,7 @@ public final class AdminCommands {
         );
     }
 
-    // ── /invsee <player> ─────────────────────────────────────────────────────
+    // /invsee <player>
 
     private static void registerInvSee(Commands commands, SMPCore plugin) {
         commands.register(
@@ -527,7 +531,7 @@ public final class AdminCommands {
         );
     }
 
-    // ── /setspawn ────────────────────────────────────────────────────────────
+    // /setspawn
 
     private static void registerSetSpawn(Commands commands, SMPCore plugin) {
         commands.register(
@@ -535,16 +539,11 @@ public final class AdminCommands {
                 .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.setspawn"))
                 .executes(ctx -> {
                     Player player = (Player) ctx.getSource().getSender();
-                    World world = player.getWorld();
-                    world.setSpawnLocation(
-                        player.getLocation().getBlockX(),
-                        player.getLocation().getBlockY(),
-                        player.getLocation().getBlockZ()
-                    );
-                    plugin.getConfig().set("spawn.world", world.getName());
-                    plugin.saveConfig();
-                    plugin.getConfigManager().reload();
-                    player.sendMessage(MessageUtil.success("Spawn point set to your current location."));
+                    if (plugin.getExactSpawnListener() == null || !plugin.getExactSpawnListener().setExactSpawn(player.getLocation())) {
+                        player.sendMessage(MessageUtil.error("Could not set spawn here."));
+                        return 0;
+                    }
+                    player.sendMessage(MessageUtil.success("Spawn set exactly here."));
                     return Command.SINGLE_SUCCESS;
                 })
                 .build(),
@@ -866,19 +865,19 @@ public final class AdminCommands {
     private static void registerPowerInfo(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("powerinfo")
-                .requires(src -> src.getSender() instanceof Player)
+                .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.superpower.admin"))
                 .executes(ctx -> {
                     Player player = (Player) ctx.getSource().getSender();
                     SuperpowerManager powers = plugin.getSuperpowerManager();
                     if (powers == null) {
-                        player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+                        player.sendMessage(MessageUtil.error("Class system is not ready yet."));
                         return 0;
                     }
                     powers.openAdminInfoMenu(player);
                     return Command.SINGLE_SUCCESS;
                 })
                 .build(),
-            "Open the superpower info menu",
+            "Open the class info menu",
             List.of("classinfo", "powermenu")
         );
     }
@@ -947,7 +946,7 @@ public final class AdminCommands {
             Commands.literal("setpower")
                 .requires(src -> src.getSender().hasPermission("smpcore.superpower.assign"))
                 .then(Commands.argument("target", ArgumentTypes.player())
-                    .then(Commands.argument("power", StringArgumentType.word())
+                    .then(Commands.argument("class", StringArgumentType.word())
                         .suggests((ctx, builder) -> suggestSuperpowerTypes(builder))
                         .executes(ctx -> {
                             List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
@@ -957,11 +956,11 @@ public final class AdminCommands {
                                 return 0;
                             }
 
-                            String rawPower = StringArgumentType.getString(ctx, "power");
+                            String rawPower = StringArgumentType.getString(ctx, "class");
                             return setSuperpower(plugin, ctx.getSource().getSender(), targets.get(0), rawPower);
                         })))
                 .build(),
-            "Assign a superpower to a player",
+            "Assign a class to a player",
             List.of("powerset")
         );
     }
@@ -1115,6 +1114,8 @@ public final class AdminCommands {
             case THE_WORLD_CLOCK_ITEM_ID -> createTheWorldClockAdminItem(plugin, sender);
             case DRUID_GRIMOIRE_ITEM_ID -> createDruidGrimoireAdminItem(plugin, sender);
             case DOMINION_CORE_ITEM_ID -> createDominionCoreAdminItem(plugin, sender);
+            case REFORGE_STONE_ITEM_ID -> createReforgeStoneAdminItem(plugin, sender, itemId);
+            case CORRUPTION_ANCHOR_ITEM_ID -> createCorruptionAnchorAdminItem(plugin, sender);
             case CustomToolListener.ADVANCED_PICKAXE_ID,
                  CustomToolListener.GRAPPLE_HOOK_ID,
                  CustomToolListener.SPELUNKER_LANTERN_ID,
@@ -1137,21 +1138,21 @@ public final class AdminCommands {
     private static int setSuperpower(SMPCore plugin, CommandSender sender, Player target, String rawPower) {
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers == null) {
-            sender.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            sender.sendMessage(MessageUtil.error("Class system is not ready yet."));
             return 0;
         }
 
         SuperpowerType power = normalizeSuperpowerType(rawPower);
         if (power == null) {
             sender.sendMessage(MessageUtil.error(
-                "Unknown power. Options: <white>" + String.join(", ", powerSuggestionValues()) + "</white>."
+                "Unknown class. Options: <white>" + String.join(", ", powerSuggestionValues()) + "</white>."
             ));
             return 0;
         }
 
         powers.assignPower(target, power, true);
         sender.sendMessage(MessageUtil.success(
-            "Assigned <white>" + power.displayName() + "</white> to <white>" + target.getName() + "</white>."
+            "Assigned class <white>" + power.displayName() + "</white> to <white>" + target.getName() + "</white>."
         ));
         return Command.SINGLE_SUCCESS;
     }
@@ -1267,7 +1268,7 @@ public final class AdminCommands {
     private static AdminGiveItem createAncientScrollAdminItem(SMPCore plugin, CommandSender sender) {
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers == null) {
-            sender.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            sender.sendMessage(MessageUtil.error("Class system is not ready yet."));
             return null;
         }
         return new AdminGiveItem(powers.createAncientScrollItem(), "Ancient Scroll");
@@ -1276,7 +1277,7 @@ public final class AdminCommands {
     private static AdminGiveItem createWardenHeartAdminItem(SMPCore plugin, CommandSender sender) {
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers == null) {
-            sender.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            sender.sendMessage(MessageUtil.error("Class system is not ready yet."));
             return null;
         }
         return new AdminGiveItem(powers.createWardenHeartItem(), "Warden Heart");
@@ -1285,16 +1286,16 @@ public final class AdminCommands {
     private static AdminGiveItem createMotherNatureStickAdminItem(SMPCore plugin, CommandSender sender) {
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers == null) {
-            sender.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            sender.sendMessage(MessageUtil.error("Class system is not ready yet."));
             return null;
         }
-        return new AdminGiveItem(powers.createMotherNatureStickItem(), "Stick from Mother Nature");
+        return new AdminGiveItem(powers.createMotherNatureStickItem(), "Wand of Mother Nature");
     }
 
     private static AdminGiveItem createTheWorldClockAdminItem(SMPCore plugin, CommandSender sender) {
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers == null) {
-            sender.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            sender.sendMessage(MessageUtil.error("Class system is not ready yet."));
             return null;
         }
         return new AdminGiveItem(powers.createTheWorldClockItem(), "World Clock");
@@ -1303,7 +1304,7 @@ public final class AdminCommands {
     private static AdminGiveItem createDruidGrimoireAdminItem(SMPCore plugin, CommandSender sender) {
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers == null) {
-            sender.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            sender.sendMessage(MessageUtil.error("Class system is not ready yet."));
             return null;
         }
         return new AdminGiveItem(powers.createDruidGrimoireItem(), "Druid's Grimoire");
@@ -1315,7 +1316,27 @@ public final class AdminCommands {
             sender.sendMessage(MessageUtil.error("Boss system is not ready yet."));
             return null;
         }
-        return new AdminGiveItem(bossManager.createDominionCoreItem(), "Dominion Core");
+        return new AdminGiveItem(bossManager.createDominionCoreItem(), "Veil Core");
+    }
+
+    private static AdminGiveItem createReforgeStoneAdminItem(SMPCore plugin, CommandSender sender, String itemId) {
+        ReforgeManager reforgeManager = plugin.getReforgeManager();
+        if (reforgeManager == null) {
+            sender.sendMessage(MessageUtil.error("Reforge system is not ready yet."));
+            return null;
+        }
+        ItemStack item = reforgeManager.createReforgeStone(itemId);
+        String displayName = reforgeManager.displayNameForStone(itemId);
+        return item == null ? null : new AdminGiveItem(item, displayName == null ? prettyCustomItemName(itemId) : displayName);
+    }
+
+    private static AdminGiveItem createCorruptionAnchorAdminItem(SMPCore plugin, CommandSender sender) {
+        CorruptionManager corruptionManager = plugin.getCorruptionManager();
+        if (corruptionManager == null) {
+            sender.sendMessage(MessageUtil.error("Corruption system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(corruptionManager.createStationItem(), "Corruption Anchor");
     }
 
     private static AdminGiveItem createCustomToolAdminItem(SMPCore plugin, CommandSender sender, String itemId) {
@@ -1548,6 +1569,10 @@ public final class AdminCommands {
             case "mythicforge", "mythic_forge", "forge" -> MYTHIC_FORGE_ITEM_ID;
             case "mothernature", "mother_nature", "mothernaturestick", "mother_nature_stick", "naturestick" -> MOTHER_NATURE_STICK_ITEM_ID;
             case "orb", "mystic_orb", "orb_of_mystics", "orb_of_the_mystic", "orbofthemystics" -> ORB_OF_THE_MYSTICS_ITEM_ID;
+            case "reforgestone", "reforge_stone", "rough", "roughstone", "rough_stone", "roughreforgestone", "rough_reforge_stone",
+                 "veilstone", "veil_stone", "veilreforgestone", "veil_reforge_stone",
+                 "corruptedstone", "corrupted_stone", "corruptedreforgestone", "corrupted_reforge_stone" -> REFORGE_STONE_ITEM_ID;
+            case "corruption", "corruptor", "corruptionanchor", "corruption_anchor", "corruptionstation", "corruption_station" -> CORRUPTION_ANCHOR_ITEM_ID;
             case "salvage", "salvaging", "salvagingdepot", "salvaging_depot", "depot", "recycler" -> SALVAGING_DEPOT_ITEM_ID;
             case "agricultural", "agriculturalpylon", "agricultural_pylon", "farm_pylon", "farmpylon", "pylon", "rootguard" -> AGRICULTURAL_PYLON_ITEM_ID;
             case "xp", "xplectern", "xp_lectern", "experiencelectern", "experience_lectern", "levelbank", "level_bank" -> XP_LECTERN_ITEM_ID;
@@ -1569,7 +1594,7 @@ public final class AdminCommands {
         }
 
         return switch (normalized) {
-            case "no_power", "no_powers", "none", "normal" -> SuperpowerType.HUMAN;
+            case "no_power", "no_powers", "none", "normal" -> SuperpowerType.MORTAL;
             default -> SuperpowerType.fromId(normalized);
         };
     }
@@ -1600,7 +1625,7 @@ public final class AdminCommands {
         if (!(sender instanceof Player player)) {
             return true;
         }
-        return ABSOLUTE_OWNER_ACCOUNTS.contains(player.getName().toLowerCase(Locale.ROOT));
+        return player.isOp() && ABSOLUTE_OWNER_ACCOUNTS.contains(player.getName().toLowerCase(Locale.ROOT));
     }
 
     private static String romanNumeral(int value) {

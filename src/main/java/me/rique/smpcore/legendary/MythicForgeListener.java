@@ -4,6 +4,9 @@ import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.InventoryRecipeUtil;
+import me.rique.smpcore.util.ItemModelUtil;
+import me.rique.smpcore.util.MenuDupeGuardListener;
+import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
@@ -28,6 +31,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.entity.ExplosionPrimeEvent;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.CraftItemEvent;
@@ -49,7 +53,6 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -132,6 +135,9 @@ public final class MythicForgeListener implements Listener {
     }
 
     public void shutdown() {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            returnOpenForgeInputs(player, true);
+        }
         if (hologramTask != null) {
             hologramTask.cancel();
             hologramTask = null;
@@ -203,6 +209,7 @@ public final class MythicForgeListener implements Listener {
             return item;
         }
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.MYTHIC, "Mythic Forge"));
+        ItemModelUtil.apply(meta, MYTHIC_FORGE_ITEM_ID);
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.END_CRYSTAL,
@@ -231,6 +238,7 @@ public final class MythicForgeListener implements Listener {
             return item;
         }
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.LEGENDARY, "Ascendant Core"));
+        ItemModelUtil.apply(meta, ASCENDANT_CORE_ITEM_ID);
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.AMETHYST_SHARD,
@@ -506,9 +514,13 @@ public final class MythicForgeListener implements Listener {
         event.setCancelled(true);
         Player player = event.getPlayer();
         ItemStack hand = player.getInventory().getItemInMainHand();
-        if (player.isSneaking()
-            && player.hasPermission("smpcore.customitem.admin")
-            && (hand == null || hand.getType() == Material.AIR)) {
+        if (player.isSneaking() && isEmptyHand(hand)) {
+            if (plugin.getSpawnProtectionListener() != null
+                && plugin.getSpawnProtectionListener().isProtected(crystal.getLocation())
+                && !plugin.getSpawnProtectionListener().canEditSpawn(player)) {
+                player.sendMessage(MessageUtil.warn("You cannot recover a Mythic Forge from protected spawn."));
+                return;
+            }
             destroyForgeHologram(crystal.getUniqueId());
             crystal.remove();
             Map<Integer, ItemStack> leftovers = player.getInventory().addItem(createMythicForgeItem());
@@ -516,8 +528,16 @@ public final class MythicForgeListener implements Listener {
             player.sendMessage(MessageUtil.success("Recovered the <white>Mythic Forge</white>."));
             return;
         }
+        if (player.isSneaking()) {
+            player.sendMessage(MessageUtil.warn("Use an empty hand to pick up the Mythic Forge."));
+            return;
+        }
 
         openForgeMenu(player, crystal.getUniqueId());
+    }
+
+    private boolean isEmptyHand(ItemStack item) {
+        return item == null || item.getType().isAir();
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -551,6 +571,9 @@ public final class MythicForgeListener implements Listener {
         if (event.getClickedInventory() == top) {
             event.setCancelled(true);
             if (event.getSlot() == RESULT_SLOT) {
+                if (!isIntentionalMenuAction(event) || !MenuItemUtil.isVisibleItem(event.getCurrentItem())) {
+                    return;
+                }
                 attemptFusion(player, top, holder.forgeId());
                 return;
             }
@@ -582,16 +605,28 @@ public final class MythicForgeListener implements Listener {
     private boolean isUnsafeForgeClick(InventoryClickEvent event) {
         ClickType click = event.getClick();
         InventoryAction action = event.getAction();
+        String actionName = action == null ? "" : action.name();
         return click == ClickType.DOUBLE_CLICK
+            || click == ClickType.DROP
+            || click == ClickType.CONTROL_DROP
             || click == ClickType.MIDDLE
             || click == ClickType.NUMBER_KEY
             || click == ClickType.SWAP_OFFHAND
             || click == ClickType.CREATIVE
             || click == ClickType.UNKNOWN
             || action == InventoryAction.COLLECT_TO_CURSOR
+            || action == InventoryAction.DROP_ALL_CURSOR
+            || action == InventoryAction.DROP_ALL_SLOT
+            || action == InventoryAction.DROP_ONE_CURSOR
+            || action == InventoryAction.DROP_ONE_SLOT
             || action == InventoryAction.HOTBAR_SWAP
+            || "HOTBAR_MOVE_AND_READD".equals(actionName)
             || action == InventoryAction.CLONE_STACK
             || action == InventoryAction.UNKNOWN;
+    }
+
+    private boolean isIntentionalMenuAction(InventoryClickEvent event) {
+        return event.getClick() == ClickType.LEFT || event.getClick() == ClickType.RIGHT;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -627,6 +662,24 @@ public final class MythicForgeListener implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onPlayerDeath(PlayerDeathEvent event) {
+        Inventory top = event.getEntity().getOpenInventory().getTopInventory();
+        if (top.getHolder(false) instanceof MythicForgeMenuHolder) {
+            evacuateDeathInput(top, event.getDrops(), LEFT_SLOT);
+            evacuateDeathInput(top, event.getDrops(), CATALYST_SLOT);
+            evacuateDeathInput(top, event.getDrops(), RIGHT_SLOT);
+        }
+    }
+
+    private static void evacuateDeathInput(Inventory inventory, List<ItemStack> drops, int slot) {
+        ItemStack item = inventory.getItem(slot);
+        if (item != null && !item.getType().isAir()) {
+            drops.add(item.clone());
+            inventory.setItem(slot, null);
+        }
+    }
+
     @EventHandler
     public void onKick(PlayerKickEvent event) {
         returnOpenForgeInputs(event.getPlayer());
@@ -638,6 +691,10 @@ public final class MythicForgeListener implements Listener {
     }
 
     private void returnOpenForgeInputs(Player player) {
+        returnOpenForgeInputs(player, false);
+    }
+
+    private void returnOpenForgeInputs(Player player, boolean closeInventory) {
         Inventory top = player.getOpenInventory().getTopInventory();
         if (!(top.getHolder() instanceof MythicForgeMenuHolder)) {
             return;
@@ -646,6 +703,9 @@ public final class MythicForgeListener implements Listener {
         returnInput(player, top, LEFT_SLOT);
         returnInput(player, top, CATALYST_SLOT);
         returnInput(player, top, RIGHT_SLOT);
+        if (closeInventory) {
+            player.closeInventory();
+        }
     }
 
     private void registerRecipes() {
@@ -971,7 +1031,7 @@ public final class MythicForgeListener implements Listener {
             return false;
         }
         int remaining = reward.getAmount();
-        int maxStack = Math.max(1, reward.getType().getMaxStackSize());
+        int maxStack = Math.max(1, reward.getMaxStackSize());
         for (ItemStack item : player.getInventory().getStorageContents()) {
             if (remaining <= 0) {
                 return true;
@@ -1106,10 +1166,11 @@ public final class MythicForgeListener implements Listener {
         if (meta == null) {
             return item;
         }
-        meta.displayName(MM.deserialize(name));
-        if (!loreLines.isEmpty()) {
+        List<String> visibleLore = MenuItemUtil.visibleMiniLore(name, loreLines);
+        meta.displayName(MM.deserialize(MenuItemUtil.visibleMiniName(name)));
+        if (!visibleLore.isEmpty()) {
             List<Component> lore = new ArrayList<>();
-            for (String line : loreLines) {
+            for (String line : visibleLore) {
                 lore.add(MM.deserialize(line));
             }
             meta.lore(lore);
@@ -1119,7 +1180,7 @@ public final class MythicForgeListener implements Listener {
         return item;
     }
 
-    private record MythicForgeMenuHolder(UUID forgeId) implements InventoryHolder {
+    private record MythicForgeMenuHolder(UUID forgeId) implements InventoryHolder, MenuDupeGuardListener.MutableMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;

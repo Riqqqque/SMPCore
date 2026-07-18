@@ -1,0 +1,61 @@
+memories:
+  yule_the_minion:
+    sound: ITEM_GOAT_HORN_SOUND_0
+    particle: ASH
+    volume: 0.55
+    pitch: 0.65
+    particle-count: 10
+  kael_the_ashen:
+    sound: BLOCK_FIRE_AMBIENT
+    particle: ASH
+    volume: 0.45
+    pitch: 0.72
+    particle-count: 28
+  vesper_the_widow_queen:
+    sound: ENTITY_SPIDER_AMBIENT
+    particle: SCULK_SOUL
+    volume: 0.35
+    pitch: 0.65
+    particle-count: 14
+  mirewood_the_root_tyrant:
+    sound: BLOCK_AZALEA_LEAVES_BREAK
+    particle: TINTED_LEAVES
+    volume: 0.55
+    pitch: 0.72
+    particle-count: 26
+  nereida_the_abyss_mother:
+    sound: BLOCK_CONDUIT_AMBIENT_SHORT
+    particle: DRIPPING_WATER
+    volume: 0.65
+    pitch: 0.70
+    particle-count: 24
+  iron_saint:
+    sound: BLOCK_BELL_USE
+    particle: WAX_OFF
+    volume: 0.65
+    pitch: 0.48
+    particle-count: 16
+  aurelion_the_rift_seraph:
+    sound: BLOCK_PORTAL_TRAVEL
+    particle: PORTAL
+    volume: 0.38
+    pitch: 0.82
+    particle-count: 36
+  morvessa_the_runebloom_witch:
+    sound: BLOCK_SPORE_BLOSSOM_AMBIENT
+    particle: SPORE_BLOSSOM_AIR
+    volume: 0.65
+    pitch: 0.82
+    particle-count: 32
+  voralith_the_crimson_warden:
+    sound: BLOCK_RESPAWN_ANCHOR_DEPLETE
+    particle: REVERSE_PORTAL
+    volume: 0.35
+    pitch: 0.50
+    particle-count: 8
+  corrupted_oathkeeper:
+    sound: BLOCK_BELL_RESONATE
+    particle: SOUL
+    volume: 1.0
+    pitch: 0.50
+    particle-count: 48

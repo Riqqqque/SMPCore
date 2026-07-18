@@ -3,6 +3,7 @@ package me.rique.smpcore.item;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.InventoryRecipeUtil;
+import me.rique.smpcore.util.ItemModelUtil;
 import me.rique.smpcore.util.MessageUtil;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
@@ -110,8 +111,8 @@ public final class SalvagingDepotListener implements Listener {
     private final NamespacedKey recipeKey;
     private final Map<String, UUID> hologramsByBlock = new ConcurrentHashMap<>();
     private final Set<String> knownDepotBlocks = ConcurrentHashMap.newKeySet();
+    private final Set<String> pendingDepotBlocks = ConcurrentHashMap.newKeySet();
     private final Map<Inventory, String> depotBlocksByInventory = Collections.synchronizedMap(new IdentityHashMap<>());
-    private final Map<UUID, String> pendingDepotOpensByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, BukkitTask> processingTasks = new ConcurrentHashMap<>();
     private BukkitTask maintenanceTask;
     private BukkitTask quickScanTask;
@@ -161,8 +162,8 @@ public final class SalvagingDepotListener implements Listener {
         }
         hologramsByBlock.clear();
         knownDepotBlocks.clear();
+        pendingDepotBlocks.clear();
         depotBlocksByInventory.clear();
-        pendingDepotOpensByPlayer.clear();
     }
 
     public ItemStack createDepotItem() {
@@ -172,6 +173,7 @@ public final class SalvagingDepotListener implements Listener {
             return item;
         }
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.UNCOMMON, "Salvaging Depot"));
+        ItemModelUtil.apply(meta, ITEM_ID);
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.CHEST,
@@ -193,7 +195,7 @@ public final class SalvagingDepotListener implements Listener {
                 CustomLoreUtil.section(
                     "Safety",
                     "No Relic Recycling",
-                    "<gray>Unique relics, legendaries, backpacks, stations, and power items are ignored.</gray>",
+                    "<gray>Unique relics, legendaries, backpacks, stations, and class items are ignored.</gray>",
                     "<gray>Processing items cannot be pulled out by players or hoppers.</gray>"
                 )
             )
@@ -332,10 +334,15 @@ public final class SalvagingDepotListener implements Listener {
             return;
         }
 
-        Bukkit.getScheduler().runTask(plugin, () -> setupPlacedDepot(block));
+        String pendingKey = blockKey(block);
+        pendingDepotBlocks.add(pendingKey);
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            pendingDepotBlocks.remove(pendingKey);
+            setupPlacedDepot(block);
+        });
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onInteract(PlayerInteractEvent event) {
         if (event.getAction() != Action.RIGHT_CLICK_BLOCK || event.getClickedBlock() == null) {
             return;
@@ -345,11 +352,7 @@ public final class SalvagingDepotListener implements Listener {
             return;
         }
 
-        String key = blockKey(block);
-        UUID playerId = event.getPlayer().getUniqueId();
-        pendingDepotOpensByPlayer.put(playerId, key);
         scheduleBlockScan(block);
-        Bukkit.getScheduler().runTaskLater(plugin, () -> pendingDepotOpensByPlayer.remove(playerId, key), 60L);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -388,29 +391,37 @@ public final class SalvagingDepotListener implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onInventoryClick(InventoryClickEvent event) {
         Inventory top = event.getView().getTopInventory();
-        if (!resolveDepotInventory(event.getWhoClicked() instanceof Player player ? player : null, top)) {
+        Player player = event.getWhoClicked() instanceof Player clickedPlayer ? clickedPlayer : null;
+        if (!resolveDepotInventory(top)) {
+            if (player != null && cleanEscapedDepotState(event)) {
+                Bukkit.getScheduler().runTask(plugin, () -> purgeQueuedItemsOutsideDepot(player, true));
+            }
+            return;
+        }
+
+        if (isUnsafeDepotClick(event)) {
+            event.setCancelled(true);
+            scheduleScan(top);
+            if (player != null) {
+                Bukkit.getScheduler().runTask(plugin, () -> purgeQueuedItemsOutsideDepot(player, true));
+            }
             return;
         }
 
         if (event.getRawSlot() >= 0 && event.getRawSlot() < top.getSize()) {
-            if (isUnsafeDepotClick(event)) {
-                event.setCancelled(true);
-                scheduleScan(top);
-                return;
-            }
             ItemStack current = event.getCurrentItem();
             if (isProcessing(current)) {
                 event.setCancelled(true);
-                if (event.getWhoClicked() instanceof Player player) {
+                if (player != null) {
                     player.sendMessage(MessageUtil.warn("Items placed in the Salvaging Depot are locked until salvage finishes."));
                 }
                 scheduleScan(top);
                 return;
             }
             if (isQueued(current)) {
-                event.setCurrentItem(cleanQueuedItem(current));
+                event.setCurrentItem(cleanDepotState(current));
                 scheduleScan(top);
-                if (event.getWhoClicked() instanceof Player player) {
+                if (player != null) {
                     Bukkit.getScheduler().runTask(plugin, () -> purgeQueuedItemsOutsideDepot(player, true));
                 }
                 return;
@@ -423,14 +434,14 @@ public final class SalvagingDepotListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onInventoryDrag(InventoryDragEvent event) {
         Inventory top = event.getView().getTopInventory();
-        if (resolveDepotInventory(event.getWhoClicked() instanceof Player player ? player : null, top)) {
+        if (resolveDepotInventory(top)) {
             scheduleScan(top);
         }
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onInventoryClose(InventoryCloseEvent event) {
-        if (resolveDepotInventory(event.getPlayer() instanceof Player player ? player : null, event.getInventory())) {
+        if (resolveDepotInventory(event.getInventory())) {
             scanDepot(event.getInventory());
             if (event.getPlayer() instanceof Player closingPlayer) {
                 purgeQueuedItemsOutsideDepot(closingPlayer);
@@ -440,7 +451,7 @@ public final class SalvagingDepotListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onInventoryOpen(InventoryOpenEvent event) {
-        if (resolveDepotInventory(event.getPlayer() instanceof Player player ? player : null, event.getInventory())) {
+        if (resolveDepotInventory(event.getInventory())) {
             scheduleScan(event.getInventory());
         }
     }
@@ -513,11 +524,26 @@ public final class SalvagingDepotListener implements Listener {
     }
 
     private boolean isUnsafeDepotClick(InventoryClickEvent event) {
-        return event.getAction() == InventoryAction.CLONE_STACK
-            || event.getAction() == InventoryAction.UNKNOWN
-            || event.getClick() == org.bukkit.event.inventory.ClickType.CREATIVE
-            || event.getClick() == org.bukkit.event.inventory.ClickType.MIDDLE
-            || event.getClick() == org.bukkit.event.inventory.ClickType.UNKNOWN;
+        InventoryAction action = event.getAction();
+        String actionName = action == null ? "" : action.name();
+        org.bukkit.event.inventory.ClickType click = event.getClick();
+        return action == InventoryAction.CLONE_STACK
+            || action == InventoryAction.COLLECT_TO_CURSOR
+            || action == InventoryAction.DROP_ALL_CURSOR
+            || action == InventoryAction.DROP_ALL_SLOT
+            || action == InventoryAction.DROP_ONE_CURSOR
+            || action == InventoryAction.DROP_ONE_SLOT
+            || action == InventoryAction.HOTBAR_SWAP
+            || "HOTBAR_MOVE_AND_READD".equals(actionName)
+            || action == InventoryAction.UNKNOWN
+            || click == org.bukkit.event.inventory.ClickType.CREATIVE
+            || click == org.bukkit.event.inventory.ClickType.CONTROL_DROP
+            || click == org.bukkit.event.inventory.ClickType.DOUBLE_CLICK
+            || click == org.bukkit.event.inventory.ClickType.DROP
+            || click == org.bukkit.event.inventory.ClickType.MIDDLE
+            || click == org.bukkit.event.inventory.ClickType.NUMBER_KEY
+            || click == org.bukkit.event.inventory.ClickType.SWAP_OFFHAND
+            || click == org.bukkit.event.inventory.ClickType.UNKNOWN;
     }
 
     private void setupPlacedDepot(Block block) {
@@ -612,14 +638,12 @@ public final class SalvagingDepotListener implements Listener {
                 continue;
             }
             knownDepotBlocks.add(blockKey(block));
-            ensureDepotBlockMarker(block);
             ensureHologram(block);
             scanDepot(block);
         }
     }
 
     private void scanDepot(Block block) {
-        ensureDepotBlockMarker(block);
         Inventory inventory = depotInventory(block);
         if (inventory != null) {
             rememberDepotInventory(inventory, block);
@@ -639,7 +663,6 @@ public final class SalvagingDepotListener implements Listener {
         if (block == null || !isDepotBlock(block) || inventory == null) {
             return;
         }
-        ensureDepotBlockMarker(block);
         rememberDepotInventory(inventory, block);
         ItemStack[] contents = inventory.getStorageContents();
         for (int slot = 0; slot < contents.length; slot++) {
@@ -837,10 +860,25 @@ public final class SalvagingDepotListener implements Listener {
             return;
         }
         ItemStack stack = itemEntity.getItemStack();
-        if (!isQueued(stack) && !isProcessing(stack)) {
+        if (!hasDepotState(stack)) {
             return;
         }
         itemEntity.setItemStack(cleanDepotState(stack));
+    }
+
+    private boolean cleanEscapedDepotState(InventoryClickEvent event) {
+        boolean changed = false;
+        ItemStack current = event.getCurrentItem();
+        if (hasDepotState(current)) {
+            event.setCurrentItem(cleanDepotState(current));
+            changed = true;
+        }
+        ItemStack cursor = event.getCursor();
+        if (hasDepotState(cursor)) {
+            event.getView().setCursor(cleanDepotState(cursor));
+            changed = true;
+        }
+        return changed;
     }
 
     private ItemStack cleanDepotState(ItemStack item) {
@@ -923,6 +961,10 @@ public final class SalvagingDepotListener implements Listener {
         return queueReadyAt(item) > 0L;
     }
 
+    private boolean hasDepotState(ItemStack item) {
+        return isQueued(item) || isProcessing(item);
+    }
+
     private void purgeQueuedItemsOutsideDepot(Player player) {
         purgeQueuedItemsOutsideDepot(player, false);
     }
@@ -936,26 +978,26 @@ public final class SalvagingDepotListener implements Listener {
         Inventory inventory = player.getInventory();
         for (int slot = 0; slot < inventory.getSize(); slot++) {
             ItemStack item = inventory.getItem(slot);
-            if (!isQueued(item)) {
+            if (!hasDepotState(item)) {
                 continue;
             }
-            inventory.setItem(slot, cleanQueuedItem(item));
+            inventory.setItem(slot, cleanDepotState(item));
             changed = true;
         }
 
         ItemStack offhand = player.getInventory().getItemInOffHand();
-        if (isQueued(offhand)) {
-            player.getInventory().setItemInOffHand(cleanQueuedItem(offhand));
+        if (hasDepotState(offhand)) {
+            player.getInventory().setItemInOffHand(cleanDepotState(offhand));
             changed = true;
         }
 
         ItemStack[] armor = player.getInventory().getArmorContents();
         boolean armorChanged = false;
         for (int i = 0; i < armor.length; i++) {
-            if (!isQueued(armor[i])) {
+            if (!hasDepotState(armor[i])) {
                 continue;
             }
-            armor[i] = cleanQueuedItem(armor[i]);
+            armor[i] = cleanDepotState(armor[i]);
             armorChanged = true;
             changed = true;
         }
@@ -964,8 +1006,8 @@ public final class SalvagingDepotListener implements Listener {
         }
 
         ItemStack cursor = player.getItemOnCursor();
-        if (isQueued(cursor)) {
-            player.setItemOnCursor(cleanQueuedItem(cursor));
+        if (hasDepotState(cursor)) {
+            player.setItemOnCursor(cleanDepotState(cursor));
             changed = true;
         }
 
@@ -1061,29 +1103,42 @@ public final class SalvagingDepotListener implements Listener {
         int itemCount = Math.max(1, Math.min(64, item.getAmount()));
         List<ItemStack> outputs = new ArrayList<>();
         Material primaryMaterial = fallbackMaterial(base, type);
-        for (Map.Entry<Material, Integer> entry : base.entrySet()) {
-            int count = returnedCount(entry.getValue() * itemCount, durabilityFactor, rate);
-            if (count <= 0
-                && rate > 0.0D
-                && durabilityFactor > 0.0D
-                && entry.getKey() == primaryMaterial) {
-                count = itemCount;
-            }
-            if (count <= 0) {
-                continue;
-            }
-            addOutput(outputs, entry.getKey(), count);
-        }
-        if (outputs.isEmpty() && primaryMaterial != null && rate > 0.0D) {
-            addOutput(outputs, primaryMaterial, itemCount);
-        }
+        Map<Material, Integer> returned = calculateReturnedMaterials(base, primaryMaterial, itemCount, durabilityFactor, rate);
+        returned.forEach((material, amount) -> addOutput(outputs, material, amount));
         if (outputs.isEmpty()) {
             Material minimumFallback = preferredFallbackMaterial(type);
-            if (minimumFallback != null && rate > 0.0D) {
+            if (minimumFallback != null && rate > 0.0D && durabilityFactor > 0.0D) {
                 addOutput(outputs, minimumFallback, itemCount);
             }
         }
         return outputs;
+    }
+
+    static Map<Material, Integer> calculateReturnedMaterials(
+        Map<Material, Integer> base,
+        Material primaryMaterial,
+        int itemCount,
+        double durabilityFactor,
+        double rate
+    ) {
+        if (base == null || base.isEmpty() || primaryMaterial == null || itemCount <= 0 || durabilityFactor <= 0.0D || rate <= 0.0D) {
+            return Map.of();
+        }
+        Map<Material, Integer> returned = new LinkedHashMap<>();
+        int safeItemCount = Math.max(1, Math.min(64, itemCount));
+        for (Map.Entry<Material, Integer> entry : base.entrySet()) {
+            int count = returnedCount(entry.getValue() * safeItemCount, durabilityFactor, rate);
+            if (count <= 0 && durabilityFactor > 0.0D && entry.getKey() == primaryMaterial) {
+                count = safeItemCount;
+            }
+            if (count > 0) {
+                returned.put(entry.getKey(), count);
+            }
+        }
+        if (returned.isEmpty()) {
+            returned.put(primaryMaterial, safeItemCount);
+        }
+        return Collections.unmodifiableMap(returned);
     }
 
     private boolean isSalvageableGear(ItemStack item) {
@@ -1167,7 +1222,7 @@ public final class SalvagingDepotListener implements Listener {
             || Tag.ITEMS_ENCHANTABLE_DURABILITY.isTagged(material);
     }
 
-    private int returnedCount(int baseCount, double durabilityFactor, double rate) {
+    private static int returnedCount(int baseCount, double durabilityFactor, double rate) {
         double exact = baseCount * rate * durabilityFactor;
         int count = (int) Math.floor(exact);
         if (count == 0 && exact >= 0.50D) {
@@ -1251,7 +1306,7 @@ public final class SalvagingDepotListener implements Listener {
             case TURTLE_HELMET -> Material.TURTLE_SCUTE;
             case ELYTRA -> Material.PHANTOM_MEMBRANE;
             case TRIDENT -> Material.PRISMARINE_SHARD;
-            case MACE -> Material.HEAVY_CORE;
+            case MACE -> Material.BREEZE_ROD;
             case WOLF_ARMOR -> Material.ARMADILLO_SCUTE;
             case CARROT_ON_A_STICK, WARPED_FUNGUS_ON_A_STICK -> Material.STICK;
             default -> genericFallbackMaterial(sourceType);
@@ -1358,10 +1413,10 @@ public final class SalvagingDepotListener implements Listener {
             case DIAMOND_CHESTPLATE -> put(result, Material.DIAMOND, 8);
             case DIAMOND_LEGGINGS -> put(result, Material.DIAMOND, 7);
             case DIAMOND_BOOTS -> put(result, Material.DIAMOND, 4);
-            case NETHERITE_HELMET -> put(result, Material.DIAMOND, 5, Material.NETHERITE_INGOT, 1);
-            case NETHERITE_CHESTPLATE -> put(result, Material.DIAMOND, 8, Material.NETHERITE_INGOT, 1);
-            case NETHERITE_LEGGINGS -> put(result, Material.DIAMOND, 7, Material.NETHERITE_INGOT, 1);
-            case NETHERITE_BOOTS -> put(result, Material.DIAMOND, 4, Material.NETHERITE_INGOT, 1);
+            case NETHERITE_HELMET -> put(result, Material.DIAMOND, 5, Material.NETHERITE_SCRAP, 4, Material.GOLD_INGOT, 4);
+            case NETHERITE_CHESTPLATE -> put(result, Material.DIAMOND, 8, Material.NETHERITE_SCRAP, 4, Material.GOLD_INGOT, 4);
+            case NETHERITE_LEGGINGS -> put(result, Material.DIAMOND, 7, Material.NETHERITE_SCRAP, 4, Material.GOLD_INGOT, 4);
+            case NETHERITE_BOOTS -> put(result, Material.DIAMOND, 4, Material.NETHERITE_SCRAP, 4, Material.GOLD_INGOT, 4);
             case TURTLE_HELMET -> put(result, Material.TURTLE_SCUTE, 5);
             case WOODEN_SWORD -> put(result, Material.OAK_PLANKS, 2, Material.STICK, 1);
             case WOODEN_PICKAXE, WOODEN_AXE -> put(result, Material.OAK_PLANKS, 3, Material.STICK, 2);
@@ -1387,10 +1442,10 @@ public final class SalvagingDepotListener implements Listener {
             case DIAMOND_PICKAXE, DIAMOND_AXE -> put(result, Material.DIAMOND, 3, Material.STICK, 2);
             case DIAMOND_SHOVEL -> put(result, Material.DIAMOND, 1, Material.STICK, 2);
             case DIAMOND_HOE -> put(result, Material.DIAMOND, 2, Material.STICK, 2);
-            case NETHERITE_SWORD -> put(result, Material.DIAMOND, 2, Material.NETHERITE_INGOT, 1, Material.STICK, 1);
-            case NETHERITE_PICKAXE, NETHERITE_AXE -> put(result, Material.DIAMOND, 3, Material.NETHERITE_INGOT, 1, Material.STICK, 2);
-            case NETHERITE_SHOVEL -> put(result, Material.DIAMOND, 1, Material.NETHERITE_INGOT, 1, Material.STICK, 2);
-            case NETHERITE_HOE -> put(result, Material.DIAMOND, 2, Material.NETHERITE_INGOT, 1, Material.STICK, 2);
+            case NETHERITE_SWORD -> put(result, Material.DIAMOND, 2, Material.NETHERITE_SCRAP, 4, Material.GOLD_INGOT, 4, Material.STICK, 1);
+            case NETHERITE_PICKAXE, NETHERITE_AXE -> put(result, Material.DIAMOND, 3, Material.NETHERITE_SCRAP, 4, Material.GOLD_INGOT, 4, Material.STICK, 2);
+            case NETHERITE_SHOVEL -> put(result, Material.DIAMOND, 1, Material.NETHERITE_SCRAP, 4, Material.GOLD_INGOT, 4, Material.STICK, 2);
+            case NETHERITE_HOE -> put(result, Material.DIAMOND, 2, Material.NETHERITE_SCRAP, 4, Material.GOLD_INGOT, 4, Material.STICK, 2);
             case BOW -> put(result, Material.STICK, 3, Material.STRING, 3);
             case CROSSBOW -> put(result, Material.STICK, 3, Material.STRING, 2, Material.IRON_INGOT, 1, Material.TRIPWIRE_HOOK, 1);
             case FISHING_ROD -> put(result, Material.STICK, 3, Material.STRING, 2);
@@ -1398,7 +1453,7 @@ public final class SalvagingDepotListener implements Listener {
             case SHEARS -> put(result, Material.IRON_INGOT, 2);
             case FLINT_AND_STEEL -> put(result, Material.IRON_INGOT, 1, Material.FLINT, 1);
             case BRUSH -> put(result, Material.FEATHER, 1, Material.COPPER_INGOT, 1, Material.STICK, 1);
-            case MACE -> put(result, Material.HEAVY_CORE, 1, Material.BREEZE_ROD, 1);
+            case MACE -> put(result, Material.BREEZE_ROD, 1);
             case TRIDENT -> put(result, Material.PRISMARINE_SHARD, 6, Material.DIAMOND, 1);
             case ELYTRA -> put(result, Material.PHANTOM_MEMBRANE, 6);
             case WOLF_ARMOR -> put(result, Material.ARMADILLO_SCUTE, 6);
@@ -1408,12 +1463,12 @@ public final class SalvagingDepotListener implements Listener {
             case IRON_HORSE_ARMOR -> put(result, Material.IRON_INGOT, 5);
             case GOLDEN_HORSE_ARMOR -> put(result, Material.GOLD_INGOT, 5);
             case DIAMOND_HORSE_ARMOR -> put(result, Material.DIAMOND, 5);
-            case NETHERITE_HORSE_ARMOR -> put(result, Material.DIAMOND, 5, Material.NETHERITE_INGOT, 1);
+            case NETHERITE_HORSE_ARMOR -> put(result, Material.DIAMOND, 5, Material.NETHERITE_SCRAP, 4, Material.GOLD_INGOT, 4);
             case COPPER_HORSE_ARMOR -> put(result, Material.COPPER_INGOT, 5);
             case IRON_NAUTILUS_ARMOR -> put(result, Material.IRON_INGOT, 5);
             case GOLDEN_NAUTILUS_ARMOR -> put(result, Material.GOLD_INGOT, 5);
             case DIAMOND_NAUTILUS_ARMOR -> put(result, Material.DIAMOND, 5);
-            case NETHERITE_NAUTILUS_ARMOR -> put(result, Material.DIAMOND, 5, Material.NETHERITE_INGOT, 1);
+            case NETHERITE_NAUTILUS_ARMOR -> put(result, Material.DIAMOND, 5, Material.NETHERITE_SCRAP, 4, Material.GOLD_INGOT, 4);
             case COPPER_NAUTILUS_ARMOR -> put(result, Material.COPPER_INGOT, 5);
             default -> {
             }
@@ -1570,6 +1625,9 @@ public final class SalvagingDepotListener implements Listener {
         if (plugin.getSeasonRelicManager() != null && plugin.getSeasonRelicManager().isSeasonRelic(item)) {
             return true;
         }
+        if (plugin.getBossMasteryManager() != null && plugin.getBossMasteryManager().isMasteryItem(item)) {
+            return true;
+        }
         if (plugin.getSustenanceTalismanListener() != null && plugin.getSustenanceTalismanListener().isTalisman(item)) {
             return true;
         }
@@ -1616,7 +1674,8 @@ public final class SalvagingDepotListener implements Listener {
 
     private boolean hasAdjacentDepot(Block block) {
         for (BlockFace face : HORIZONTAL_FACES) {
-            if (isDepotBlock(block.getRelative(face))) {
+            Block adjacent = block.getRelative(face);
+            if (isDepotBlock(adjacent) || pendingDepotBlocks.contains(blockKey(adjacent))) {
                 return true;
             }
         }
@@ -1636,7 +1695,7 @@ public final class SalvagingDepotListener implements Listener {
         return false;
     }
 
-    private boolean isDepotBlock(Block block) {
+    public boolean isDepotBlock(Block block) {
         if (block == null || block.getType() != Material.CHEST) {
             return false;
         }
@@ -1645,18 +1704,15 @@ public final class SalvagingDepotListener implements Listener {
             && ITEM_ID.equals(tile.getPersistentDataContainer().get(keyDepotBlock, PersistentDataType.STRING))) {
             return true;
         }
-        return state instanceof Chest chest && isLegacyDepotName(chest.customName());
+        return false;
     }
 
-    private boolean resolveDepotInventory(Player player, Inventory inventory) {
-        if (depotBlock(inventory) != null) {
-            return true;
-        }
-        return tryBindPendingDepotInventory(player, inventory);
+    private boolean resolveDepotInventory(Inventory inventory) {
+        return depotBlock(inventory) != null;
     }
 
     private boolean isDepotInventory(Inventory inventory) {
-        return resolveDepotInventory(null, inventory);
+        return resolveDepotInventory(inventory);
     }
 
     private Block depotBlock(Inventory inventory) {
@@ -1704,38 +1760,6 @@ public final class SalvagingDepotListener implements Listener {
         depotBlocksByInventory.put(inventory, blockKey);
     }
 
-    private boolean tryBindPendingDepotInventory(Player player, Inventory inventory) {
-        if (player == null || inventory == null) {
-            return false;
-        }
-        Block block = pendingDepotBlock(player);
-        if (block == null || !isDepotBlock(block)) {
-            return false;
-        }
-        rememberDepotInventory(inventory, block);
-        return true;
-    }
-
-    private Block pendingDepotBlock(Player player) {
-        if (player == null) {
-            return null;
-        }
-        String key = pendingDepotOpensByPlayer.get(player.getUniqueId());
-        Location location = locationFromBlockKey(key);
-        if (location == null || location.getWorld() == null || !location.isChunkLoaded()) {
-            if (key != null) {
-                pendingDepotOpensByPlayer.remove(player.getUniqueId(), key);
-            }
-            return null;
-        }
-        Block block = location.getBlock();
-        if (!isDepotBlock(block)) {
-            pendingDepotOpensByPlayer.remove(player.getUniqueId(), key);
-            return null;
-        }
-        return block;
-    }
-
     private Block depotBlock(InventoryHolder holder) {
         Block direct = singleDepotBlock(holder);
         if (direct != null) {
@@ -1763,7 +1787,6 @@ public final class SalvagingDepotListener implements Listener {
         if (!isDepotBlock(block)) {
             return null;
         }
-        ensureDepotBlockMarker(block);
         BlockState state = block.getState();
         if (!(state instanceof Chest chest)) {
             return null;
@@ -1771,34 +1794,6 @@ public final class SalvagingDepotListener implements Listener {
         Inventory inventory = chest.getBlockInventory();
         rememberDepotInventory(inventory, block);
         return inventory;
-    }
-
-    private void ensureDepotBlockMarker(Block block) {
-        if (block == null || block.getType() != Material.CHEST) {
-            return;
-        }
-        BlockState state = block.getState();
-        if (!(state instanceof Chest chest)) {
-            return;
-        }
-        PersistentDataContainer pdc = chest.getPersistentDataContainer();
-        if (ITEM_ID.equals(pdc.get(keyDepotBlock, PersistentDataType.STRING))) {
-            return;
-        }
-        if (!isLegacyDepotName(chest.customName())) {
-            return;
-        }
-        pdc.set(keyDepotBlock, PersistentDataType.STRING, ITEM_ID);
-        chest.customName(MM.deserialize("<gradient:#74ee15:#22c55e><bold>Salvaging Depot</bold></gradient>"));
-        chest.update(true, false);
-        knownDepotBlocks.add(blockKey(block));
-    }
-
-    private boolean isLegacyDepotName(Component name) {
-        if (name == null) {
-            return false;
-        }
-        return "salvaging depot".equals(PLAIN.serialize(name).strip().toLowerCase(java.util.Locale.ROOT));
     }
 
     private void ensureHologram(Block block) {

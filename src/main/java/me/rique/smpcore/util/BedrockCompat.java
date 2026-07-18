@@ -51,6 +51,10 @@ public final class BedrockCompat {
         return isBedrockPlayer(player) ? "Tap" : "Click";
     }
 
+    public static boolean isFloodgateAvailable() {
+        return isFloodgatePresent();
+    }
+
     private static void ensureLookup() {
         if (floodgateGetInstance != null && floodgateIsPlayer != null) {
             return;

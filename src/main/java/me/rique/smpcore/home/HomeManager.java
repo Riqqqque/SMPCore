@@ -1,6 +1,7 @@
 package me.rique.smpcore.home;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -10,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -21,10 +23,14 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class HomeManager {
 
+    private static final int HOME_SAFE_HORIZONTAL_RADIUS = 5;
+    private static final int HOME_SAFE_VERTICAL_RADIUS = 8;
+
     private final SMPCore plugin;
     private final Map<UUID, Map<String, HomeEntry>> cache = new ConcurrentHashMap<>();
     private final Map<UUID, CompletableFuture<Map<String, HomeEntry>>> loading = new ConcurrentHashMap<>();
     private final Map<UUID, Long> sessionTokens = new ConcurrentHashMap<>();
+    private final Set<UUID> mutationsInProgress = ConcurrentHashMap.newKeySet();
     private final AtomicLong sessionSequence = new AtomicLong();
 
     public HomeManager(SMPCore plugin) {
@@ -42,12 +48,17 @@ public final class HomeManager {
     public void setHome(Player player, String name, Location loc, Runnable onSuccess, Runnable onLimitReached, Runnable onFailure) {
         UUID uuid = player.getUniqueId();
         ensureLoaded(player, () -> {
+            if (!mutationsInProgress.add(uuid)) {
+                onFailure.run();
+                return;
+            }
             Map<String, HomeEntry> homes = cache.get(uuid);
             String normalized = name.toLowerCase(Locale.ROOT);
             boolean exists = homes.containsKey(normalized);
             int max = maxHomes(player);
 
             if (!exists && homes.size() >= max) {
+                mutationsInProgress.remove(uuid);
                 onLimitReached.run();
                 return;
             }
@@ -60,7 +71,8 @@ public final class HomeManager {
             );
             long token = sessionToken(uuid);
             HomeEntry previous = homes.put(entry.name(), entry);
-            plugin.getDatabase().saveHome(uuid, entry).whenComplete((ignored, ex) ->
+            plugin.getDatabase().saveHome(uuid, entry).whenComplete((ignored, ex) -> {
+                mutationsInProgress.remove(uuid);
                 runForActiveCache(uuid, token, currentHomes -> {
                     HomeEntry current = currentHomes.get(entry.name());
                     if (ex == null) {
@@ -78,8 +90,8 @@ public final class HomeManager {
                         currentHomes.put(entry.name(), previous);
                     }
                     onFailure.run();
-                })
-            );
+                });
+            });
         });
     }
 
@@ -90,12 +102,17 @@ public final class HomeManager {
     public void deleteHome(Player player, String name, Runnable onSuccess, Runnable onNotFound, Runnable onFailure) {
         UUID uuid = player.getUniqueId();
         ensureLoaded(player, () -> {
+            if (!mutationsInProgress.add(uuid)) {
+                onFailure.run();
+                return;
+            }
             Map<String, HomeEntry> homes = cache.get(uuid);
             String normalized = name.toLowerCase(Locale.ROOT);
             HomeEntry removed = homes.remove(normalized);
             if (removed != null) {
                 long token = sessionToken(uuid);
-                plugin.getDatabase().deleteHome(uuid, normalized).whenComplete((ignored, ex) ->
+                plugin.getDatabase().deleteHome(uuid, normalized).whenComplete((ignored, ex) -> {
+                    mutationsInProgress.remove(uuid);
                     runForActiveCache(uuid, token, currentHomes -> {
                         if (ex == null) {
                             if (!currentHomes.containsKey(normalized)) {
@@ -108,17 +125,20 @@ public final class HomeManager {
 
                         currentHomes.put(normalized, removed);
                         onFailure.run();
-                    })
-                );
+                    });
+                });
             } else {
+                mutationsInProgress.remove(uuid);
                 onNotFound.run();
             }
         });
     }
 
     public void teleportHome(Player player, String name) {
+        if (isInPlayerCombat(player)) return;
         UUID uuid = player.getUniqueId();
         ensureLoaded(player, () -> {
+            if (isInPlayerCombat(player)) return;
             String normalized = name.toLowerCase(Locale.ROOT);
             Map<String, HomeEntry> homes = cache.get(uuid);
             HomeEntry entry = homes.get(normalized);
@@ -132,9 +152,21 @@ public final class HomeManager {
                 player.sendMessage(MessageUtil.error(worldMissingMessage(name, normalized)));
                 return;
             }
+            Location safe = LocationUtil.findNearestSafeStandingLocation(
+                loc,
+                HOME_SAFE_HORIZONTAL_RADIUS,
+                HOME_SAFE_VERTICAL_RADIUS
+            );
+            if (safe == null) {
+                player.sendMessage(MessageUtil.error(unsafeMessage(name, normalized)));
+                return;
+            }
+
+            // Combat may have started while the home data was loading/safety was resolved.
+            if (isInPlayerCombat(player)) return;
 
             plugin.getPlayerManager().saveBackLocation(player);
-            player.teleportAsync(loc).thenAccept(success -> {
+            player.teleportAsync(safe).thenAccept(success -> {
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     if (!player.isOnline()) return;
                     if (success) {
@@ -145,6 +177,14 @@ public final class HomeManager {
                 });
             });
         });
+    }
+
+    private boolean isInPlayerCombat(Player player) {
+        if (plugin.getCombatLogListener() == null || !plugin.getCombatLogListener().isInPlayerCombat(player)) {
+            return false;
+        }
+        player.sendMessage(MessageUtil.warn("You cannot teleport while in combat."));
+        return true;
     }
 
     public void listHomes(Player player) {
@@ -163,6 +203,15 @@ public final class HomeManager {
     public int homeCount(UUID uuid) {
         Map<String, HomeEntry> homes = cache.get(uuid);
         return homes == null ? 0 : homes.size();
+    }
+
+    /** Returns cached home names for command suggestions. */
+    public List<String> cachedHomeNames(UUID uuid) {
+        Map<String, HomeEntry> homes = cache.get(uuid);
+        if (homes == null || homes.isEmpty()) {
+            return List.of();
+        }
+        return List.copyOf(homes.keySet());
     }
 
     /** Max homes allowed for this player based on permissions. */
@@ -294,6 +343,12 @@ public final class HomeManager {
         return isDefaultHome(normalized)
             ? "World for your default home is not loaded."
             : "World for <white>" + inputName + "</white> is not loaded.";
+    }
+
+    private static String unsafeMessage(String inputName, String normalized) {
+        return isDefaultHome(normalized)
+            ? "Your default home is not safe right now."
+            : "Home <white>" + inputName + "</white> is not safe right now.";
     }
 
     private static String teleportedMessage(String inputName, String normalized) {

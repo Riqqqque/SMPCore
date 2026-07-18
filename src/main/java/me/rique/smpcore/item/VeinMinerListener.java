@@ -1,6 +1,7 @@
 package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.AtomicYamlFile;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
@@ -439,7 +440,7 @@ public final class VeinMinerListener implements Listener {
                 plugin.getLogger().warning("Failed to create plugin data folder for vein miner settings.");
                 return;
             }
-            data.save(dataFile);
+            AtomicYamlFile.save(data, dataFile);
         } catch (IOException e) {
             plugin.getLogger().warning("Failed to save vein miner settings: " + e.getMessage());
         }

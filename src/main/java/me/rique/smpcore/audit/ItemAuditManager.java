@@ -6,8 +6,10 @@ import me.rique.smpcore.backpack.BackpackListener;
 import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.database.DatabaseManager;
 import me.rique.smpcore.item.AgriculturalPylonListener;
+import me.rique.smpcore.item.CorruptionManager;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.CustomToolListener;
+import me.rique.smpcore.item.ReforgeManager;
 import me.rique.smpcore.item.RewardLanternListener;
 import me.rique.smpcore.item.SalvagingDepotListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
@@ -60,7 +62,7 @@ import java.util.stream.Collectors;
 public final class ItemAuditManager implements Listener {
 
     private static final String STAFF_PERMISSION = "smpcore.staff";
-    private static final long SCAN_INTERVAL_TICKS = 20L * 90L;
+    private static final int DEFAULT_SCAN_INTERVAL_SECONDS = 180;
     private static final long ANOMALY_COOLDOWN_MS = 5L * 60L * 1000L;
     private static final long PENDING_ACQUISITION_TTL_MS = 5L * 60L * 1000L;
     private static final int MAX_PENDING_ACQUISITIONS_PER_PLAYER = 96;
@@ -109,7 +111,8 @@ public final class ItemAuditManager implements Listener {
 
         auditStateLoaded = true;
         Bukkit.getScheduler().runTask(plugin, this::scanOnlinePlayers);
-        scanTask = Bukkit.getScheduler().runTaskTimer(plugin, this::scanOnlinePlayers, 100L, SCAN_INTERVAL_TICKS);
+        long intervalTicks = scanIntervalTicks();
+        scanTask = Bukkit.getScheduler().runTaskTimer(plugin, this::scanOnlinePlayers, 100L, intervalTicks);
     }
 
     public void shutdown() {
@@ -138,11 +141,11 @@ public final class ItemAuditManager implements Listener {
             return;
         }
 
-        Map<String, List<String>> seenInstanceLocations = new LinkedHashMap<>();
+        Map<String, SeenInstance> seenInstances = new LinkedHashMap<>();
         Map<String, Integer> legendaryCounts = new LinkedHashMap<>();
         String safeScope = scope == null || scope.isBlank() ? "shared_storage" : scope;
-        scanInventory(observer, inventory, safeScope, seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true, false);
-        finishAudit(observer, "shared_storage", seenInstanceLocations, legendaryCounts);
+        scanInventory(observer, inventory, safeScope, seenInstances, legendaryCounts, new LinkedHashSet<>(), true, false);
+        finishAudit(observer, "shared_storage", seenInstances, legendaryCounts);
     }
 
     public void recordKnownAcquisition(Player subject, ItemStack item, CommandSender actor, String method, String details) {
@@ -181,6 +184,9 @@ public final class ItemAuditManager implements Listener {
         options.add("custom:salvaging_depot");
         options.add("custom:agricultural_pylon");
         options.add("custom:xp_lectern");
+        options.add("custom:" + CorruptionManager.STATION_ITEM_ID);
+        options.add("corruption:locked_item");
+        options.add("reforge:" + ReforgeManager.STONE_ID);
 
         CustomEnchantListener enchants = plugin.getCustomEnchantListener();
         if (enchants != null) {
@@ -219,7 +225,8 @@ public final class ItemAuditManager implements Listener {
         }
 
         String filter = normalizeFilter(rawFilter);
-        plugin.getDatabase().loadManagedItemEvents(target.getUniqueId(), filter, 25).whenComplete((records, throwable) -> {
+        int limit = 15;
+        plugin.getDatabase().loadManagedItemEvents(target.getUniqueId(), filter, limit).whenComplete((records, throwable) -> {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (!plugin.isEnabled()) {
                     return;
@@ -233,8 +240,9 @@ public final class ItemAuditManager implements Listener {
                     ? target.getUniqueId().toString()
                     : target.getName();
                 sender.sendMessage(me.rique.smpcore.util.MessageUtil.info(
-                    "Item audit for <white>" + targetName + "</white>"
-                        + (filter == null ? "" : " <gray>(" + filter + ")</gray>")
+                    "Item audit for <white>" + escape(targetName) + "</white>"
+                        + (filter == null ? "" : " <gray>filtered by <white>" + escape(filterLabel(filter)) + "</white></gray>")
+                        + " <dark_gray>(latest " + limit + ")</dark_gray>"
                 ));
 
                 if (records == null || records.isEmpty()) {
@@ -242,20 +250,35 @@ public final class ItemAuditManager implements Listener {
                     return;
                 }
 
+                int index = 1;
                 for (var record : records) {
-                    String time = TIME_FORMAT.format(Instant.ofEpochMilli(record.loggedAt()));
-                    String details = record.details() == null || record.details().isBlank() ? "" : " <dark_gray>- " + record.details() + "</dark_gray>";
-                    String actor = record.actorName() == null || record.actorName().isBlank() ? "system" : record.actorName();
-                    sender.sendMessage(me.rique.smpcore.util.MessageUtil.prefixedRaw(
-                        "<gray>[" + time + "]</gray> <white>" + escape(record.itemKey()) + "</white> "
-                            + "<gold>" + escape(record.eventType()) + "</gold> "
-                            + "<gray>(" + escape(record.method()) + ")</gray> "
-                            + "<gray>actor:</gray> <white>" + escape(actor) + "</white>"
-                            + details
-                    ));
+                    sendAuditRecord(sender, record, index++);
                 }
             });
         });
+    }
+
+    private void sendAuditRecord(CommandSender sender, DatabaseManager.ManagedItemEventRecord record, int index) {
+        String itemKey = record.itemKey() == null || record.itemKey().isBlank() ? "unknown" : record.itemKey();
+        String instanceId = shortInstanceId(record.instanceId());
+        String time = TIME_FORMAT.format(Instant.ofEpochMilli(record.loggedAt()));
+        String source = methodLabel(record.method());
+        String actor = record.actorName() == null || record.actorName().isBlank() ? "system" : record.actorName();
+        String detail = humanDetails(record.details());
+
+        sender.sendMessage(me.rique.smpcore.util.MessageUtil.prefixedRaw(
+            "<gray>" + index + ". [" + escape(time) + "]</gray> "
+                + "<white>" + escape(displayNameForItemKey(itemKey)) + "</white> "
+                + "<yellow>" + escape(eventLabel(record.eventType())) + "</yellow> "
+                + "<dark_gray>(" + escape(itemKey) + ")</dark_gray>"
+        ));
+        sender.sendMessage(me.rique.smpcore.util.MessageUtil.prefixedRaw(
+            "<dark_gray>   " + escape(detail)
+                + " Source: " + escape(source)
+                + (instanceId.isBlank() ? "" : " | ID: " + escape(instanceId))
+                + " | Actor: " + escape(actor)
+                + "</dark_gray>"
+        ));
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -415,9 +438,27 @@ public final class ItemAuditManager implements Listener {
         if (!auditStateLoaded) {
             return;
         }
+        pruneTransientState();
         for (Player player : Bukkit.getOnlinePlayers()) {
             auditPlayer(player, "scheduled");
         }
+    }
+
+    private void pruneTransientState() {
+        long now = System.currentTimeMillis();
+        anomalyCooldowns.entrySet().removeIf(entry -> entry.getValue() < now - ANOMALY_COOLDOWN_MS);
+        pendingAcquisitions.entrySet().removeIf(entry -> {
+            Deque<PendingAcquisition> queue = entry.getValue();
+            prunePending(queue);
+            return queue.isEmpty();
+        });
+    }
+
+    private long scanIntervalTicks() {
+        int seconds = plugin.getConfigManager() == null
+            ? DEFAULT_SCAN_INTERVAL_SECONDS
+            : plugin.getConfigManager().itemAuditScanIntervalSeconds;
+        return Math.max(60L, seconds) * 20L;
     }
 
     private void auditPlayer(Player player, String reason) {
@@ -425,35 +466,36 @@ public final class ItemAuditManager implements Listener {
             return;
         }
 
-        Map<String, List<String>> seenInstanceLocations = new LinkedHashMap<>();
+        Map<String, SeenInstance> seenInstances = new LinkedHashMap<>();
         Map<String, Integer> legendaryCounts = new LinkedHashMap<>();
 
-        scanInventory(player, player.getInventory(), "inventory", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true, true);
-        scanInventory(player, player.getEnderChest(), "ender_chest", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true, true);
+        scanInventory(player, player.getInventory(), "inventory", seenInstances, legendaryCounts, new LinkedHashSet<>(), true, true);
+        scanInventory(player, player.getEnderChest(), "ender_chest", seenInstances, legendaryCounts, new LinkedHashSet<>(), true, true);
         ItemStack cursor = player.getItemOnCursor();
-        scanItem(player, cursor, "cursor", seenInstanceLocations, legendaryCounts, new LinkedHashSet<>(), true, true);
+        scanItem(player, cursor, "cursor", seenInstances, legendaryCounts, new LinkedHashSet<>(), true, true);
         if (shouldWriteBackScannedItem(cursor)) {
             player.setItemOnCursor(cursor);
         }
-        finishAudit(player, reason, seenInstanceLocations, legendaryCounts);
+        finishAudit(player, reason, seenInstances, legendaryCounts);
     }
 
     private void finishAudit(
         Player player,
         String reason,
-        Map<String, List<String>> seenInstanceLocations,
+        Map<String, SeenInstance> seenInstances,
         Map<String, Integer> legendaryCounts
     ) {
-        for (Map.Entry<String, List<String>> entry : seenInstanceLocations.entrySet()) {
-            if (entry.getValue().size() <= 1) {
+        for (SeenInstance seen : seenInstances.values()) {
+            if (seen.locations().size() <= 1) {
                 continue;
             }
             logAnomaly(
                 player,
-                entry.getKey(),
+                seen.itemKey(),
                 "duplicate_instance",
                 "scan",
-                "Duplicate tracked instance seen at " + String.join(", ", entry.getValue())
+                "Tracked ID " + shortInstanceId(seen.instanceId()) + " appears in " + friendlyLocationList(seen.locations()) + ".",
+                seen.instanceId()
             );
         }
 
@@ -476,7 +518,7 @@ public final class ItemAuditManager implements Listener {
         Player owner,
         Inventory inventory,
         String scope,
-        Map<String, List<String>> seenInstanceLocations,
+        Map<String, SeenInstance> seenInstances,
         Map<String, Integer> legendaryCounts,
         Set<String> backpackTrail,
         boolean canMutateIdentity,
@@ -488,7 +530,7 @@ public final class ItemAuditManager implements Listener {
         ItemStack[] contents = inventory.getContents();
         for (int slot = 0; slot < contents.length; slot++) {
             ItemStack item = contents[slot];
-            scanItem(owner, item, scope + "[" + slot + "]", seenInstanceLocations, legendaryCounts, backpackTrail, canMutateIdentity, updateOwner);
+            scanItem(owner, item, scope + "[" + slot + "]", seenInstances, legendaryCounts, backpackTrail, canMutateIdentity, updateOwner);
             if (canMutateIdentity && shouldWriteBackScannedItem(item)) {
                 inventory.setItem(slot, item);
             }
@@ -504,7 +546,7 @@ public final class ItemAuditManager implements Listener {
         Player owner,
         ItemStack item,
         String location,
-        Map<String, List<String>> seenInstanceLocations,
+        Map<String, SeenInstance> seenInstances,
         Map<String, Integer> legendaryCounts,
         Set<String> backpackTrail,
         boolean canMutateIdentity,
@@ -553,7 +595,7 @@ public final class ItemAuditManager implements Listener {
         }
 
         instanceId = ensureTrackedIdentity(item, descriptor);
-        seenInstanceLocations.computeIfAbsent(instanceId, ignored -> new ArrayList<>()).add(location);
+        rememberSeenInstance(seenInstances, instanceId, descriptor, location);
 
         if (item != null && item.getAmount() > 1) {
             logAnomaly(
@@ -561,7 +603,8 @@ public final class ItemAuditManager implements Listener {
                 descriptor.itemKey(),
                 "stacked_item",
                 "scan",
-                "Tracked item stack amount was " + item.getAmount() + " at " + location
+                "Tracked item stack amount was " + item.getAmount() + " at " + location,
+                instanceId
             );
         }
 
@@ -618,7 +661,8 @@ public final class ItemAuditManager implements Listener {
                     owner,
                     descriptor.itemKey(),
                     "unknown_origin",
-                    "First seen in " + location + " with no known acquisition path."
+                    "First seen in " + location + " with no known acquisition path.",
+                    instanceId
                 );
             }
         } else if (updateOwner && !Objects.equals(state.currentOwnerUuid, owner.getUniqueId())) {
@@ -646,7 +690,8 @@ public final class ItemAuditManager implements Listener {
                     owner,
                     descriptor.itemKey(),
                     "unknown_transfer",
-                    "Seen in " + location + " after belonging to " + safeName(previousOwnerName)
+                    "Seen in " + location + " after belonging to " + safeName(previousOwnerName),
+                    instanceId
                 );
             }
         } else {
@@ -668,10 +713,27 @@ public final class ItemAuditManager implements Listener {
         try {
             List<ItemStack> contents = backpacks.auditContents(owner, item);
             for (int i = 0; i < contents.size(); i++) {
-                scanItem(owner, contents.get(i), location + "/backpack[" + i + "]", seenInstanceLocations, legendaryCounts, backpackTrail, false, updateOwner);
+                scanItem(owner, contents.get(i), location + "/backpack[" + i + "]", seenInstances, legendaryCounts, backpackTrail, false, updateOwner);
             }
         } finally {
             backpackTrail.remove(backpackId);
+        }
+    }
+
+    private void rememberSeenInstance(
+        Map<String, SeenInstance> seenInstances,
+        String instanceId,
+        ManagedItemDescriptor descriptor,
+        String location
+    ) {
+        if (seenInstances == null || instanceId == null || instanceId.isBlank() || descriptor == null) {
+            return;
+        }
+        SeenInstance seen = seenInstances.computeIfAbsent(instanceId, ignored ->
+            new SeenInstance(instanceId, descriptor.itemKey(), new ArrayList<>())
+        );
+        if (location != null && !location.isBlank() && !seen.locations().contains(location)) {
+            seen.locations().add(location);
         }
     }
 
@@ -758,6 +820,17 @@ public final class ItemAuditManager implements Listener {
             return new ManagedItemDescriptor("custom:xp_lectern", "XP Lectern", false);
         }
 
+        CorruptionManager corruption = plugin.getCorruptionManager();
+        if (corruption != null) {
+            if (corruption.isStationItem(item)) {
+                return new ManagedItemDescriptor("custom:" + CorruptionManager.STATION_ITEM_ID, "Corruption Anchor", false);
+            }
+            String corruptionName = corruption.corruptionDisplayName(item);
+            if (corruptionName != null) {
+                return new ManagedItemDescriptor("corruption:locked_item", corruptionName, false);
+            }
+        }
+
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers != null) {
             if (powers.isAncientScroll(item)) {
@@ -767,7 +840,7 @@ public final class ItemAuditManager implements Listener {
                 return new ManagedItemDescriptor("relic:" + SuperpowerManager.WARDEN_HEART_ITEM_ID, "Warden Heart", false);
             }
             if (powers.isMotherNatureStick(item)) {
-                return new ManagedItemDescriptor("power:" + SuperpowerManager.MOTHER_NATURE_STICK_ITEM_ID, "Stick from Mother Nature", true);
+                return new ManagedItemDescriptor("power:" + SuperpowerManager.MOTHER_NATURE_STICK_ITEM_ID, "Wand of Mother Nature", true);
             }
             if (powers.isTheWorldClock(item)) {
                 return new ManagedItemDescriptor("power:" + SuperpowerManager.THE_WORLD_CLOCK_ITEM_ID, "The World Clock", true);
@@ -779,7 +852,16 @@ public final class ItemAuditManager implements Listener {
 
         BossManager bosses = plugin.getBossManager();
         if (bosses != null && bosses.isDominionCore(item)) {
-            return new ManagedItemDescriptor("relic:" + BossManager.DOMINION_CORE_ITEM_ID, "Dominion Core", false);
+            return new ManagedItemDescriptor("relic:" + BossManager.DOMINION_CORE_ITEM_ID, "Veil Core", false);
+        }
+
+        ReforgeManager reforges = plugin.getReforgeManager();
+        if (reforges != null) {
+            String stoneId = reforges.reforgeStoneId(item);
+            if (stoneId != null) {
+                String displayName = reforges.displayNameForStone(stoneId);
+                return new ManagedItemDescriptor("reforge:" + stoneId, defaultDisplay(displayName, stoneId), false);
+            }
         }
 
         SeasonRelicManager season = plugin.getSeasonRelicManager();
@@ -796,18 +878,26 @@ public final class ItemAuditManager implements Listener {
     }
 
     private void logAnomaly(Player subject, String itemKey, String eventType, String method, String details) {
-        String dedupeKey = subject.getUniqueId() + "|" + itemKey + "|" + eventType + "|" + details;
+        logAnomaly(subject, itemKey, eventType, method, details, "");
+    }
+
+    private void logAnomaly(Player subject, String itemKey, String eventType, String method, String details, String instanceId) {
+        if (subject == null || itemKey == null || itemKey.isBlank()) {
+            return;
+        }
+        String safeInstanceId = instanceId == null ? "" : instanceId;
+        String dedupeKey = subject.getUniqueId() + "|" + itemKey + "|" + safeInstanceId + "|" + eventType + "|" + details;
         long now = System.currentTimeMillis();
         Long previous = anomalyCooldowns.get(dedupeKey);
         if (previous != null && now - previous < ANOMALY_COOLDOWN_MS) {
             return;
         }
         anomalyCooldowns.put(dedupeKey, now);
-        notifyStaffAnomaly(subject, itemKey, eventType, details);
+        notifyStaffAnomaly(subject, itemKey, eventType, details, safeInstanceId);
         persistEvent(new DatabaseManager.ManagedItemEventRecord(
             0L,
             now,
-            "",
+            safeInstanceId,
             itemKey,
             subject.getUniqueId(),
             subject.getName(),
@@ -853,6 +943,10 @@ public final class ItemAuditManager implements Listener {
     }
 
     private void notifyStaffAnomaly(Player subject, String itemKey, String eventType, String details) {
+        notifyStaffAnomaly(subject, itemKey, eventType, details, "");
+    }
+
+    private void notifyStaffAnomaly(Player subject, String itemKey, String eventType, String details, String instanceId) {
         if (subject == null || itemKey == null || itemKey.isBlank()) {
             return;
         }
@@ -864,17 +958,29 @@ public final class ItemAuditManager implements Listener {
             + subject.getLocation().getBlockY()
             + ","
             + subject.getLocation().getBlockZ();
-        String message = "<red><bold>Audit Alert</bold></red> "
-            + "<gray><white>" + escape(subject.getName()) + "</white> has suspicious custom item activity.</gray> "
-            + "<gray>Type:</gray> <yellow>" + escape(eventType) + "</yellow> "
-            + "<gray>Item:</gray> <white>" + escape(itemKey) + "</white> "
-            + "<gray>At:</gray> <white>" + escape(location) + "</white>"
-            + (details == null || details.isBlank() ? "" : " <dark_gray>- " + escape(details) + "</dark_gray>")
-            + " <gray>Use <white>/itemaudit " + escape(subject.getName()) + " " + escape(itemKey) + "</white>.</gray>";
+        String shortId = shortInstanceId(instanceId);
+        String itemMeta = itemKey + (shortId.isBlank() ? "" : ", ID " + shortId);
+        String subjectName = safeName(subject.getName());
 
         for (Player staff : Bukkit.getOnlinePlayers()) {
             if (staff.isOp() || staff.hasPermission(STAFF_PERMISSION)) {
-                staff.sendMessage(me.rique.smpcore.util.MessageUtil.prefixedRaw(message));
+                staff.sendMessage(me.rique.smpcore.util.MessageUtil.prefixedRaw(
+                    "<red><bold>Audit Alert</bold></red> <white>" + escape(subjectName)
+                        + "</white> <gray>-</gray> <yellow>" + escape(eventLabel(eventType)) + "</yellow>"
+                ));
+                staff.sendMessage(me.rique.smpcore.util.MessageUtil.prefixedRaw(
+                    "<gray>Item:</gray> <white>" + escape(displayNameForItemKey(itemKey)) + "</white> "
+                        + "<dark_gray>(" + escape(itemMeta) + ")</dark_gray> "
+                        + "<gray>At:</gray> <white>" + escape(location) + "</white>"
+                ));
+                if (details != null && !details.isBlank()) {
+                    staff.sendMessage(me.rique.smpcore.util.MessageUtil.prefixedRaw(
+                        "<gray>Why:</gray> <white>" + escape(humanDetails(details)) + "</white>"
+                    ));
+                }
+                staff.sendMessage(me.rique.smpcore.util.MessageUtil.prefixedRaw(
+                    "<gray>Check:</gray> <white>/itemaudit " + escape(subjectName) + " " + escape(itemKey) + "</white>"
+                ));
             }
         }
     }
@@ -991,12 +1097,312 @@ public final class ItemAuditManager implements Listener {
         plugin.getDatabase().saveManagedItemEvent(event);
     }
 
+    private String filterLabel(String filter) {
+        if (filter == null || filter.isBlank()) {
+            return "all items";
+        }
+        if (looksLikeUuid(filter)) {
+            return "tracked ID " + shortInstanceId(filter);
+        }
+        String displayName = displayNameForItemKey(filter);
+        return displayName + " (" + filter + ")";
+    }
+
     private String normalizeFilter(String rawFilter) {
         if (rawFilter == null) {
             return null;
         }
         String normalized = rawFilter.trim().toLowerCase(Locale.ROOT);
         return normalized.isBlank() ? null : normalized;
+    }
+
+    private String displayNameForItemKey(String itemKey) {
+        if (itemKey == null || itemKey.isBlank()) {
+            return "Unknown Item";
+        }
+
+        String key = itemKey.trim().toLowerCase(Locale.ROOT);
+        if (looksLikeUuid(key)) {
+            return "Tracked Item " + shortInstanceId(key);
+        }
+
+        int separator = key.indexOf(':');
+        String category = separator > 0 ? key.substring(0, separator) : "";
+        String id = separator > 0 && separator + 1 < key.length() ? key.substring(separator + 1) : key;
+
+        return switch (category) {
+            case "legendary" -> {
+                LegendaryListener legendary = plugin.getLegendaryListener();
+                String displayName = legendary == null ? null : legendary.displayNameForLegendary(id);
+                yield defaultDisplay(displayName, id);
+            }
+            case "season" -> {
+                SeasonRelicManager season = plugin.getSeasonRelicManager();
+                String displayName = season == null ? null : season.displayNameFor(id);
+                yield defaultDisplay(displayName, id);
+            }
+            case "custom_tool" -> {
+                CustomToolListener tools = plugin.getCustomToolListener();
+                String displayName = tools == null ? null : tools.displayNameFor(id);
+                yield defaultDisplay(displayName, id);
+            }
+            case "custom_enchant" -> defaultDisplay(null, id) + " Book";
+            case "custom" -> switch (id) {
+                case "backpack" -> "Backpack";
+                case "awakening_table" -> "Awakening Table";
+                case "mythic_forge" -> "Mythic Forge";
+                case "reward_soul_lantern" -> "Reward Soul Lantern";
+                case "talisman_of_sustenance" -> "Talisman of Sustenance";
+                case "salvaging_depot" -> "Salvaging Depot";
+                case "agricultural_pylon" -> "Agricultural Pylon";
+                case "xp_lectern" -> "XP Lectern";
+                default -> defaultDisplay(null, id);
+            };
+            case "special" -> switch (id) {
+                case "ender_bone" -> "Ender Bone";
+                case "orb_of_the_mystics" -> "Orb of the Mystics";
+                default -> defaultDisplay(null, id);
+            };
+            case "power" -> switch (id) {
+                case SuperpowerManager.ANCIENT_SCROLL_ITEM_ID -> "Ancient Scroll";
+                case SuperpowerManager.THE_WORLD_CLOCK_ITEM_ID -> "The World Clock";
+                case SuperpowerManager.MOTHER_NATURE_STICK_ITEM_ID -> "Wand of Mother Nature";
+                case SuperpowerManager.DRUID_GRIMOIRE_ITEM_ID -> "Druid's Grimoire";
+                default -> defaultDisplay(null, id);
+            };
+            case "relic" -> switch (id) {
+                case MythicForgeListener.ASCENDANT_CORE_ITEM_ID -> "Ascendant Core";
+                case SuperpowerManager.WARDEN_HEART_ITEM_ID -> "Warden Heart";
+                case BossManager.DOMINION_CORE_ITEM_ID -> "Veil Core";
+                default -> defaultDisplay(null, id);
+            };
+            default -> defaultDisplay(null, key);
+        };
+    }
+
+    private String eventLabel(String eventType) {
+        if (eventType == null || eventType.isBlank()) {
+            return "Audit record";
+        }
+        return switch (eventType.toLowerCase(Locale.ROOT)) {
+            case "duplicate_instance" -> "Duplicate tracked item";
+            case "multiple_copies_held" -> "Too many copies";
+            case "stacked_item" -> "Tracked item was stacked";
+            case "unknown_origin" -> "Unknown origin";
+            case "owner_changed_unknown", "unknown_transfer" -> "Moved without a known handoff";
+            case "owner_changed" -> "Owner updated";
+            case "acquired" -> "Acquired";
+            case "picked_up" -> "Picked up";
+            case "dropped" -> "Dropped";
+            case "staff_seeded" -> "First seen with staff";
+            case "first_seen_craftable" -> "First seen";
+            default -> defaultDisplay(null, eventType);
+        };
+    }
+
+    private String methodLabel(String method) {
+        if (method == null || method.isBlank()) {
+            return "unknown";
+        }
+        return switch (method.toLowerCase(Locale.ROOT)) {
+            case "scan", "scheduled", "join" -> "inventory scan";
+            case "unknown_transfer", "inventory_transfer" -> "owner scan";
+            case "ground_drop" -> "item drop";
+            case "ground_pickup" -> "item pickup";
+            case "craft" -> "crafting";
+            case "backpack_scan" -> "backpack scan";
+            case "staff_inventory_seed" -> "staff inventory scan";
+            case "craftable_first_seen" -> "first scan";
+            case "season_craft" -> "Armory of the Veil craft";
+            case "custom_enchant_reliquary_craft" -> "custom enchant craft";
+            case "reliquary_craft" -> "Reliquary craft";
+            case "mythic_forge" -> "Mythic Forge";
+            case "admin_give", "admin_custom_item_give", "admin_legendary_give" -> "admin give";
+            default -> defaultDisplay(null, method);
+        };
+    }
+
+    private String humanDetails(String details) {
+        if (details == null || details.isBlank()) {
+            return "No details saved.";
+        }
+
+        String text = details.trim();
+        String transferMarker = " after belonging to ";
+        if (text.startsWith("Seen in ") && text.contains(transferMarker)) {
+            int markerIndex = text.indexOf(transferMarker);
+            String location = text.substring("Seen in ".length(), markerIndex);
+            String previousOwner = text.substring(markerIndex + transferMarker.length());
+            return ensurePeriod("Found in " + friendlyLocation(location) + " after belonging to " + safeName(previousOwner));
+        }
+
+        String noPathSuffix = " with no known acquisition path.";
+        if (text.startsWith("First seen in ") && text.endsWith(noPathSuffix)) {
+            String location = text.substring("First seen in ".length(), text.length() - noPathSuffix.length());
+            return "First seen in " + friendlyLocation(location) + "; no craft, drop, pickup, or admin record matched it.";
+        }
+
+        if (text.startsWith("First seen in staff inventory at ")) {
+            String location = text.substring("First seen in staff inventory at ".length());
+            return "First seen in staff inventory at " + friendlyLocation(location) + ".";
+        }
+
+        if (text.startsWith("First seen craftable item at ")) {
+            String location = text.substring("First seen craftable item at ".length());
+            return "First seen as a normal craftable item in " + friendlyLocation(location) + ".";
+        }
+
+        if (text.startsWith("First seen in ")) {
+            String location = text.substring("First seen in ".length());
+            return "First seen in " + friendlyLocation(location) + ".";
+        }
+
+        if (text.startsWith("Untracked item seen inside stored backpack data at ")) {
+            String location = text.substring("Untracked item seen inside stored backpack data at ".length());
+            return "Untracked item found inside stored backpack data at " + friendlyLocation(location) + ".";
+        }
+
+        if (text.startsWith("Tracked item stack amount was ")) {
+            String rest = text.substring("Tracked item stack amount was ".length());
+            int atIndex = rest.lastIndexOf(" at ");
+            if (atIndex > 0) {
+                String amount = rest.substring(0, atIndex);
+                String location = rest.substring(atIndex + " at ".length());
+                return "Stack amount " + amount + " at " + friendlyLocation(location) + "; tracked items should not stack.";
+            }
+        }
+
+        if (text.startsWith("Duplicate tracked instance seen at ")) {
+            String locations = text.substring("Duplicate tracked instance seen at ".length());
+            return "Same tracked item exists in " + friendlyLocationList(Arrays.asList(locations.split(","))) + ".";
+        }
+
+        String copyMarker = " copies of ";
+        if ((text.startsWith("Holding ") || text.startsWith("Storage contains ")) && text.contains(copyMarker)) {
+            int markerIndex = text.lastIndexOf(copyMarker);
+            String prefix = text.substring(0, markerIndex + copyMarker.length());
+            String item = text.substring(markerIndex + copyMarker.length());
+            return ensurePeriod(prefix + displayNameForItemKey(item) + " (" + item + ")");
+        }
+
+        return ensurePeriod(text);
+    }
+
+    private String shortInstanceId(String instanceId) {
+        if (instanceId == null || instanceId.isBlank()) {
+            return "";
+        }
+        String trimmed = instanceId.trim();
+        return trimmed.length() <= 8 ? trimmed : trimmed.substring(0, 8);
+    }
+
+    private String friendlyLocationList(List<String> locations) {
+        if (locations == null || locations.isEmpty()) {
+            return "an unknown location";
+        }
+        List<String> readable = locations.stream()
+            .filter(location -> location != null && !location.isBlank())
+            .map(this::friendlyLocation)
+            .distinct()
+            .collect(Collectors.toCollection(ArrayList::new));
+        if (readable.isEmpty()) {
+            return "an unknown location";
+        }
+        if (readable.size() > 4) {
+            int extra = readable.size() - 4;
+            readable = new ArrayList<>(readable.subList(0, 4));
+            readable.add(extra + " more place" + (extra == 1 ? "" : "s"));
+        }
+        return naturalList(readable);
+    }
+
+    private String friendlyLocation(String location) {
+        if (location == null || location.isBlank()) {
+            return "unknown location";
+        }
+        return Arrays.stream(location.trim().split("/"))
+            .filter(part -> !part.isBlank())
+            .map(this::friendlyLocationPart)
+            .collect(Collectors.joining(" -> "));
+    }
+
+    private String friendlyLocationPart(String locationPart) {
+        String part = locationPart == null ? "" : locationPart.trim();
+        if (part.isBlank()) {
+            return "unknown location";
+        }
+        if ("cursor".equalsIgnoreCase(part)) {
+            return "cursor";
+        }
+
+        int openBracket = part.indexOf('[');
+        int closeBracket = part.indexOf(']', openBracket + 1);
+        if (openBracket > 0 && closeBracket > openBracket) {
+            String scope = part.substring(0, openBracket);
+            int slot = parseSlot(part.substring(openBracket + 1, closeBracket));
+            if (slot >= 0) {
+                return locationLabel(scope) + " slot " + (slot + 1);
+            }
+            return locationLabel(scope);
+        }
+
+        return locationLabel(part);
+    }
+
+    private String locationLabel(String scope) {
+        if (scope == null || scope.isBlank()) {
+            return "unknown location";
+        }
+        return switch (scope.toLowerCase(Locale.ROOT)) {
+            case "inventory" -> "Inventory";
+            case "ender_chest" -> "Ender chest";
+            case "backpack" -> "Backpack";
+            case "shared_storage" -> "Shared storage";
+            case "cursor" -> "cursor";
+            default -> defaultDisplay(null, scope);
+        };
+    }
+
+    private int parseSlot(String rawSlot) {
+        try {
+            return Integer.parseInt(rawSlot.trim());
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    private String naturalList(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return "";
+        }
+        if (values.size() == 1) {
+            return values.get(0);
+        }
+        if (values.size() == 2) {
+            return values.get(0) + " and " + values.get(1);
+        }
+        return String.join(", ", values.subList(0, values.size() - 1)) + ", and " + values.get(values.size() - 1);
+    }
+
+    private String ensurePeriod(String text) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+        String trimmed = text.trim();
+        char last = trimmed.charAt(trimmed.length() - 1);
+        return last == '.' || last == '!' || last == '?' ? trimmed : trimmed + ".";
+    }
+
+    private boolean looksLikeUuid(String input) {
+        if (input == null || input.isBlank()) {
+            return false;
+        }
+        try {
+            UUID.fromString(input.trim());
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
     private String defaultDisplay(String displayName, String fallbackKey) {
@@ -1021,6 +1427,9 @@ public final class ItemAuditManager implements Listener {
     }
 
     private record ManagedItemDescriptor(String itemKey, String displayName, boolean instanceTracked) {
+    }
+
+    private record SeenInstance(String instanceId, String itemKey, List<String> locations) {
     }
 
     private record PendingAcquisition(String itemKey, String method, String details, long createdAt) {

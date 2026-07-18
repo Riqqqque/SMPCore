@@ -1,19 +1,23 @@
 package me.rique.smpcore.power;
 
-import io.papermc.paper.registry.RegistryAccess;
-import io.papermc.paper.registry.RegistryKey;
+import io.papermc.paper.event.entity.EntityLoadCrossbowEvent;
+import io.papermc.paper.event.entity.EntityEquipmentChangedEvent;
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.combat.AbilityDamageContext;
 import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.item.CustomEnchantListener;
+import me.rique.smpcore.player.SpawnProtectionListener;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.InventoryRecipeUtil;
+import me.rique.smpcore.util.ItemModelUtil;
+import me.rique.smpcore.util.MenuDupeGuardListener;
+import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
-import org.bukkit.Chunk;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -23,10 +27,14 @@ import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.block.BlockState;
+import org.bukkit.block.Container;
 import org.bukkit.block.data.Ageable;
+import org.bukkit.block.data.type.Light;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeModifier;
 import org.bukkit.enchantments.Enchantment;
+import org.bukkit.entity.AbstractArrow;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Item;
@@ -34,6 +42,7 @@ import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Mob;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
+import org.bukkit.entity.Snowball;
 import org.bukkit.entity.Tameable;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -55,7 +64,9 @@ import org.bukkit.event.enchantment.PrepareItemEnchantEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.entity.EntityShootBowEvent;
 import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
+import org.bukkit.event.entity.ProjectileHitEvent;
 import org.bukkit.event.entity.ProjectileLaunchEvent;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
@@ -80,7 +91,6 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerToggleFlightEvent;
 import org.bukkit.event.player.PlayerToggleSneakEvent;
-import org.bukkit.inventory.AnvilInventory;
 import org.bukkit.inventory.CraftingInventory;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.EquipmentSlotGroup;
@@ -103,7 +113,6 @@ import org.bukkit.util.RayTraceResult;
 import org.bukkit.util.Vector;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -124,17 +133,18 @@ public final class SuperpowerManager implements Listener {
     public static final String MOTHER_NATURE_STICK_ITEM_ID = "mother_nature_stick";
     public static final String THE_WORLD_CLOCK_ITEM_ID = "the_world_clock";
     public static final String DRUID_GRIMOIRE_ITEM_ID = "druid_grimoire";
+    private static final String POWER_COMMAND_BYPASS_PERMISSION = "smpcore.superpower.command.all";
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final Component POWERS_MENU_TITLE =
-        MM.deserialize("<gradient:#ff9a3d:#d61c4e><bold>Superpower Info</bold></gradient>");
+        MM.deserialize("<gradient:#ff9a3d:#d61c4e><bold>Class Info</bold></gradient>");
     private static final Component POWER_CHOICE_MENU_TITLE =
         MM.deserialize("<gradient:#ff4d6d:#7c3aed><bold>Choose Your Fate</bold></gradient>");
     private static final Component DRUID_MENU_TITLE =
         MM.deserialize("<gradient:#63c74d:#2f8f47><bold>Druid's Grimoire</bold></gradient>");
 
     private static final int MENU_SIZE = 54;
-    private static final int DRUID_MENU_SIZE = 27;
+    private static final int DRUID_MENU_SIZE = 54;
     private static final int[] POWER_CHOICE_SLOTS = {
         10, 11, 12, 13, 14, 15, 16,
         19, 20, 21, 22, 23, 24, 25,
@@ -158,6 +168,7 @@ public final class SuperpowerManager implements Listener {
     private static final double MONARCH_MIN_ARMOR = 10.0;
     private static final double MONARCH_MIN_ARMOR_TOUGHNESS = 4.0;
     private static final double MONARCH_KNOCKBACK_RESISTANCE = 0.35;
+    private static final double MONARCH_BOSS_DAMAGE_MULTIPLIER = 0.30;
     private static final int FLORIST_HEAL_DURATION_SECONDS = 10;
     private static final int FLORIST_VINE_DAMAGE = 2;
     private static final int FLORIST_VINE_RANGE = 18;
@@ -167,17 +178,40 @@ public final class SuperpowerManager implements Listener {
     private static final int DRUID_BUFF_RADIUS = 5;
     private static final int DRUID_BUFF_DURATION_SECONDS = 300;
     private static final int DRUID_BUFF_COOLDOWN_SECONDS = 90;
+    private static final int HONORED_DOMAIN_HALF_RANGE = 8;
+    private static final int HONORED_DOMAIN_DURATION_SECONDS = 15;
+    private static final int HONORED_DOMAIN_COOLDOWN_SECONDS = 10 * 60;
+    private static final int HONORED_DOMAIN_LEGACY_COOLDOWN_SECONDS = 2 * 60 * 60;
+    private static final int HONORED_DOMAIN_PLATFORM_RADIUS = 8;
+    private static final int HONORED_DOMAIN_WALL_HEIGHT = 7;
+    private static final int HONORED_DOMAIN_LIGHT_HEIGHT = 4;
+    private static final int HONORED_DOMAIN_LIGHT_OFFSET = 5;
+    private static final int HONORED_DOMAIN_NAUSEA_DURATION_TICKS = 220;
+    private static final int HONORED_DOMAIN_NAUSEA_AMPLIFIER = 24;
+    private static final long HONORED_DOMAIN_SWING_COOLDOWN_MS = 450L;
+    private static final double HONORED_DOMAIN_TEAMMATE_DAMAGE_MULTIPLIER = 1.25;
+    private static final double HONORED_PROJECTILE_AURA_RADIUS = 5.0;
+    private static final long HONORED_PROJECTILE_FREEZE_MS = 2500L;
     private static final int IMMORTALITY_REGEN_SECONDS = 10;
     private static final int IMMORTALITY_RESCUE_SECONDS = 4;
     private static final double IMMORTALITY_SURVIVAL_HEALTH = 1.0;
     private static final double BERSERK_LOW_HEALTH_THRESHOLD = 6.0;
     private static final int ENCHANTER_VIRTUAL_LAPIS_AMOUNT = 64;
-    private static final double ENCHANTER_ESSENCE_EXTRACTION_CHANCE = 0.10;
     private static final double ENCHANTER_ARCANE_PRESERVATION_CHANCE = 0.25;
     private static final double ENCHANTER_LUCK_BONUS = 2.0;
     private static final double TANK_CROUCH_KNOCKBACK_RESISTANCE = 1.0;
-    private static final double MINER_EXTRA_ORE_CHANCE = 0.15;
+    private static final int JUGGERNAUT_UNSTOPPABLE_DURATION_SECONDS = 20;
+    private static final int JUGGERNAUT_UNSTOPPABLE_COOLDOWN_SECONDS = 5 * 60;
+    private static final long JUGGERNAUT_IMPACT_INTERVAL_MS = 220L;
+    private static final double JUGGERNAUT_UNSTOPPABLE_BREAK_HARDNESS_LIMIT = 12.0;
+    private static final double JUGGERNAUT_UNSTOPPABLE_IMPACT_DAMAGE = 2.0;
+    private static final double JUGGERNAUT_GROUND_SLAM_RADIUS = 5.0;
+    private static final double JUGGERNAUT_GROUND_SLAM_MIN_FALL_DISTANCE = 4.0;
+    private static final double JUGGERNAUT_GROUND_SLAM_MAX_PLAYER_DAMAGE = 16.0;
+    private static final double JUGGERNAUT_FALL_DAMAGE_MULTIPLIER = 0.20;
+    private static final double MINER_EXTRA_ORE_CHANCE = 0.25;
     private static final double MINER_HEALTH_BONUS = 2.0;
+    private static final int MINER_NIGHT_VISION_Y_LEVEL = 32;
     private static final double GIANT_SCALE_MULTIPLIER = 1.2;
     private static final double GIANT_HEALTH_BONUS = 12.0;
     private static final double GIANT_KNOCKBACK_RESISTANCE = 0.40;
@@ -186,11 +220,14 @@ public final class SuperpowerManager implements Listener {
     private static final int SUPERMAN_FLIGHT_SECONDS = 30;
     private static final int SUPERMAN_FLIGHT_COOLDOWN_SECONDS = 5 * 60;
     private static final long SUPERMAN_BOOST_COOLDOWN_MS = 800L;
-    private static final int XRAY_DURATION_SECONDS = 30;
+    private static final int XRAY_DURATION_SECONDS = 150;
     private static final int XRAY_COOLDOWN_SECONDS = 6 * 60;
     private static final int XRAY_ENTITY_RADIUS = 24;
     private static final int XRAY_ORE_RADIUS = 12;
     private static final int XRAY_ORE_VERTICAL_RADIUS = 8;
+    private static final int XRAY_ORE_SCAN_BUDGET = 2048;
+    private static final int XRAY_VALUABLE_ALERT_RADIUS = 3;
+    private static final long XRAY_VALUABLE_ALERT_INTERVAL_MS = 8000L;
     private static final int TIME_STOP_RADIUS = 10;
     private static final int TIME_STOP_DURATION_SECONDS = 5;
     private static final int TIME_STOP_COOLDOWN_SECONDS = 5 * 60;
@@ -200,44 +237,65 @@ public final class SuperpowerManager implements Listener {
     private static final double PHOENIX_BURST_DAMAGE = 4.0;
     private static final double PHOENIX_SEARING_STRIKE_DAMAGE = 1.0;
     private static final double PHOENIX_LOW_HEALTH_RATIO = 0.35;
-    private static final int VOIDSTEP_COOLDOWN_SECONDS = 45;
-    private static final double VOIDSTEP_RANGE = 25.0;
+    private static final int VOIDSTEP_COOLDOWN_SECONDS = 35;
+    private static final double VOIDSTEP_RANGE = 30.0;
     private static final int VOIDSTEP_VEIL_SECONDS = 4;
     private static final int VOIDSTEP_SLOW_FALLING_SECONDS = 7;
     private static final int VOIDSTEP_INVISIBILITY_SECONDS = 12;
     private static final double VOIDSTEP_AMBUSH_DAMAGE = 3.0;
-    private static final double SENTINEL_AURA_RADIUS = 6.0;
-    private static final double SENTINEL_HEALTH_BONUS = 4.0;
-    private static final double SENTINEL_BRACE_DAMAGE_REDUCTION = 0.20;
+    private static final double SENTINEL_AURA_RADIUS = 7.0;
+    private static final double SENTINEL_HEALTH_BONUS = 6.0;
+    private static final double SENTINEL_BRACE_DAMAGE_REDUCTION = 0.35;
     private static final double WATERMAN_DAMAGE_MULTIPLIER = 1.25;
     private static final double WATERMAN_DAMAGE_REDUCTION = 0.25;
     private static final double WATERMAN_SUBMERGED_MINING_BONUS = 0.8;
-    private static final int FROSTBORN_CHILL_SECONDS = 4;
-    private static final double FROSTBORN_FROZEN_TARGET_DAMAGE_MULTIPLIER = 1.15;
-    private static final double DEADEYE_PROJECTILE_DAMAGE_MULTIPLIER = 1.20;
-    private static final double DEADEYE_MARKED_SHOT_DAMAGE_MULTIPLIER = 1.35;
-    private static final double DEADEYE_MARKED_SHOT_VELOCITY_MULTIPLIER = 1.18;
+    private static final int FROSTBORN_CHILL_SECONDS = 5;
+    private static final double FROSTBORN_FROZEN_TARGET_DAMAGE_MULTIPLIER = 1.25;
+    private static final double FROSTBORN_BOSS_DAMAGE_MULTIPLIER = 1.10;
+    private static final double DEADEYE_PROJECTILE_DAMAGE_MULTIPLIER = 1.25;
+    private static final double DEADEYE_MARKED_SHOT_DAMAGE_MULTIPLIER = 1.45;
+    private static final double DEADEYE_BOSS_PROJECTILE_DAMAGE_MULTIPLIER = 1.15;
+    private static final double DEADEYE_BOSS_MARKED_SHOT_DAMAGE_MULTIPLIER = 1.25;
+    private static final double DEADEYE_MARKED_SHOT_VELOCITY_MULTIPLIER = 1.25;
     private static final int DEADEYE_GLOW_SECONDS = 5;
     private static final int DEADEYE_MARKED_SHOT_SLOW_SECONDS = 3;
     private static final double RIFTWARDEN_BOSS_RADIUS = 18.0;
-    private static final double RIFTWARDEN_BOSS_DAMAGE_MULTIPLIER = 1.18;
-    private static final double RIFTWARDEN_MOB_DAMAGE_MULTIPLIER = 1.08;
-    private static final double RIFTWARDEN_BOSS_DAMAGE_REDUCTION = 0.25;
-    private static final double RIFTWARDEN_MOB_DAMAGE_REDUCTION = 0.15;
-    private static final double OATHBOUND_AURA_RADIUS = 8.0;
-    private static final double RUNESMITH_PRESERVATION_CHANCE = 0.15;
-    private static final double RUNESMITH_SPECIAL_PRESERVATION_CHANCE = 0.25;
-    private static final double RUNESMITH_BOSS_REPAIR_RATIO = 0.10;
-    private static final double GRAVEBORN_KILL_HEAL = 2.0;
-    private static final double GRAVEBORN_PLAYER_KILL_HEAL = 6.0;
-    private static final double GRAVEBORN_UNDEAD_DAMAGE_MULTIPLIER = 1.12;
-    private static final double GRAVEBORN_UNDEAD_DAMAGE_REDUCTION = 0.20;
-    private static final double STORMCALLER_PROC_CHANCE = 0.14;
-    private static final double STORMCALLER_STORM_PROC_CHANCE = 0.24;
-    private static final double STORMCALLER_DAMAGE_BONUS = 2.0;
-    private static final double BLOODMENDER_PLAYER_LEECH_RATIO = 0.12;
-    private static final double BLOODMENDER_MOB_LEECH_RATIO = 0.18;
-    private static final double BLOODMENDER_MAX_LEECH = 2.0;
+    private static final double RIFTWARDEN_BOSS_DAMAGE_MULTIPLIER = 1.15;
+    private static final double RIFTWARDEN_MOB_DAMAGE_MULTIPLIER = 1.12;
+    private static final double RIFTWARDEN_BOSS_DAMAGE_REDUCTION = 0.15;
+    private static final double RIFTWARDEN_MOB_DAMAGE_REDUCTION = 0.18;
+    private static final double OATHBOUND_AURA_RADIUS = 9.0;
+    private static final double OATHBOUND_SUMMON_BUFF_RADIUS = 8.0;
+    private static final int OATHBOUND_SUMMON_BUFF_SECONDS = 30;
+    private static final double RUNESMITH_PRESERVATION_CHANCE = 0.20;
+    private static final double RUNESMITH_SPECIAL_PRESERVATION_CHANCE = 0.35;
+    private static final double RUNESMITH_BOSS_REPAIR_RATIO = 0.15;
+    private static final int ARCANIST_BOOK_UPGRADE_COOLDOWN_SECONDS = 5 * 60 * 60;
+    private static final double GRAVEBORN_KILL_HEAL = 3.0;
+    private static final double GRAVEBORN_PLAYER_KILL_HEAL = 8.0;
+    private static final double GRAVEBORN_UNDEAD_DAMAGE_MULTIPLIER = 1.18;
+    private static final double GRAVEBORN_UNDEAD_DAMAGE_REDUCTION = 0.25;
+    private static final double GRAVEBORN_REVIVE_RADIUS = 8.0;
+    private static final double GRAVEBORN_PLAYER_DEATH_BUFF_RADIUS = 12.0;
+    private static final double STORMCALLER_PROC_CHANCE = 0.18;
+    private static final double STORMCALLER_STORM_PROC_CHANCE = 0.32;
+    private static final double STORMCALLER_DAMAGE_BONUS = 3.0;
+    private static final int STORMCALLER_HEAVY_WEAPON_BUFF_SECONDS = 8;
+    private static final double BLOODMENDER_PLAYER_LEECH_RATIO = 0.16;
+    private static final double BLOODMENDER_MOB_LEECH_RATIO = 0.22;
+    private static final double BLOODMENDER_MAX_LEECH = 3.0;
+    private static final double BLOODMENDER_SACRIFICE_RADIUS = 12.0;
+    private static final int BLOODMENDER_SACRIFICE_WEAKNESS_SECONDS = 5 * 60;
+    private static final double BLOODMENDER_CURSE_RADIUS = 6.0;
+    private static final int VEIL_ASSASSIN_CROUCH_SECONDS = 5;
+    private static final double VEIL_ASSASSIN_MAX_HEALTH = 16.0;
+    private static final double VEIL_ASSASSIN_SMOKE_RADIUS = 5.0;
+    private static final int VEIL_ASSASSIN_SMOKE_DARKNESS_SECONDS = 15;
+    private static final int VEIL_ASSASSIN_SMOKE_BUFF_SECONDS = 5;
+    private static final int VEIL_ASSASSIN_SMOKE_COOLDOWN_SECONDS = 60;
+    private static final double VEIL_ASSASSIN_BACKSTAB_RATIO = 0.90;
+    private static final double VEIL_ASSASSIN_BOSS_BACKSTAB_MULTIPLIER = 1.20;
+    private static final double VEIL_ASSASSIN_SNEAKING_SPEED_BONUS = 0.70;
     private static final int PASSIVE_NIGHT_VISION_TICKS = 600;
     private static final long PORTAL_RECENT_TRAVEL_MS = 2500L;
     private static final long FLORIST_CROUCH_GROWTH_COOLDOWN_MS = 150L;
@@ -330,6 +388,8 @@ public final class SuperpowerManager implements Listener {
     private final NamespacedKey keyGiantAttackDamageModifier;
     private final NamespacedKey keySupermanHealthModifier;
     private final NamespacedKey keySentinelHealthModifier;
+    private final NamespacedKey keyVeilAssassinHealthModifier;
+    private final NamespacedKey keyVeilAssassinSneakingSpeedModifier;
     private final NamespacedKey keyWatermanSubmergedMiningModifier;
     private final NamespacedKey keySupermanFlightActiveUntil;
     private final NamespacedKey keySupermanFlightCooldownUntil;
@@ -340,10 +400,18 @@ public final class SuperpowerManager implements Listener {
     private final NamespacedKey keyVoidstepCooldownUntil;
     private final NamespacedKey keyVoidstepVeilUntil;
     private final NamespacedKey keyVoidwalkerNightVisionEnabled;
+    private final NamespacedKey keyNightshadeNightVisionEnabled;
+    private final NamespacedKey keyJuggernautUnstoppableActiveUntil;
+    private final NamespacedKey keyJuggernautUnstoppableCooldownUntil;
+    private final NamespacedKey keyArcanistBookUpgradeCooldownUntil;
+    private final NamespacedKey keyDeadeyeArrowInfinityEnabled;
     private final NamespacedKey keyDeadeyeMarkedShot;
     private final NamespacedKey keyShadowCooldownUntil;
     private final NamespacedKey keyShadowActiveUntil;
     private final NamespacedKey keyDruidBuffCooldownUntil;
+    private final NamespacedKey keyHonoredDomainCooldownUntil;
+    private final NamespacedKey keyHonoredInfinityEnabled;
+    private final NamespacedKey keyVeilAssassinSmokeBombCooldownUntil;
     private final NamespacedKey keyStormcallerLightningEnabled;
     private final NamespacedKey keyMonarchSummonOwner;
     private final NamespacedKey keyMonarchSummonTag;
@@ -351,8 +419,6 @@ public final class SuperpowerManager implements Listener {
     private final NamespacedKey keyMonarchBaseDamage;
     private final NamespacedKey keyMonarchBaseSpeed;
     private final Map<UUID, Integer> pendingFloristStickReturns = new ConcurrentHashMap<>();
-    private final Map<UUID, Integer> pendingTheWorldClockReturns = new ConcurrentHashMap<>();
-    private final Map<UUID, Integer> pendingDruidGrimoireReturns = new ConcurrentHashMap<>();
     private final Map<UUID, PortalPair> activeTravelerPortals = new ConcurrentHashMap<>();
     private final Map<UUID, Long> recentPortalTravel = new ConcurrentHashMap<>();
     private final Map<UUID, Set<UUID>> monarchSummonsByOwner = new ConcurrentHashMap<>();
@@ -362,14 +428,32 @@ public final class SuperpowerManager implements Listener {
     private final Map<UUID, Long> floristLeftClickCooldowns = new ConcurrentHashMap<>();
     private final Map<UUID, Long> floristRightClickCooldowns = new ConcurrentHashMap<>();
     private final Map<UUID, Long> supermanBoostCooldowns = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> juggernautImpactCooldowns = new ConcurrentHashMap<>();
+    private final Map<UUID, Float> juggernautPeakFallDistances = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> juggernautGroundSlamCooldowns = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> oracleValuableAlertCooldowns = new ConcurrentHashMap<>();
+    private final Map<UUID, Integer> oracleXrayScanCursors = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> veilAssassinCrouchStartedAt = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> veilAssassinSmokeInvisibilityUntil = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> veilAssassinArmorWarnCooldowns = new ConcurrentHashMap<>();
     private final Map<UUID, Long> bedrockPowerItemActivationDebounces = new ConcurrentHashMap<>();
     private final Map<UUID, TimeStopState> activeTimeStops = new ConcurrentHashMap<>();
     private final Map<UUID, FrozenMobState> frozenMobs = new ConcurrentHashMap<>();
     private final Map<UUID, FrozenProjectileState> frozenProjectiles = new ConcurrentHashMap<>();
+    private final Map<UUID, HonoredDomainState> activeHonoredDomains = new ConcurrentHashMap<>();
+    private final Map<UUID, Location> pendingHonoredDomainReturns = new ConcurrentHashMap<>();
+    private final Map<UUID, Location> honoredDomainDeathChestOrigins = new ConcurrentHashMap<>();
+    private final Map<UUID, HonoredFrozenProjectileState> honoredFrozenProjectiles = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> honoredDomainSwingCooldowns = new ConcurrentHashMap<>();
     private final Set<UUID> timeStoppedPlayers = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> honoredDomainParalyzedPlayers = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> honoredDomainDamageGuards = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> veilAssassinsInVeil = ConcurrentHashMap.newKeySet();
     private BukkitTask passiveTask;
     private BukkitTask portalTask;
     private BukkitTask timeStopTask;
+    private BukkitTask honoredTask;
+    private long honoredAuraPulse;
 
     public SuperpowerManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -396,6 +480,8 @@ public final class SuperpowerManager implements Listener {
         this.keyGiantAttackDamageModifier = new NamespacedKey(plugin, "superpower_giant_attack_damage");
         this.keySupermanHealthModifier = new NamespacedKey(plugin, "superpower_superman_health");
         this.keySentinelHealthModifier = new NamespacedKey(plugin, "superpower_sentinel_health");
+        this.keyVeilAssassinHealthModifier = new NamespacedKey(plugin, "superpower_veil_assassin_health");
+        this.keyVeilAssassinSneakingSpeedModifier = new NamespacedKey(plugin, "superpower_veil_assassin_sneaking_speed");
         this.keyWatermanSubmergedMiningModifier = new NamespacedKey(plugin, "superpower_waterman_submerged_mining");
         this.keySupermanFlightActiveUntil = new NamespacedKey(plugin, "superpower_superman_flight_until");
         this.keySupermanFlightCooldownUntil = new NamespacedKey(plugin, "superpower_superman_flight_cooldown_until");
@@ -406,10 +492,18 @@ public final class SuperpowerManager implements Listener {
         this.keyVoidstepCooldownUntil = new NamespacedKey(plugin, "superpower_voidstep_cooldown_until");
         this.keyVoidstepVeilUntil = new NamespacedKey(plugin, "superpower_voidstep_veil_until");
         this.keyVoidwalkerNightVisionEnabled = new NamespacedKey(plugin, "superpower_voidwalker_night_vision_enabled");
+        this.keyNightshadeNightVisionEnabled = new NamespacedKey(plugin, "superpower_nightshade_night_vision_enabled");
+        this.keyJuggernautUnstoppableActiveUntil = new NamespacedKey(plugin, "superpower_juggernaut_unstoppable_until");
+        this.keyJuggernautUnstoppableCooldownUntil = new NamespacedKey(plugin, "superpower_juggernaut_unstoppable_cooldown_until");
+        this.keyArcanistBookUpgradeCooldownUntil = new NamespacedKey(plugin, "superpower_arcanist_book_upgrade_cooldown_until");
+        this.keyDeadeyeArrowInfinityEnabled = new NamespacedKey(plugin, "superpower_deadeye_arrow_infinity_enabled");
         this.keyDeadeyeMarkedShot = new NamespacedKey(plugin, "superpower_deadeye_marked_shot");
         this.keyShadowCooldownUntil = new NamespacedKey(plugin, "superpower_shadow_cooldown_until");
         this.keyShadowActiveUntil = new NamespacedKey(plugin, "superpower_shadow_active_until");
         this.keyDruidBuffCooldownUntil = new NamespacedKey(plugin, "superpower_druid_buff_cooldown_until");
+        this.keyHonoredDomainCooldownUntil = new NamespacedKey(plugin, "superpower_honored_domain_cooldown_until");
+        this.keyHonoredInfinityEnabled = new NamespacedKey(plugin, "superpower_honored_infinity_enabled");
+        this.keyVeilAssassinSmokeBombCooldownUntil = new NamespacedKey(plugin, "superpower_veil_assassin_smoke_cooldown_until");
         this.keyStormcallerLightningEnabled = new NamespacedKey(plugin, "superpower_stormcaller_lightning_enabled");
         this.keyMonarchSummonOwner = new NamespacedKey(plugin, "superpower_monarch_owner");
         this.keyMonarchSummonTag = new NamespacedKey(plugin, "superpower_monarch_summon");
@@ -422,14 +516,18 @@ public final class SuperpowerManager implements Listener {
         passiveTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickPlayers, 20L, 20L);
         portalTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickPortals, 5L, 5L);
         timeStopTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickTimeStops, 1L, 1L);
+        honoredTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickHonoredPowers, 1L, 1L);
         Bukkit.getScheduler().runTask(plugin, () -> Bukkit.getOnlinePlayers().forEach(this::initializePlayerState));
     }
 
     public void shutdown() {
+        endAllHonoredDomains(false);
+        restoreHonoredFrozenProjectiles(false);
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (isShadowActive(player)) {
                 restoreShadowAppearance(player);
             }
+            clearVeilAssassinState(player, true);
             syncTankImmovableState(player, false);
             clearPowerAttributeModifiers(player);
             syncSupermanFlightState(player, false);
@@ -447,6 +545,10 @@ public final class SuperpowerManager implements Listener {
             timeStopTask.cancel();
             timeStopTask = null;
         }
+        if (honoredTask != null) {
+            honoredTask.cancel();
+            honoredTask = null;
+        }
         for (UUID ownerId : new HashSet<>(activeTravelerPortals.keySet())) {
             closeTravelerPortal(ownerId, false);
         }
@@ -454,14 +556,26 @@ public final class SuperpowerManager implements Listener {
         monarchOwnerByMob.clear();
         pendingMonarchUnsummonOwners.clear();
         clearAllTimeStops();
+        pendingHonoredDomainReturns.clear();
+        honoredDomainDeathChestOrigins.clear();
+        honoredDomainParalyzedPlayers.clear();
+        honoredDomainDamageGuards.clear();
+        honoredDomainSwingCooldowns.clear();
         pendingFloristStickReturns.clear();
-        pendingTheWorldClockReturns.clear();
-        pendingDruidGrimoireReturns.clear();
         recentPortalTravel.clear();
         floristCrouchGrowthCooldowns.clear();
         floristLeftClickCooldowns.clear();
         floristRightClickCooldowns.clear();
         supermanBoostCooldowns.clear();
+        juggernautImpactCooldowns.clear();
+        juggernautPeakFallDistances.clear();
+        juggernautGroundSlamCooldowns.clear();
+        oracleValuableAlertCooldowns.clear();
+        oracleXrayScanCursors.clear();
+        veilAssassinCrouchStartedAt.clear();
+        veilAssassinSmokeInvisibilityUntil.clear();
+        veilAssassinArmorWarnCooldowns.clear();
+        veilAssassinsInVeil.clear();
         bedrockPowerItemActivationDebounces.clear();
     }
 
@@ -589,7 +703,7 @@ public final class SuperpowerManager implements Listener {
         Inventory inventory = Bukkit.createInventory(
             new PowerInfoHolder(),
             MENU_SIZE,
-            BedrockCompat.menuTitle(player, POWERS_MENU_TITLE, "Superpower Info")
+            BedrockCompat.menuTitle(player, POWERS_MENU_TITLE, "Class Info")
         );
         fillInfoMenu(player, inventory);
         player.openInventory(inventory);
@@ -603,8 +717,30 @@ public final class SuperpowerManager implements Listener {
         return type != null && type == powerOf(player);
     }
 
+    private boolean hasCommandPower(Player player, SuperpowerType type) {
+        return player != null
+            && (hasPower(player, type) || player.hasPermission(POWER_COMMAND_BYPASS_PERMISSION));
+    }
+
+    public boolean hasOathSummonTarget(Player requester) {
+        if (requester == null || !requester.isOnline()) {
+            return false;
+        }
+        UUID requesterId = requester.getUniqueId();
+        for (Player target : Bukkit.getOnlinePlayers()) {
+            if (target.isDead() || target.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            if (hasPower(target, SuperpowerType.OATHBOUND)
+                && sameTeamOrSelf(requesterId, target.getUniqueId())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public boolean shouldRetainFlightAccess(Player player) {
-        if (player == null || !hasPower(player, SuperpowerType.SUPERMAN)) {
+        if (player == null || !hasPower(player, SuperpowerType.SKYBOUND)) {
             return false;
         }
         if (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR) {
@@ -627,7 +763,7 @@ public final class SuperpowerManager implements Listener {
     }
 
     public boolean handleShadowCommand(Player player) {
-        if (!hasPower(player, SuperpowerType.SHADOW)) {
+        if (!hasCommandPower(player, SuperpowerType.NIGHTSHADE)) {
             player.sendMessage(MessageUtil.warn("Nothing happens."));
             return false;
         }
@@ -654,8 +790,85 @@ public final class SuperpowerManager implements Listener {
         return true;
     }
 
+    public boolean handleNightshadeVisionCommand(Player player, Boolean requestedEnabled) {
+        if (!hasCommandPower(player, SuperpowerType.NIGHTSHADE)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+
+        boolean enabled = requestedEnabled == null ? !isNightshadeNightVisionEnabled(player) : requestedEnabled;
+        setNightshadeNightVisionEnabled(player, enabled);
+        if (enabled) {
+            applyPassiveNightVision(player);
+            player.sendMessage(MessageUtil.success("Night vision <white>enabled</white>."));
+        } else {
+            removePassiveNightVision(player);
+            player.sendMessage(MessageUtil.info("Night vision <white>disabled</white>."));
+        }
+        return true;
+    }
+
+    public boolean handleNightshadeVisionStatusCommand(Player player) {
+        if (!hasCommandPower(player, SuperpowerType.NIGHTSHADE)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+
+        player.sendMessage(MessageUtil.info(
+            "Nightshade night vision is <white>" + (isNightshadeNightVisionEnabled(player) ? "enabled" : "disabled") + "</white>."
+        ));
+        return true;
+    }
+
+    public boolean handleSmokeBombCommand(Player player) {
+        if (!hasCommandPower(player, SuperpowerType.VEIL_ASSASSIN)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+        if (player.isDead() || player.getGameMode() == GameMode.SPECTATOR) {
+            player.sendMessage(MessageUtil.warn("You cannot vanish right now."));
+            return false;
+        }
+        if (denyUnsafeSpawnAbilityArea(player, player.getLocation(), VEIL_ASSASSIN_SMOKE_RADIUS)) {
+            return false;
+        }
+
+        long now = System.currentTimeMillis();
+        long cooldownUntil = veilAssassinSmokeBombCooldownUntil(player);
+        if (cooldownUntil > now) {
+            player.sendMessage(MessageUtil.warn(
+                "Smoke Bomb cooldown: <white>" + formatShortDuration(cooldownUntil - now) + "</white>."
+            ));
+            return false;
+        }
+
+        setVeilAssassinSmokeBombCooldownUntil(player, now + (VEIL_ASSASSIN_SMOKE_COOLDOWN_SECONDS * 1000L));
+        veilAssassinSmokeInvisibilityUntil.put(player.getUniqueId(), now + (VEIL_ASSASSIN_SMOKE_BUFF_SECONDS * 1000L));
+        applyPotion(player, PotionEffectType.SPEED, VEIL_ASSASSIN_SMOKE_BUFF_SECONDS * 20, 2);
+        applyPotion(player, PotionEffectType.DOLPHINS_GRACE, VEIL_ASSASSIN_SMOKE_BUFF_SECONDS * 20, 0);
+        applyPotion(player, PotionEffectType.INVISIBILITY, VEIL_ASSASSIN_SMOKE_BUFF_SECONDS * 20, 0);
+        hideShadowEquipment(player);
+        refreshVeilAssassinConcealment(player);
+
+        int blinded = 0;
+        for (Entity entity : player.getNearbyEntities(VEIL_ASSASSIN_SMOKE_RADIUS, VEIL_ASSASSIN_SMOKE_RADIUS, VEIL_ASSASSIN_SMOKE_RADIUS)) {
+            if (!(entity instanceof Player target) || target.equals(player) || target.isDead() || target.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            applyPotion(target, PotionEffectType.DARKNESS, VEIL_ASSASSIN_SMOKE_DARKNESS_SECONDS * 20, 0);
+            blinded++;
+        }
+
+        renderSmokeBomb(player.getLocation());
+        player.sendMessage(MessageUtil.success("Smoke Bomb dropped."));
+        if (blinded > 0) {
+            player.sendMessage(MessageUtil.info("Blinded <white>" + blinded + "</white> nearby player(s)."));
+        }
+        return true;
+    }
+
     public boolean handleXrayCommand(Player player) {
-        if (!hasPower(player, SuperpowerType.XRAY_VISION)) {
+        if (!hasCommandPower(player, SuperpowerType.ORACLE_EYE)) {
             player.sendMessage(MessageUtil.warn("Nothing happens."));
             return false;
         }
@@ -677,6 +890,7 @@ public final class SuperpowerManager implements Listener {
         }
 
         setXrayActiveUntil(player, now + (XRAY_DURATION_SECONDS * 1000L));
+        oracleXrayScanCursors.put(player.getUniqueId(), 0);
         setXrayCooldownUntil(player, now + (XRAY_COOLDOWN_SECONDS * 1000L));
         player.sendMessage(MessageUtil.success("Oracle Eye tears through the walls around you."));
         player.getWorld().playSound(player.getLocation(), Sound.BLOCK_BEACON_ACTIVATE, 0.7f, 1.8f);
@@ -684,13 +898,291 @@ public final class SuperpowerManager implements Listener {
         return true;
     }
 
+    public boolean handleUnstoppableForceCommand(Player player) {
+        if (!hasCommandPower(player, SuperpowerType.JUGGERNAUT)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+        if (player.isDead() || player.getGameMode() == GameMode.SPECTATOR) {
+            player.sendMessage(MessageUtil.warn("You cannot charge right now."));
+            return false;
+        }
+        if (denyUnsafeSpawnAbilityArea(player, player.getLocation(), 3.0, 3.0, 3.0)) {
+            return false;
+        }
+
+        long now = System.currentTimeMillis();
+        long activeUntil = juggernautUnstoppableActiveUntil(player);
+        if (activeUntil > now) {
+            player.sendMessage(MessageUtil.warn(
+                "Unstoppable Force is already active for <white>" + secondsLeft(activeUntil, now) + "s</white>."
+            ));
+            return false;
+        }
+
+        long cooldownUntil = juggernautUnstoppableCooldownUntil(player);
+        if (cooldownUntil > now) {
+            player.sendMessage(MessageUtil.warn(
+                "Unstoppable Force cooldown: <white>" + formatShortDuration(cooldownUntil - now) + "</white>."
+            ));
+            return false;
+        }
+
+        setJuggernautUnstoppableActiveUntil(player, now + (JUGGERNAUT_UNSTOPPABLE_DURATION_SECONDS * 1000L));
+        setJuggernautUnstoppableCooldownUntil(player, now + (JUGGERNAUT_UNSTOPPABLE_COOLDOWN_SECONDS * 1000L));
+        applyPotion(player, PotionEffectType.RESISTANCE, JUGGERNAUT_UNSTOPPABLE_DURATION_SECONDS * 20, 1);
+        applyPotion(player, PotionEffectType.SPEED, JUGGERNAUT_UNSTOPPABLE_DURATION_SECONDS * 20, 0);
+        player.sendMessage(MessageUtil.success("Unstoppable Force active for <white>20s</white>. Sprint into walls."));
+        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_RAVAGER_ROAR, 0.9f, 0.75f);
+        player.getWorld().spawnParticle(Particle.CLOUD, player.getLocation().clone().add(0.0, 1.0, 0.0), 40, 0.7, 0.45, 0.7, 0.08);
+        return true;
+    }
+
+    public boolean handleDeadeyeArrowInfinityCommand(Player player, Boolean requestedEnabled) {
+        if (!hasCommandPower(player, SuperpowerType.DEADEYE)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+
+        boolean enabled = requestedEnabled == null ? !isDeadeyeArrowInfinityEnabled(player) : requestedEnabled;
+        setDeadeyeArrowInfinityEnabled(player, enabled);
+        player.sendMessage((enabled ? MessageUtil.success("Deadeye arrows <white>preserved</white>.") : MessageUtil.info("Deadeye arrows <white>consume normally</white>.")));
+        return true;
+    }
+
+    public boolean handleDeadeyeArrowInfinityStatusCommand(Player player) {
+        if (!hasCommandPower(player, SuperpowerType.DEADEYE)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+
+        player.sendMessage(MessageUtil.info(
+            "Deadeye arrow preservation is <white>" + (isDeadeyeArrowInfinityEnabled(player) ? "enabled" : "disabled") + "</white>."
+        ));
+        return true;
+    }
+
+    public boolean handleArcanistBookUpgradeCommand(Player player) {
+        if (!hasCommandPower(player, SuperpowerType.ARCANIST)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+
+        long now = System.currentTimeMillis();
+        long cooldownUntil = arcanistBookUpgradeCooldownUntil(player);
+        if (cooldownUntil > now) {
+            player.sendMessage(MessageUtil.warn(
+                "Arcane upgrade cooldown: <white>" + formatShortDuration(cooldownUntil - now) + "</white>."
+            ));
+            return false;
+        }
+
+        ItemStack book = player.getInventory().getItemInMainHand();
+        if (book == null || book.getType() != Material.ENCHANTED_BOOK || !(book.getItemMeta() instanceof EnchantmentStorageMeta meta)) {
+            player.sendMessage(MessageUtil.warn("Hold one enchanted book first."));
+            return false;
+        }
+        if (book.getAmount() != 1) {
+            player.sendMessage(MessageUtil.warn("Hold only one enchanted book at a time."));
+            return false;
+        }
+        if (!meta.hasStoredEnchants()) {
+            player.sendMessage(MessageUtil.warn("That book has no stored enchants."));
+            return false;
+        }
+
+        Map<Enchantment, Integer> upgrades = new HashMap<>();
+        for (Map.Entry<Enchantment, Integer> entry : meta.getStoredEnchants().entrySet()) {
+            Enchantment enchantment = entry.getKey();
+            if (enchantment == null) {
+                continue;
+            }
+            int currentLevel = Math.max(0, entry.getValue());
+            int maxLevel = Math.max(1, enchantment.getMaxLevel());
+            if (currentLevel > 0 && currentLevel < maxLevel) {
+                upgrades.put(enchantment, maxLevel);
+            }
+        }
+        if (upgrades.isEmpty()) {
+            player.sendMessage(MessageUtil.info("That book is already maxed."));
+            return false;
+        }
+
+        for (Map.Entry<Enchantment, Integer> upgrade : upgrades.entrySet()) {
+            meta.removeStoredEnchant(upgrade.getKey());
+            meta.addStoredEnchant(upgrade.getKey(), upgrade.getValue(), true);
+        }
+        book.setItemMeta(meta);
+        setArcanistBookUpgradeCooldownUntil(player, now + (ARCANIST_BOOK_UPGRADE_COOLDOWN_SECONDS * 1000L));
+        player.getWorld().playSound(player.getLocation(), Sound.BLOCK_ENCHANTMENT_TABLE_USE, 0.9f, 1.35f);
+        player.getWorld().spawnParticle(Particle.ENCHANT, player.getLocation().clone().add(0.0, 1.1, 0.0), 36, 0.45, 0.6, 0.45, 0.04);
+        player.sendMessage(MessageUtil.success("The book's enchantment level was maxed."));
+        return true;
+    }
+
+    public boolean handleOathSummonCommand(Player requester, String targetName) {
+        if (targetName == null || targetName.isBlank()) {
+            requester.sendMessage(MessageUtil.warn("Use <white>/oathsummon <player></white>."));
+            return false;
+        }
+        Player target = Bukkit.getPlayerExact(targetName);
+        if (target == null) {
+            requester.sendMessage(MessageUtil.warn("That player is not online."));
+            return false;
+        }
+        if (!hasPower(target, SuperpowerType.OATHBOUND)) {
+            requester.sendMessage(MessageUtil.warn("That player is not Oathbound."));
+            return false;
+        }
+        if (!sameTeamOrSelf(requester.getUniqueId(), target.getUniqueId())) {
+            requester.sendMessage(MessageUtil.warn("They are not on your team."));
+            return false;
+        }
+        if (target.isDead() || target.getGameMode() == GameMode.SPECTATOR) {
+            requester.sendMessage(MessageUtil.warn("They cannot be summoned right now."));
+            return false;
+        }
+        if (isPowerFrozenPlayer(target.getUniqueId())) {
+            requester.sendMessage(MessageUtil.warn("They are locked by another class right now."));
+            return false;
+        }
+        if (isActiveBossFight(requester) || isActiveBossFight(target)) {
+            requester.sendMessage(MessageUtil.warn("Oath Summon cannot move players into or out of an active boss fight."));
+            return false;
+        }
+        if (denyUnsafeSpawnAbility(requester, requester.getLocation())
+            || denyUnsafeSpawnAbility(requester, target.getLocation())) {
+            return false;
+        }
+
+        Location destination = requester.getLocation().clone();
+        if (target.isInsideVehicle()) {
+            target.leaveVehicle();
+        }
+        target.teleportAsync(destination).thenAccept(ok -> Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!requester.isOnline() || !target.isOnline()) {
+                return;
+            }
+            if (!ok) {
+                requester.sendMessage(MessageUtil.error("Oath summon failed."));
+                return;
+            }
+            target.setFallDistance(0.0f);
+            applyOathSummonBuffs(target);
+            requester.sendMessage(MessageUtil.success("Summoned <white>" + target.getName() + "</white>."));
+            if (!requester.equals(target)) {
+                target.sendMessage(MessageUtil.info("<white>" + requester.getName() + "</white> called your oath."));
+            }
+            target.getWorld().playSound(target.getLocation(), Sound.BLOCK_BELL_USE, 1.0f, 0.75f);
+            target.getWorld().spawnParticle(Particle.TOTEM_OF_UNDYING, target.getLocation().clone().add(0.0, 1.0, 0.0), 34, 0.65, 0.55, 0.65, 0.02);
+        }));
+        return true;
+    }
+
+    public boolean handleBloodSacrificeCommand(Player player) {
+        if (!hasCommandPower(player, SuperpowerType.BLOODMENDER)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+        if (player.isDead() || player.getGameMode() == GameMode.SPECTATOR) {
+            player.sendMessage(MessageUtil.warn("You cannot sacrifice right now."));
+            return false;
+        }
+        if (player.getHealth() <= 2.0) {
+            player.sendMessage(MessageUtil.warn("You are too weak to sacrifice more blood."));
+            return false;
+        }
+        if (denyUnsafeSpawnAbilityArea(player, player.getLocation(), BLOODMENDER_SACRIFICE_RADIUS, 4.0, BLOODMENDER_SACRIFICE_RADIUS)) {
+            return false;
+        }
+
+        List<Player> targets = nearbyBloodmenderTeammates(player);
+        if (targets.isEmpty()) {
+            player.sendMessage(MessageUtil.warn("No nearby teammates need your blood."));
+            return false;
+        }
+
+        BossManager bossManager = plugin.getBossManager();
+        if (bossManager != null) {
+            targets = targets.stream()
+                .filter(target -> !bossManager.blockHealingIfSuppressed(target, Math.max(0.0, maxHealth(target) - target.getHealth())))
+                .toList();
+        }
+        if (targets.isEmpty()) {
+            player.sendMessage(MessageUtil.warn("Healing is sealed. No blood was consumed."));
+            return false;
+        }
+
+        double newHealth = Math.max(1.0, player.getHealth() * 0.5);
+        player.setHealth(newHealth);
+        applyPotion(player, PotionEffectType.WEAKNESS, BLOODMENDER_SACRIFICE_WEAKNESS_SECONDS * 20, 1);
+
+        for (Player target : targets) {
+            healPlayer(target, maxHealth(target));
+            target.setFireTicks(0);
+            target.getWorld().spawnParticle(Particle.HEART, target.getLocation().clone().add(0.0, 1.0, 0.0), 12, 0.45, 0.45, 0.45, 0.02);
+            target.playSound(target.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 0.45f, 1.45f);
+            target.sendMessage(MessageUtil.success("<white>" + player.getName() + "</white> fully healed you."));
+        }
+        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_WITHER_HURT, 0.7f, 1.3f);
+        player.getWorld().spawnParticle(Particle.DAMAGE_INDICATOR, player.getLocation().clone().add(0.0, 1.0, 0.0), 24, 0.5, 0.55, 0.5, 0.05);
+        player.sendMessage(MessageUtil.success("You healed <white>" + targets.size() + "</white> teammate(s). Weakness II for <white>5m</white>."));
+        return true;
+    }
+
+    public boolean handleBloodCurseCommand(Player player) {
+        if (!hasCommandPower(player, SuperpowerType.BLOODMENDER)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+        if (denyUnsafeSpawnAbilityArea(player, player.getLocation(), BLOODMENDER_CURSE_RADIUS, 4.0, BLOODMENDER_CURSE_RADIUS)) {
+            return false;
+        }
+
+        List<ArmorCurseTarget> validTargets = nearbyCurseArmorTargets(player);
+        if (validTargets.isEmpty()) {
+            player.sendMessage(MessageUtil.warn("No enemy armor can be cursed within <white>6 blocks</white>."));
+            return false;
+        }
+
+        ArmorCurseTarget chosen = validTargets.get(ThreadLocalRandom.current().nextInt(validTargets.size()));
+        ItemStack armor = chosen.item();
+        ItemMeta meta = armor.getItemMeta();
+        if (meta == null) {
+            player.sendMessage(MessageUtil.error("That armor could not be cursed."));
+            return false;
+        }
+        meta.addEnchant(Enchantment.VANISHING_CURSE, 1, true);
+        armor.setItemMeta(meta);
+        switch (chosen.slot()) {
+            case HEAD -> chosen.target().getInventory().setHelmet(armor);
+            case CHEST -> chosen.target().getInventory().setChestplate(armor);
+            case LEGS -> chosen.target().getInventory().setLeggings(armor);
+            case FEET -> chosen.target().getInventory().setBoots(armor);
+            default -> {
+                player.sendMessage(MessageUtil.error("That armor could not be cursed."));
+                return false;
+            }
+        }
+
+        player.sendMessage(MessageUtil.success("Cursed <white>" + chosen.target().getName() + "</white>'s armor."));
+        chosen.target().sendMessage(MessageUtil.warn("A Bloodmender cursed one piece of your armor."));
+        chosen.target().getWorld().playSound(chosen.target().getLocation(), Sound.ENTITY_WITHER_AMBIENT, 0.75f, 1.45f);
+        chosen.target().getWorld().spawnParticle(Particle.DAMAGE_INDICATOR, chosen.target().getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.45, 0.5, 0.45, 0.04);
+        return true;
+    }
+
     public boolean handleVoidstepCommand(Player player) {
-        if (!hasPower(player, SuperpowerType.VOIDWALKER)) {
+        if (!hasCommandPower(player, SuperpowerType.VOIDWALKER)) {
             player.sendMessage(MessageUtil.warn("Nothing happens."));
             return false;
         }
         if (player.isDead() || player.getGameMode() == GameMode.SPECTATOR) {
             player.sendMessage(MessageUtil.warn("You cannot step through the void right now."));
+            return false;
+        }
+        if (isActiveBossFight(player)) {
+            player.sendMessage(MessageUtil.warn("Voidstep is sealed during active boss fights."));
             return false;
         }
 
@@ -704,6 +1196,9 @@ public final class SuperpowerManager implements Listener {
         Location destination = findVoidstepDestination(player);
         if (destination == null) {
             player.sendMessage(MessageUtil.warn("The void cannot find a safe path there."));
+            return false;
+        }
+        if (denyUnsafeSpawnAbility(player, player.getLocation()) || denyUnsafeSpawnAbility(player, destination)) {
             return false;
         }
 
@@ -733,7 +1228,7 @@ public final class SuperpowerManager implements Listener {
     }
 
     public boolean handleVoidwalkerNightVisionCommand(Player player) {
-        if (!hasPower(player, SuperpowerType.VOIDWALKER)) {
+        if (!hasCommandPower(player, SuperpowerType.VOIDWALKER)) {
             player.sendMessage(MessageUtil.warn("Nothing happens."));
             return false;
         }
@@ -751,7 +1246,7 @@ public final class SuperpowerManager implements Listener {
     }
 
     public boolean handleStormcallerLightningCommand(Player player, Boolean requestedEnabled) {
-        if (!hasPower(player, SuperpowerType.STORMCALLER)) {
+        if (!hasCommandPower(player, SuperpowerType.STORMCALLER)) {
             player.sendMessage(MessageUtil.warn("Nothing happens."));
             return false;
         }
@@ -778,7 +1273,7 @@ public final class SuperpowerManager implements Listener {
     }
 
     public boolean handleStormcallerLightningStatusCommand(Player player) {
-        if (!hasPower(player, SuperpowerType.STORMCALLER)) {
+        if (!hasCommandPower(player, SuperpowerType.STORMCALLER)) {
             player.sendMessage(MessageUtil.warn("Nothing happens."));
             return false;
         }
@@ -789,9 +1284,162 @@ public final class SuperpowerManager implements Listener {
         return true;
     }
 
-    public boolean handleMonarchSummonCommand(Player player, int amount) {
-        if (!hasPower(player, SuperpowerType.MONARCH)) {
+    public boolean handleDomainExpansionCommand(Player player) {
+        if (!hasCommandPower(player, SuperpowerType.HONORED_ONE)) {
             player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+        if (player.isDead() || player.getGameMode() == GameMode.SPECTATOR) {
+            player.sendMessage(MessageUtil.warn("You cannot open a domain right now."));
+            return false;
+        }
+        if (isActiveBossFight(player)) {
+            player.sendMessage(MessageUtil.warn("Domain Expansion cannot remove fighters from an active boss encounter."));
+            return false;
+        }
+        if (denyUnsafeSpawnAbilityArea(player, player.getLocation(), HONORED_DOMAIN_HALF_RANGE, HONORED_DOMAIN_HALF_RANGE, HONORED_DOMAIN_HALF_RANGE)) {
+            return false;
+        }
+        if (activeHonoredDomains.containsKey(player.getUniqueId())) {
+            player.sendMessage(MessageUtil.warn("Your domain is already open."));
+            return false;
+        }
+
+        long now = System.currentTimeMillis();
+        long cooldownUntil = honoredDomainCooldownUntil(player);
+        if (cooldownUntil > now) {
+            player.sendMessage(MessageUtil.warn(
+                "Domain cooldown: <white>" + formatShortDuration(cooldownUntil - now) + "</white>."
+            ));
+            return false;
+        }
+
+        List<Player> participants = honoredDomainParticipants(player);
+        if (participants.size() <= 1) {
+            player.sendMessage(MessageUtil.warn("No one is close enough for the domain."));
+            return false;
+        }
+
+        World endWorld = primaryWorld(World.Environment.THE_END);
+        if (endWorld == null) {
+            player.sendMessage(MessageUtil.error("The End is not available right now."));
+            return false;
+        }
+
+        Location source = player.getLocation().clone();
+        Location domainCenter = honoredDomainCenter(player, endWorld);
+        List<BlockState> restoreBlocks = prepareHonoredDomainPlatform(domainCenter);
+        Map<UUID, Location> returnLocations = new HashMap<>();
+        Set<UUID> participantIds = new HashSet<>();
+        HonoredDomainState state = new HonoredDomainState(
+            player.getUniqueId(),
+            domainCenter,
+            now + (HONORED_DOMAIN_DURATION_SECONDS * 1000L),
+            returnLocations,
+            participantIds,
+            restoreBlocks
+        );
+        activeHonoredDomains.put(player.getUniqueId(), state);
+        setHonoredDomainCooldownUntil(player, now + (HONORED_DOMAIN_COOLDOWN_SECONDS * 1000L));
+
+        if (source.getWorld() != null) {
+            source.getWorld().playSound(source, Sound.BLOCK_END_PORTAL_SPAWN, 1.0f, 0.8f);
+            source.getWorld().spawnParticle(Particle.REVERSE_PORTAL, source.clone().add(0.0, 1.0, 0.0), 90, 1.1, 0.9, 1.1, 0.18);
+        }
+
+        int teleported = 0;
+        for (Player target : participants) {
+            if (!target.isOnline() || target.isDead() || target.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            if (target.isInsideVehicle()) {
+                target.leaveVehicle();
+            }
+            UUID targetId = target.getUniqueId();
+            returnLocations.put(targetId, target.getLocation().clone());
+            participantIds.add(targetId);
+            Location destination = honoredDomainSpawn(domainCenter, teleported, participants.size(), target);
+            clearHonoredDomainTeleportVisualsNowAndLater(target);
+            boolean moved = target.teleport(destination);
+            if (!moved) {
+                participantIds.remove(targetId);
+                returnLocations.remove(targetId);
+                clearHonoredDomainTeleportVisualsNowAndLater(target);
+                continue;
+            }
+            clearHonoredDomainTeleportVisualsNowAndLater(target);
+            target.setFallDistance(0.0f);
+            if (!targetId.equals(player.getUniqueId())) {
+                honoredDomainParalyzedPlayers.add(targetId);
+                applyHonoredDomainLockEffects(target);
+                target.sendMessage(MessageUtil.warn("Unlimited Void locks around you."));
+            } else {
+                target.sendMessage(MessageUtil.success("Domain Expansion."));
+            }
+            target.playSound(target.getLocation(), Sound.BLOCK_BEACON_ACTIVATE, 0.8f, targetId.equals(player.getUniqueId()) ? 1.45f : 0.7f);
+            target.getWorld().spawnParticle(Particle.END_ROD, target.getLocation().clone().add(0.0, 1.0, 0.0), 30, 0.45, 0.6, 0.45, 0.04);
+            teleported++;
+        }
+
+        if (teleported <= 1) {
+            endHonoredDomain(player.getUniqueId(), false);
+            setHonoredDomainCooldownUntil(player, 0L);
+            player.sendMessage(MessageUtil.error("The domain failed to pull anyone in."));
+            return false;
+        }
+
+        renderHonoredDomainOpening(state);
+        return true;
+    }
+
+    public Location consumeHonoredDomainDeathChestOrigin(UUID playerId) {
+        if (playerId == null) {
+            return null;
+        }
+        Location cached = honoredDomainDeathChestOrigins.remove(playerId);
+        if (cached != null && cached.getWorld() != null) {
+            return cached.clone();
+        }
+        Location activeReturn = honoredDomainReturnLocation(playerId);
+        return activeReturn == null || activeReturn.getWorld() == null ? null : activeReturn.clone();
+    }
+
+    public boolean handleInfinityCommand(Player player, Boolean requestedEnabled) {
+        if (!hasCommandPower(player, SuperpowerType.HONORED_ONE)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+
+        boolean enabled = requestedEnabled == null ? !isHonoredInfinityEnabled(player) : requestedEnabled;
+        setHonoredInfinityEnabled(player, enabled);
+        if (enabled) {
+            player.sendMessage(MessageUtil.success("Infinity is <white>on</white>."));
+            player.getWorld().playSound(player.getLocation(), Sound.BLOCK_BEACON_POWER_SELECT, 0.65f, 1.55f);
+        } else {
+            releaseHonoredFrozenProjectiles(player.getUniqueId());
+            player.sendMessage(MessageUtil.info("Infinity is <white>off</white>."));
+            player.getWorld().playSound(player.getLocation(), Sound.BLOCK_COPPER_BULB_TURN_OFF, 0.65f, 0.8f);
+        }
+        return true;
+    }
+
+    public boolean handleInfinityStatusCommand(Player player) {
+        if (!hasCommandPower(player, SuperpowerType.HONORED_ONE)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+        player.sendMessage(MessageUtil.info(
+            "Infinity is <white>" + (isHonoredInfinityEnabled(player) ? "on" : "off") + "</white>."
+        ));
+        return true;
+    }
+
+    public boolean handleMonarchSummonCommand(Player player, int amount) {
+        if (!hasCommandPower(player, SuperpowerType.MONARCH)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+        if (denyUnsafeSpawnAbilityArea(player, player.getLocation(), 5.0, 4.0, 5.0)) {
             return false;
         }
 
@@ -838,21 +1486,25 @@ public final class SuperpowerManager implements Listener {
     }
 
     public boolean handleMonarchDespawnCommand(Player player) {
-        if (!hasPower(player, SuperpowerType.MONARCH)) {
+        if (!hasCommandPower(player, SuperpowerType.MONARCH)) {
             player.sendMessage(MessageUtil.warn("Nothing happens."));
             return false;
         }
 
         int removed = despawnMonarchSummons(player.getUniqueId(), true);
         player.sendMessage(removed > 0
-            ? MessageUtil.success("Unsummoned <white>" + removed + "</white> Monarch summon(s).")
-            : MessageUtil.info("No loaded Monarch summons were active. Any unloaded summons will be removed when their chunks load."));
+            ? MessageUtil.success("Unsummoned <white>" + removed + "</white> Shadow Monarch summon(s).")
+            : MessageUtil.info("No loaded Shadow Monarch summons were active. Any unloaded summons will be removed when their chunks load."));
         return true;
     }
 
     public boolean handleTravelCommand(Player player, int x, int y, int z, String dimensionRaw) {
-        if (!hasPower(player, SuperpowerType.TRAVELER)) {
+        if (!hasCommandPower(player, SuperpowerType.WAYFARER)) {
             player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+        if (isActiveBossFight(player)) {
+            player.sendMessage(MessageUtil.warn("Travel portals cannot open during an active boss fight."));
             return false;
         }
 
@@ -861,12 +1513,20 @@ public final class SuperpowerManager implements Listener {
             player.sendMessage(MessageUtil.error("Use <white>overworld</white>, <white>nether</white>, or <white>end</white>."));
             return false;
         }
+        if (!isWayfarerWorld(player.getWorld())) {
+            player.sendMessage(MessageUtil.warn("Wayfarer portals cannot anchor in this world."));
+            return false;
+        }
+        if (!canEnterWayfarerDimension(player, environment)) {
+            player.sendMessage(MessageUtil.warn("That dimension is still locked."));
+            return false;
+        }
         if (!hasVisitedEnvironment(player, environment)) {
             player.sendMessage(MessageUtil.warn("That dimension has not opened itself to you yet."));
             return false;
         }
 
-        World targetWorld = primaryWorld(environment);
+        World targetWorld = wayfarerWorld(environment);
         if (targetWorld == null) {
             player.sendMessage(MessageUtil.error("That dimension is not available right now."));
             return false;
@@ -879,12 +1539,20 @@ public final class SuperpowerManager implements Listener {
             player.sendMessage(MessageUtil.error("No safe portal anchor could be created at those coordinates."));
             return false;
         }
+        if (denyUnsafeSpawnAbilityArea(player, source, 2.5, 3.0, 2.5)
+            || denyUnsafeSpawnAbilityArea(player, target, 2.5, 3.0, 2.5)) {
+            return false;
+        }
 
         closeTravelerPortal(player.getUniqueId(), false);
+        Location safeSource = findSafeTravelLocation(source, false);
+        Location targetAnchor = centeredPortalLocation(target);
         PortalPair pair = new PortalPair(
             player.getUniqueId(),
             source,
-            centeredPortalLocation(target),
+            targetAnchor,
+            safeSource,
+            targetAnchor,
             System.currentTimeMillis() + (TRAVEL_PORTAL_DURATION_SECONDS * 1000L)
         );
         activeTravelerPortals.put(player.getUniqueId(), pair);
@@ -906,7 +1574,7 @@ public final class SuperpowerManager implements Listener {
     }
 
     public boolean handleTravelCloseCommand(Player player) {
-        if (!hasPower(player, SuperpowerType.TRAVELER)) {
+        if (!hasCommandPower(player, SuperpowerType.WAYFARER)) {
             player.sendMessage(MessageUtil.warn("Nothing happens."));
             return false;
         }
@@ -928,6 +1596,7 @@ public final class SuperpowerManager implements Listener {
         Player player = event.getPlayer();
         initializePlayerState(player);
         refreshVisibleShadowsFor(player);
+        returnPendingHonoredDomainPlayer(player);
     }
 
     @EventHandler
@@ -938,54 +1607,52 @@ public final class SuperpowerManager implements Listener {
     @EventHandler(priority = EventPriority.HIGH)
     public void onPlayerDeath(org.bukkit.event.entity.PlayerDeathEvent event) {
         Player player = event.getPlayer();
-        if (hasPower(player, SuperpowerType.FLORIST)) {
-            int kept = 0;
+        rememberHonoredDomainDeathChestOrigin(player.getUniqueId());
+        handleHonoredDomainPlayerExit(player.getUniqueId(), false);
+        if (hasPower(player, SuperpowerType.VERDANT)) {
+            ItemStack kept = null;
             List<ItemStack> drops = event.getDrops();
             for (int i = drops.size() - 1; i >= 0; i--) {
                 ItemStack drop = drops.get(i);
                 if (!isMotherNatureStick(drop)) {
                     continue;
                 }
-                kept += Math.max(1, drop.getAmount());
+                if (kept == null) {
+                    kept = drop.clone();
+                    kept.setAmount(1);
+                }
                 drops.remove(i);
             }
-            if (kept > 0) {
-                pendingFloristStickReturns.put(player.getUniqueId(), 1);
+            if (kept != null) {
+                event.getItemsToKeep().add(kept);
             }
         }
         if (hasPower(player, SuperpowerType.THE_WORLD)) {
-            int kept = 0;
             List<ItemStack> drops = event.getDrops();
             for (int i = drops.size() - 1; i >= 0; i--) {
                 ItemStack drop = drops.get(i);
                 if (!isTheWorldClock(drop)) {
                     continue;
                 }
-                kept += Math.max(1, drop.getAmount());
+                event.getItemsToKeep().add(drop.clone());
                 drops.remove(i);
-            }
-            if (kept > 0) {
-                pendingTheWorldClockReturns.merge(player.getUniqueId(), kept, Integer::sum);
             }
         }
         if (hasPower(player, SuperpowerType.DRUID)) {
-            int kept = 0;
             List<ItemStack> drops = event.getDrops();
             for (int i = drops.size() - 1; i >= 0; i--) {
                 ItemStack drop = drops.get(i);
                 if (!isDruidGrimoire(drop)) {
                     continue;
                 }
-                kept += Math.max(1, drop.getAmount());
+                event.getItemsToKeep().add(drop.clone());
                 drops.remove(i);
-            }
-            if (kept > 0) {
-                pendingDruidGrimoireReturns.merge(player.getUniqueId(), kept, Integer::sum);
             }
         }
         if (isShadowActive(player)) {
             deactivateShadow(player, false, false);
         }
+        clearVeilAssassinState(player, true);
         stopSupermanFlight(player, false);
         syncTankImmovableState(player, false);
         clearPowerAttributeModifiers(player);
@@ -999,22 +1666,12 @@ public final class SuperpowerManager implements Listener {
         Player player = event.getPlayer();
         Integer pendingValue = pendingFloristStickReturns.remove(player.getUniqueId());
         int pending = pendingValue == null ? 0 : pendingValue;
-        Integer pendingClockValue = pendingTheWorldClockReturns.remove(player.getUniqueId());
-        int pendingClocks = pendingClockValue == null ? 0 : pendingClockValue;
-        Integer pendingGrimoireValue = pendingDruidGrimoireReturns.remove(player.getUniqueId());
-        int pendingGrimoires = pendingGrimoireValue == null ? 0 : pendingGrimoireValue;
         Bukkit.getScheduler().runTask(plugin, () -> {
             if (!player.isOnline()) {
                 return;
             }
             if (pending > 0) {
                 giveMotherNatureStick(player, true);
-            }
-            for (int i = 0; i < pendingClocks; i++) {
-                giveTheWorldClock(player, true);
-            }
-            for (int i = 0; i < pendingGrimoires; i++) {
-                giveDruidGrimoire(player, true);
             }
         });
     }
@@ -1029,18 +1686,33 @@ public final class SuperpowerManager implements Listener {
         clearVirtualEnchanterLapis(player);
         closeTravelerPortal(playerId, false);
         clearTimeStopForOwner(playerId);
+        handleHonoredDomainPlayerExit(playerId, true);
         timeStoppedPlayers.remove(playerId);
+        honoredDomainParalyzedPlayers.remove(playerId);
+        honoredDomainSwingCooldowns.remove(playerId);
         recentPortalTravel.remove(playerId);
         floristCrouchGrowthCooldowns.remove(playerId);
         floristLeftClickCooldowns.remove(playerId);
         floristRightClickCooldowns.remove(playerId);
         supermanBoostCooldowns.remove(playerId);
+        juggernautImpactCooldowns.remove(playerId);
+        juggernautPeakFallDistances.remove(playerId);
+        juggernautGroundSlamCooldowns.remove(playerId);
+        oracleValuableAlertCooldowns.remove(playerId);
+        oracleXrayScanCursors.remove(playerId);
+        veilAssassinCrouchStartedAt.remove(playerId);
+        veilAssassinSmokeInvisibilityUntil.remove(playerId);
+        veilAssassinArmorWarnCooldowns.remove(playerId);
+        veilAssassinsInVeil.remove(playerId);
         bedrockPowerItemActivationDebounces.remove(playerId);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onExpGain(PlayerExpChangeEvent event) {
-        if (!hasPower(event.getPlayer(), SuperpowerType.ENCHANTER)) {
+        if (!hasPower(event.getPlayer(), SuperpowerType.ARCANIST)) {
+            return;
+        }
+        if (plugin.getXpLecternListener() != null && plugin.getXpLecternListener().isLecternBottleXpPickup(event.getPlayer())) {
             return;
         }
         int amount = event.getAmount();
@@ -1052,7 +1724,7 @@ public final class SuperpowerManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onEnchanterItemDamage(PlayerItemDamageEvent event) {
         Player player = event.getPlayer();
-        if (hasPower(player, SuperpowerType.ENCHANTER)
+        if (hasPower(player, SuperpowerType.ARCANIST)
             && ThreadLocalRandom.current().nextDouble() < ENCHANTER_ARCANE_PRESERVATION_CHANCE) {
             event.setCancelled(true);
             return;
@@ -1072,9 +1744,15 @@ public final class SuperpowerManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onSupermanFlightToggle(PlayerToggleFlightEvent event) {
         Player player = event.getPlayer();
-        if (!hasPower(player, SuperpowerType.SUPERMAN)
+        if (!hasPower(player, SuperpowerType.SKYBOUND)
             || player.getGameMode() == GameMode.CREATIVE
             || player.getGameMode() == GameMode.SPECTATOR) {
+            return;
+        }
+        if (isActiveBossFight(player)) {
+            event.setCancelled(true);
+            stopSupermanFlight(player, false);
+            player.sendMessage(MessageUtil.warn("Skybound flight is grounded during active boss fights."));
             return;
         }
 
@@ -1099,7 +1777,7 @@ public final class SuperpowerManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onFrozenPlayerMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
-        if (!timeStoppedPlayers.contains(player.getUniqueId())) {
+        if (!isPowerFrozenPlayer(player.getUniqueId())) {
             return;
         }
         Location from = event.getFrom();
@@ -1117,9 +1795,78 @@ public final class SuperpowerManager implements Listener {
         event.setTo(locked);
     }
 
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onJuggernautUnstoppableMove(PlayerMoveEvent event) {
+        Player player = event.getPlayer();
+        if (!hasCommandPower(player, SuperpowerType.JUGGERNAUT) || !player.isSprinting()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (juggernautUnstoppableActiveUntil(player) <= now) {
+            return;
+        }
+        Location from = event.getFrom();
+        Location to = event.getTo();
+        if (to == null || from.getWorld() != to.getWorld()) {
+            return;
+        }
+        if (from.distanceSquared(to) < 0.0025) {
+            return;
+        }
+        long nextImpactAt = juggernautImpactCooldowns.getOrDefault(player.getUniqueId(), 0L);
+        if (nextImpactAt > now) {
+            return;
+        }
+
+        if (tryJuggernautWallImpact(player)) {
+            juggernautImpactCooldowns.put(player.getUniqueId(), now + JUGGERNAUT_IMPACT_INTERVAL_MS);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onJuggernautFallTrack(PlayerMoveEvent event) {
+        trackJuggernautFall(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onHonoredDomainAnimation(PlayerAnimationEvent event) {
+        if (event.getAnimationType() != PlayerAnimationType.ARM_SWING) {
+            return;
+        }
+        Player player = event.getPlayer();
+        if (isPowerFrozenPlayer(player.getUniqueId())) {
+            event.setCancelled(true);
+            return;
+        }
+        if (triggerHonoredDomainPulse(player)) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onHonoredDomainInteract(PlayerInteractEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND) {
+            return;
+        }
+        Action action = event.getAction();
+        if (action != Action.LEFT_CLICK_AIR && action != Action.LEFT_CLICK_BLOCK) {
+            return;
+        }
+        Player player = event.getPlayer();
+        if (isPowerFrozenPlayer(player.getUniqueId())) {
+            event.setCancelled(true);
+            return;
+        }
+        if (triggerHonoredDomainPulse(player)) {
+            event.setCancelled(true);
+            event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
+            event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
+        }
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPrepareItemEnchant(PrepareItemEnchantEvent event) {
-        if (!hasPower(event.getEnchanter(), SuperpowerType.ENCHANTER)) {
+        if (!hasPower(event.getEnchanter(), SuperpowerType.ARCANIST)) {
             return;
         }
         if (event.getView().getTopInventory() instanceof EnchantingInventory enchanting) {
@@ -1129,7 +1876,7 @@ public final class SuperpowerManager implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onEnchantItem(EnchantItemEvent event) {
-        if (!hasPower(event.getEnchanter(), SuperpowerType.ENCHANTER)) {
+        if (!hasPower(event.getEnchanter(), SuperpowerType.ARCANIST)) {
             return;
         }
         if (!(event.getView().getTopInventory() instanceof EnchantingInventory enchanting)) {
@@ -1143,11 +1890,18 @@ public final class SuperpowerManager implements Listener {
         if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
+        if (hasPower(player, SuperpowerType.VEIL_ASSASSIN)) {
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (player.isOnline() && hasPower(player, SuperpowerType.VEIL_ASSASSIN)) {
+                    enforceVeilAssassinArmor(player);
+                }
+            });
+        }
         if (!(event.getView().getTopInventory() instanceof EnchantingInventory enchanting)) {
             return;
         }
 
-        if (!hasPower(player, SuperpowerType.ENCHANTER)) {
+        if (!hasPower(player, SuperpowerType.ARCANIST)) {
             clearVirtualEnchanterLapis(enchanting);
             return;
         }
@@ -1161,6 +1915,28 @@ public final class SuperpowerManager implements Listener {
         Bukkit.getScheduler().runTask(plugin, () -> refreshEnchanterLapis(player, enchanting));
     }
 
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onVeilAssassinEquipmentChanged(EntityEquipmentChangedEvent event) {
+        if (!(event.getEntity() instanceof Player player) || !hasPower(player, SuperpowerType.VEIL_ASSASSIN)) {
+            return;
+        }
+        boolean armorChanged = false;
+        for (EquipmentSlot slot : event.getEquipmentChanges().keySet()) {
+            if (slot == EquipmentSlot.HEAD || slot == EquipmentSlot.CHEST || slot == EquipmentSlot.LEGS || slot == EquipmentSlot.FEET) {
+                armorChanged = true;
+                break;
+            }
+        }
+        if (!armorChanged) {
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (player.isOnline() && hasPower(player, SuperpowerType.VEIL_ASSASSIN)) {
+                enforceVeilAssassinArmor(player);
+            }
+        });
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onEnchanterInventoryDrag(InventoryDragEvent event) {
         if (!(event.getWhoClicked() instanceof Player player)) {
@@ -1170,7 +1946,7 @@ public final class SuperpowerManager implements Listener {
             return;
         }
 
-        if (!hasPower(player, SuperpowerType.ENCHANTER)) {
+        if (!hasPower(player, SuperpowerType.ARCANIST)) {
             clearVirtualEnchanterLapis(enchanting);
             return;
         }
@@ -1194,19 +1970,28 @@ public final class SuperpowerManager implements Listener {
         if (!(event.getEntity() instanceof Player player)) {
             return;
         }
+        boolean lethalBossMechanic = isLethalBossMechanicDamage(player);
 
-        if (hasPower(player, SuperpowerType.IMMORTALITY)) {
+        if (hasPower(player, SuperpowerType.JUGGERNAUT)
+            && event.getCause() == EntityDamageEvent.DamageCause.FALL) {
+            double fallDamage = event.getDamage();
+            Float trackedFall = juggernautPeakFallDistances.remove(player.getUniqueId());
+            float fallDistance = Math.max(player.getFallDistance(), trackedFall == null ? 0.0f : trackedFall);
+            tryTriggerJuggernautGroundSlam(player, fallDistance, fallDamage);
+            event.setDamage(fallDamage * JUGGERNAUT_FALL_DAMAGE_MULTIPLIER);
+        }
+
+        if (!lethalBossMechanic && hasPower(player, SuperpowerType.ASHEN_SOUL)) {
             double finalDamage = event.getFinalDamage();
-            if (finalDamage > 0.0 && player.getHealth() - finalDamage <= 0.0) {
+            if (finalDamage > 0.0 && player.getHealth() - finalDamage <= 0.0 && tryPhoenixRebirth(player, event.getCause())) {
                 event.setCancelled(true);
-                rescueImmortalPlayer(player, event.getCause());
                 return;
             }
         }
 
-        if (hasPower(player, SuperpowerType.PHOENIX)) {
+        if (!lethalBossMechanic && hasPower(player, SuperpowerType.GRAVEBORN)) {
             double finalDamage = event.getFinalDamage();
-            if (finalDamage > 0.0 && player.getHealth() - finalDamage <= 0.0 && tryPhoenixRebirth(player, event.getCause())) {
+            if (finalDamage > 0.0 && player.getHealth() - finalDamage <= 0.0 && tryGravebornSecondChance(player)) {
                 event.setCancelled(true);
                 return;
             }
@@ -1225,7 +2010,7 @@ public final class SuperpowerManager implements Listener {
             return;
         }
 
-        if (hasPower(player, SuperpowerType.WATERMAN)
+        if (hasPower(player, SuperpowerType.TIDEBORN)
             && event.getCause() == EntityDamageEvent.DamageCause.DROWNING) {
             event.setCancelled(true);
             player.setRemainingAir(player.getMaximumAir());
@@ -1246,23 +2031,48 @@ public final class SuperpowerManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPowerCombat(EntityDamageByEntityEvent event) {
+        boolean honoredDomainSplash = event.getEntity() instanceof Player splashTarget
+            && honoredDomainDamageGuards.remove(splashTarget.getUniqueId());
+        if (event.getEntity() instanceof Player projectileTarget
+            && hasCommandPower(projectileTarget, SuperpowerType.HONORED_ONE)
+            && event.getDamager() instanceof Projectile projectile
+            && shouldBlockHonoredIncomingProjectile(projectile, projectileTarget)) {
+            event.setCancelled(true);
+            freezeHonoredProjectile(projectile, projectileTarget);
+            return;
+        }
+
         LivingEntity source = actualLivingDamager(event.getDamager());
         if (source == null || !(event.getEntity() instanceof LivingEntity victim)) {
             return;
         }
         Player attacker = source instanceof Player player ? player : null;
-        if (attacker != null && isFriendlyTo(attacker, victim)) {
+        boolean customBossVictim = isCustomBoss(victim);
+        if (customBossVictim && monarchOwnerOf(source) != null) {
+            event.setDamage(event.getDamage() * MONARCH_BOSS_DAMAGE_MULTIPLIER);
+        }
+        if (blocksUnsafeSpawnCombat(attacker, victim)) {
+            event.setCancelled(true);
+            return;
+        }
+        boolean honoredDomainPulse = attacker != null && event.getDamage() > 0.0 && triggerHonoredDomainPulse(attacker);
+        boolean friendlyTarget = attacker != null && isFriendlyTo(attacker, victim);
+        if (!honoredDomainSplash
+            && attacker != null
+            && victim instanceof Player hitPlayer
+            && shouldCancelRecentHonoredDomainDirectHit(attacker, hitPlayer)) {
+            event.setCancelled(true);
             return;
         }
 
-        if (attacker != null && event.getDamage() > 0.0) {
-            if (hasPower(attacker, SuperpowerType.WATERMAN) && isWatermanEmpowered(attacker)) {
+        if (attacker != null && event.getDamage() > 0.0 && !friendlyTarget) {
+            if (hasPower(attacker, SuperpowerType.TIDEBORN) && isWatermanEmpowered(attacker)) {
                 event.setDamage(event.getDamage() * WATERMAN_DAMAGE_MULTIPLIER);
                 victim.getWorld().spawnParticle(Particle.SPLASH, victim.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.45, 0.35, 0.45, 0.05);
                 victim.getWorld().playSound(victim.getLocation(), Sound.ITEM_TRIDENT_HIT, 0.55f, 1.25f);
             }
 
-            if (hasPower(attacker, SuperpowerType.PHOENIX)) {
+            if (hasPower(attacker, SuperpowerType.ASHEN_SOUL)) {
                 if (victim.getFireTicks() > 0) {
                     event.setDamage(event.getDamage() + PHOENIX_SEARING_STRIKE_DAMAGE);
                 }
@@ -1272,8 +2082,10 @@ public final class SuperpowerManager implements Listener {
 
             if (hasPower(attacker, SuperpowerType.VOIDWALKER) && voidstepVeilUntil(attacker) > System.currentTimeMillis()) {
                 event.setDamage(event.getDamage() + VOIDSTEP_AMBUSH_DAMAGE);
-                applyPotion(victim, PotionEffectType.BLINDNESS, 60, 0);
-                applyPotion(victim, PotionEffectType.WEAKNESS, 60, 0);
+                if (!customBossVictim) {
+                    applyPotion(victim, PotionEffectType.BLINDNESS, 60, 0);
+                    applyPotion(victim, PotionEffectType.WEAKNESS, 60, 0);
+                }
                 setVoidstepVeilUntil(attacker, 0L);
                 removeLikelyPowerPotion(attacker, PotionEffectType.INVISIBILITY, 0, VOIDSTEP_INVISIBILITY_SECONDS * 20 + 20);
                 removeLikelyPowerPotion(attacker, PotionEffectType.SLOW_FALLING, 0, VOIDSTEP_SLOW_FALLING_SECONDS * 20 + 20);
@@ -1282,27 +2094,45 @@ public final class SuperpowerManager implements Listener {
             }
 
             if (hasPower(attacker, SuperpowerType.FROSTBORN)) {
-                if (victim.getPotionEffect(PotionEffectType.SLOWNESS) != null) {
+                if (customBossVictim) {
+                    event.setDamage(event.getDamage() * FROSTBORN_BOSS_DAMAGE_MULTIPLIER);
+                } else if (victim.getPotionEffect(PotionEffectType.SLOWNESS) != null) {
                     event.setDamage(event.getDamage() * FROSTBORN_FROZEN_TARGET_DAMAGE_MULTIPLIER);
                 }
-                applyPotion(victim, PotionEffectType.SLOWNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
-                applyPotion(victim, PotionEffectType.WEAKNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
+                if (!customBossVictim) {
+                    applyPotion(victim, PotionEffectType.SLOWNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
+                    applyPotion(victim, PotionEffectType.WEAKNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
+                }
                 victim.getWorld().spawnParticle(Particle.CLOUD, victim.getLocation().clone().add(0.0, 1.0, 0.0), 12, 0.35, 0.35, 0.35, 0.02);
+            }
+
+            if (hasPower(attacker, SuperpowerType.NIGHTSHADE)) {
+                applyPotion(victim, PotionEffectType.POISON, 5 * 20, 0);
+                victim.getWorld().spawnParticle(Particle.WITCH, victim.getLocation().clone().add(0.0, 1.0, 0.0), 10, 0.35, 0.35, 0.35, 0.01);
+            }
+
+            if (hasPower(attacker, SuperpowerType.VEIL_ASSASSIN)
+                && isInVeilAssassinVeil(attacker)
+                && isBehindTarget(attacker, victim)) {
+                applyVeilAssassinBackstab(event, attacker, victim);
             }
 
             if (event.getDamager() instanceof Projectile projectile
                 && hasPower(attacker, SuperpowerType.DEADEYE)) {
                 boolean markedShot = projectile.getPersistentDataContainer().has(keyDeadeyeMarkedShot, PersistentDataType.BYTE);
-                event.setDamage(event.getDamage() * (markedShot ? DEADEYE_MARKED_SHOT_DAMAGE_MULTIPLIER : DEADEYE_PROJECTILE_DAMAGE_MULTIPLIER));
+                double multiplier = customBossVictim
+                    ? (markedShot ? DEADEYE_BOSS_MARKED_SHOT_DAMAGE_MULTIPLIER : DEADEYE_BOSS_PROJECTILE_DAMAGE_MULTIPLIER)
+                    : (markedShot ? DEADEYE_MARKED_SHOT_DAMAGE_MULTIPLIER : DEADEYE_PROJECTILE_DAMAGE_MULTIPLIER);
+                event.setDamage(event.getDamage() * multiplier);
                 applyPotion(victim, PotionEffectType.GLOWING, DEADEYE_GLOW_SECONDS * 20, 0);
-                if (markedShot) {
+                if (markedShot && !customBossVictim) {
                     applyPotion(victim, PotionEffectType.SLOWNESS, DEADEYE_MARKED_SHOT_SLOW_SECONDS * 20, 1);
                 }
                 victim.getWorld().spawnParticle(Particle.CRIT, victim.getLocation().clone().add(0.0, 1.0, 0.0), markedShot ? 28 : 18, 0.35, 0.35, 0.35, 0.05);
             }
 
             if (hasPower(attacker, SuperpowerType.RIFTWARDEN)) {
-                if (isCustomBoss(victim)) {
+                if (customBossVictim) {
                     event.setDamage(event.getDamage() * RIFTWARDEN_BOSS_DAMAGE_MULTIPLIER);
                     victim.getWorld().spawnParticle(Particle.REVERSE_PORTAL, victim.getLocation().clone().add(0.0, 1.0, 0.0), 22, 0.5, 0.45, 0.5, 0.08);
                 } else if (isHostileMob(victim)) {
@@ -1315,8 +2145,13 @@ public final class SuperpowerManager implements Listener {
                 victim.getWorld().spawnParticle(Particle.SOUL, victim.getLocation().clone().add(0.0, 1.0, 0.0), 10, 0.35, 0.35, 0.35, 0.02);
             }
 
-            if (hasPower(attacker, SuperpowerType.STORMCALLER) && tryStormcallerStrike(attacker, victim)) {
+            if (hasCommandPower(attacker, SuperpowerType.STORMCALLER) && tryStormcallerStrike(attacker, victim)) {
                 event.setDamage(event.getDamage() + STORMCALLER_DAMAGE_BONUS);
+            }
+            if (victim instanceof Player && hasPower(attacker, SuperpowerType.STORMCALLER) && isStormcallerHeavyWeapon(attacker.getInventory().getItemInMainHand())) {
+                applyPotion(attacker, PotionEffectType.RESISTANCE, STORMCALLER_HEAVY_WEAPON_BUFF_SECONDS * 20, 0);
+                applyPotion(attacker, PotionEffectType.STRENGTH, STORMCALLER_HEAVY_WEAPON_BUFF_SECONDS * 20, 0);
+                attacker.getWorld().spawnParticle(Particle.ELECTRIC_SPARK, attacker.getLocation().clone().add(0.0, 1.0, 0.0), 10, 0.4, 0.45, 0.4, 0.04);
             }
 
             if (hasPower(attacker, SuperpowerType.BLOODMENDER)) {
@@ -1324,11 +2159,15 @@ public final class SuperpowerManager implements Listener {
             }
         }
 
+        if (!honoredDomainSplash && !honoredDomainPulse && attacker != null && event.getDamage() > 0.0) {
+            applyHonoredDomainDamage(event, attacker, victim);
+        }
+
         if (!(victim instanceof Player defender) || source.getUniqueId().equals(defender.getUniqueId()) || isFriendlyTo(defender, source)) {
             return;
         }
 
-        if (hasPower(defender, SuperpowerType.PHOENIX) && event.getDamage() > 0.0) {
+        if (hasPower(defender, SuperpowerType.ASHEN_SOUL) && event.getDamage() > 0.0) {
             source.setFireTicks(Math.max(source.getFireTicks(), 60));
             applyPotion(defender, PotionEffectType.ABSORPTION, 80, 0);
             source.getWorld().spawnParticle(Particle.FLAME, source.getLocation().clone().add(0.0, 1.0, 0.0), 10, 0.35, 0.35, 0.35, 0.02);
@@ -1336,25 +2175,31 @@ public final class SuperpowerManager implements Listener {
 
         if (hasPower(defender, SuperpowerType.SENTINEL) && defender.isSneaking() && event.getDamage() > 0.0) {
             event.setDamage(event.getDamage() * (1.0 - SENTINEL_BRACE_DAMAGE_REDUCTION));
-            applyPotion(source, PotionEffectType.WEAKNESS, 80, 0);
+            if (!isCustomBoss(source)) {
+                applyPotion(source, PotionEffectType.WEAKNESS, 80, 0);
+            }
             Vector push = source.getLocation().toVector().subtract(defender.getLocation().toVector());
             push.setY(0.0);
-            if (push.lengthSquared() > 0.001) {
+            if (!isCustomBoss(source) && push.lengthSquared() > 0.001) {
                 source.setVelocity(source.getVelocity().add(push.normalize().multiply(0.45).setY(0.18)));
             }
             defender.getWorld().spawnParticle(Particle.CRIT, defender.getLocation().clone().add(0.0, 1.0, 0.0), 16, 0.55, 0.45, 0.55, 0.02);
             defender.getWorld().playSound(defender.getLocation(), Sound.ITEM_SHIELD_BLOCK, 0.75f, 0.9f);
         }
 
-        if (hasPower(defender, SuperpowerType.WATERMAN) && isWatermanEmpowered(defender) && event.getDamage() > 0.0) {
+        if (hasPower(defender, SuperpowerType.TIDEBORN) && isWatermanEmpowered(defender) && event.getDamage() > 0.0) {
             event.setDamage(event.getDamage() * (1.0 - WATERMAN_DAMAGE_REDUCTION));
-            applyPotion(source, PotionEffectType.SLOWNESS, 60, 0);
+            if (!isCustomBoss(source)) {
+                applyPotion(source, PotionEffectType.SLOWNESS, 60, 0);
+            }
             defender.getWorld().spawnParticle(Particle.BUBBLE_POP, defender.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.65, 0.4, 0.65, 0.03);
             defender.getWorld().playSound(defender.getLocation(), Sound.BLOCK_CONDUIT_ATTACK_TARGET, 0.45f, 1.4f);
         }
 
         if (hasPower(defender, SuperpowerType.FROSTBORN) && event.getDamage() > 0.0) {
-            applyPotion(source, PotionEffectType.SLOWNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
+            if (!isCustomBoss(source)) {
+                applyPotion(source, PotionEffectType.SLOWNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
+            }
             source.getWorld().spawnParticle(Particle.CLOUD, source.getLocation().clone().add(0.0, 1.0, 0.0), 10, 0.35, 0.35, 0.35, 0.02);
         }
 
@@ -1366,14 +2211,16 @@ public final class SuperpowerManager implements Listener {
 
         if (hasPower(defender, SuperpowerType.GRAVEBORN) && event.getDamage() > 0.0 && isUndeadPassiveType(source.getType())) {
             event.setDamage(event.getDamage() * (1.0 - GRAVEBORN_UNDEAD_DAMAGE_REDUCTION));
-            applyPotion(source, PotionEffectType.WEAKNESS, 60, 0);
+            if (!isCustomBoss(source)) {
+                applyPotion(source, PotionEffectType.WEAKNESS, 60, 0);
+            }
         }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onEntityDamageByEntity(EntityDamageByEntityEvent event) {
         Player attackingPlayer = resolvePlayerDamager(event.getDamager());
-        if (attackingPlayer != null && timeStoppedPlayers.contains(attackingPlayer.getUniqueId())) {
+        if (attackingPlayer != null && isPowerFrozenPlayer(attackingPlayer.getUniqueId())) {
             event.setCancelled(true);
             return;
         }
@@ -1416,15 +2263,12 @@ public final class SuperpowerManager implements Listener {
             event.getDrops().add(heartDrop);
         }
 
-        if (killer != null
-            && hasPower(killer, SuperpowerType.ENCHANTER)
-            && entity.getType() != EntityType.PLAYER
-            && ThreadLocalRandom.current().nextDouble() < ENCHANTER_ESSENCE_EXTRACTION_CHANCE) {
-            event.getDrops().add(createEnchanterEssenceDrop());
-        }
-
         if (killer != null && hasPower(killer, SuperpowerType.MONARCH) && isMonarchStorable(entity)) {
             storeMonarchMob(killer, entity.getType());
+        }
+
+        if (entity instanceof Player deadPlayer) {
+            applyNearbyGravebornDeathBuff(deadPlayer);
         }
 
         if (killer != null && hasPower(killer, SuperpowerType.GRAVEBORN)) {
@@ -1548,13 +2392,20 @@ public final class SuperpowerManager implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerToggleSneak(PlayerToggleSneakEvent event) {
         Player player = event.getPlayer();
-        if (hasPower(player, SuperpowerType.TANK)) {
+        if (hasPower(player, SuperpowerType.JUGGERNAUT)) {
             syncTankImmovableState(player, event.isSneaking());
         }
-        if (hasPower(player, SuperpowerType.SUPERMAN) && event.isSneaking()) {
+        if (hasPower(player, SuperpowerType.SKYBOUND) && event.isSneaking()) {
             trySupermanBoost(player);
         }
-        if (!hasPower(player, SuperpowerType.FLORIST)) {
+        if (hasPower(player, SuperpowerType.VEIL_ASSASSIN)) {
+            if (event.isSneaking()) {
+                startVeilAssassinCrouch(player);
+            } else {
+                deactivateVeilAssassin(player, true);
+            }
+        }
+        if (!hasPower(player, SuperpowerType.VERDANT)) {
             return;
         }
         pulseFloristGrowth(player);
@@ -1563,7 +2414,7 @@ public final class SuperpowerManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onFloristDrops(BlockDropItemEvent event) {
         Player player = event.getPlayer();
-        if (player == null || player.getGameMode() == GameMode.CREATIVE || !hasPower(player, SuperpowerType.FLORIST)) {
+        if (player == null || player.getGameMode() == GameMode.CREATIVE || !hasPower(player, SuperpowerType.VERDANT)) {
             return;
         }
         Material blockType = event.getBlockState().getType();
@@ -1600,10 +2451,13 @@ public final class SuperpowerManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onMinerDrops(BlockDropItemEvent event) {
         Player player = event.getPlayer();
-        if (player == null || player.getGameMode() == GameMode.CREATIVE || !hasPower(player, SuperpowerType.MINER)) {
+        if (player == null || player.getGameMode() == GameMode.CREATIVE || !hasPower(player, SuperpowerType.PROSPECTOR)) {
             return;
         }
         if (!MINER_ORE_BLOCKS.contains(event.getBlockState().getType())) {
+            return;
+        }
+        if (plugin.getGoblinHuntManager() != null && !plugin.getGoblinHuntManager().isEligibleOreBreak(event.getBlock(), player)) {
             return;
         }
         if (ThreadLocalRandom.current().nextDouble() >= MINER_EXTRA_ORE_CHANCE) {
@@ -1638,14 +2492,16 @@ public final class SuperpowerManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onTimeStoppedBreak(BlockBreakEvent event) {
-        if (timeStoppedPlayers.contains(event.getPlayer().getUniqueId())) {
+        if (isPowerFrozenPlayer(event.getPlayer().getUniqueId())
+            || isInsideAnyHonoredDomain(event.getBlock().getLocation())) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onTimeStoppedPlace(BlockPlaceEvent event) {
-        if (timeStoppedPlayers.contains(event.getPlayer().getUniqueId())) {
+        if (isPowerFrozenPlayer(event.getPlayer().getUniqueId())
+            || isInsideAnyHonoredDomain(event.getBlock().getLocation())) {
             event.setCancelled(true);
         }
     }
@@ -1655,9 +2511,43 @@ public final class SuperpowerManager implements Listener {
         if (!(event.getEntity().getShooter() instanceof Player player)) {
             return;
         }
-        if (timeStoppedPlayers.contains(player.getUniqueId())) {
+        if (isPowerFrozenPlayer(player.getUniqueId())) {
             event.setCancelled(true);
         }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onDeadeyeCrossbowLoad(EntityLoadCrossbowEvent event) {
+        if (!(event.getEntity() instanceof Player player)
+            || !hasCommandPower(player, SuperpowerType.DEADEYE)
+            || !isDeadeyeArrowInfinityEnabled(player)
+            || !event.shouldConsumeItem()) {
+            return;
+        }
+        ItemStack selected = likelyCrossbowConsumable(player);
+        if (selected == null || !isArrowMaterial(selected.getType())) {
+            return;
+        }
+        event.setConsumeItem(false);
+        Bukkit.getScheduler().runTask(plugin, player::updateInventory);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onDeadeyeBowShoot(EntityShootBowEvent event) {
+        if (!(event.getEntity() instanceof Player player)
+            || !hasCommandPower(player, SuperpowerType.DEADEYE)
+            || !isDeadeyeArrowInfinityEnabled(player)
+            || !(event.getProjectile() instanceof AbstractArrow)
+            || !event.shouldConsumeItem()) {
+            return;
+        }
+        ItemStack consumable = event.getConsumable();
+        if (consumable == null || !isArrowMaterial(consumable.getType())) {
+            return;
+        }
+        ItemStack refund = consumable.clone();
+        refund.setAmount(1);
+        Bukkit.getScheduler().runTask(plugin, () -> refundDeadeyeArrow(player, refund));
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -1678,8 +2568,23 @@ public final class SuperpowerManager implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onFrostbornSnowballHit(ProjectileHitEvent event) {
+        if (!(event.getEntity() instanceof Snowball snowball)
+            || !(snowball.getShooter() instanceof Player player)
+            || !hasPower(player, SuperpowerType.FROSTBORN)
+            || !(event.getHitEntity() instanceof LivingEntity target)) {
+            return;
+        }
+        if (!isCustomBoss(target)) {
+            applyPotion(target, PotionEffectType.WEAKNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
+        }
+        target.getWorld().spawnParticle(Particle.SNOWFLAKE, target.getLocation().clone().add(0.0, 1.0, 0.0), 16, 0.35, 0.35, 0.35, 0.03);
+        target.getWorld().playSound(target.getLocation(), Sound.BLOCK_SNOW_BREAK, 0.75f, 1.15f);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onFrozenPlayerInteract(PlayerInteractEvent event) {
-        if (!timeStoppedPlayers.contains(event.getPlayer().getUniqueId())) {
+        if (!isPowerFrozenPlayer(event.getPlayer().getUniqueId())) {
             return;
         }
         event.setCancelled(true);
@@ -1687,7 +2592,7 @@ public final class SuperpowerManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onFrozenPlayerDrop(PlayerDropItemEvent event) {
-        if (timeStoppedPlayers.contains(event.getPlayer().getUniqueId())) {
+        if (isPowerFrozenPlayer(event.getPlayer().getUniqueId())) {
             event.setCancelled(true);
         }
     }
@@ -1697,12 +2602,12 @@ public final class SuperpowerManager implements Listener {
         if (!isMotherNatureStick(event.getItemDrop().getItemStack())) {
             return;
         }
-        if (!hasPower(event.getPlayer(), SuperpowerType.FLORIST)) {
+        if (!hasPower(event.getPlayer(), SuperpowerType.VERDANT)) {
             return;
         }
 
         event.setCancelled(true);
-        event.getPlayer().sendMessage(MessageUtil.warn("The Stick from Mother Nature refuses to leave you."));
+        event.getPlayer().sendMessage(MessageUtil.warn("The Wand of Mother Nature refuses to leave you."));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -1831,7 +2736,7 @@ public final class SuperpowerManager implements Listener {
         if (hand != EquipmentSlot.HAND) {
             return;
         }
-        if (!isMotherNatureStick(item) || !hasPower(player, SuperpowerType.FLORIST)) {
+        if (!isMotherNatureStick(item) || !hasPower(player, SuperpowerType.VERDANT)) {
             return;
         }
 
@@ -1843,6 +2748,40 @@ public final class SuperpowerManager implements Listener {
         useMotherNatureStickHeal(player);
     }
 
+    public boolean activateHeldCrossplayAbility(Player player, boolean alternate) {
+        if (player == null) {
+            return false;
+        }
+        ItemStack item = player.getInventory().getItemInMainHand();
+        if (isAncientScroll(item)) {
+            if (markPowerItemActivation(player)) {
+                useAncientScroll(player, EquipmentSlot.HAND);
+            }
+            return true;
+        }
+        if (isTheWorldClock(item)) {
+            if (markPowerItemActivation(player)) {
+                useTheWorldClock(player);
+            }
+            return true;
+        }
+        if (isDruidGrimoire(item)) {
+            if (markPowerItemActivation(player)) {
+                openDruidGrimoire(player);
+            }
+            return true;
+        }
+        if (!isMotherNatureStick(item) || !hasPower(player, SuperpowerType.VERDANT)) {
+            return false;
+        }
+        if (alternate) {
+            useMotherNatureStickAttack(player);
+        } else {
+            useMotherNatureStickHeal(player);
+        }
+        return true;
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onBedrockPowerItemSwing(PlayerAnimationEvent event) {
         if (event.getAnimationType() != PlayerAnimationType.ARM_SWING) {
@@ -1852,8 +2791,15 @@ public final class SuperpowerManager implements Listener {
         if (!BedrockCompat.isBedrockPlayer(player)) {
             return;
         }
+        if (event.isCancelled()) {
+            return;
+        }
 
         ItemStack item = player.getInventory().getItemInMainHand();
+        if (isPowerFrozenPlayer(player.getUniqueId())) {
+            event.setCancelled(true);
+            return;
+        }
         if (isAncientScroll(item)) {
             if (markPowerItemActivation(player)) {
                 useAncientScroll(player, EquipmentSlot.HAND);
@@ -1876,8 +2822,14 @@ public final class SuperpowerManager implements Listener {
         if (event.getAnimationType() != PlayerAnimationType.ARM_SWING) {
             return;
         }
+        if (event.isCancelled()) {
+            return;
+        }
         Player player = event.getPlayer();
-        if (!hasPower(player, SuperpowerType.FLORIST)) {
+        if (isPowerFrozenPlayer(player.getUniqueId())) {
+            return;
+        }
+        if (!hasPower(player, SuperpowerType.VERDANT)) {
             return;
         }
         if (!isMotherNatureStick(player.getInventory().getItemInMainHand())) {
@@ -2019,7 +2971,16 @@ public final class SuperpowerManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPowerMenuClick(InventoryClickEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof PowerChoiceHolder holder) {
+        Inventory top = event.getView().getTopInventory();
+        InventoryHolder rawHolder = top.getHolder(false);
+        if ((rawHolder instanceof PowerChoiceHolder
+            || rawHolder instanceof PowerInfoHolder
+            || rawHolder instanceof DruidGrimoireHolder)
+            && !isIntentionalMenuAction(event)) {
+            event.setCancelled(true);
+            return;
+        }
+        if (rawHolder instanceof PowerChoiceHolder holder) {
             event.setCancelled(true);
             if (!(event.getWhoClicked() instanceof Player player)) {
                 return;
@@ -2027,36 +2988,65 @@ public final class SuperpowerManager implements Listener {
             if (!player.getUniqueId().equals(holder.ownerId())) {
                 return;
             }
-            if (event.getClickedInventory() != event.getView().getTopInventory()) {
+            int rawSlot = event.getRawSlot();
+            if (rawSlot < 0 || rawSlot >= top.getSize()) {
                 return;
             }
-            if (event.getSlot() == POWER_CHOICE_CANCEL_SLOT) {
-                player.closeInventory();
+            if (!MenuItemUtil.isVisibleItem(event.getCurrentItem())) {
                 return;
             }
-            if (event.getSlot() == POWER_CHOICE_PREVIOUS_SLOT && holder.page() > 0) {
-                openAncientScrollPowerChoice(player, holder.hand(), holder.page() - 1);
+            if (rawSlot == POWER_CHOICE_CANCEL_SLOT) {
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (player.isOnline()) {
+                        player.closeInventory();
+                    }
+                });
                 return;
             }
-            if (event.getSlot() == POWER_CHOICE_NEXT_SLOT && holder.page() < maxPowerChoicePage(selectablePowerChoices().size())) {
-                openAncientScrollPowerChoice(player, holder.hand(), holder.page() + 1);
+            if (rawSlot == POWER_CHOICE_PREVIOUS_SLOT && holder.page() > 0) {
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (player.isOnline()) {
+                        openAncientScrollPowerChoice(player, holder.hand(), holder.page() - 1);
+                    }
+                });
                 return;
             }
-            SuperpowerType choice = powerChoiceBySlot(event.getSlot(), holder.page());
+            if (rawSlot == POWER_CHOICE_NEXT_SLOT && holder.page() < maxPowerChoicePage(selectablePowerChoices().size())) {
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (player.isOnline()) {
+                        openAncientScrollPowerChoice(player, holder.hand(), holder.page() + 1);
+                    }
+                });
+                return;
+            }
+            SuperpowerType choice = powerChoiceBySlot(rawSlot, holder.page());
             if (choice != null) {
-                chooseAncientScrollPower(player, holder, choice);
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (player.isOnline()) {
+                        chooseAncientScrollPower(player, holder, choice);
+                    }
+                });
             }
             return;
         }
-        if (event.getView().getTopInventory().getHolder() instanceof PowerInfoHolder) {
+        if (rawHolder instanceof PowerInfoHolder) {
             event.setCancelled(true);
-            if (event.getRawSlot() == 49 && event.getWhoClicked() instanceof Player player) {
-                player.closeInventory();
-                Bukkit.getScheduler().runTask(plugin, () -> player.performCommand("menu"));
+            if (event.getWhoClicked() instanceof Player player) {
+                int rawSlot = event.getRawSlot();
+                if (rawSlot >= 0 && rawSlot < top.getSize() && rawSlot == 49
+                    && MenuItemUtil.isVisibleItem(event.getCurrentItem())) {
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (!player.isOnline()) {
+                            return;
+                        }
+                        player.closeInventory();
+                        player.performCommand("menu");
+                    });
+                }
             }
             return;
         }
-        if (event.getView().getTopInventory().getHolder() instanceof DruidGrimoireHolder holder) {
+        if (rawHolder instanceof DruidGrimoireHolder holder) {
             event.setCancelled(true);
             if (!(event.getWhoClicked() instanceof Player player)) {
                 return;
@@ -2064,31 +3054,45 @@ public final class SuperpowerManager implements Listener {
             if (!player.getUniqueId().equals(holder.ownerId())) {
                 return;
             }
-            if (event.getClickedInventory() != event.getView().getTopInventory()) {
+            int rawSlot = event.getRawSlot();
+            if (rawSlot < 0 || rawSlot >= top.getSize()) {
                 return;
             }
-            DruidBlessing blessing = DruidBlessing.fromSlot(event.getSlot());
+            if (!MenuItemUtil.isVisibleItem(event.getCurrentItem())) {
+                return;
+            }
+            DruidBlessing blessing = DruidBlessing.fromSlot(rawSlot);
             if (blessing == null) {
                 return;
             }
-            useDruidBlessing(player, blessing);
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (player.isOnline()) {
+                    useDruidBlessing(player, blessing);
+                }
+            });
         }
+    }
+
+    private boolean isIntentionalMenuAction(InventoryClickEvent event) {
+        return event.getClick() == ClickType.LEFT || event.getClick() == ClickType.RIGHT;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPowerMenuDrag(InventoryDragEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof PowerInfoHolder
-            || event.getView().getTopInventory().getHolder() instanceof PowerChoiceHolder
-            || event.getView().getTopInventory().getHolder() instanceof DruidGrimoireHolder) {
+        InventoryHolder holder = event.getView().getTopInventory().getHolder(false);
+        if (holder instanceof PowerInfoHolder
+            || holder instanceof PowerChoiceHolder
+            || holder instanceof DruidGrimoireHolder) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler
     public void onPowerMenuClose(InventoryCloseEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof PowerInfoHolder
-            || event.getView().getTopInventory().getHolder() instanceof PowerChoiceHolder
-            || event.getView().getTopInventory().getHolder() instanceof DruidGrimoireHolder) {
+        InventoryHolder holder = event.getView().getTopInventory().getHolder(false);
+        if (holder instanceof PowerInfoHolder
+            || holder instanceof PowerChoiceHolder
+            || holder instanceof DruidGrimoireHolder) {
             event.getView().getTopInventory().clear();
         }
     }
@@ -2096,7 +3100,7 @@ public final class SuperpowerManager implements Listener {
     private void initializePlayerState(Player player) {
         markVisitedDimension(player, player.getWorld());
         SuperpowerType power = ensurePowerAssigned(player);
-        if (power == SuperpowerType.FLORIST) {
+        if (power == SuperpowerType.VERDANT) {
             trimExtraMotherNatureSticks(player);
             if (!hasMotherNatureStick(player)) {
                 giveMotherNatureStick(player, false);
@@ -2108,10 +3112,10 @@ public final class SuperpowerManager implements Listener {
         if (power == SuperpowerType.DRUID && !hasDruidGrimoire(player)) {
             giveDruidGrimoire(player, false);
         }
-        if (power == SuperpowerType.SHADOW && isShadowActive(player)) {
+        if (power == SuperpowerType.NIGHTSHADE && isShadowActive(player)) {
             applyShadowEffects(player);
         }
-        syncTankImmovableState(player, power == SuperpowerType.TANK && player.isSneaking());
+        syncTankImmovableState(player, power == SuperpowerType.JUGGERNAUT && player.isSneaking());
         refreshPowerItems(player);
         applyPassiveEffects(player);
     }
@@ -2129,13 +3133,39 @@ public final class SuperpowerManager implements Listener {
             if (xrayActiveUntil(player) <= now) {
                 setXrayActiveUntil(player, 0L);
             }
+            if (juggernautUnstoppableActiveUntil(player) <= now) {
+                setJuggernautUnstoppableActiveUntil(player, 0L);
+            }
             if (supermanFlightActiveUntil(player) > 0L && supermanFlightActiveUntil(player) <= now) {
                 stopSupermanFlight(player, true);
             }
             applyPassiveEffects(player);
+            applyBypassedCommandEffects(player, now);
         }
         cleanupRecentPortalTravel(now);
         tickMonarchSummons();
+    }
+
+    private void applyBypassedCommandEffects(Player player, long now) {
+        if (!player.hasPermission(POWER_COMMAND_BYPASS_PERMISSION)
+            || player.isDead()
+            || player.getGameMode() == GameMode.SPECTATOR) {
+            return;
+        }
+        SuperpowerType power = powerOf(player);
+        if (power != SuperpowerType.NIGHTSHADE && isShadowActive(player)) {
+            applyShadowEffects(player);
+        }
+        if (power != SuperpowerType.ORACLE_EYE && xrayActiveUntil(player) > now) {
+            renderXrayHighlights(player);
+        }
+        if (power != SuperpowerType.VEIL_ASSASSIN && hasActiveSmokeInvisibility(player)) {
+            tickVeilAssassinSmokeInvisibility(player);
+        }
+        if ((power != SuperpowerType.NIGHTSHADE && isNightshadeNightVisionEnabled(player))
+            || (power != SuperpowerType.VOIDWALKER && isVoidwalkerNightVisionEnabled(player))) {
+            applyPassiveNightVision(player);
+        }
     }
 
     private void applyPassiveEffects(Player player) {
@@ -2152,25 +3182,22 @@ public final class SuperpowerManager implements Listener {
         }
 
         switch (power) {
-            case FLASH -> {
-                applyPotion(player, PotionEffectType.SPEED, 80, 2);
-                applyPotion(player, PotionEffectType.HASTE, 80, 2);
-            }
-            case ENCHANTER -> {
+            case VEIL_ASSASSIN -> applyVeilAssassinPassives(player);
+            case ARCANIST -> {
                 if (player.getOpenInventory().getTopInventory() instanceof EnchantingInventory enchanting) {
                     refreshEnchanterLapis(player, enchanting);
                 }
                 syncEnchanterAttunement(player);
                 syncPlayerAttributeModifier(player, Attribute.LUCK, keyEnchanterLuckModifier, ENCHANTER_LUCK_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
             }
-            case BERSERK -> {
+            case BERSERKER -> {
                 applyPotion(player, PotionEffectType.STRENGTH, 80, 1);
                 if (player.getHealth() <= BERSERK_LOW_HEALTH_THRESHOLD) {
                     applyPotion(player, PotionEffectType.SPEED, 60, 1);
                     applyPotion(player, PotionEffectType.REGENERATION, 60, 0);
                 }
             }
-            case TANK -> {
+            case JUGGERNAUT -> {
                 applyPotion(player, PotionEffectType.HEALTH_BOOST, 80, 4);
                 syncTankImmovableState(player, player.isSneaking());
                 var maxHealth = player.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH);
@@ -2178,8 +3205,8 @@ public final class SuperpowerManager implements Listener {
                     player.setHealth(maxHealth.getValue());
                 }
             }
-            case TRAVELER -> applyPotion(player, PotionEffectType.SPEED, 80, 1);
-            case FLORIST -> {
+            case WAYFARER -> applyPotion(player, PotionEffectType.SPEED, 80, 1);
+            case VERDANT -> {
                 if (player.getLocation().getBlock().getLightFromSky() > 0) {
                     applyPotion(player, PotionEffectType.REGENERATION, 60, 0);
                 }
@@ -2189,7 +3216,12 @@ public final class SuperpowerManager implements Listener {
                 }
             }
             case MONARCH -> pacifyNearbyUndead(player);
-            case SHADOW -> {
+            case NIGHTSHADE -> {
+                if (isNightshadeNightVisionEnabled(player)) {
+                    applyPassiveNightVision(player);
+                } else {
+                    removePassiveNightVision(player);
+                }
                 if (isShadowActive(player)) {
                     applyShadowEffects(player);
                 }
@@ -2204,28 +3236,38 @@ public final class SuperpowerManager implements Listener {
                     giveDruidGrimoire(player, false);
                 }
             }
-            case XRAY_VISION -> {
+            case ORACLE_EYE -> {
                 if (xrayActiveUntil(player) > System.currentTimeMillis()) {
                     renderXrayHighlights(player);
                 }
             }
-            case MINER -> {
+            case PROSPECTOR -> {
                 applyPotion(player, PotionEffectType.HASTE, 80, 2);
+                if (player.getLocation().getBlockY() <= MINER_NIGHT_VISION_Y_LEVEL) {
+                    applyPassiveNightVision(player);
+                } else {
+                    removePassiveNightVision(player);
+                }
                 syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyMinerHealthModifier, MINER_HEALTH_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
             }
-            case GIANT -> {
+            case TITAN -> {
                 syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyGiantHealthModifier, GIANT_HEALTH_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
                 syncPlayerAttributeModifier(player, Attribute.SCALE, keyGiantScaleModifier, GIANT_SCALE_MULTIPLIER - 1.0, AttributeModifier.Operation.ADD_SCALAR, true);
                 syncPlayerAttributeModifier(player, Attribute.KNOCKBACK_RESISTANCE, keyGiantKnockbackModifier, GIANT_KNOCKBACK_RESISTANCE, AttributeModifier.Operation.ADD_NUMBER, true);
                 syncPlayerAttributeModifier(player, Attribute.ATTACK_DAMAGE, keyGiantAttackDamageModifier, GIANT_ATTACK_DAMAGE_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
             }
-            case SUPERMAN -> {
+            case SKYBOUND -> {
                 applyPotion(player, PotionEffectType.STRENGTH, 80, 1);
                 applyPotion(player, PotionEffectType.SPEED, 80, 0);
                 syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySupermanHealthModifier, SUPERMAN_HEALTH_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
-                syncSupermanFlightState(player, true);
+                if (isActiveBossFight(player) && supermanFlightActiveUntil(player) > 0L) {
+                    stopSupermanFlight(player, false);
+                    player.sendActionBar(MM.deserialize("<red>Skybound flight grounded for this boss fight.</red>"));
+                } else {
+                    syncSupermanFlightState(player, true);
+                }
             }
-            case WATERMAN -> {
+            case TIDEBORN -> {
                 syncPlayerAttributeModifier(player, Attribute.SUBMERGED_MINING_SPEED, keyWatermanSubmergedMiningModifier, WATERMAN_SUBMERGED_MINING_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
                 player.setRemainingAir(player.getMaximumAir());
                 applyPotion(player, PotionEffectType.WATER_BREATHING, 80, 0);
@@ -2243,7 +3285,7 @@ public final class SuperpowerManager implements Listener {
                     removeWatermanWaterBuffs(player);
                 }
             }
-            case PHOENIX -> {
+            case ASHEN_SOUL -> {
                 applyPotion(player, PotionEffectType.FIRE_RESISTANCE, 80, 0);
                 var phoenixHealth = player.getAttribute(Attribute.MAX_HEALTH);
                 double healthCap = phoenixHealth == null ? 20.0 : phoenixHealth.getValue();
@@ -2268,8 +3310,11 @@ public final class SuperpowerManager implements Listener {
             }
             case FROSTBORN -> {
                 applyPotion(player, PotionEffectType.WATER_BREATHING, 80, 0);
-                if (isStandingOnFrostBlock(player)) {
-                    applyPotion(player, PotionEffectType.SPEED, 60, 0);
+                if (isStandingOnFrostBlock(player) || isColdBiome(player)) {
+                    applyPotion(player, PotionEffectType.SPEED, 60, isColdBiome(player) ? 1 : 0);
+                }
+                if (isColdBiome(player)) {
+                    applyPotion(player, PotionEffectType.STRENGTH, 60, 0);
                 }
             }
             case DEADEYE -> {
@@ -2291,7 +3336,7 @@ public final class SuperpowerManager implements Listener {
                 }
             }
             case OATHBOUND -> applyOathboundAura(player);
-            case RUNESMITH -> applyPotion(player, PotionEffectType.HASTE, 80, 0);
+            case RUNESMITH -> applyPotion(player, PotionEffectType.HASTE, 80, 1);
             case GRAVEBORN -> {
                 pacifyNearbyUndead(player);
                 player.removePotionEffect(PotionEffectType.WITHER);
@@ -2299,7 +3344,7 @@ public final class SuperpowerManager implements Listener {
                 applyPassiveNightVision(player);
             }
             case STORMCALLER -> {
-                applyPotion(player, PotionEffectType.SPEED, 80, 0);
+                applyPotion(player, PotionEffectType.SPEED, 80, 1);
                 if (isStorming(player.getWorld())) {
                     applyPotion(player, PotionEffectType.HASTE, 80, 1);
                     applyPotion(player, PotionEffectType.STRENGTH, 80, 0);
@@ -2346,6 +3391,306 @@ public final class SuperpowerManager implements Listener {
         entity.addPotionEffect(new PotionEffect(type, durationTicks, amplifier, true, false, false));
     }
 
+    private boolean denyUnsafeSpawnAbility(Player player, Location location) {
+        SpawnProtectionListener spawnProtection = plugin.getSpawnProtectionListener();
+        if (spawnProtection == null || !spawnProtection.blocksUnsafeAbility(player, location)) {
+            return false;
+        }
+        spawnProtection.sendUnsafeAbilityDeny(player);
+        return true;
+    }
+
+    private boolean denyUnsafeSpawnAbilityArea(Player player, Location center, double radius) {
+        return denyUnsafeSpawnAbilityArea(player, center, radius, radius, radius);
+    }
+
+    private boolean denyUnsafeSpawnAbilityArea(Player player, Location center, double radiusX, double radiusY, double radiusZ) {
+        SpawnProtectionListener spawnProtection = plugin.getSpawnProtectionListener();
+        if (spawnProtection == null || !spawnProtection.blocksUnsafeAbilityArea(player, center, radiusX, radiusY, radiusZ)) {
+            return false;
+        }
+        spawnProtection.sendUnsafeAbilityDeny(player);
+        return true;
+    }
+
+    private boolean blocksUnsafeSpawnAbilityArea(Player player, Location center, double radiusX, double radiusY, double radiusZ) {
+        SpawnProtectionListener spawnProtection = plugin.getSpawnProtectionListener();
+        return spawnProtection != null && spawnProtection.blocksUnsafeAbilityArea(player, center, radiusX, radiusY, radiusZ);
+    }
+
+    private boolean blocksUnsafeSpawnCombat(Player attacker, LivingEntity victim) {
+        if (attacker == null || victim == null) {
+            return false;
+        }
+        SpawnProtectionListener spawnProtection = plugin.getSpawnProtectionListener();
+        if (spawnProtection == null || spawnProtection.canBypassSpawnSafety(attacker)) {
+            return false;
+        }
+        return spawnProtection.blocksUnsafeAbility(attacker, attacker.getLocation())
+            || spawnProtection.blocksUnsafeAbility(attacker, victim.getLocation());
+    }
+
+    private void applyVeilAssassinPassives(Player player) {
+        syncVeilAssassinHealthCap(player);
+        enforceVeilAssassinArmor(player);
+        tickVeilAssassinSmokeInvisibility(player);
+        tickVeilAssassinCrouch(player);
+    }
+
+    private void syncVeilAssassinHealthCap(Player player) {
+        var maxHealth = player.getAttribute(Attribute.MAX_HEALTH);
+        if (maxHealth == null) {
+            return;
+        }
+        AttributeModifier existing = maxHealth.getModifier(keyVeilAssassinHealthModifier);
+        double currentWithoutCap = maxHealth.getValue();
+        if (existing != null && existing.getOperation() == AttributeModifier.Operation.ADD_NUMBER) {
+            currentWithoutCap -= existing.getAmount();
+        }
+        double amount = VEIL_ASSASSIN_MAX_HEALTH - currentWithoutCap;
+        syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyVeilAssassinHealthModifier, amount, AttributeModifier.Operation.ADD_NUMBER, true);
+    }
+
+    private void startVeilAssassinCrouch(Player player) {
+        UUID playerId = player.getUniqueId();
+        veilAssassinCrouchStartedAt.put(playerId, System.currentTimeMillis());
+        veilAssassinsInVeil.remove(playerId);
+    }
+
+    private void tickVeilAssassinCrouch(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (!player.isSneaking() || player.isDead() || player.getGameMode() == GameMode.SPECTATOR) {
+            deactivateVeilAssassin(player, true);
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        long startedAt = veilAssassinCrouchStartedAt.computeIfAbsent(playerId, id -> now);
+        if (now - startedAt < VEIL_ASSASSIN_CROUCH_SECONDS * 1000L) {
+            return;
+        }
+
+        boolean justEntered = veilAssassinsInVeil.add(playerId);
+        applyPotion(player, PotionEffectType.INVISIBILITY, 60, 0);
+        applyPotion(player, PotionEffectType.SPEED, 60, 3);
+        syncPlayerAttributeModifier(
+            player,
+            Attribute.SNEAKING_SPEED,
+            keyVeilAssassinSneakingSpeedModifier,
+            VEIL_ASSASSIN_SNEAKING_SPEED_BONUS,
+            AttributeModifier.Operation.ADD_NUMBER,
+            true
+        );
+        hideShadowEquipment(player);
+        if (justEntered) {
+            player.sendMessage(MessageUtil.success("You enter the veil."));
+            refreshVeilAssassinConcealment(player);
+            player.playSound(player.getLocation(), Sound.BLOCK_SCULK_SENSOR_CLICKING, 0.6f, 0.65f);
+            player.spawnParticle(Particle.SMOKE, player.getLocation().clone().add(0.0, 1.0, 0.0), 24, 0.35, 0.55, 0.35, 0.03);
+        }
+    }
+
+    private void deactivateVeilAssassin(Player player, boolean restoreAppearance) {
+        UUID playerId = player.getUniqueId();
+        veilAssassinCrouchStartedAt.remove(playerId);
+        boolean wasInVeil = veilAssassinsInVeil.remove(playerId);
+        syncPlayerAttributeModifier(
+            player,
+            Attribute.SNEAKING_SPEED,
+            keyVeilAssassinSneakingSpeedModifier,
+            0.0,
+            AttributeModifier.Operation.ADD_NUMBER,
+            false
+        );
+        removeLikelyPowerPotion(player, PotionEffectType.SPEED, 3);
+        if (!hasActiveSmokeInvisibility(player)) {
+            removeLikelyPowerPotion(player, PotionEffectType.INVISIBILITY, 0);
+            if (wasInVeil) {
+                refreshVeilAssassinConcealment(player);
+            }
+            if (restoreAppearance && wasInVeil) {
+                restoreShadowAppearance(player);
+            }
+        }
+    }
+
+    private void clearVeilAssassinState(Player player, boolean restoreAppearance) {
+        UUID playerId = player.getUniqueId();
+        boolean hadCrouch = veilAssassinCrouchStartedAt.containsKey(playerId);
+        boolean hadSmoke = veilAssassinSmokeInvisibilityUntil.remove(playerId) != null;
+        boolean hadVeil = veilAssassinsInVeil.contains(playerId);
+        veilAssassinArmorWarnCooldowns.remove(playerId);
+        if (!hadCrouch && !hadSmoke && !hadVeil) {
+            return;
+        }
+        deactivateVeilAssassin(player, restoreAppearance);
+        removeLikelyPowerPotion(player, PotionEffectType.SPEED, 2, VEIL_ASSASSIN_SMOKE_BUFF_SECONDS * 20 + 40);
+        removeLikelyPowerPotion(player, PotionEffectType.DOLPHINS_GRACE, 0, VEIL_ASSASSIN_SMOKE_BUFF_SECONDS * 20 + 40);
+        removeLikelyPowerPotion(player, PotionEffectType.INVISIBILITY, 0, VEIL_ASSASSIN_SMOKE_BUFF_SECONDS * 20 + 40);
+        if (hadSmoke || hadVeil) {
+            refreshVeilAssassinConcealment(player);
+        }
+        if (restoreAppearance && (hadSmoke || hadVeil)) {
+            restoreShadowAppearance(player);
+        }
+    }
+
+    private void tickVeilAssassinSmokeInvisibility(Player player) {
+        UUID playerId = player.getUniqueId();
+        Long activeUntil = veilAssassinSmokeInvisibilityUntil.get(playerId);
+        if (activeUntil == null) {
+            return;
+        }
+        if (activeUntil > System.currentTimeMillis()) {
+            hideShadowEquipment(player);
+            return;
+        }
+        veilAssassinSmokeInvisibilityUntil.remove(playerId);
+        removeLikelyPowerPotion(player, PotionEffectType.SPEED, 2, VEIL_ASSASSIN_SMOKE_BUFF_SECONDS * 20 + 40);
+        removeLikelyPowerPotion(player, PotionEffectType.DOLPHINS_GRACE, 0, VEIL_ASSASSIN_SMOKE_BUFF_SECONDS * 20 + 40);
+        if (!isInVeilAssassinVeil(player)) {
+            removeLikelyPowerPotion(player, PotionEffectType.INVISIBILITY, 0, VEIL_ASSASSIN_SMOKE_BUFF_SECONDS * 20 + 40);
+            refreshVeilAssassinConcealment(player);
+            restoreShadowAppearance(player);
+        }
+    }
+
+    private boolean hasActiveSmokeInvisibility(Player player) {
+        return veilAssassinSmokeInvisibilityUntil.getOrDefault(player.getUniqueId(), 0L) > System.currentTimeMillis();
+    }
+
+    public boolean isVeilAssassinFullyConcealed(Player player) {
+        return player != null
+            && player.isOnline()
+            && !player.isDead()
+            && player.getGameMode() != GameMode.SPECTATOR
+            && hasPower(player, SuperpowerType.VEIL_ASSASSIN)
+            && (veilAssassinsInVeil.contains(player.getUniqueId()) || hasActiveSmokeInvisibility(player));
+    }
+
+    private boolean isInVeilAssassinVeil(Player player) {
+        return player != null
+            && player.isSneaking()
+            && hasPower(player, SuperpowerType.VEIL_ASSASSIN)
+            && veilAssassinsInVeil.contains(player.getUniqueId());
+    }
+
+    private void refreshVeilAssassinConcealment(Player player) {
+        if (player == null || plugin.getPlayerVisualListener() == null) {
+            return;
+        }
+        plugin.getPlayerVisualListener().refreshPlayerConcealment(player);
+    }
+
+    private void enforceVeilAssassinArmor(Player player) {
+        PlayerInventory inventory = player.getInventory();
+        boolean removed = false;
+        removed |= removeForbiddenVeilAssassinArmor(player, EquipmentSlot.HEAD, inventory.getHelmet());
+        removed |= removeForbiddenVeilAssassinArmor(player, EquipmentSlot.CHEST, inventory.getChestplate());
+        removed |= removeForbiddenVeilAssassinArmor(player, EquipmentSlot.LEGS, inventory.getLeggings());
+        removed |= removeForbiddenVeilAssassinArmor(player, EquipmentSlot.FEET, inventory.getBoots());
+        if (!removed) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        long nextWarnAt = veilAssassinArmorWarnCooldowns.getOrDefault(player.getUniqueId(), 0L);
+        if (nextWarnAt <= now) {
+            veilAssassinArmorWarnCooldowns.put(player.getUniqueId(), now + 3000L);
+            player.sendMessage(MessageUtil.warn("Veil Assassins cannot wear netherite armor."));
+        }
+        player.getWorld().playSound(player.getLocation(), Sound.ITEM_ARMOR_EQUIP_LEATHER, 0.65f, 0.7f);
+        player.updateInventory();
+    }
+
+    private boolean removeForbiddenVeilAssassinArmor(Player player, EquipmentSlot slot, ItemStack item) {
+        if (!isNetheriteArmor(item)) {
+            return false;
+        }
+        ItemStack removed = item.clone();
+        switch (slot) {
+            case HEAD -> player.getInventory().setHelmet(null);
+            case CHEST -> player.getInventory().setChestplate(null);
+            case LEGS -> player.getInventory().setLeggings(null);
+            case FEET -> player.getInventory().setBoots(null);
+            default -> {
+                return false;
+            }
+        }
+        giveOrDrop(player, removed);
+        return true;
+    }
+
+    private boolean isNetheriteArmor(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return false;
+        }
+        return switch (item.getType()) {
+            case NETHERITE_HELMET, NETHERITE_CHESTPLATE, NETHERITE_LEGGINGS, NETHERITE_BOOTS -> true;
+            default -> false;
+        };
+    }
+
+    private void giveOrDrop(Player player, ItemStack item) {
+        if (item == null || item.getType().isAir() || item.getAmount() <= 0) {
+            return;
+        }
+        player.getInventory().addItem(item).values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
+    }
+
+    private void applyVeilAssassinBackstab(EntityDamageByEntityEvent event, Player attacker, LivingEntity victim) {
+        if (isCustomBoss(victim)) {
+            event.setDamage(event.getDamage() * VEIL_ASSASSIN_BOSS_BACKSTAB_MULTIPLIER);
+        } else {
+            double targetFinalDamage = Math.max(1.0, victim.getHealth() * VEIL_ASSASSIN_BACKSTAB_RATIO);
+            setFinalDamageAtLeast(event, targetFinalDamage);
+        }
+        victim.getWorld().spawnParticle(Particle.SWEEP_ATTACK, victim.getLocation().clone().add(0.0, 1.0, 0.0), 1, 0.0, 0.0, 0.0, 0.0);
+        victim.getWorld().spawnParticle(Particle.SMOKE, victim.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.35, 0.45, 0.35, 0.04);
+        victim.getWorld().playSound(victim.getLocation(), Sound.ENTITY_PLAYER_ATTACK_CRIT, 0.9f, 0.75f);
+        attacker.getWorld().playSound(attacker.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 0.35f, 1.6f);
+    }
+
+    private void setFinalDamageAtLeast(EntityDamageByEntityEvent event, double targetFinalDamage) {
+        if (event.getFinalDamage() >= targetFinalDamage) {
+            return;
+        }
+        double rawDamage = Math.max(event.getDamage(), targetFinalDamage);
+        for (int i = 0; i < 6; i++) {
+            event.setDamage(rawDamage);
+            double finalDamage = event.getFinalDamage();
+            if (finalDamage >= targetFinalDamage || finalDamage <= 0.0) {
+                return;
+            }
+            rawDamage *= targetFinalDamage / finalDamage;
+        }
+    }
+
+    private boolean isBehindTarget(Player attacker, LivingEntity victim) {
+        Vector targetFacing = victim.getLocation().getDirection();
+        Vector targetToAttacker = attacker.getLocation().toVector().subtract(victim.getLocation().toVector());
+        targetFacing.setY(0.0);
+        targetToAttacker.setY(0.0);
+        if (targetFacing.lengthSquared() < 0.001 || targetToAttacker.lengthSquared() < 0.001) {
+            return false;
+        }
+        return targetFacing.normalize().dot(targetToAttacker.normalize()) < -0.45;
+    }
+
+    private void renderSmokeBomb(Location center) {
+        World world = center.getWorld();
+        world.playSound(center, Sound.BLOCK_FIRE_EXTINGUISH, 1.0f, 0.55f);
+        world.playSound(center, Sound.ENTITY_ENDERMAN_TELEPORT, 0.85f, 0.7f);
+        for (int i = 0; i < 8; i++) {
+            int delay = i * 5;
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                world.spawnParticle(Particle.SMOKE, center.clone().add(0.0, 1.0, 0.0), 95, 2.8, 1.2, 2.8, 0.08);
+                world.spawnParticle(Particle.CLOUD, center.clone().add(0.0, 0.75, 0.0), 55, 2.4, 0.7, 2.4, 0.05);
+                world.spawnParticle(Particle.ASH, center.clone().add(0.0, 1.2, 0.0), 60, 2.7, 1.0, 2.7, 0.03);
+            }, delay);
+        }
+    }
+
     private SuperpowerType ensurePowerAssigned(Player player) {
         SuperpowerType existing = powerOf(player);
         if (existing != null) {
@@ -2365,7 +3710,7 @@ public final class SuperpowerManager implements Listener {
             int rerolls = pdc.getOrDefault(keyPowerRerolls, PersistentDataType.INTEGER, 0);
             pdc.set(keyPowerRerolls, PersistentDataType.INTEGER, rerolls + 1);
         }
-        if (power == SuperpowerType.FLORIST) {
+        if (power == SuperpowerType.VERDANT) {
             trimExtraMotherNatureSticks(player);
             if (!hasMotherNatureStick(player)) {
                 giveMotherNatureStick(player, false);
@@ -2379,19 +3724,27 @@ public final class SuperpowerManager implements Listener {
         }
         applyPassiveEffects(player);
         player.updateInventory();
+        refreshPowerCommandVisibility();
         if (notifyScrollResult || power.hasCommandHint()) {
             sendPowerHint(player, power);
+        }
+    }
+
+    private void refreshPowerCommandVisibility() {
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            online.updateCommands();
         }
     }
 
     private void prepareForPowerAssignment(Player player, SuperpowerType nextPower) {
         UUID playerId = player.getUniqueId();
         pendingFloristStickReturns.remove(playerId);
-        pendingTheWorldClockReturns.remove(playerId);
-        pendingDruidGrimoireReturns.remove(playerId);
         closeTravelerPortal(playerId, false);
         despawnMonarchSummons(playerId);
         clearTimeStopForOwner(playerId);
+        handleHonoredDomainPlayerExit(playerId, false);
+        honoredDomainSwingCooldowns.remove(playerId);
+        clearVeilAssassinState(player, true);
         stopSupermanFlight(player, false);
 
         if (isShadowActive(player)) {
@@ -2404,7 +3757,7 @@ public final class SuperpowerManager implements Listener {
         clearPowerCooldownState(player);
         removePassiveNightVision(player);
 
-        if (nextPower != SuperpowerType.FLORIST) {
+        if (nextPower != SuperpowerType.VERDANT) {
             removeMotherNatureSticks(player);
         }
         if (nextPower != SuperpowerType.THE_WORLD) {
@@ -2426,9 +3779,17 @@ public final class SuperpowerManager implements Listener {
         pdc.remove(keyPhoenixCooldownUntil);
         pdc.remove(keyVoidstepCooldownUntil);
         pdc.remove(keyVoidstepVeilUntil);
+        pdc.remove(keyNightshadeNightVisionEnabled);
+        pdc.remove(keyJuggernautUnstoppableActiveUntil);
+        pdc.remove(keyJuggernautUnstoppableCooldownUntil);
+        pdc.remove(keyArcanistBookUpgradeCooldownUntil);
+        pdc.remove(keyDeadeyeArrowInfinityEnabled);
         pdc.remove(keyShadowCooldownUntil);
         pdc.remove(keyShadowActiveUntil);
         pdc.remove(keyDruidBuffCooldownUntil);
+        pdc.remove(keyHonoredDomainCooldownUntil);
+        pdc.remove(keyHonoredInfinityEnabled);
+        pdc.remove(keyVeilAssassinSmokeBombCooldownUntil);
         pdc.remove(keySupermanFlightActiveUntil);
         pdc.remove(keySupermanFlightCooldownUntil);
         pdc.remove(keyStormcallerLightningEnabled);
@@ -2438,15 +3799,21 @@ public final class SuperpowerManager implements Listener {
         removeLikelyPowerPotion(player, PotionEffectType.SPEED, 0);
         removeLikelyPowerPotion(player, PotionEffectType.SPEED, 1);
         removeLikelyPowerPotion(player, PotionEffectType.SPEED, 2);
+        removeLikelyPowerPotion(player, PotionEffectType.SPEED, 3);
         removeLikelyPowerPotion(player, PotionEffectType.HASTE, 2);
         removeLikelyPowerPotion(player, PotionEffectType.HASTE, 1);
         removeLikelyPowerPotion(player, PotionEffectType.HASTE, 0);
         removeLikelyPowerPotion(player, PotionEffectType.STRENGTH, 1);
         removeLikelyPowerPotion(player, PotionEffectType.STRENGTH, 0);
         removeLikelyPowerPotion(player, PotionEffectType.HEALTH_BOOST, 4);
+        removeLikelyPowerPotion(player, PotionEffectType.HEALTH_BOOST, 1);
+        removeLikelyPowerPotion(player, PotionEffectType.HEALTH_BOOST, 0);
         removeLikelyPowerPotion(player, PotionEffectType.REGENERATION, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.REGENERATION, 1);
         removeLikelyPowerPotion(player, PotionEffectType.FIRE_RESISTANCE, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.JUMP_BOOST, 0);
         removeLikelyPowerPotion(player, PotionEffectType.RESISTANCE, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.RESISTANCE, 1);
         removeLikelyPowerPotion(player, PotionEffectType.SLOWNESS, 0);
         removeLikelyPowerPotion(player, PotionEffectType.WATER_BREATHING, 0);
         removeLikelyPowerPotion(player, PotionEffectType.CONDUIT_POWER, 0);
@@ -2455,6 +3822,15 @@ public final class SuperpowerManager implements Listener {
         removeLikelyPowerPotion(player, PotionEffectType.SLOW_FALLING, 0);
         removeLikelyPowerPotion(player, PotionEffectType.INVISIBILITY, 0);
         removeLikelyPowerPotion(player, PotionEffectType.ABSORPTION, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.ABSORPTION, 1);
+        removeLikelyPowerPotion(player, PotionEffectType.LUCK, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.SATURATION, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.WEAKNESS, 10);
+        removeLikelyPowerPotion(player, PotionEffectType.WEAKNESS, 1, BLOODMENDER_SACRIFICE_WEAKNESS_SECONDS * 20 + 40);
+        removeLikelyPowerPotion(player, PotionEffectType.MINING_FATIGUE, 4);
+        removeLikelyPowerPotion(player, PotionEffectType.BLINDNESS, 0);
+        removeLikelyPowerPotion(player, PotionEffectType.NAUSEA, HONORED_DOMAIN_NAUSEA_AMPLIFIER, HONORED_DOMAIN_NAUSEA_DURATION_TICKS + 40);
+        removeLikelyPowerPotion(player, PotionEffectType.DARKNESS, 0);
 
         var maxHealth = player.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH);
         if (maxHealth != null && player.getHealth() > maxHealth.getValue()) {
@@ -2482,7 +3858,7 @@ public final class SuperpowerManager implements Listener {
     private SuperpowerType randomPower(boolean excludeHuman) {
         double total = 0.0;
         for (SuperpowerType type : SuperpowerType.values()) {
-            if (excludeHuman && type == SuperpowerType.HUMAN) {
+            if (excludeHuman && type == SuperpowerType.MORTAL) {
                 continue;
             }
             total += type.chance();
@@ -2491,7 +3867,7 @@ public final class SuperpowerManager implements Listener {
         double roll = ThreadLocalRandom.current().nextDouble() * total;
         double cursor = 0.0;
         for (SuperpowerType type : SuperpowerType.values()) {
-            if (excludeHuman && type == SuperpowerType.HUMAN) {
+            if (excludeHuman && type == SuperpowerType.MORTAL) {
                 continue;
             }
             cursor += type.chance();
@@ -2499,7 +3875,7 @@ public final class SuperpowerManager implements Listener {
                 return type;
             }
         }
-        return excludeHuman ? SuperpowerType.FLASH : SuperpowerType.HUMAN;
+        return excludeHuman ? SuperpowerType.VEIL_ASSASSIN : SuperpowerType.MORTAL;
     }
 
     private void markVisitedDimension(Player player, World world) {
@@ -2534,6 +3910,30 @@ public final class SuperpowerManager implements Listener {
             }
         }
         return null;
+    }
+
+    private World wayfarerWorld(World.Environment environment) {
+        if (environment == null) {
+            return null;
+        }
+        World world = environment == World.Environment.NORMAL
+            ? Bukkit.getWorld(plugin.getConfigManager().smpStartWorld)
+            : primaryWorld(environment);
+        return world != null && world.getEnvironment() == environment ? world : null;
+    }
+
+    private boolean isWayfarerWorld(World world) {
+        return world != null && world.equals(wayfarerWorld(world.getEnvironment()));
+    }
+
+    private boolean canEnterWayfarerDimension(Player player, World.Environment environment) {
+        if (environment != World.Environment.NETHER && environment != World.Environment.THE_END) {
+            return true;
+        }
+        if (player.hasPermission("smpcore.startsmp.bypass-dimension-lock")) {
+            return true;
+        }
+        return plugin.getSmpStartManager() == null || plugin.getSmpStartManager().isDimensionUnlocked(environment);
     }
 
     private World.Environment parseEnvironment(String raw) {
@@ -2615,7 +4015,7 @@ public final class SuperpowerManager implements Listener {
                 continue;
             }
             living.setFireTicks(Math.max(living.getFireTicks(), 80));
-            living.damage(PHOENIX_BURST_DAMAGE, player);
+            AbilityDamageContext.damage(player, living, PHOENIX_BURST_DAMAGE);
         }
         player.sendMessage(MessageUtil.success("Your Ashen Soul pulls you back from death."));
         return true;
@@ -2644,6 +4044,34 @@ public final class SuperpowerManager implements Listener {
         return player.getPersistentDataContainer().getOrDefault(keyDruidBuffCooldownUntil, PersistentDataType.LONG, 0L);
     }
 
+    private long honoredDomainCooldownUntil(Player player) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        long cooldownUntil = pdc.getOrDefault(keyHonoredDomainCooldownUntil, PersistentDataType.LONG, 0L);
+        if (cooldownUntil <= 0L) {
+            return 0L;
+        }
+        long now = System.currentTimeMillis();
+        if (cooldownUntil <= now) {
+            pdc.remove(keyHonoredDomainCooldownUntil);
+            return 0L;
+        }
+
+        long currentCooldownMs = HONORED_DOMAIN_COOLDOWN_SECONDS * 1000L;
+        long remainingMs = cooldownUntil - now;
+        if (remainingMs <= currentCooldownMs) {
+            return cooldownUntil;
+        }
+
+        // Older builds stored Domain Expansion cooldowns as 2-hour absolute expiry times.
+        long migratedUntil = cooldownUntil - ((HONORED_DOMAIN_LEGACY_COOLDOWN_SECONDS - HONORED_DOMAIN_COOLDOWN_SECONDS) * 1000L);
+        if (migratedUntil <= now) {
+            pdc.remove(keyHonoredDomainCooldownUntil);
+            return 0L;
+        }
+        pdc.set(keyHonoredDomainCooldownUntil, PersistentDataType.LONG, migratedUntil);
+        return migratedUntil;
+    }
+
     private long phoenixCooldownUntil(Player player) {
         return player.getPersistentDataContainer().getOrDefault(keyPhoenixCooldownUntil, PersistentDataType.LONG, 0L);
     }
@@ -2658,12 +4086,43 @@ public final class SuperpowerManager implements Listener {
 
     private boolean isVoidwalkerNightVisionEnabled(Player player) {
         Byte raw = player.getPersistentDataContainer().get(keyVoidwalkerNightVisionEnabled, PersistentDataType.BYTE);
-        return raw == null || raw != 0;
+        return raw == null ? hasPower(player, SuperpowerType.VOIDWALKER) : raw != 0;
+    }
+
+    private boolean isNightshadeNightVisionEnabled(Player player) {
+        Byte raw = player.getPersistentDataContainer().get(keyNightshadeNightVisionEnabled, PersistentDataType.BYTE);
+        return raw == null ? hasPower(player, SuperpowerType.NIGHTSHADE) : raw != 0;
     }
 
     private boolean isStormcallerLightningEnabled(Player player) {
         Byte raw = player.getPersistentDataContainer().get(keyStormcallerLightningEnabled, PersistentDataType.BYTE);
-        return raw == null || raw != 0;
+        return raw == null ? hasPower(player, SuperpowerType.STORMCALLER) : raw != 0;
+    }
+
+    private boolean isDeadeyeArrowInfinityEnabled(Player player) {
+        Byte raw = player.getPersistentDataContainer().get(keyDeadeyeArrowInfinityEnabled, PersistentDataType.BYTE);
+        return raw == null ? hasPower(player, SuperpowerType.DEADEYE) : raw != 0;
+    }
+
+    private boolean isHonoredInfinityEnabled(Player player) {
+        Byte raw = player.getPersistentDataContainer().get(keyHonoredInfinityEnabled, PersistentDataType.BYTE);
+        return raw == null ? hasPower(player, SuperpowerType.HONORED_ONE) : raw != 0;
+    }
+
+    private long juggernautUnstoppableActiveUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keyJuggernautUnstoppableActiveUntil, PersistentDataType.LONG, 0L);
+    }
+
+    private long juggernautUnstoppableCooldownUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keyJuggernautUnstoppableCooldownUntil, PersistentDataType.LONG, 0L);
+    }
+
+    private long arcanistBookUpgradeCooldownUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keyArcanistBookUpgradeCooldownUntil, PersistentDataType.LONG, 0L);
+    }
+
+    private long veilAssassinSmokeBombCooldownUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keyVeilAssassinSmokeBombCooldownUntil, PersistentDataType.LONG, 0L);
     }
 
     private void setShadowCooldownUntil(Player player, long value) {
@@ -2715,8 +4174,61 @@ public final class SuperpowerManager implements Listener {
         player.getPersistentDataContainer().set(keyVoidwalkerNightVisionEnabled, PersistentDataType.BYTE, (byte) (enabled ? 1 : 0));
     }
 
+    private void setNightshadeNightVisionEnabled(Player player, boolean enabled) {
+        player.getPersistentDataContainer().set(keyNightshadeNightVisionEnabled, PersistentDataType.BYTE, (byte) (enabled ? 1 : 0));
+    }
+
     private void setStormcallerLightningEnabled(Player player, boolean enabled) {
         player.getPersistentDataContainer().set(keyStormcallerLightningEnabled, PersistentDataType.BYTE, (byte) (enabled ? 1 : 0));
+    }
+
+    private void setDeadeyeArrowInfinityEnabled(Player player, boolean enabled) {
+        player.getPersistentDataContainer().set(keyDeadeyeArrowInfinityEnabled, PersistentDataType.BYTE, (byte) (enabled ? 1 : 0));
+    }
+
+    private void setHonoredInfinityEnabled(Player player, boolean enabled) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (enabled) {
+            pdc.remove(keyHonoredInfinityEnabled);
+            return;
+        }
+        pdc.set(keyHonoredInfinityEnabled, PersistentDataType.BYTE, (byte) 0);
+    }
+
+    private void setJuggernautUnstoppableActiveUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keyJuggernautUnstoppableActiveUntil);
+            return;
+        }
+        pdc.set(keyJuggernautUnstoppableActiveUntil, PersistentDataType.LONG, value);
+    }
+
+    private void setJuggernautUnstoppableCooldownUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keyJuggernautUnstoppableCooldownUntil);
+            return;
+        }
+        pdc.set(keyJuggernautUnstoppableCooldownUntil, PersistentDataType.LONG, value);
+    }
+
+    private void setArcanistBookUpgradeCooldownUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keyArcanistBookUpgradeCooldownUntil);
+            return;
+        }
+        pdc.set(keyArcanistBookUpgradeCooldownUntil, PersistentDataType.LONG, value);
+    }
+
+    private void setVeilAssassinSmokeBombCooldownUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keyVeilAssassinSmokeBombCooldownUntil);
+            return;
+        }
+        pdc.set(keyVeilAssassinSmokeBombCooldownUntil, PersistentDataType.LONG, value);
     }
 
     private void setDruidBuffCooldownUntil(Player player, long value) {
@@ -2726,6 +4238,15 @@ public final class SuperpowerManager implements Listener {
             return;
         }
         pdc.set(keyDruidBuffCooldownUntil, PersistentDataType.LONG, value);
+    }
+
+    private void setHonoredDomainCooldownUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keyHonoredDomainCooldownUntil);
+            return;
+        }
+        pdc.set(keyHonoredDomainCooldownUntil, PersistentDataType.LONG, value);
     }
 
     private boolean isShadowActive(Player player) {
@@ -2767,7 +4288,21 @@ public final class SuperpowerManager implements Listener {
 
     private void refreshVisibleShadowsFor(Player viewer) {
         for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player.equals(viewer) || !isShadowActive(player)) {
+            if (player.equals(viewer)) {
+                continue;
+            }
+            if (isVeilAssassinFullyConcealed(player)) {
+                viewer.hideEntity(plugin, player);
+                if (!viewer.isListed(player)) {
+                    try {
+                        viewer.listPlayer(player);
+                    } catch (IllegalStateException ignored) {
+                        // PlayerVisualListener retries once the join visibility state settles.
+                    }
+                }
+                continue;
+            }
+            if (!isShadowActive(player)) {
                 continue;
             }
             sendShadowEquipmentState(viewer, player, true);
@@ -2829,6 +4364,20 @@ public final class SuperpowerManager implements Listener {
 
     private int secondsLeft(long future, long now) {
         return Math.max(1, (int) Math.ceil((future - now) / 1000.0));
+    }
+
+    private String formatShortDuration(long millis) {
+        long seconds = Math.max(1L, (long) Math.ceil(millis / 1000.0));
+        long hours = seconds / 3600L;
+        long minutes = (seconds % 3600L) / 60L;
+        long remainder = seconds % 60L;
+        if (hours > 0L) {
+            return hours + "h " + minutes + "m";
+        }
+        if (minutes > 0L) {
+            return minutes + "m " + remainder + "s";
+        }
+        return remainder + "s";
     }
 
     private boolean isPowerItemActivationClick(Player player, Action action) {
@@ -2899,11 +4448,17 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void chooseAncientScrollPower(Player player, PowerChoiceHolder holder, SuperpowerType choice) {
-        if (choice == null || choice == SuperpowerType.HUMAN) {
+        if (choice == null || choice == SuperpowerType.MORTAL) {
             return;
         }
         if (choice == powerOf(player)) {
             player.sendMessage(MessageUtil.warn("You already have <white>" + choice.displayName() + "</white>. Pick a different fate."));
+            return;
+        }
+        if (choice == SuperpowerType.HONORED_ONE
+            && plugin.getSpawnProtectionListener() != null
+            && plugin.getSpawnProtectionListener().blocksProtectedSpawnDeath(player)) {
+            player.sendMessage(MessageUtil.warn("Choose that fate outside protected spawn."));
             return;
         }
         if (!isAwakenedAncientScroll(itemInHand(player, holder.hand()))) {
@@ -2922,6 +4477,12 @@ public final class SuperpowerManager implements Listener {
         player.sendMessage(MessageUtil.success("The awakened scroll binds you to <white>" + choice.displayName() + "</white>."));
         player.getWorld().playSound(player.getLocation(), Sound.BLOCK_ENCHANTMENT_TABLE_USE, 0.9f, 1.45f);
         player.getWorld().spawnParticle(Particle.ENCHANT, player.getLocation().add(0.0, 1.1, 0.0), 40, 0.45, 0.65, 0.45, 0.04);
+        if (choice == SuperpowerType.HONORED_ONE) {
+            player.sendMessage(MessageUtil.warn("The scroll takes your life as payment."));
+            player.getWorld().playSound(player.getLocation(), Sound.ENTITY_WITHER_SPAWN, 0.7f, 1.4f);
+            player.getWorld().spawnParticle(Particle.REVERSE_PORTAL, player.getLocation().clone().add(0.0, 1.0, 0.0), 70, 0.6, 0.8, 0.6, 0.12);
+            player.setHealth(0.0);
+        }
     }
 
     private void openDruidGrimoire(Player player) {
@@ -2941,7 +4502,9 @@ public final class SuperpowerManager implements Listener {
 
     private void fillDruidMenu(Inventory inventory) {
         for (int slot = 0; slot < inventory.getSize(); slot++) {
-            inventory.setItem(slot, fillerPane());
+            if (isFrameSlot(slot, inventory.getSize())) {
+                inventory.setItem(slot, fillerPane());
+            }
         }
         inventory.setItem(4, createDruidHeaderIcon());
         for (DruidBlessing blessing : DruidBlessing.values()) {
@@ -2956,13 +4519,13 @@ public final class SuperpowerManager implements Listener {
             return item;
         }
         meta.displayName(MM.deserialize("<gradient:#63c74d:#c6ff6b><bold>Druid's Grimoire</bold></gradient>"));
-        meta.lore(List.of(
-            MM.deserialize("<gray>Choose one blessing for yourself and nearby teammates.</gray>"),
+        meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
+            MM.deserialize("<gray>Choose one positive blessing for yourself and nearby teammates.</gray>"),
             MM.deserialize("<gray>Only one blessing is cast per use.</gray>"),
             Component.empty(),
             MM.deserialize("<gray>Radius: <white>" + DRUID_BUFF_RADIUS + " blocks</white></gray>"),
             MM.deserialize("<gray>Duration: <white>" + DRUID_BUFF_DURATION_SECONDS + "s</white></gray>")
-        ));
+        )));
         item.setItemMeta(meta);
         return item;
     }
@@ -3093,14 +4656,408 @@ public final class SuperpowerManager implements Listener {
         }
 
         if (allies.size() <= 1) {
+            applyPotion(player, PotionEffectType.SPEED, 60, 1);
             return;
         }
         for (Player ally : allies) {
-            applyPotion(ally, PotionEffectType.SPEED, 60, 0);
+            applyPotion(ally, PotionEffectType.SPEED, 60, 1);
+            applyPotion(ally, PotionEffectType.RESISTANCE, 60, 0);
         }
-        applyPotion(player, PotionEffectType.RESISTANCE, 60, 0);
-        applyPotion(player, PotionEffectType.ABSORPTION, 60, 0);
+        applyPotion(player, PotionEffectType.STRENGTH, 60, 0);
+        applyPotion(player, PotionEffectType.ABSORPTION, 60, 1);
         player.getWorld().spawnParticle(Particle.WAX_ON, player.getLocation().clone().add(0.0, 1.0, 0.0), 10, 0.7, 0.4, 0.7, 0.01);
+    }
+
+    private void applyOathSummonBuffs(Player oathbound) {
+        double radiusSquared = OATHBOUND_SUMMON_BUFF_RADIUS * OATHBOUND_SUMMON_BUFF_RADIUS;
+        for (Player nearby : oathbound.getWorld().getPlayers()) {
+            if (nearby.isDead() || nearby.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            if (nearby.getLocation().distanceSquared(oathbound.getLocation()) > radiusSquared) {
+                continue;
+            }
+            if (!sameTeamOrSelf(oathbound.getUniqueId(), nearby.getUniqueId())) {
+                continue;
+            }
+            applyPotion(nearby, PotionEffectType.STRENGTH, OATHBOUND_SUMMON_BUFF_SECONDS * 20, 1);
+            applyPotion(nearby, PotionEffectType.ABSORPTION, OATHBOUND_SUMMON_BUFF_SECONDS * 20, 1);
+            nearby.getWorld().spawnParticle(Particle.WAX_ON, nearby.getLocation().clone().add(0.0, 1.0, 0.0), 12, 0.55, 0.4, 0.55, 0.02);
+        }
+    }
+
+    private boolean tryJuggernautWallImpact(Player player) {
+        Vector direction = player.getLocation().getDirection();
+        direction.setY(0.0);
+        if (direction.lengthSquared() < 0.01) {
+            direction = player.getVelocity().clone();
+            direction.setY(0.0);
+        }
+        if (direction.lengthSquared() < 0.01) {
+            return false;
+        }
+        direction.normalize();
+
+        Location base = player.getLocation();
+        if (blocksUnsafeSpawnAbilityArea(player, base, 3.0, 3.0, 3.0)) {
+            return false;
+        }
+        BlockFace forward = dominantFace(direction);
+        BlockFace side = perpendicularFace(forward);
+        int broken = 0;
+        boolean hitWall = false;
+        for (int depth = 1; depth <= 2; depth++) {
+            Block center = base.clone().add(direction.clone().multiply(depth)).getBlock();
+            for (int y = 0; y <= 2; y++) {
+                for (int offset = -1; offset <= 1; offset++) {
+                    Block block = center.getRelative(BlockFace.UP, y).getRelative(side, offset);
+                    if (!isUnstoppableBreakable(block)) {
+                        if (block.getType().isSolid()) {
+                            hitWall = true;
+                        }
+                        continue;
+                    }
+                    if (breakUnstoppableBlock(player, block)) {
+                        broken++;
+                    }
+                }
+            }
+        }
+
+        if (broken <= 0) {
+            return hitWall;
+        }
+        Location impact = base.clone().add(direction.multiply(1.2)).add(0.0, 1.0, 0.0);
+        World world = player.getWorld();
+        world.playSound(impact, Sound.ENTITY_GENERIC_EXPLODE, 0.75f, 0.75f);
+        world.playSound(impact, Sound.BLOCK_STONE_BREAK, 1.0f, 0.55f);
+        world.spawnParticle(Particle.CLOUD, impact, 36, 0.75, 0.55, 0.75, 0.12);
+        world.spawnParticle(Particle.CRIT, impact, 22, 0.65, 0.45, 0.65, 0.05);
+        damageJuggernautImpact(player, impact);
+        return true;
+    }
+
+    private boolean breakUnstoppableBlock(Player player, Block block) {
+        BlockBreakEvent breakEvent = new BlockBreakEvent(block, player);
+        Bukkit.getPluginManager().callEvent(breakEvent);
+        if (breakEvent.isCancelled()) {
+            return false;
+        }
+        if (!breakEvent.isDropItems()) {
+            block.setType(Material.AIR, true);
+            return true;
+        }
+        ItemStack tool = player.getInventory().getItemInMainHand();
+        return block.breakNaturally(tool, true, true);
+    }
+
+    private boolean isUnstoppableBreakable(Block block) {
+        if (block == null) {
+            return false;
+        }
+        Material type = block.getType();
+        if (type.isAir() || !type.isBlock() || !type.isSolid()) {
+            return false;
+        }
+        if (block.getState() instanceof Container) {
+            return false;
+        }
+        float hardness = type.getHardness();
+        if (hardness < 0.0f || hardness > JUGGERNAUT_UNSTOPPABLE_BREAK_HARDNESS_LIMIT) {
+            return false;
+        }
+        return switch (type) {
+            case BEDROCK, BARRIER, COMMAND_BLOCK, CHAIN_COMMAND_BLOCK, REPEATING_COMMAND_BLOCK,
+                STRUCTURE_BLOCK, STRUCTURE_VOID, JIGSAW, END_PORTAL, END_PORTAL_FRAME,
+                NETHER_PORTAL, TRIAL_SPAWNER, SPAWNER, VAULT, REINFORCED_DEEPSLATE,
+                CHEST, TRAPPED_CHEST, BARREL, HOPPER, DISPENSER, DROPPER, FURNACE,
+                BLAST_FURNACE, SMOKER, BREWING_STAND, CHISELED_BOOKSHELF, JUKEBOX,
+                LECTERN, DECORATED_POT -> false;
+            default -> true;
+        };
+    }
+
+    private BlockFace dominantFace(Vector direction) {
+        if (Math.abs(direction.getX()) > Math.abs(direction.getZ())) {
+            return direction.getX() >= 0.0 ? BlockFace.EAST : BlockFace.WEST;
+        }
+        return direction.getZ() >= 0.0 ? BlockFace.SOUTH : BlockFace.NORTH;
+    }
+
+    private BlockFace perpendicularFace(BlockFace face) {
+        return switch (face) {
+            case EAST, WEST -> BlockFace.NORTH;
+            default -> BlockFace.EAST;
+        };
+    }
+
+    private void damageJuggernautImpact(Player player, Location impact) {
+        for (Entity nearby : player.getWorld().getNearbyEntities(impact, 2.4, 1.8, 2.4)) {
+            if (!(nearby instanceof LivingEntity living) || living.equals(player) || living.isDead() || isFriendlyTo(player, living)) {
+                continue;
+            }
+            AbilityDamageContext.damage(player, living, JUGGERNAUT_UNSTOPPABLE_IMPACT_DAMAGE);
+            Vector push = living.getLocation().toVector().subtract(player.getLocation().toVector());
+            push.setY(0.0);
+            if (!isCustomBoss(living) && push.lengthSquared() > 0.001) {
+                living.setVelocity(living.getVelocity().add(push.normalize().multiply(0.35).setY(0.12)));
+            }
+        }
+    }
+
+    private void trackJuggernautFall(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (!hasPower(player, SuperpowerType.JUGGERNAUT) || player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR) {
+            juggernautPeakFallDistances.remove(playerId);
+            return;
+        }
+        if (player.isFlying() || player.isGliding() || player.isInsideVehicle()) {
+            juggernautPeakFallDistances.remove(playerId);
+            return;
+        }
+
+        float currentFall = player.getFallDistance();
+        if (!((Entity) player).isOnGround()) {
+            if (currentFall > 0.5f) {
+                juggernautPeakFallDistances.merge(playerId, currentFall, (previous, current) -> Math.max(previous, current));
+            }
+            return;
+        }
+
+        Float peakFall = juggernautPeakFallDistances.remove(playerId);
+        if (peakFall == null || peakFall < JUGGERNAUT_GROUND_SLAM_MIN_FALL_DISTANCE) {
+            return;
+        }
+        tryTriggerJuggernautGroundSlam(player, peakFall, Math.max(0.0, peakFall - 3.0));
+    }
+
+    private boolean tryTriggerJuggernautGroundSlam(Player player, float fallDistance, double fallDamage) {
+        if (blocksUnsafeSpawnAbilityArea(player, player.getLocation(), JUGGERNAUT_GROUND_SLAM_RADIUS, 3.0, JUGGERNAUT_GROUND_SLAM_RADIUS)) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        UUID playerId = player.getUniqueId();
+        Long nextSlamAt = juggernautGroundSlamCooldowns.get(playerId);
+        if (nextSlamAt != null && nextSlamAt > now) {
+            return false;
+        }
+        boolean triggered = triggerJuggernautGroundSlam(player, fallDistance, fallDamage);
+        if (triggered) {
+            juggernautGroundSlamCooldowns.put(playerId, now + 700L);
+        }
+        return triggered;
+    }
+
+    private boolean triggerJuggernautGroundSlam(Player player, float fallDistance, double fallDamage) {
+        double effectiveFall = Math.max(fallDistance, fallDamage + 3.0);
+        if (effectiveFall < JUGGERNAUT_GROUND_SLAM_MIN_FALL_DISTANCE) {
+            return false;
+        }
+        double radius = Math.min(JUGGERNAUT_GROUND_SLAM_RADIUS, 2.5 + (effectiveFall * 0.15));
+        double playerDamage = Math.min(JUGGERNAUT_GROUND_SLAM_MAX_PLAYER_DAMAGE, Math.max(2.0, (effectiveFall - 3.0) * 0.75));
+        Location center = player.getLocation();
+        player.getWorld().playSound(center, Sound.ENTITY_GENERIC_EXPLODE, 0.8f, 0.65f);
+        player.getWorld().spawnParticle(Particle.CLOUD, center.clone().add(0.0, 0.15, 0.0), 54, radius * 0.35, 0.1, radius * 0.35, 0.1);
+        player.getWorld().spawnParticle(Particle.SWEEP_ATTACK, center.clone().add(0.0, 0.55, 0.0), 18, radius * 0.28, 0.15, radius * 0.28, 0.0);
+        for (Entity nearby : player.getWorld().getNearbyEntities(center, radius, 2.5, radius)) {
+            if (!(nearby instanceof LivingEntity living) || living.equals(player) || living.isDead() || isFriendlyTo(player, living)) {
+                continue;
+            }
+            double damage = living instanceof Player ? playerDamage : playerDamage * 2.0;
+            AbilityDamageContext.damage(player, living, damage);
+            Vector launch = living.getLocation().toVector().subtract(center.toVector());
+            launch.setY(0.0);
+            if (!isCustomBoss(living) && launch.lengthSquared() > 0.001) {
+                living.setVelocity(living.getVelocity().add(launch.normalize().multiply(0.45).setY(0.28)));
+            }
+        }
+        return true;
+    }
+
+    private boolean tryGravebornSecondChance(Player player) {
+        Mob sacrifice = nearestReviveUndead(player);
+        if (sacrifice == null) {
+            return false;
+        }
+        sacrifice.getWorld().spawnParticle(Particle.SOUL, sacrifice.getLocation().clone().add(0.0, 1.0, 0.0), 30, 0.45, 0.5, 0.45, 0.04);
+        sacrifice.remove();
+
+        double healthCap = maxHealth(player);
+        player.setHealth(Math.min(healthCap, 8.0));
+        player.setFireTicks(0);
+        player.removePotionEffect(PotionEffectType.POISON);
+        player.removePotionEffect(PotionEffectType.WITHER);
+        applyPotion(player, PotionEffectType.REGENERATION, 8 * 20, 1);
+        applyPotion(player, PotionEffectType.RESISTANCE, 5 * 20, 1);
+        applyPotion(player, PotionEffectType.ABSORPTION, 10 * 20, 1);
+        player.getWorld().spawnParticle(Particle.TOTEM_OF_UNDYING, player.getLocation().clone().add(0.0, 1.0, 0.0), 42, 0.55, 0.65, 0.55, 0.03);
+        player.getWorld().playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 0.95f, 0.8f);
+        player.sendMessage(MessageUtil.success("An undead soul pulled you back."));
+        return true;
+    }
+
+    private Mob nearestReviveUndead(Player player) {
+        Mob best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (Entity nearby : player.getWorld().getNearbyEntities(player.getLocation(), GRAVEBORN_REVIVE_RADIUS, GRAVEBORN_REVIVE_RADIUS, GRAVEBORN_REVIVE_RADIUS)) {
+            if (!(nearby instanceof Mob mob) || mob.isDead() || !mob.isValid() || !isUndeadPassiveType(mob.getType())) {
+                continue;
+            }
+            if (isTaggedMonarchSummon(mob) || isCustomBoss(mob)) {
+                continue;
+            }
+            double distance = mob.getLocation().distanceSquared(player.getLocation());
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = mob;
+            }
+        }
+        return best;
+    }
+
+    private void applyNearbyGravebornDeathBuff(Player deadPlayer) {
+        for (Player nearby : deadPlayer.getWorld().getPlayers()) {
+            if (nearby.equals(deadPlayer) || nearby.isDead() || !hasPower(nearby, SuperpowerType.GRAVEBORN)) {
+                continue;
+            }
+            if (nearby.getLocation().distanceSquared(deadPlayer.getLocation()) > GRAVEBORN_PLAYER_DEATH_BUFF_RADIUS * GRAVEBORN_PLAYER_DEATH_BUFF_RADIUS) {
+                continue;
+            }
+            applyPotion(nearby, PotionEffectType.STRENGTH, 30 * 20, 0);
+            applyPotion(nearby, PotionEffectType.SPEED, 30 * 20, 0);
+            applyPotion(nearby, PotionEffectType.ABSORPTION, 45 * 20, 2);
+            applyPotion(nearby, PotionEffectType.REGENERATION, 8 * 20, 1);
+            nearby.getWorld().spawnParticle(Particle.SOUL, nearby.getLocation().clone().add(0.0, 1.0, 0.0), 22, 0.55, 0.5, 0.55, 0.03);
+        }
+    }
+
+    private List<Player> nearbyBloodmenderTeammates(Player player) {
+        double radiusSquared = BLOODMENDER_SACRIFICE_RADIUS * BLOODMENDER_SACRIFICE_RADIUS;
+        List<Player> targets = new ArrayList<>();
+        for (Player nearby : player.getWorld().getPlayers()) {
+            if (nearby.equals(player) || nearby.isDead() || nearby.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            if (nearby.getLocation().distanceSquared(player.getLocation()) > radiusSquared) {
+                continue;
+            }
+            if (!sameTeamOrSelf(player.getUniqueId(), nearby.getUniqueId())) {
+                continue;
+            }
+            if (nearby.getHealth() >= maxHealth(nearby) - 0.05 && nearby.getFireTicks() <= 0) {
+                continue;
+            }
+            targets.add(nearby);
+        }
+        return targets;
+    }
+
+    private List<ArmorCurseTarget> nearbyCurseArmorTargets(Player player) {
+        double radiusSquared = BLOODMENDER_CURSE_RADIUS * BLOODMENDER_CURSE_RADIUS;
+        List<ArmorCurseTarget> targets = new ArrayList<>();
+        for (Player enemy : player.getWorld().getPlayers()) {
+            if (enemy.equals(player) || enemy.isDead() || enemy.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            if (enemy.getLocation().distanceSquared(player.getLocation()) > radiusSquared) {
+                continue;
+            }
+            if (sameTeamOrSelf(player.getUniqueId(), enemy.getUniqueId())) {
+                continue;
+            }
+            collectCurseTarget(targets, enemy, EquipmentSlot.HEAD, enemy.getInventory().getHelmet());
+            collectCurseTarget(targets, enemy, EquipmentSlot.CHEST, enemy.getInventory().getChestplate());
+            collectCurseTarget(targets, enemy, EquipmentSlot.LEGS, enemy.getInventory().getLeggings());
+            collectCurseTarget(targets, enemy, EquipmentSlot.FEET, enemy.getInventory().getBoots());
+        }
+        return targets;
+    }
+
+    private void collectCurseTarget(List<ArmorCurseTarget> targets, Player target, EquipmentSlot slot, ItemStack item) {
+        if (item == null || item.getType() == Material.AIR || !isArmorMaterial(item.getType())) {
+            return;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null || meta.hasEnchant(Enchantment.VANISHING_CURSE)) {
+            return;
+        }
+        targets.add(new ArmorCurseTarget(target, slot, item.clone()));
+    }
+
+    private boolean isArmorMaterial(Material material) {
+        if (material == null) {
+            return false;
+        }
+        String name = material.name();
+        return name.endsWith("_HELMET")
+            || name.endsWith("_CHESTPLATE")
+            || name.endsWith("_LEGGINGS")
+            || name.endsWith("_BOOTS")
+            || name.equals("ELYTRA")
+            || name.equals("TURTLE_HELMET");
+    }
+
+    private boolean isArrowMaterial(Material material) {
+        return material == Material.ARROW || material == Material.TIPPED_ARROW || material == Material.SPECTRAL_ARROW;
+    }
+
+    private ItemStack likelyCrossbowConsumable(Player player) {
+        ItemStack offhand = player.getInventory().getItemInOffHand();
+        if (isCrossbowConsumable(offhand)) {
+            return offhand;
+        }
+        ItemStack mainHand = player.getInventory().getItemInMainHand();
+        if (isCrossbowConsumable(mainHand)) {
+            return mainHand;
+        }
+        for (ItemStack item : player.getInventory().getContents()) {
+            if (isCrossbowConsumable(item)) {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    private boolean isCrossbowConsumable(ItemStack item) {
+        return item != null
+            && item.getAmount() > 0
+            && (isArrowMaterial(item.getType()) || item.getType() == Material.FIREWORK_ROCKET);
+    }
+
+    private void refundDeadeyeArrow(Player player, ItemStack refund) {
+        if (!player.isOnline() || refund == null || refund.getAmount() <= 0 || !isArrowMaterial(refund.getType())) {
+            return;
+        }
+        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(refund);
+        for (ItemStack leftover : leftovers.values()) {
+            player.getWorld().dropItemNaturally(player.getLocation(), leftover);
+        }
+        player.updateInventory();
+    }
+
+    private boolean isStormcallerHeavyWeapon(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) {
+            return false;
+        }
+        Material type = item.getType();
+        return type == Material.MACE || type.name().endsWith("_AXE");
+    }
+
+    private boolean isColdBiome(Player player) {
+        Block block = player.getLocation().getBlock();
+        String biome = block.getBiome().getKey().getKey().toUpperCase(Locale.ROOT);
+        return block.getTemperature() <= 0.20
+            || biome.contains("SNOW")
+            || biome.contains("FROZEN")
+            || biome.contains("ICE")
+            || biome.contains("COLD")
+            || biome.contains("GROVE")
+            || biome.contains("PEAK");
+    }
+
+    private double maxHealth(Player player) {
+        var attribute = player.getAttribute(Attribute.MAX_HEALTH);
+        return attribute == null ? 20.0 : Math.max(1.0, attribute.getValue());
     }
 
     private boolean hasNearbyCustomBoss(Player player, double radius) {
@@ -3116,6 +5073,26 @@ public final class SuperpowerManager implements Listener {
     private boolean isCustomBoss(Entity entity) {
         BossManager bossManager = plugin.getBossManager();
         return bossManager != null && bossManager.isCustomBoss(entity);
+    }
+
+    private boolean isBossEncounterEntity(Entity entity) {
+        BossManager bossManager = plugin.getBossManager();
+        return bossManager != null && bossManager.isBossEncounterEntity(entity);
+    }
+
+    private boolean isBossOwnedProjectile(Projectile projectile) {
+        BossManager bossManager = plugin.getBossManager();
+        return bossManager != null && bossManager.isBossOwnedProjectile(projectile);
+    }
+
+    private boolean isActiveBossFight(Player player) {
+        BossManager bossManager = plugin.getBossManager();
+        return bossManager != null && bossManager.isActiveBossFight(player);
+    }
+
+    private boolean isLethalBossMechanicDamage(Player player) {
+        BossManager bossManager = plugin.getBossManager();
+        return bossManager != null && bossManager.isLethalBossMechanicDamage(player);
     }
 
     private boolean isHostileMob(LivingEntity entity) {
@@ -3156,6 +5133,9 @@ public final class SuperpowerManager implements Listener {
 
     private void healPlayer(Player player, double amount) {
         if (player == null || amount <= 0.0 || player.isDead()) {
+            return;
+        }
+        if (plugin.getBossManager() != null && plugin.getBossManager().blockHealingIfSuppressed(player, amount)) {
             return;
         }
         var maxHealth = player.getAttribute(Attribute.MAX_HEALTH);
@@ -3277,6 +5257,9 @@ public final class SuperpowerManager implements Listener {
         if (readyAt > now) {
             return;
         }
+        if (blocksUnsafeSpawnAbilityArea(player, player.getLocation(), FLORIST_VINE_RANGE, 4.0, FLORIST_VINE_RANGE)) {
+            return;
+        }
         floristLeftClickCooldowns.put(player.getUniqueId(), now + FLORIST_STICK_LEFT_CLICK_COOLDOWN_MS);
 
         float baseYaw = player.getLocation().getYaw();
@@ -3329,7 +5312,7 @@ public final class SuperpowerManager implements Listener {
         spawnVineTrail(player.getWorld(), eye, direction, distance);
 
         if (hit != null && hit.getHitEntity() instanceof LivingEntity victim) {
-            victim.damage(FLORIST_VINE_DAMAGE, player);
+            AbilityDamageContext.damage(player, victim, FLORIST_VINE_DAMAGE);
             victim.getWorld().spawnParticle(Particle.ITEM_SLIME, victim.getLocation().add(0.0, 1.0, 0.0), 16, 0.25, 0.35, 0.25, 0.02);
         }
     }
@@ -3366,56 +5349,80 @@ public final class SuperpowerManager implements Listener {
             }
             showPortal(pair.source());
             showPortal(pair.target());
-            handlePortalTravel(pair.source(), pair.target());
-            handlePortalTravel(pair.target(), pair.source());
+            handlePortalTravel(pair, true);
+            handlePortalTravel(pair, false);
         }
     }
 
-    private void handlePortalTravel(Location from, Location to) {
+    private void handlePortalTravel(PortalPair pair, boolean travelToTarget) {
+        Location from = travelToTarget ? pair.source() : pair.target();
+        Location to = travelToTarget ? pair.target() : pair.source();
         World world = from.getWorld();
-        if (world == null || !from.getChunk().isLoaded()) {
+        if (world == null || !isChunkLoaded(from)) {
             return;
         }
-        World targetWorld = to.getWorld();
-        Location safe = targetWorld == null ? null : findSafeTravelLocation(to);
-        Collection<Entity> nearby = world.getNearbyEntities(from, 1.35, 2.25, 1.35);
-        for (Entity entity : nearby) {
-            long recentUntil = recentPortalTravel.getOrDefault(entity.getUniqueId(), 0L);
-            if (recentUntil > System.currentTimeMillis()) {
+
+        long now = System.currentTimeMillis();
+        List<Entity> travelers = new ArrayList<>();
+        for (Entity entity : world.getNearbyEntities(from, 1.35, 2.25, 1.35)) {
+            if (recentPortalTravel.getOrDefault(entity.getUniqueId(), 0L) > now) {
                 continue;
             }
+            if (entity instanceof Player player) {
+                boolean activeBossFight = isActiveBossFight(player);
+                if (!player.isDead() && player.getGameMode() != GameMode.SPECTATOR && !activeBossFight) {
+                    travelers.add(player);
+                } else if (activeBossFight) {
+                    recentPortalTravel.put(player.getUniqueId(), now + 1_000L);
+                    player.sendActionBar(MM.deserialize("<red>Boss fights seal Wayfarer portals.</red>"));
+                }
+            } else if (entity instanceof LivingEntity living
+                && !living.isDead()
+                && living.isValid()
+                && !isBossEncounterEntity(living)) {
+                travelers.add(living);
+            }
+        }
+        if (travelers.isEmpty()) {
+            return;
+        }
+
+        World targetWorld = to.getWorld();
+        Location safe = targetWorld == null ? null : resolvePortalDestination(pair, travelToTarget);
+        for (Entity entity : travelers) {
 
             if (entity instanceof Player player) {
-                if (player.isDead() || player.getGameMode() == GameMode.SPECTATOR) {
-                    continue;
-                }
-                if (targetWorld == null || !hasVisitedEnvironment(player, targetWorld.getEnvironment())) {
+                if (targetWorld == null
+                    || !isWayfarerWorld(targetWorld)
+                    || !canEnterWayfarerDimension(player, targetWorld.getEnvironment())
+                    || !hasVisitedEnvironment(player, targetWorld.getEnvironment())) {
                     player.sendMessage(MessageUtil.warn("This portal rejects you."));
-                    recentPortalTravel.put(player.getUniqueId(), System.currentTimeMillis() + 1000L);
+                    recentPortalTravel.put(player.getUniqueId(), now + 1000L);
                     continue;
                 }
                 if (safe == null) {
                     player.sendMessage(MessageUtil.error("The other side of the portal is unstable."));
-                    recentPortalTravel.put(player.getUniqueId(), System.currentTimeMillis() + 1000L);
+                    recentPortalTravel.put(player.getUniqueId(), now + 1000L);
                     continue;
                 }
 
                 plugin.getPlayerManager().saveBackLocation(player);
-                recentPortalTravel.put(player.getUniqueId(), System.currentTimeMillis() + PORTAL_RECENT_TRAVEL_MS);
+                recentPortalTravel.put(player.getUniqueId(), now + PORTAL_RECENT_TRAVEL_MS);
                 player.teleportAsync(safe.clone());
                 player.setFallDistance(0.0f);
                 player.getWorld().playSound(player.getLocation(), Sound.BLOCK_PORTAL_TRAVEL, 0.8f, 1.2f);
                 continue;
             }
 
-            if (!(entity instanceof LivingEntity living) || living.isDead() || !living.isValid()) {
-                continue;
-            }
+            LivingEntity living = (LivingEntity) entity;
             if (safe == null) {
-                recentPortalTravel.put(living.getUniqueId(), System.currentTimeMillis() + 1000L);
+                recentPortalTravel.put(living.getUniqueId(), now + 1000L);
                 continue;
             }
-            recentPortalTravel.put(living.getUniqueId(), System.currentTimeMillis() + PORTAL_RECENT_TRAVEL_MS);
+            if (!isChunkLoaded(safe)) {
+                continue;
+            }
+            recentPortalTravel.put(living.getUniqueId(), now + PORTAL_RECENT_TRAVEL_MS);
             living.setFallDistance(0.0f);
             if (living.teleport(safe.clone())) {
                 living.setFallDistance(0.0f);
@@ -3425,7 +5432,7 @@ public final class SuperpowerManager implements Listener {
 
     private void showPortal(Location center) {
         World world = center.getWorld();
-        if (world == null || !center.getChunk().isLoaded()) {
+        if (world == null || !isChunkLoaded(center)) {
             return;
         }
         for (int i = 0; i < 10; i++) {
@@ -3453,17 +5460,32 @@ public final class SuperpowerManager implements Listener {
     }
 
     private Location centeredPortalLocation(Location location) {
-        return location.clone().add(0.5, 0.0, 0.5);
+        return new Location(
+            location.getWorld(),
+            location.getBlockX() + 0.5,
+            location.getY(),
+            location.getBlockZ() + 0.5,
+            location.getYaw(),
+            location.getPitch()
+        );
     }
 
     private Location findSafeTravelLocation(Location target) {
+        return findSafeTravelLocation(target, true);
+    }
+
+    private Location findSafeTravelLocation(Location target, boolean loadTargetChunk) {
         if (target == null || target.getWorld() == null) {
             return null;
         }
         World world = target.getWorld();
-        Chunk chunk = world.getChunkAt(target);
-        if (!chunk.isLoaded()) {
-            chunk.load();
+        int targetChunkX = target.getBlockX() >> 4;
+        int targetChunkZ = target.getBlockZ() >> 4;
+        if (!world.isChunkLoaded(targetChunkX, targetChunkZ)) {
+            if (!loadTargetChunk) {
+                return null;
+            }
+            world.getChunkAt(targetChunkX, targetChunkZ);
         }
 
         int originX = target.getBlockX();
@@ -3474,6 +5496,9 @@ public final class SuperpowerManager implements Listener {
                 for (int dz = -radius; dz <= radius; dz++) {
                     for (int dy = -4; dy <= 4; dy++) {
                         Location candidate = new Location(world, originX + dx + 0.5, originY + dy, originZ + dz + 0.5, target.getYaw(), target.getPitch());
+                        if (!loadTargetChunk && !isChunkLoaded(candidate)) {
+                            continue;
+                        }
                         if (isSafeStandingLocation(candidate)) {
                             return candidate;
                         }
@@ -3484,7 +5509,26 @@ public final class SuperpowerManager implements Listener {
 
         int highestY = world.getHighestBlockYAt(originX, originZ);
         Location fallback = new Location(world, originX + 0.5, highestY + 1.0, originZ + 0.5, target.getYaw(), target.getPitch());
-        return isSafeStandingLocation(fallback) ? fallback : null;
+        return (loadTargetChunk || isChunkLoaded(fallback)) && isSafeStandingLocation(fallback) ? fallback : null;
+    }
+
+    private Location resolvePortalDestination(PortalPair pair, boolean travelToTarget) {
+        Location anchor = travelToTarget ? pair.target() : pair.source();
+        Location cached = pair.cachedDestination(travelToTarget);
+        if (cached != null && (!isChunkLoaded(cached) || isSafeStandingLocation(cached))) {
+            return cached.clone();
+        }
+        if (!isChunkLoaded(anchor)) {
+            return null;
+        }
+        Location resolved = findSafeTravelLocation(anchor, false);
+        pair.cacheDestination(travelToTarget, resolved);
+        return resolved == null ? null : resolved.clone();
+    }
+
+    private boolean isChunkLoaded(Location location) {
+        World world = location == null ? null : location.getWorld();
+        return world != null && world.isChunkLoaded(location.getBlockX() >> 4, location.getBlockZ() >> 4);
     }
 
     private boolean isSafeStandingLocation(Location location) {
@@ -3533,6 +5577,9 @@ public final class SuperpowerManager implements Listener {
                     if (ageable.getAge() >= ageable.getMaximumAge()) {
                         continue;
                     }
+                    if (blocksUnsafeSpawnAbilityArea(player, block.getLocation().add(0.5, 0.5, 0.5), 0.5, 0.5, 0.5)) {
+                        continue;
+                    }
 
                     ageable.setAge(Math.min(ageable.getMaximumAge(), ageable.getAge() + FLORIST_CROUCH_GROWTH_STAGES));
                     block.setBlockData(ageable, false);
@@ -3556,7 +5603,7 @@ public final class SuperpowerManager implements Listener {
             return false;
         }
         for (Player player : world.getPlayers()) {
-            if (!hasPower(player, SuperpowerType.FLORIST) || player.isDead()) {
+            if (!hasPower(player, SuperpowerType.VERDANT) || player.isDead()) {
                 continue;
             }
             Location playerLocation = player.getLocation();
@@ -3591,7 +5638,7 @@ public final class SuperpowerManager implements Listener {
         stored.add(type);
         saveMonarchStorage(player, stored);
         player.sendMessage(MessageUtil.info(
-            "Monarch stored hostile <white>" + prettyEntityType(type) + "</white> (<white>" + stored.size() + "/" + MONARCH_STORAGE_LIMIT + "</white>)."
+            "Shadow Monarch stored hostile <white>" + prettyEntityType(type) + "</white> (<white>" + stored.size() + "/" + MONARCH_STORAGE_LIMIT + "</white>)."
         ));
     }
 
@@ -3608,7 +5655,7 @@ public final class SuperpowerManager implements Listener {
         if (hostileOnly.size() != stored.size()) {
             saveMonarchStorage(player, hostileOnly);
             int removed = stored.size() - hostileOnly.size();
-            player.sendMessage(MessageUtil.info("Cleared <white>" + removed + "</white> old non-hostile Sovereign stored mob(s)."));
+            player.sendMessage(MessageUtil.info("Cleared <white>" + removed + "</white> old non-hostile Shadow Monarch stored mob(s)."));
         }
         return hostileOnly;
     }
@@ -3967,6 +6014,9 @@ public final class SuperpowerManager implements Listener {
         if (ownerId.equals(targetId)) {
             return true;
         }
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().areOpponents(ownerId, targetId)) {
+            return false;
+        }
         return plugin.getTeamManager() != null && plugin.getTeamManager().sameTeam(ownerId, targetId);
     }
 
@@ -4060,27 +6110,32 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void clearInactivePowerAttributeModifiers(Player player, SuperpowerType power) {
-        if (power != SuperpowerType.ENCHANTER) {
+        if (power != SuperpowerType.ARCANIST) {
             syncPlayerAttributeModifier(player, Attribute.LUCK, keyEnchanterLuckModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
             syncPlayerAttributeModifier(player, Attribute.MOVEMENT_SPEED, keyEnchanterMoveModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR, false);
             syncPlayerAttributeModifier(player, Attribute.ATTACK_SPEED, keyEnchanterAttackModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR, false);
         }
-        if (power != SuperpowerType.MINER) {
+        if (power != SuperpowerType.PROSPECTOR) {
             syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyMinerHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         }
-        if (power != SuperpowerType.GIANT) {
+        if (power != SuperpowerType.TITAN) {
             syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyGiantHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
             syncPlayerAttributeModifier(player, Attribute.SCALE, keyGiantScaleModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR, false);
             syncPlayerAttributeModifier(player, Attribute.KNOCKBACK_RESISTANCE, keyGiantKnockbackModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
             syncPlayerAttributeModifier(player, Attribute.ATTACK_DAMAGE, keyGiantAttackDamageModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         }
-        if (power != SuperpowerType.SUPERMAN) {
+        if (power != SuperpowerType.SKYBOUND) {
             syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySupermanHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         }
         if (power != SuperpowerType.SENTINEL) {
             syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySentinelHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         }
-        if (power != SuperpowerType.WATERMAN) {
+        if (power != SuperpowerType.VEIL_ASSASSIN) {
+            syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyVeilAssassinHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+            syncPlayerAttributeModifier(player, Attribute.SNEAKING_SPEED, keyVeilAssassinSneakingSpeedModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+            clearVeilAssassinState(player, true);
+        }
+        if (power != SuperpowerType.TIDEBORN) {
             syncPlayerAttributeModifier(player, Attribute.SUBMERGED_MINING_SPEED, keyWatermanSubmergedMiningModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         }
     }
@@ -4096,6 +6151,8 @@ public final class SuperpowerManager implements Listener {
         syncPlayerAttributeModifier(player, Attribute.ATTACK_DAMAGE, keyGiantAttackDamageModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySupermanHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySentinelHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyVeilAssassinHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        syncPlayerAttributeModifier(player, Attribute.SNEAKING_SPEED, keyVeilAssassinSneakingSpeedModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.SUBMERGED_MINING_SPEED, keyWatermanSubmergedMiningModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
     }
 
@@ -4111,6 +6168,7 @@ public final class SuperpowerManager implements Listener {
         PersistentDataContainer pdc = player.getPersistentDataContainer();
         if (value <= 0L) {
             pdc.remove(keyXrayActiveUntil);
+            oracleXrayScanCursors.remove(player.getUniqueId());
             return;
         }
         pdc.set(keyXrayActiveUntil, PersistentDataType.LONG, value);
@@ -4172,9 +6230,10 @@ public final class SuperpowerManager implements Listener {
         long now = System.currentTimeMillis();
         boolean active = supermanFlightActiveUntil(player) > now;
         boolean offCooldown = supermanFlightCooldownUntil(player) <= now;
+        boolean bossRestricted = isActiveBossFight(player);
         boolean shouldAllow = plugin.getPlayerManager().hasFlightEnabled(player.getUniqueId())
-            || (supermanAvailable && (active || offCooldown))
-            || (plugin.getCustomEnchantListener() != null && plugin.getCustomEnchantListener().shouldRetainFlightAccess(player));
+            || (!bossRestricted && supermanAvailable && (active || offCooldown))
+            || (!bossRestricted && plugin.getCustomEnchantListener() != null && plugin.getCustomEnchantListener().shouldRetainFlightAccess(player));
 
         if (player.getAllowFlight() != shouldAllow) {
             player.setAllowFlight(shouldAllow);
@@ -4196,7 +6255,7 @@ public final class SuperpowerManager implements Listener {
     private void stopSupermanFlight(Player player, boolean expired) {
         long activeUntil = supermanFlightActiveUntil(player);
         if (activeUntil <= 0L && !expired) {
-            syncSupermanFlightState(player, hasPower(player, SuperpowerType.SUPERMAN));
+            syncSupermanFlightState(player, hasPower(player, SuperpowerType.SKYBOUND));
             return;
         }
 
@@ -4207,7 +6266,7 @@ public final class SuperpowerManager implements Listener {
         if (player.isFlying() && !plugin.getPlayerManager().hasFlightEnabled(player.getUniqueId())) {
             player.setFlying(false);
         }
-        syncSupermanFlightState(player, hasPower(player, SuperpowerType.SUPERMAN));
+        syncSupermanFlightState(player, hasPower(player, SuperpowerType.SKYBOUND));
         if (expired && player.isOnline()) {
             player.sendMessage(MessageUtil.warn("Skybound flight faded. Cooldown: <white>5 minutes</white>."));
         }
@@ -4250,17 +6309,71 @@ public final class SuperpowerManager implements Listener {
         int baseZ = origin.getBlockZ();
         int minY = Math.max(world.getMinHeight(), baseY - XRAY_ORE_VERTICAL_RADIUS);
         int maxY = Math.min(world.getMaxHeight() - 1, baseY + XRAY_ORE_VERTICAL_RADIUS);
-        for (int x = baseX - XRAY_ORE_RADIUS; x <= baseX + XRAY_ORE_RADIUS; x++) {
+        int diameter = (XRAY_ORE_RADIUS * 2) + 1;
+        int horizontalArea = diameter * diameter;
+        int height = (maxY - minY) + 1;
+        int totalBlocks = horizontalArea * height;
+        int start = Math.floorMod(oracleXrayScanCursors.getOrDefault(player.getUniqueId(), 0), totalBlocks);
+        int scanCount = Math.min(XRAY_ORE_SCAN_BUDGET, totalBlocks);
+        for (int offset = 0; offset < scanCount; offset++) {
+            int index = (start + offset) % totalBlocks;
+            int y = minY + (index / horizontalArea);
+            int horizontalIndex = index % horizontalArea;
+            int x = baseX - XRAY_ORE_RADIUS + (horizontalIndex / diameter);
+            int z = baseZ - XRAY_ORE_RADIUS + (horizontalIndex % diameter);
+            if (!world.isChunkLoaded(x >> 4, z >> 4)) {
+                continue;
+            }
+            Block block = world.getBlockAt(x, y, z);
+            if (MINER_ORE_BLOCKS.contains(block.getType())) {
+                spawnXrayOreMarker(player, block);
+            }
+        }
+        oracleXrayScanCursors.put(player.getUniqueId(), (start + scanCount) % totalBlocks);
+        alertOracleValuableNearby(player, origin);
+    }
+
+    private void alertOracleValuableNearby(Player player, Location origin) {
+        long now = System.currentTimeMillis();
+        long nextAt = oracleValuableAlertCooldowns.getOrDefault(player.getUniqueId(), 0L);
+        if (nextAt > now || !hasValuableOreNearby(origin, XRAY_VALUABLE_ALERT_RADIUS)) {
+            return;
+        }
+        oracleValuableAlertCooldowns.put(player.getUniqueId(), now + XRAY_VALUABLE_ALERT_INTERVAL_MS);
+        player.sendMessage(MessageUtil.info("You sense something valuable nearby."));
+        player.playSound(player.getLocation(), Sound.BLOCK_AMETHYST_BLOCK_CHIME, 0.45f, 1.65f);
+    }
+
+    private boolean hasValuableOreNearby(Location origin, int radius) {
+        World world = origin.getWorld();
+        if (world == null) {
+            return false;
+        }
+        int baseX = origin.getBlockX();
+        int baseY = origin.getBlockY();
+        int baseZ = origin.getBlockZ();
+        int minY = Math.max(world.getMinHeight(), baseY - radius);
+        int maxY = Math.min(world.getMaxHeight() - 1, baseY + radius);
+        for (int x = baseX - radius; x <= baseX + radius; x++) {
             for (int y = minY; y <= maxY; y++) {
-                for (int z = baseZ - XRAY_ORE_RADIUS; z <= baseZ + XRAY_ORE_RADIUS; z++) {
-                    Block block = world.getBlockAt(x, y, z);
-                    if (!MINER_ORE_BLOCKS.contains(block.getType())) {
+                for (int z = baseZ - radius; z <= baseZ + radius; z++) {
+                    double dx = x - baseX;
+                    double dy = y - baseY;
+                    double dz = z - baseZ;
+                    if ((dx * dx) + (dy * dy) + (dz * dz) > radius * radius) {
                         continue;
                     }
-                    spawnXrayOreMarker(player, block);
+                    if (!world.isChunkLoaded(x >> 4, z >> 4)) {
+                        continue;
+                    }
+                    Material type = world.getBlockAt(x, y, z).getType();
+                    if (type == Material.DIAMOND_ORE || type == Material.DEEPSLATE_DIAMOND_ORE || type == Material.ANCIENT_DEBRIS) {
+                        return true;
+                    }
                 }
             }
         }
+        return false;
     }
 
     private void spawnXrayEntityOutline(Player viewer, LivingEntity target, org.bukkit.Color color) {
@@ -4297,6 +6410,13 @@ public final class SuperpowerManager implements Listener {
     private void useTheWorldClock(Player player) {
         if (!hasPower(player, SuperpowerType.THE_WORLD)) {
             player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return;
+        }
+        if (isActiveBossFight(player)) {
+            player.sendMessage(MessageUtil.warn("Boss encounters resist Time Stop."));
+            return;
+        }
+        if (denyUnsafeSpawnAbilityArea(player, player.getLocation(), TIME_STOP_RADIUS)) {
             return;
         }
 
@@ -4363,6 +6483,10 @@ public final class SuperpowerManager implements Listener {
                     continue;
                 }
                 if (!isInsideTimeStop(state, entity.getLocation())) {
+                    continue;
+                }
+                if (isBossEncounterEntity(entity)
+                    || (entity instanceof Projectile projectile && isBossOwnedProjectile(projectile))) {
                     continue;
                 }
 
@@ -4486,6 +6610,723 @@ public final class SuperpowerManager implements Listener {
         timeStoppedPlayers.clear();
         restoreExpiredFrozenMobs(Set.of());
         restoreExpiredFrozenProjectiles(Set.of());
+    }
+
+    private boolean isPowerFrozenPlayer(UUID playerId) {
+        return playerId != null && (timeStoppedPlayers.contains(playerId) || honoredDomainParalyzedPlayers.contains(playerId));
+    }
+
+    private void tickHonoredPowers() {
+        long now = System.currentTimeMillis();
+        tickHonoredDomains(now);
+        tickHonoredProjectileAura(now);
+        tickHonoredFrozenProjectiles(now);
+    }
+
+    private void tickHonoredDomains(long now) {
+        Set<UUID> currentParalyzed = new HashSet<>();
+        for (Map.Entry<UUID, HonoredDomainState> entry : new HashMap<>(activeHonoredDomains).entrySet()) {
+            HonoredDomainState state = entry.getValue();
+            Player owner = Bukkit.getPlayer(state.ownerId());
+            if (owner == null || !owner.isOnline() || owner.isDead() || owner.getGameMode() == GameMode.SPECTATOR) {
+                endHonoredDomain(state.ownerId(), false);
+                continue;
+            }
+            if (state.expiresAt() <= now) {
+                endHonoredDomain(state.ownerId(), true);
+                continue;
+            }
+            if (!isInsideHonoredDomain(owner.getLocation(), state)) {
+                clearHonoredDomainTeleportVisualsNowAndLater(owner);
+                owner.teleport(honoredDomainSpawn(state.domainCenter(), 0, state.participantIds().size(), owner));
+                clearHonoredDomainTeleportVisualsNowAndLater(owner);
+            }
+
+            renderHonoredDomain(state);
+            int index = 1;
+            for (UUID participantId : new HashSet<>(state.participantIds())) {
+                if (participantId.equals(state.ownerId())) {
+                    continue;
+                }
+                Player participant = Bukkit.getPlayer(participantId);
+                if (participant == null || !participant.isOnline()) {
+                    continue;
+                }
+                if (participant.isDead() || participant.getGameMode() == GameMode.SPECTATOR) {
+                    handleHonoredDomainPlayerExit(participantId, false);
+                    continue;
+                }
+                if (!isInsideHonoredDomain(participant.getLocation(), state)) {
+                    clearHonoredDomainTeleportVisualsNowAndLater(participant);
+                    participant.teleport(honoredDomainSpawn(state.domainCenter(), index, state.participantIds().size(), participant));
+                    clearHonoredDomainTeleportVisualsNowAndLater(participant);
+                }
+                participant.setVelocity(new Vector());
+                participant.setFallDistance(0.0f);
+                applyHonoredDomainLockEffects(participant);
+                currentParalyzed.add(participantId);
+                index++;
+            }
+        }
+        honoredDomainParalyzedPlayers.clear();
+        honoredDomainParalyzedPlayers.addAll(currentParalyzed);
+    }
+
+    private void renderHonoredDomain(HonoredDomainState state) {
+        World world = state.domainCenter().getWorld();
+        if (world == null) {
+            return;
+        }
+        Location center = state.domainCenter().clone().add(0.0, 1.0, 0.0);
+        world.spawnParticle(Particle.REVERSE_PORTAL, center, 14, 0.55, 0.7, 0.55, 0.08);
+        for (int i = 0; i < 28; i++) {
+            double angle = (Math.PI * 2.0 * i) / 28.0;
+            double x = Math.cos(angle) * HONORED_DOMAIN_PLATFORM_RADIUS;
+            double z = Math.sin(angle) * HONORED_DOMAIN_PLATFORM_RADIUS;
+            Location ring = center.clone().add(x, 0.05, z);
+            world.spawnParticle(
+                Particle.DUST,
+                ring,
+                1,
+                0.02,
+                0.02,
+                0.02,
+                0.0,
+                new Particle.DustOptions(org.bukkit.Color.fromRGB(185, 225, 255), 1.15f)
+            );
+        }
+    }
+
+    private void renderHonoredDomainOpening(HonoredDomainState state) {
+        World world = state.domainCenter().getWorld();
+        if (world == null) {
+            return;
+        }
+        Location center = state.domainCenter().clone().add(0.0, 1.0, 0.0);
+        world.playSound(center, Sound.ENTITY_ENDER_DRAGON_GROWL, 0.85f, 1.8f);
+        world.playSound(center, Sound.BLOCK_RESPAWN_ANCHOR_DEPLETE, 1.0f, 0.55f);
+        world.spawnParticle(Particle.FLASH, center, 1, 0.0, 0.0, 0.0, 0.0, org.bukkit.Color.WHITE);
+        world.spawnParticle(Particle.END_ROD, center, 130, 3.5, 1.0, 3.5, 0.08);
+    }
+
+    private List<Player> honoredDomainParticipants(Player owner) {
+        Location center = owner.getLocation();
+        List<Player> participants = new ArrayList<>();
+        participants.add(owner);
+        for (Player candidate : owner.getWorld().getPlayers()) {
+            if (candidate.equals(owner) || candidate.isDead() || candidate.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            Location location = candidate.getLocation();
+            if (Math.abs(location.getX() - center.getX()) > HONORED_DOMAIN_HALF_RANGE
+                || Math.abs(location.getY() - center.getY()) > HONORED_DOMAIN_HALF_RANGE
+                || Math.abs(location.getZ() - center.getZ()) > HONORED_DOMAIN_HALF_RANGE) {
+                continue;
+            }
+            participants.add(candidate);
+        }
+        participants.sort(Comparator.comparingDouble(player -> player.equals(owner) ? -1.0 : player.getLocation().distanceSquared(center)));
+        return participants;
+    }
+
+    private Location honoredDomainCenter(Player player, World endWorld) {
+        int y = Math.min(endWorld.getMaxHeight() - HONORED_DOMAIN_WALL_HEIGHT - 2, endWorld.getMinHeight() + 16);
+        Location base = new Location(
+            endWorld,
+            player.getLocation().getBlockX() + 0.5,
+            y,
+            player.getLocation().getBlockZ() + 0.5,
+            player.getLocation().getYaw(),
+            player.getLocation().getPitch()
+        );
+        if (!honoredDomainCenterOverlaps(base)) {
+            return base;
+        }
+
+        double spacing = (HONORED_DOMAIN_PLATFORM_RADIUS * 2.0) + 10.0;
+        for (int ring = 1; ring <= 8; ring++) {
+            for (int dx = -ring; dx <= ring; dx++) {
+                for (int dz = -ring; dz <= ring; dz++) {
+                    if (Math.abs(dx) != ring && Math.abs(dz) != ring) {
+                        continue;
+                    }
+                    Location candidate = base.clone().add(dx * spacing, 0.0, dz * spacing);
+                    if (!honoredDomainCenterOverlaps(candidate)) {
+                        return candidate;
+                    }
+                }
+            }
+        }
+        return base.clone().add(spacing * (activeHonoredDomains.size() + 1), 0.0, 0.0);
+    }
+
+    private boolean honoredDomainCenterOverlaps(Location candidate) {
+        if (candidate == null || candidate.getWorld() == null) {
+            return true;
+        }
+        double minimumGap = (HONORED_DOMAIN_PLATFORM_RADIUS * 2.0) + 5.0;
+        for (HonoredDomainState state : activeHonoredDomains.values()) {
+            Location active = state.domainCenter();
+            if (active.getWorld() == null || !active.getWorld().equals(candidate.getWorld())) {
+                continue;
+            }
+            if (Math.abs(active.getX() - candidate.getX()) <= minimumGap
+                && Math.abs(active.getZ() - candidate.getZ()) <= minimumGap) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Location honoredDomainSpawn(Location center, int index, int total, Player player) {
+        Location destination = center.clone();
+        if (index > 0 && total > 1) {
+            double angle = (Math.PI * 2.0 * (index - 1)) / Math.max(1, total - 1);
+            double radius = Math.min(5.5, 2.0 + (Math.max(0, index - 1) / 6) * 1.5);
+            destination.add(Math.cos(angle) * radius, 0.0, Math.sin(angle) * radius);
+        }
+        destination.setYaw(player.getLocation().getYaw());
+        destination.setPitch(player.getLocation().getPitch());
+        return destination;
+    }
+
+    private List<BlockState> prepareHonoredDomainPlatform(Location center) {
+        World world = center.getWorld();
+        if (world == null) {
+            return List.of();
+        }
+        loadHonoredDomainChunks(center);
+        List<BlockState> restoreBlocks = new ArrayList<>();
+        int baseX = center.getBlockX();
+        int baseY = center.getBlockY();
+        int baseZ = center.getBlockZ();
+        for (int x = -HONORED_DOMAIN_PLATFORM_RADIUS; x <= HONORED_DOMAIN_PLATFORM_RADIUS; x++) {
+            for (int z = -HONORED_DOMAIN_PLATFORM_RADIUS; z <= HONORED_DOMAIN_PLATFORM_RADIUS; z++) {
+                for (int y = -1; y <= HONORED_DOMAIN_WALL_HEIGHT; y++) {
+                    Block block = world.getBlockAt(baseX + x, baseY + y, baseZ + z);
+                    restoreBlocks.add(block.getState());
+                    boolean shell = y == -1
+                        || y == HONORED_DOMAIN_WALL_HEIGHT
+                        || Math.abs(x) == HONORED_DOMAIN_PLATFORM_RADIUS
+                        || Math.abs(z) == HONORED_DOMAIN_PLATFORM_RADIUS;
+                    if (shell) {
+                        block.setType(Material.SCULK, false);
+                    } else if (isHonoredDomainLightBlock(x, y, z)) {
+                        block.setType(Material.LIGHT, false);
+                        if (block.getBlockData() instanceof Light light) {
+                            light.setLevel(light.getMaximumLevel());
+                            block.setBlockData(light, false);
+                        }
+                    } else {
+                        block.setType(Material.AIR, false);
+                    }
+                }
+            }
+        }
+        return restoreBlocks;
+    }
+
+    private void loadHonoredDomainChunks(Location center) {
+        World world = center.getWorld();
+        if (world == null) {
+            return;
+        }
+        int minChunkX = (center.getBlockX() - HONORED_DOMAIN_PLATFORM_RADIUS) >> 4;
+        int maxChunkX = (center.getBlockX() + HONORED_DOMAIN_PLATFORM_RADIUS) >> 4;
+        int minChunkZ = (center.getBlockZ() - HONORED_DOMAIN_PLATFORM_RADIUS) >> 4;
+        int maxChunkZ = (center.getBlockZ() + HONORED_DOMAIN_PLATFORM_RADIUS) >> 4;
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                world.getChunkAt(chunkX, chunkZ);
+            }
+        }
+    }
+
+    private boolean isHonoredDomainLightBlock(int x, int y, int z) {
+        if (y != HONORED_DOMAIN_LIGHT_HEIGHT) {
+            return false;
+        }
+        boolean litX = x == 0 || Math.abs(x) == HONORED_DOMAIN_LIGHT_OFFSET;
+        boolean litZ = z == 0 || Math.abs(z) == HONORED_DOMAIN_LIGHT_OFFSET;
+        return litX && litZ;
+    }
+
+    private boolean isInsideHonoredDomain(Location location, HonoredDomainState state) {
+        if (location == null || state == null || location.getWorld() == null || state.domainCenter().getWorld() == null) {
+            return false;
+        }
+        if (!location.getWorld().equals(state.domainCenter().getWorld())) {
+            return false;
+        }
+        return Math.abs(location.getX() - state.domainCenter().getX()) <= HONORED_DOMAIN_PLATFORM_RADIUS + 1.0
+            && Math.abs(location.getZ() - state.domainCenter().getZ()) <= HONORED_DOMAIN_PLATFORM_RADIUS + 1.0
+            && location.getY() >= state.domainCenter().getY() - 1.5
+            && location.getY() <= state.domainCenter().getY() + HONORED_DOMAIN_WALL_HEIGHT + 0.5;
+    }
+
+    private boolean isInsideAnyHonoredDomain(Location location) {
+        for (HonoredDomainState state : activeHonoredDomains.values()) {
+            if (isInsideHonoredDomain(location, state)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void applyHonoredDomainLockEffects(Player participant) {
+        applyHonoredDomainEffect(participant, PotionEffectType.SLOWNESS, 10, 10, false, false);
+        applyHonoredDomainEffect(participant, PotionEffectType.MINING_FATIGUE, 10, 4, false, false);
+        applyHonoredDomainEffect(participant, PotionEffectType.WEAKNESS, 10, 10, false, false);
+        applyHonoredDomainEffect(participant, PotionEffectType.NAUSEA, HONORED_DOMAIN_NAUSEA_DURATION_TICKS, HONORED_DOMAIN_NAUSEA_AMPLIFIER, true, true);
+        applyHonoredDomainEffect(participant, PotionEffectType.DARKNESS, 45, 0, false, false);
+    }
+
+    private void applyHonoredDomainEffect(
+        Player participant,
+        PotionEffectType type,
+        int durationTicks,
+        int amplifier,
+        boolean particles,
+        boolean icon
+    ) {
+        PotionEffect current = participant.getPotionEffect(type);
+        if (current != null && current.getAmplifier() >= amplifier && current.getDuration() >= Math.max(1, durationTicks - 3)) {
+            return;
+        }
+        if (current != null) {
+            participant.removePotionEffect(type);
+        }
+        participant.addPotionEffect(new PotionEffect(type, durationTicks, amplifier, true, particles, icon));
+    }
+
+    private void clearHonoredDomainLockEffects(Player participant) {
+        removeLikelyPowerPotion(participant, PotionEffectType.SLOWNESS, 10);
+        removeLikelyPowerPotion(participant, PotionEffectType.MINING_FATIGUE, 4);
+        removeLikelyPowerPotion(participant, PotionEffectType.WEAKNESS, 10);
+        removeLikelyPowerPotion(participant, PotionEffectType.NAUSEA, HONORED_DOMAIN_NAUSEA_AMPLIFIER, HONORED_DOMAIN_NAUSEA_DURATION_TICKS + 40);
+        removeLikelyPowerPotion(participant, PotionEffectType.DARKNESS, 0);
+    }
+
+    private boolean triggerHonoredDomainPulse(Player attacker) {
+        if (!hasPower(attacker, SuperpowerType.HONORED_ONE)) {
+            return false;
+        }
+        HonoredDomainState state = activeHonoredDomains.get(attacker.getUniqueId());
+        if (state == null || !isInsideHonoredDomain(attacker.getLocation(), state)) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        Long cooldownUntil = honoredDomainSwingCooldowns.get(attacker.getUniqueId());
+        if (cooldownUntil != null && cooldownUntil > now) {
+            return true;
+        }
+        honoredDomainSwingCooldowns.put(attacker.getUniqueId(), now + HONORED_DOMAIN_SWING_COOLDOWN_MS);
+
+        double damage = honoredDomainPulseDamage(attacker);
+        int hits = 0;
+        for (UUID participantId : new HashSet<>(state.participantIds())) {
+            if (participantId.equals(attacker.getUniqueId())) {
+                continue;
+            }
+            Player target = Bukkit.getPlayer(participantId);
+            if (target == null || !target.isOnline() || target.isDead() || target.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            if (!isInsideHonoredDomain(target.getLocation(), state)) {
+                continue;
+            }
+            double multiplier = sameTeamOrSelf(attacker.getUniqueId(), target.getUniqueId())
+                ? HONORED_DOMAIN_TEAMMATE_DAMAGE_MULTIPLIER
+                : 1.0;
+            damageHonoredDomainTarget(attacker, target, damage * multiplier);
+            hits++;
+        }
+        if (hits > 0) {
+            Location effect = attacker.getLocation().clone().add(0.0, 1.0, 0.0);
+            attacker.getWorld().spawnParticle(Particle.SONIC_BOOM, effect, 1, 0.0, 0.0, 0.0, 0.0);
+            attacker.getWorld().playSound(attacker.getLocation(), Sound.ENTITY_WARDEN_SONIC_BOOM, 0.75f, 1.75f);
+        }
+        return true;
+    }
+
+    private double honoredDomainPulseDamage(Player attacker) {
+        var attribute = attacker.getAttribute(Attribute.ATTACK_DAMAGE);
+        double damage = attribute == null ? 1.0 : attribute.getValue();
+        return Math.max(1.0, damage * Math.max(0.35, attacker.getAttackCooldown()));
+    }
+
+    private boolean shouldCancelRecentHonoredDomainDirectHit(Player attacker, Player hitPlayer) {
+        if (!isRecentHonoredDomainSwing(attacker)) {
+            return false;
+        }
+        HonoredDomainState state = activeHonoredDomains.get(attacker.getUniqueId());
+        return state != null
+            && state.participantIds().contains(hitPlayer.getUniqueId())
+            && isInsideHonoredDomain(attacker.getLocation(), state)
+            && isInsideHonoredDomain(hitPlayer.getLocation(), state);
+    }
+
+    private boolean isRecentHonoredDomainSwing(Player attacker) {
+        Long cooldownUntil = honoredDomainSwingCooldowns.get(attacker.getUniqueId());
+        if (cooldownUntil == null) {
+            return false;
+        }
+        if (cooldownUntil <= System.currentTimeMillis()) {
+            honoredDomainSwingCooldowns.remove(attacker.getUniqueId());
+            return false;
+        }
+        return true;
+    }
+
+    private void damageHonoredDomainTarget(Player attacker, Player target, double damage) {
+        target.setNoDamageTicks(0);
+        honoredDomainDamageGuards.add(target.getUniqueId());
+        try {
+            AbilityDamageContext.damage(attacker, target, Math.max(0.1, damage));
+        } finally {
+            honoredDomainDamageGuards.remove(target.getUniqueId());
+        }
+        Location effect = target.getLocation().clone().add(0.0, 1.0, 0.0);
+        target.getWorld().spawnParticle(Particle.END_ROD, effect, 18, 0.35, 0.45, 0.35, 0.04);
+        target.getWorld().playSound(target.getLocation(), Sound.BLOCK_AMETHYST_BLOCK_RESONATE, 0.65f, 1.65f);
+    }
+
+    private void clearHonoredDomainTeleportVisualsNowAndLater(Player player) {
+        clearHonoredDomainTeleportVisuals(player);
+        if (player == null) {
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        for (long delay : new long[] {1L, 5L, 20L}) {
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                Player online = Bukkit.getPlayer(playerId);
+                if (online != null && online.isOnline()) {
+                    clearHonoredDomainTeleportVisuals(online);
+                }
+            }, delay);
+        }
+    }
+
+    private void clearHonoredDomainTeleportVisuals(Player player) {
+        if (plugin.getPlayerVisualListener() != null) {
+            plugin.getPlayerVisualListener().clearTeleportVisuals(player);
+        }
+    }
+
+    private void applyHonoredDomainDamage(EntityDamageByEntityEvent event, Player attacker, LivingEntity hitVictim) {
+        if (!hasPower(attacker, SuperpowerType.HONORED_ONE)) {
+            return;
+        }
+        HonoredDomainState state = activeHonoredDomains.get(attacker.getUniqueId());
+        if (state == null || !isInsideHonoredDomain(attacker.getLocation(), state)) {
+            return;
+        }
+        double damage = event.getDamage();
+        if (damage <= 0.0) {
+            return;
+        }
+        if (hitVictim instanceof Player hitPlayer
+            && state.participantIds().contains(hitPlayer.getUniqueId())
+            && sameTeamOrSelf(attacker.getUniqueId(), hitPlayer.getUniqueId())) {
+            event.setDamage(damage * HONORED_DOMAIN_TEAMMATE_DAMAGE_MULTIPLIER);
+        }
+        for (UUID participantId : new HashSet<>(state.participantIds())) {
+            if (participantId.equals(attacker.getUniqueId())
+                || (hitVictim != null && participantId.equals(hitVictim.getUniqueId()))) {
+                continue;
+            }
+            Player target = Bukkit.getPlayer(participantId);
+            if (target == null || !target.isOnline() || target.isDead() || target.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            if (!isInsideHonoredDomain(target.getLocation(), state)) {
+                continue;
+            }
+            double multiplier = sameTeamOrSelf(attacker.getUniqueId(), target.getUniqueId())
+                ? HONORED_DOMAIN_TEAMMATE_DAMAGE_MULTIPLIER
+                : 1.0;
+            damageHonoredDomainTarget(attacker, target, damage * multiplier);
+        }
+    }
+
+    private void endHonoredDomain(UUID ownerId, boolean announce) {
+        HonoredDomainState state = activeHonoredDomains.remove(ownerId);
+        if (state == null) {
+            return;
+        }
+        honoredDomainSwingCooldowns.remove(ownerId);
+        for (UUID participantId : new HashSet<>(state.participantIds())) {
+            honoredDomainParalyzedPlayers.remove(participantId);
+            Player participant = Bukkit.getPlayer(participantId);
+            Location returnLocation = state.returnLocations().get(participantId);
+            if (returnLocation == null || returnLocation.getWorld() == null) {
+                continue;
+            }
+            if (participant == null || !participant.isOnline()) {
+                pendingHonoredDomainReturns.put(participantId, returnLocation);
+                continue;
+            }
+            participant.setFallDistance(0.0f);
+            clearHonoredDomainTeleportVisualsNowAndLater(participant);
+            participant.teleport(returnLocation);
+            clearHonoredDomainTeleportVisualsNowAndLater(participant);
+            clearHonoredDomainLockEffects(participant);
+            if (announce) {
+                participant.sendMessage(MessageUtil.info("The domain fades."));
+                participant.playSound(participant.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 0.7f, 1.25f);
+                participant.getWorld().spawnParticle(Particle.PORTAL, participant.getLocation().clone().add(0.0, 1.0, 0.0), 35, 0.45, 0.55, 0.45, 0.08);
+            }
+        }
+        restoreHonoredDomainBlocks(state.restoreBlocks());
+    }
+
+    private void endAllHonoredDomains(boolean announce) {
+        for (UUID ownerId : new HashSet<>(activeHonoredDomains.keySet())) {
+            endHonoredDomain(ownerId, announce);
+        }
+        honoredDomainParalyzedPlayers.clear();
+        honoredDomainSwingCooldowns.clear();
+    }
+
+    private void rememberHonoredDomainDeathChestOrigin(UUID playerId) {
+        Location returnLocation = honoredDomainReturnLocation(playerId);
+        if (returnLocation == null || returnLocation.getWorld() == null) {
+            return;
+        }
+        Location cached = returnLocation.clone();
+        honoredDomainDeathChestOrigins.put(playerId, cached);
+        Bukkit.getScheduler().runTask(plugin, () -> honoredDomainDeathChestOrigins.remove(playerId, cached));
+    }
+
+    private Location honoredDomainReturnLocation(UUID playerId) {
+        if (playerId == null) {
+            return null;
+        }
+        HonoredDomainState ownedDomain = activeHonoredDomains.get(playerId);
+        if (ownedDomain != null) {
+            return ownedDomain.returnLocations().get(playerId);
+        }
+        for (HonoredDomainState state : activeHonoredDomains.values()) {
+            if (!state.participantIds().contains(playerId)) {
+                continue;
+            }
+            Location returnLocation = state.returnLocations().get(playerId);
+            if (returnLocation != null) {
+                return returnLocation;
+            }
+        }
+        return null;
+    }
+
+    private void handleHonoredDomainPlayerExit(UUID playerId, boolean keepReturnForRejoin) {
+        if (playerId == null) {
+            return;
+        }
+        honoredDomainSwingCooldowns.remove(playerId);
+        if (activeHonoredDomains.containsKey(playerId)) {
+            endHonoredDomain(playerId, false);
+            return;
+        }
+        for (HonoredDomainState state : new ArrayList<>(activeHonoredDomains.values())) {
+            if (!state.participantIds().remove(playerId)) {
+                continue;
+            }
+            honoredDomainParalyzedPlayers.remove(playerId);
+            Location returnLocation = state.returnLocations().remove(playerId);
+            if (keepReturnForRejoin && returnLocation != null && returnLocation.getWorld() != null) {
+                pendingHonoredDomainReturns.put(playerId, returnLocation);
+            }
+            if (state.participantIds().size() <= 1) {
+                endHonoredDomain(state.ownerId(), false);
+            }
+        }
+    }
+
+    private void returnPendingHonoredDomainPlayer(Player player) {
+        Location returnLocation = pendingHonoredDomainReturns.remove(player.getUniqueId());
+        if (returnLocation == null || returnLocation.getWorld() == null) {
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!player.isOnline() || player.isDead()) {
+                pendingHonoredDomainReturns.put(player.getUniqueId(), returnLocation);
+                return;
+            }
+            clearHonoredDomainTeleportVisualsNowAndLater(player);
+            player.teleport(returnLocation);
+            player.setFallDistance(0.0f);
+            clearHonoredDomainTeleportVisualsNowAndLater(player);
+            clearHonoredDomainLockEffects(player);
+            player.sendMessage(MessageUtil.info("The domain released you."));
+        });
+    }
+
+    private void restoreHonoredDomainBlocks(List<BlockState> restoreBlocks) {
+        for (int i = restoreBlocks.size() - 1; i >= 0; i--) {
+            restoreBlocks.get(i).update(true, false);
+        }
+    }
+
+    private void tickHonoredProjectileAura(long now) {
+        honoredAuraPulse++;
+        boolean renderAura = honoredAuraPulse % 10L == 0L;
+        boolean scanAura = honoredAuraPulse % 2L == 0L;
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (!hasCommandPower(player, SuperpowerType.HONORED_ONE)
+                || !isHonoredInfinityEnabled(player)
+                || player.isDead()
+                || player.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            Location center = player.getLocation().clone().add(0.0, 1.0, 0.0);
+            if (renderAura) {
+                renderHonoredProjectileAura(player, center);
+            }
+            if (!scanAura) {
+                continue;
+            }
+            for (Entity entity : player.getWorld().getNearbyEntities(center, HONORED_PROJECTILE_AURA_RADIUS, HONORED_PROJECTILE_AURA_RADIUS, HONORED_PROJECTILE_AURA_RADIUS)) {
+                if (!(entity instanceof Projectile projectile) || !shouldFreezeHonoredProjectile(projectile, player, center)) {
+                    continue;
+                }
+                freezeHonoredProjectile(projectile, player);
+            }
+        }
+    }
+
+    private void renderHonoredProjectileAura(Player player, Location center) {
+        World world = player.getWorld();
+        for (int i = 0; i < 14; i++) {
+            double angle = (Math.PI * 2.0 * i) / 14.0;
+            Location point = center.clone().add(
+                Math.cos(angle) * HONORED_PROJECTILE_AURA_RADIUS,
+                Math.sin(angle * 2.0) * 0.35,
+                Math.sin(angle) * HONORED_PROJECTILE_AURA_RADIUS
+            );
+            world.spawnParticle(
+                Particle.DUST,
+                point,
+                1,
+                0.02,
+                0.02,
+                0.02,
+                0.0,
+                new Particle.DustOptions(org.bukkit.Color.fromRGB(210, 245, 255), 0.85f)
+            );
+        }
+    }
+
+    private boolean shouldFreezeHonoredProjectile(Projectile projectile, Player player, Location auraCenter) {
+        if (!isHonoredInfinityEnabled(player)
+            || !projectile.isValid()
+            || projectile.isDead()
+            || honoredFrozenProjectiles.containsKey(projectile.getUniqueId())
+            || isBossOwnedProjectile(projectile)) {
+            return false;
+        }
+        if (projectile.getShooter() instanceof Entity shooter && shooter.getUniqueId().equals(player.getUniqueId())) {
+            return false;
+        }
+        if (isPlayerUtilityProjectile(projectile) && projectile.getShooter() instanceof Player) {
+            return false;
+        }
+        return projectile.getLocation().distanceSquared(auraCenter) <= HONORED_PROJECTILE_AURA_RADIUS * HONORED_PROJECTILE_AURA_RADIUS;
+    }
+
+    private void freezeHonoredProjectile(Projectile projectile, Player player) {
+        if (!isHonoredInfinityEnabled(player) || !projectile.isValid() || projectile.isDead() || isBossOwnedProjectile(projectile)) {
+            return;
+        }
+        if (projectile.getShooter() instanceof Entity shooter && shooter.getUniqueId().equals(player.getUniqueId())) {
+            return;
+        }
+        if (isPlayerUtilityProjectile(projectile) && projectile.getShooter() instanceof Player) {
+            return;
+        }
+        UUID projectileId = projectile.getUniqueId();
+        honoredFrozenProjectiles.computeIfAbsent(projectileId, ignored -> new HonoredFrozenProjectileState(
+            player.getUniqueId(),
+            projectile.getLocation().clone(),
+            projectile.getVelocity().clone(),
+            projectile.hasGravity(),
+            System.currentTimeMillis() + HONORED_PROJECTILE_FREEZE_MS
+        ));
+        HonoredFrozenProjectileState state = honoredFrozenProjectiles.get(projectileId);
+        projectile.setGravity(false);
+        projectile.teleport(state.location());
+        projectile.setVelocity(new Vector());
+        projectile.getWorld().spawnParticle(Particle.END_ROD, state.location(), 12, 0.18, 0.18, 0.18, 0.02);
+        projectile.getWorld().playSound(state.location(), Sound.BLOCK_AMETHYST_BLOCK_CHIME, 0.55f, 1.85f);
+    }
+
+    private boolean shouldBlockHonoredIncomingProjectile(Projectile projectile, Player target) {
+        if (!isHonoredInfinityEnabled(target) || isBossOwnedProjectile(projectile)) {
+            return false;
+        }
+        if (projectile.getShooter() instanceof Entity shooter && shooter.getUniqueId().equals(target.getUniqueId())) {
+            return false;
+        }
+        return !(isPlayerUtilityProjectile(projectile) && projectile.getShooter() instanceof Player);
+    }
+
+    private boolean isPlayerUtilityProjectile(Projectile projectile) {
+        EntityType type = projectile.getType();
+        return type == EntityType.WIND_CHARGE
+            || type == EntityType.ENDER_PEARL
+            || type == EntityType.FISHING_BOBBER;
+    }
+
+    private void releaseHonoredFrozenProjectiles(UUID ownerId) {
+        if (ownerId == null) {
+            return;
+        }
+        for (Map.Entry<UUID, HonoredFrozenProjectileState> entry : new HashMap<>(honoredFrozenProjectiles).entrySet()) {
+            HonoredFrozenProjectileState state = entry.getValue();
+            if (!ownerId.equals(state.ownerId())) {
+                continue;
+            }
+            Entity entity = Bukkit.getEntity(entry.getKey());
+            if (entity instanceof Projectile projectile && projectile.isValid()) {
+                projectile.setGravity(state.hadGravity());
+                projectile.setVelocity(state.velocity());
+            }
+            honoredFrozenProjectiles.remove(entry.getKey());
+        }
+    }
+
+    private void tickHonoredFrozenProjectiles(long now) {
+        for (Map.Entry<UUID, HonoredFrozenProjectileState> entry : new HashMap<>(honoredFrozenProjectiles).entrySet()) {
+            Entity entity = Bukkit.getEntity(entry.getKey());
+            if (!(entity instanceof Projectile projectile) || !projectile.isValid() || projectile.isDead()) {
+                honoredFrozenProjectiles.remove(entry.getKey());
+                continue;
+            }
+            HonoredFrozenProjectileState state = entry.getValue();
+            if (state.expiresAt() <= now) {
+                projectile.getWorld().spawnParticle(Particle.REVERSE_PORTAL, state.location(), 18, 0.18, 0.18, 0.18, 0.06);
+                projectile.remove();
+                honoredFrozenProjectiles.remove(entry.getKey());
+                continue;
+            }
+            projectile.setGravity(false);
+            projectile.teleport(state.location());
+            projectile.setVelocity(new Vector());
+        }
+    }
+
+    private void restoreHonoredFrozenProjectiles(boolean remove) {
+        for (Map.Entry<UUID, HonoredFrozenProjectileState> entry : new HashMap<>(honoredFrozenProjectiles).entrySet()) {
+            Entity entity = Bukkit.getEntity(entry.getKey());
+            if (entity instanceof Projectile projectile && projectile.isValid()) {
+                if (remove) {
+                    projectile.remove();
+                } else {
+                    projectile.setGravity(entry.getValue().hadGravity());
+                    projectile.setVelocity(entry.getValue().velocity());
+                }
+            }
+        }
+        honoredFrozenProjectiles.clear();
     }
 
     private String prettyEntityType(EntityType type) {
@@ -4626,7 +7467,7 @@ public final class SuperpowerManager implements Listener {
         if (player.getInventory().firstEmpty() == -1) {
             pendingFloristStickReturns.put(player.getUniqueId(), 1);
             if (restored) {
-                player.sendMessage(MessageUtil.warn("Clear an inventory slot so the Stick from Mother Nature can return."));
+                player.sendMessage(MessageUtil.warn("Clear an inventory slot so the Wand of Mother Nature can return."));
             }
             return;
         }
@@ -4637,7 +7478,7 @@ public final class SuperpowerManager implements Listener {
                 player,
                 stick,
                 restored ? "power_item_restore" : "power_item_grant",
-                restored ? "Restored Stick from Mother Nature." : "Granted Stick from Mother Nature."
+                restored ? "Restored Wand of Mother Nature." : "Granted Wand of Mother Nature."
             );
         }
         Map<Integer, ItemStack> leftovers = player.getInventory().addItem(stick);
@@ -4645,7 +7486,7 @@ public final class SuperpowerManager implements Listener {
             pendingFloristStickReturns.put(player.getUniqueId(), 1);
         }
         if (restored) {
-            player.sendMessage(MessageUtil.info("The Stick from Mother Nature returned to you."));
+            player.sendMessage(MessageUtil.info("The Wand of Mother Nature returned to you."));
         }
     }
 
@@ -4905,7 +7746,9 @@ public final class SuperpowerManager implements Listener {
 
     private void fillInfoMenu(Player viewer, Inventory inventory) {
         for (int slot = 0; slot < inventory.getSize(); slot++) {
-            inventory.setItem(slot, fillerPane());
+            if (isFrameSlot(slot, inventory.getSize())) {
+                inventory.setItem(slot, fillerPane());
+            }
         }
         List<SuperpowerType> types = new ArrayList<>(List.of(SuperpowerType.values()));
         types.sort(Comparator
@@ -4927,7 +7770,9 @@ public final class SuperpowerManager implements Listener {
 
     private void fillPowerChoiceMenu(Player viewer, Inventory inventory, int page) {
         for (int slot = 0; slot < inventory.getSize(); slot++) {
-            inventory.setItem(slot, fillerPane());
+            if (isFrameSlot(slot, inventory.getSize())) {
+                inventory.setItem(slot, fillerPane());
+            }
         }
 
         List<SuperpowerType> choices = selectablePowerChoices();
@@ -4947,14 +7792,14 @@ public final class SuperpowerManager implements Listener {
             inventory.setItem(POWER_CHOICE_PREVIOUS_SLOT, simpleMenuItem(
                 Material.ARROW,
                 "<yellow>Previous Page</yellow>",
-                List.of("<gray>View earlier powers.</gray>")
+                List.of("<gray>View earlier classes.</gray>")
             ));
         }
         if (safePage + 1 < totalPages) {
             inventory.setItem(POWER_CHOICE_NEXT_SLOT, simpleMenuItem(
                 Material.ARROW,
                 "<yellow>Next Page</yellow>",
-                List.of("<gray>View more powers.</gray>")
+                List.of("<gray>View more classes.</gray>")
             ));
         }
         inventory.setItem(POWER_CHOICE_CANCEL_SLOT, simpleMenuItem(Material.BARRIER, "<red>Cancel</red>", List.of("<gray>Keep the awakened scroll for later.</gray>")));
@@ -4963,7 +7808,7 @@ public final class SuperpowerManager implements Listener {
     private List<SuperpowerType> selectablePowerChoices() {
         List<SuperpowerType> choices = new ArrayList<>();
         for (SuperpowerType type : SuperpowerType.values()) {
-            if (type != SuperpowerType.HUMAN) {
+            if (type != SuperpowerType.MORTAL) {
                 choices.add(type);
             }
         }
@@ -5004,10 +7849,15 @@ public final class SuperpowerManager implements Listener {
         ItemStack pane = new ItemStack(Material.BLACK_STAINED_GLASS_PANE);
         ItemMeta meta = pane.getItemMeta();
         if (meta != null) {
-            meta.displayName(Component.empty());
+            meta.displayName(MenuItemUtil.visibleName(Component.empty()));
+            meta.lore(MenuItemUtil.visibleLore(Component.empty(), List.of()));
             pane.setItemMeta(meta);
         }
         return pane;
+    }
+
+    private boolean isFrameSlot(int slot, int size) {
+        return slot < 9 || slot >= size - 9 || slot % 9 == 0 || slot % 9 == 8;
     }
 
     private ItemStack simpleMenuItem(Material material, String name, List<String> lore) {
@@ -5016,8 +7866,8 @@ public final class SuperpowerManager implements Listener {
         if (meta == null) {
             return item;
         }
-        meta.displayName(MM.deserialize(name));
-        meta.lore(lore.stream().map(MM::deserialize).toList());
+        meta.displayName(MM.deserialize(MenuItemUtil.visibleMiniName(name)));
+        meta.lore(MenuItemUtil.visibleMiniLore(name, lore).stream().map(MM::deserialize).toList());
         item.setItemMeta(meta);
         return item;
     }
@@ -5030,13 +7880,13 @@ public final class SuperpowerManager implements Listener {
             return item;
         }
         meta.displayName(MM.deserialize("<gradient:#ff4d6d:#7c3aed><bold>Awakened Ancient Scroll</bold></gradient>"));
-        meta.lore(List.of(
-            MM.deserialize("<gray>Choose the power you want to receive.</gray>"),
-            MM.deserialize("<gray>The scroll is consumed only after you click a power.</gray>"),
+        meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
+            MM.deserialize("<gray>Choose the class you want to receive.</gray>"),
+            MM.deserialize("<gray>The scroll is consumed only after you click a class.</gray>"),
             Component.empty(),
-            MM.deserialize("<gray>Current Fate: <white>" + (currentPower == null ? "Unknown" : currentPower.displayName()) + "</white></gray>"),
+            MM.deserialize("<gray>Current Class: <white>" + (currentPower == null ? "Unknown" : currentPower.displayName()) + "</white></gray>"),
             MM.deserialize("<gray>Page: <white>" + (page + 1) + "/" + Math.max(1, totalPages) + "</white></gray>")
-        ));
+        )));
         item.setItemMeta(meta);
         return item;
     }
@@ -5047,7 +7897,7 @@ public final class SuperpowerManager implements Listener {
         if (meta == null) {
             return item;
         }
-        meta.displayName(MM.deserialize("<gold><bold>" + type.displayName() + "</bold></gold>"));
+        meta.displayName(MM.deserialize(powerTitleTag(type)));
         meta.lore(powerInfoLore(type));
         item.setItemMeta(meta);
         return item;
@@ -5063,7 +7913,7 @@ public final class SuperpowerManager implements Listener {
             ? new ArrayList<>(meta.lore())
             : new ArrayList<>();
         lore.add(Component.empty());
-        lore.add(MM.deserialize("<green>Click to choose this fate.</green>"));
+        lore.add(MM.deserialize("<green>Click to choose this class.</green>"));
         meta.lore(lore);
         item.setItemMeta(meta);
         return item;
@@ -5078,11 +7928,11 @@ public final class SuperpowerManager implements Listener {
             return item;
         }
         String powerName = currentPower == null ? "Unknown" : currentPower.displayName();
-        meta.displayName(MM.deserialize("<aqua><bold>Your Power</bold></aqua>"));
+        meta.displayName(MM.deserialize("<aqua><bold>Your Class</bold></aqua>"));
         meta.lore(List.of(
-            MM.deserialize("<gray>Current Fate: <white>" + powerName + "</white></gray>"),
+            MM.deserialize("<gray>Current Class: <white>" + powerName + "</white></gray>"),
             Component.empty(),
-            MM.deserialize("<gray>The menu below shows every possible power and its effects.</gray>")
+            MM.deserialize("<gray>The menu below shows every possible class and its effects.</gray>")
         ));
         item.setItemMeta(meta);
         return item;
@@ -5090,72 +7940,92 @@ public final class SuperpowerManager implements Listener {
 
     private List<Component> powerInfoLore(SuperpowerType type) {
         List<Component> lore = new ArrayList<>();
-        lore.add(MM.deserialize("<gray>Chance: <white>" + formatPercent(displayChance(type)) + "</white></gray>"));
+        String rarityColor = powerRarityColorName(type);
+        lore.add(MM.deserialize("<gray>Tier: <" + rarityColor + "><bold>" + powerRarityName(type) + "</bold></" + rarityColor + "></gray>"));
+        lore.add(MM.deserialize("<gray>Chance: <" + rarityColor + "><bold><italic>" + formatPercent(displayChance(type)) + "</italic></bold></" + rarityColor + "></gray>"));
         lore.add(Component.empty());
         switch (type) {
-            case IMMORTALITY -> {
-                lore.add(MM.deserialize("<gray>Lethal damage leaves the player at <white>half a heart</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Triggers extremely strong regeneration.</gray>"));
+            case HONORED_ONE -> {
+                lore.add(MM.deserialize("<gray><white>/infinity</white> stops non-boss hostile projectiles.</gray>"));
+                lore.add(MM.deserialize("<gray><white>/domainexpansion</white> pulls nearby players into a <white>15s</white> sculk End domain.</gray>"));
+                lore.add(MM.deserialize("<gray>Trapped players get heavy Nausea and cannot move.</gray>"));
+                lore.add(MM.deserialize("<gray>Your domain swings hit every trapped player.</gray>"));
+                lore.add(MM.deserialize("<gray>Teammates take <white>25%</white> more domain damage.</gray>"));
+                lore.add(MM.deserialize("<gray>Cooldown: <white>10m</white>. Sealed during boss fights.</gray>"));
+                lore.add(MM.deserialize("<gray>Choosing it from an awakened scroll kills you once.</gray>"));
             }
-            case FLASH -> {
-                lore.add(MM.deserialize("<gray>Permanent <white>Speed III</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Permanent <white>Haste III</white>.</gray>"));
+            case VEIL_ASSASSIN -> {
+                lore.add(MM.deserialize("<gray>Has only <white>8 hearts</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Cannot wear <white>netherite armor</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Crouch for <white>5s</white> to enter the veil.</gray>"));
+                lore.add(MM.deserialize("<gray>In the veil, crouching moves at full speed with Speed IV.</gray>"));
+                lore.add(MM.deserialize("<gray>Your body, gear, name, and ally marker are fully hidden.</gray>"));
+                lore.add(MM.deserialize("<gray>Backstabs: <white>90% current HP</white>; bosses: <white>+20%</white>.</gray>"));
+                lore.add(MM.deserialize("<gray><white>/smokebomb</white> blinds nearby players and fully hides you for <white>5s</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Smoke Bomb cooldown: <white>60s</white>.</gray>"));
             }
-            case ENCHANTER -> {
+            case ARCANIST -> {
                 lore.add(MM.deserialize("<gray>All XP gains are multiplied by <white>5x</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Enchanting no longer needs <white>lapis</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Mob kills can drop <white>essence loot</white>.</gray>"));
+                lore.add(MM.deserialize("<gray><white>/arcanebook</white> upgrades one held enchanted book to max level.</gray>"));
+                lore.add(MM.deserialize("<gray>Book upgrade cooldown: <white>5 hours</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Enchanted gear has a <white>25%</white> chance to ignore durability loss.</gray>"));
                 lore.add(MM.deserialize("<gray>Held enchant levels grant speed and attack speed.</gray>"));
                 lore.add(MM.deserialize("<gray>Also grants <white>+2 Luck</white>.</gray>"));
             }
-            case BERSERK -> {
+            case BERSERKER -> {
                 lore.add(MM.deserialize("<gray>Permanent <white>Strength II</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>At <white>3 hearts or less</white>, gain <white>Speed II</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Also gains <white>Regeneration I</white> while low.</gray>"));
             }
-            case TANK -> {
+            case JUGGERNAUT -> {
                 lore.add(MM.deserialize("<gray>Permanent <white>two rows of health</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>While crouching, incoming knockback is nearly ignored.</gray>"));
+                lore.add(MM.deserialize("<gray><white>/unstoppableforce</white> lets you sprint through breakable walls for <white>20s</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Fall impacts trigger an area slam and deal <white>80%</white> less fall damage to you.</gray>"));
+                lore.add(MM.deserialize("<gray>Unstoppable Force cooldown: <white>5 minutes</white>.</gray>"));
             }
-            case HUMAN -> {
-                lore.add(MM.deserialize("<gray>No passive power.</gray>"));
+            case MORTAL -> {
+                lore.add(MM.deserialize("<gray>No passive ability.</gray>"));
                 lore.add(MM.deserialize("<gray>An <white>Ancient Scroll</white> can reroll any current fate.</gray>"));
             }
-            case TRAVELER -> {
+            case WAYFARER -> {
                 lore.add(MM.deserialize("<gray>Permanent <white>Speed II</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Creates paired portals to chosen coordinates.</gray>"));
                 lore.add(MM.deserialize("<gray>Players and mobs can pass through them.</gray>"));
-                lore.add(MM.deserialize("<gray>Works across the Overworld, Nether, and End.</gray>"));
+                lore.add(MM.deserialize("<gray>Works across main dimensions, but not during boss fights.</gray>"));
                 lore.add(MM.deserialize("<gray>Portals fade after <white>" + TRAVEL_PORTAL_DURATION_SECONDS + "s</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Command: <white>/travel [x] [y] [z] [dimension]</white></gray>"));
                 lore.add(MM.deserialize("<gray>Close it early with <white>/travel close</white>.</gray>"));
             }
-            case FLORIST -> {
+            case VERDANT -> {
                 lore.add(MM.deserialize("<gray>Boosts nearby crop growth and doubles crops and wood.</gray>"));
                 lore.add(MM.deserialize("<gray>Regenerates health outdoors.</gray>"));
                 lore.add(MM.deserialize("<gray>Spam-crouching near crops surges their growth.</gray>"));
-                lore.add(MM.deserialize("<gray>Grants the <white>Stick from Mother Nature</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Grants the <white>Wand of Mother Nature</white>.</gray>"));
             }
             case DRUID -> {
                 lore.add(MM.deserialize("<gray>Receives a bound <white>Druid's Grimoire</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Choose one blessing for yourself and nearby teammates within <white>" + DRUID_BUFF_RADIUS + " blocks</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Can grant strength, speed, regeneration, resistance, fire resistance, absorption, or instant health.</gray>"));
+                lore.add(MM.deserialize("<gray>Can grant the positive potion blessings in the grimoire.</gray>"));
                 lore.add(MM.deserialize("<gray>Non-instant blessings last <white>" + (DRUID_BUFF_DURATION_SECONDS / 60) + " minutes</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Only one blessing can be chosen each use.</gray>"));
                 lore.add(MM.deserialize("<gray>Cooldown: <white>" + DRUID_BUFF_COOLDOWN_SECONDS + "s</white>.</gray>"));
             }
             case MONARCH -> {
                 lore.add(MM.deserialize("<gray>Stores slain hostile mobs for later battle.</gray>"));
-                lore.add(MM.deserialize("<gray>Summons have <white>40 HP</white>, stronger damage, armor, resistance, and knockback defense.</gray>"));
+                lore.add(MM.deserialize("<gray>Summons have <white>40 HP</white>, armor, resistance, and strong damage.</gray>"));
                 lore.add(MM.deserialize("<gray>They persist during normal gameplay and guard against enemies of your team.</gray>"));
                 lore.add(MM.deserialize("<gray>They auto-prioritize enemy players, then hostile mobs.</gray>"));
-                lore.add(MM.deserialize("<gray>Undead mobs refuse to target the Monarch.</gray>"));
+                lore.add(MM.deserialize("<gray>Bosses resist <white>70%</white> of their damage.</gray>"));
+                lore.add(MM.deserialize("<gray>Undead mobs refuse to target the Shadow Monarch.</gray>"));
                 lore.add(MM.deserialize("<gray>Storage limit: <white>" + MONARCH_STORAGE_LIMIT + "</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Command: <white>/msummon [amount]</white> or <white>/msummon despawn</white></gray>"));
             }
-            case SHADOW -> {
+            case NIGHTSHADE -> {
                 lore.add(MM.deserialize("<gray>Toggle invisibility for <white>15 minutes</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Night vision can be toggled with <white>/nightshadevision</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Hits poison enemies briefly.</gray>"));
                 lore.add(MM.deserialize("<gray>While hidden, gain <white>Speed III</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Hit cooldown: <white>7 minutes</white>. Normal cooldown: <white>5 minutes</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Command: <white>/shadow toggle</white></gray>"));
@@ -5164,33 +8034,33 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Receives a bound <white>World Clock</white>.</gray>"));
                 lore.add(MM.deserialize("<gray><white>Right-click</white> to stop time in a <white>10 block</white> radius.</gray>"));
                 lore.add(MM.deserialize("<gray>Freezes mobs, players, projectiles, redstone, and block updates for <white>5s</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>The user can still move, fight, and interact during the stop.</gray>"));
-                lore.add(MM.deserialize("<gray>Cooldown: <white>5 minutes</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>You stay active. Bosses resist it. Cooldown: <white>5m</white>.</gray>"));
             }
-            case XRAY_VISION -> {
-                lore.add(MM.deserialize("<gray>Highlights ores, players, and mobs through walls for <white>30s</white>.</gray>"));
+            case ORACLE_EYE -> {
+                lore.add(MM.deserialize("<gray>Highlights ores, players, and mobs through walls for <white>2.5 minutes</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Quietly warns you when diamonds or ancient debris are within <white>3 blocks</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Cooldown: <white>6 minutes</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Command: <white>/xray</white></gray>"));
             }
-            case MINER -> {
+            case PROSPECTOR -> {
                 lore.add(MM.deserialize("<gray>Permanent <white>Haste III</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Grants <white>+2 health</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Mining ores has a <white>15%</white> chance to duplicate the drop.</gray>"));
+                lore.add(MM.deserialize("<gray>Gains Night Vision under Y <white>" + MINER_NIGHT_VISION_Y_LEVEL + "</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Mining ores has a <white>25%</white> chance to duplicate the drop.</gray>"));
             }
-            case GIANT -> {
+            case TITAN -> {
                 lore.add(MM.deserialize("<gray>Scaled to <white>1.2x</white> normal size.</gray>"));
                 lore.add(MM.deserialize("<gray>Grants <white>+6 hearts</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Heavy blows gain <white>+2 attack damage</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Reduces all incoming knockback by <white>40%</white>.</gray>"));
             }
-            case SUPERMAN -> {
+            case SKYBOUND -> {
                 lore.add(MM.deserialize("<gray>Permanent <white>Strength II</white> and <white>Speed I</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Grants <white>an extra row of hearts</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Double-tap jump to fly for <white>30s</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Sneak while flying to burst forward.</gray>"));
-                lore.add(MM.deserialize("<gray>Cooldown: <white>5 minutes</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Sneak to boost. Bosses ground flight. Cooldown: <white>5m</white>.</gray>"));
             }
-            case WATERMAN -> {
+            case TIDEBORN -> {
                 lore.add(MM.deserialize("<gray>Can live underwater with <white>no drowning</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Air is constantly restored and Water Breathing is always active.</gray>"));
                 lore.add(MM.deserialize("<gray>Breaks blocks at normal speed while submerged.</gray>"));
@@ -5198,12 +8068,12 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Water-empowered hits deal <white>25%</white> more damage.</gray>"));
                 lore.add(MM.deserialize("<gray>While water-empowered, incoming damage is reduced by <white>25%</white> and attackers are slowed.</gray>"));
             }
-            case PHOENIX -> {
+            case ASHEN_SOUL -> {
                 lore.add(MM.deserialize("<gray>Permanent <white>Fire Resistance</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Low health grants <white>Speed I</white> and <white>Regeneration I</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Hits ignite enemies and burning targets take bonus damage.</gray>"));
                 lore.add(MM.deserialize("<gray>Enemies that damage you are scorched while you gain brief Absorption.</gray>"));
-                lore.add(MM.deserialize("<gray>Lethal damage can trigger <white>Rebirth</white>, restoring health and burning nearby enemies.</gray>"));
+                lore.add(MM.deserialize("<gray><white>Rebirth</white> survives lethal hits, except failed boss mechanics.</gray>"));
                 lore.add(MM.deserialize("<gray>Rebirth cooldown: <white>" + (PHOENIX_COOLDOWN_SECONDS / 60) + " minutes</white>.</gray>"));
             }
             case VOIDWALKER -> {
@@ -5215,11 +8085,11 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Voidstep grants <white>" + VOIDSTEP_SLOW_FALLING_SECONDS + "s</white> of Slow Falling.</gray>"));
                 lore.add(MM.deserialize("<gray>Your first veil attack blinds and weakens the target with bonus damage.</gray>"));
                 lore.add(MM.deserialize("<gray>The veil attack window lasts <white>" + VOIDSTEP_VEIL_SECONDS + "s</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Endermen refuse to target Voidwalkers.</gray>"));
+                lore.add(MM.deserialize("<gray>Endermen ignore you. Boss fights seal Voidstep.</gray>"));
                 lore.add(MM.deserialize("<gray>Cooldown: <white>" + VOIDSTEP_COOLDOWN_SECONDS + "s</white>.</gray>"));
             }
             case SENTINEL -> {
-                lore.add(MM.deserialize("<gray>Grants <white>+2 hearts</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Grants <white>+3 hearts</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Sneak to project a <white>" + (int) SENTINEL_AURA_RADIUS + " block</white> guard aura.</gray>"));
                 lore.add(MM.deserialize("<gray>You and nearby teammates gain <white>Resistance I</white> and Absorption.</gray>"));
                 lore.add(MM.deserialize("<gray>While braced, incoming damage is reduced and attackers are weakened.</gray>"));
@@ -5228,61 +8098,111 @@ public final class SuperpowerManager implements Listener {
             case FROSTBORN -> {
                 lore.add(MM.deserialize("<gray>Permanent <white>Water Breathing</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Immune to freezing damage.</gray>"));
-                lore.add(MM.deserialize("<gray>Gain <white>Speed I</white> while standing on snow or ice.</gray>"));
+                lore.add(MM.deserialize("<gray>Gain speed on snow or ice, stronger in cold biomes.</gray>"));
+                lore.add(MM.deserialize("<gray>Cold and snowy biomes also grant <white>Strength I</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Damaging enemies chills them with <white>Slowness I</white> and <white>Weakness I</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Chilled targets take <white>15%</white> more Frostborn damage.</gray>"));
+                lore.add(MM.deserialize("<gray>Snowballs inflict <white>Weakness I</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Chilled targets take <white>+25%</white>; bosses resist it and take <white>+10%</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Enemies that damage you are chilled too.</gray>"));
                 lore.add(MM.deserialize("<gray>Chill duration: <white>" + FROSTBORN_CHILL_SECONDS + "s</white>.</gray>"));
             }
             case DEADEYE -> {
                 lore.add(MM.deserialize("<gray>Permanent <white>Speed I</white> and <white>Night Vision</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Projectile hits deal <white>20%</white> more damage.</gray>"));
+                lore.add(MM.deserialize("<gray>Can preserve any arrow type if at least one is in your inventory.</gray>"));
+                lore.add(MM.deserialize("<gray>Toggle arrow preservation with <white>/deadeyearrows</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Projectile hits deal <white>25%</white> more damage.</gray>"));
                 lore.add(MM.deserialize("<gray>Sneak while shooting arrows/tridents to fire a faster marked shot.</gray>"));
-                lore.add(MM.deserialize("<gray>Marked shots deal <white>35%</white> more damage and briefly slow targets.</gray>"));
+                lore.add(MM.deserialize("<gray>Marked shots: <white>+45%</white> and slow. Boss shots: <white>+15/25%</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Targets hit by projectiles glow for <white>" + DEADEYE_GLOW_SECONDS + "s</white>.</gray>"));
             }
             case RIFTWARDEN -> {
                 lore.add(MM.deserialize("<gray>Built for boss fights and dangerous mobs.</gray>"));
-                lore.add(MM.deserialize("<gray>Deals <white>18%</white> more damage to custom bosses.</gray>"));
-                lore.add(MM.deserialize("<gray>Deals <white>8%</white> more damage to hostile mobs.</gray>"));
-                lore.add(MM.deserialize("<gray>Reduces non-player damage, stronger against bosses.</gray>"));
+                lore.add(MM.deserialize("<gray>Deals <white>15%</white> more damage to custom bosses.</gray>"));
+                lore.add(MM.deserialize("<gray>Deals <white>12%</white> more damage to hostile mobs.</gray>"));
+                lore.add(MM.deserialize("<gray>Reduces boss damage by <white>15%</white> and mob damage by <white>18%</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Gains Slow Falling only near custom bosses.</gray>"));
                 lore.add(MM.deserialize("<gray>Gains Resistance near custom bosses or while in the End.</gray>"));
             }
             case OATHBOUND -> {
                 lore.add(MM.deserialize("<gray>Wakes up around nearby teammates.</gray>"));
-                lore.add(MM.deserialize("<gray>You and teammates within <white>" + (int) OATHBOUND_AURA_RADIUS + " blocks</white> gain Speed I.</gray>"));
-                lore.add(MM.deserialize("<gray>The Oathbound caster also gains Resistance I and Absorption.</gray>"));
-                lore.add(MM.deserialize("<gray>Only works with real team members, so multiple Oathbound players stack naturally without duping inventory effects.</gray>"));
+                lore.add(MM.deserialize("<gray>Even alone, keeps <white>Speed II</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>You and teammates within <white>" + (int) OATHBOUND_AURA_RADIUS + " blocks</white> gain Speed II and Resistance I.</gray>"));
+                lore.add(MM.deserialize("<gray>With nearby teammates, the caster also gains Strength I and Absorption II.</gray>"));
+                lore.add(MM.deserialize("<gray><white>/oathsummon [player]</white> calls an ally outside boss fights.</gray>"));
+                lore.add(MM.deserialize("<gray>The team aura only counts real team members.</gray>"));
             }
             case RUNESMITH -> {
-                lore.add(MM.deserialize("<gray>Permanent <white>Haste I</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Gear has a <white>15%</white> chance to ignore durability loss.</gray>"));
-                lore.add(MM.deserialize("<gray>Custom, legendary, and season gear preserve durability at <white>25%</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Killing a custom boss repairs held gear and armor by <white>10%</white> durability.</gray>"));
+                lore.add(MM.deserialize("<gray>Permanent <white>Haste II</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Gear has a <white>20%</white> chance to ignore durability loss.</gray>"));
+                lore.add(MM.deserialize("<gray>Custom, legendary, and season gear preserve durability at <white>35%</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Killing a custom boss repairs held gear and armor by <white>15%</white> durability.</gray>"));
             }
             case GRAVEBORN -> {
                 lore.add(MM.deserialize("<gray>Immune to poison and wither damage.</gray>"));
                 lore.add(MM.deserialize("<gray>Undead mobs refuse to target the Graveborn.</gray>"));
                 lore.add(MM.deserialize("<gray>Deals extra damage to undead and takes less from them.</gray>"));
+                lore.add(MM.deserialize("<gray>Nearby undead can save a lethal hit, except failed boss mechanics.</gray>"));
+                lore.add(MM.deserialize("<gray>Nearby player deaths grant temporary combat buffs and absorption.</gray>"));
                 lore.add(MM.deserialize("<gray>Kills restore health, with player kills restoring more.</gray>"));
                 lore.add(MM.deserialize("<gray>Permanent Night Vision keeps caves readable without a command.</gray>"));
             }
             case STORMCALLER -> {
-                lore.add(MM.deserialize("<gray>Permanent <white>Speed I</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Permanent <white>Speed II</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Rain or thunder grants <white>Haste II</white> and <white>Strength I</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Hits can call a visual lightning strike for bonus damage.</gray>"));
+                lore.add(MM.deserialize("<gray>Axes and maces in PvP grant brief Strength and Resistance.</gray>"));
                 lore.add(MM.deserialize("<gray>Lightning chance is higher during storms.</gray>"));
                 lore.add(MM.deserialize("<gray>Command: <white>/stormcaller on|off</white></gray>"));
             }
             case BLOODMENDER -> {
                 lore.add(MM.deserialize("<gray>Damaging enemies heals a portion of the damage dealt.</gray>"));
                 lore.add(MM.deserialize("<gray>Healing is stronger against mobs and capped per hit.</gray>"));
+                lore.add(MM.deserialize("<gray><white>/bloodsacrifice</white> spends half your health to fully heal allies.</gray>"));
+                lore.add(MM.deserialize("<gray>Healing seals cancel it without taking your health.</gray>"));
+                lore.add(MM.deserialize("<gray><white>/curse</white> curses one nearby enemy armor piece with Vanishing.</gray>"));
                 lore.add(MM.deserialize("<gray>Kills pair well with boss waves and PvP cleanup without making the player immortal.</gray>"));
                 lore.add(MM.deserialize("<gray>Low health grants brief Regeneration I.</gray>"));
             }
         }
+        lore.add(Component.empty());
+        lore.add(MM.deserialize("<dark_gray><italic>Numbers shown here are live season values.</italic></dark_gray>"));
         return lore;
+    }
+
+    private String powerTitleTag(SuperpowerType type) {
+        String color = powerRarityColorName(type);
+        return "<" + color + "><bold>" + type.displayName() + "</bold></" + color + ">";
+    }
+
+    private String powerRarityName(SuperpowerType type) {
+        double chance = displayChance(type);
+        if (chance <= 0.001) {
+            return "Secret";
+        }
+        if (chance <= 0.025) {
+            return "Mythic";
+        }
+        if (chance <= 0.04) {
+            return "Legendary";
+        }
+        if (chance <= 0.055) {
+            return "Epic";
+        }
+        if (chance <= 0.075) {
+            return "Rare";
+        }
+        return "Common";
+    }
+
+    private String powerRarityColorName(SuperpowerType type) {
+        return switch (powerRarityName(type)) {
+            case "Secret" -> "dark_purple";
+            case "Mythic" -> "light_purple";
+            case "Legendary" -> "gold";
+            case "Epic" -> "aqua";
+            case "Rare" -> "green";
+            default -> "gray";
+        };
     }
 
     private void applyAncientScrollState(ItemMeta meta) {
@@ -5296,23 +8216,24 @@ public final class SuperpowerManager implements Listener {
         CustomLoreUtil.Rarity rarity = awakened ? CustomLoreUtil.Rarity.MYTHIC : CustomLoreUtil.Rarity.EPIC;
         String name = awakened ? "Awakened Ancient Scroll" : "Ancient Scroll";
         meta.displayName(CustomLoreUtil.displayName(rarity, name));
+        ItemModelUtil.apply(meta, awakened ? "awakened_ancient_scroll" : ANCIENT_SCROLL_ITEM_ID);
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.PAPER,
             rarity.label(),
             "SCROLL",
             List.of(awakened
-                ? "<gray>Use or tap to choose your next superpower.</gray>"
-                : "<gray>Use or tap to reroll your current superpower.</gray>"),
+                ? "<gray>Use or tap to choose your next class.</gray>"
+                : "<gray>Use or tap to reroll your current class.</gray>"),
             List.of(CustomLoreUtil.section(
                 "Use",
-                awakened ? "Chosen Fate" : "Fate Rewrite",
+                awakened ? "Class Choice" : "Class Rewrite",
                 awakened
-                    ? "<gray>Opens a menu where you choose any non-Mortal power.</gray>"
-                    : "<gray>Works even if you already have a power.</gray>",
+                    ? "<gray>Opens a menu where you choose any non-Mortal class.</gray>"
+                    : "<gray>Works even if you already have a class.</gray>",
                 awakened
-                    ? "<gray>Consumes the scroll only after a new power is selected.</gray>"
-                    : "<gray>Consumes the scroll and rerolls you into a random new fate.</gray>"
+                    ? "<gray>Consumes the scroll only after a new class is selected.</gray>"
+                    : "<gray>Consumes the scroll and rerolls you into a random new class.</gray>"
             ))
         ));
     }
@@ -5325,6 +8246,7 @@ public final class SuperpowerManager implements Listener {
 
     private void applyWardenHeartPresentation(ItemMeta meta) {
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.EPIC, "Warden Heart"));
+        ItemModelUtil.apply(meta, WARDEN_HEART_ITEM_ID);
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.HEART_OF_THE_SEA,
@@ -5346,13 +8268,14 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void applyMotherNatureStickPresentation(ItemMeta meta) {
-        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.EPIC, "Stick from Mother Nature"));
+        meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.EPIC, "Wand of Mother Nature"));
+        ItemModelUtil.apply(meta, MOTHER_NATURE_STICK_ITEM_ID);
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.STICK,
             CustomLoreUtil.Rarity.EPIC.label(),
             "NATURE",
-            List.of("<gray>Bound to the Florist.</gray>"),
+            List.of("<gray>Bound to the Verdant.</gray>"),
             List.of(
                 CustomLoreUtil.section(
                     "Left Click",
@@ -5378,6 +8301,7 @@ public final class SuperpowerManager implements Listener {
 
     private void applyTheWorldClockPresentation(ItemMeta meta) {
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.MYTHIC, "World Clock"));
+        ItemModelUtil.apply(meta, THE_WORLD_CLOCK_ITEM_ID);
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.CLOCK,
@@ -5402,6 +8326,7 @@ public final class SuperpowerManager implements Listener {
 
     private void applyDruidGrimoirePresentation(ItemMeta meta) {
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.EPIC, "Druid's Grimoire"));
+        ItemModelUtil.apply(meta, DRUID_GRIMOIRE_ITEM_ID);
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.BOOK,
@@ -5416,33 +8341,6 @@ public final class SuperpowerManager implements Listener {
                 "<gray>Cooldown: <white>" + DRUID_BUFF_COOLDOWN_SECONDS + "s</white>.</gray>"
             ))
         ));
-    }
-
-    private ItemStack createEnchanterEssenceDrop() {
-        if (ThreadLocalRandom.current().nextBoolean()) {
-            return new ItemStack(Material.EXPERIENCE_BOTTLE);
-        }
-
-        ItemStack book = new ItemStack(Material.ENCHANTED_BOOK);
-        if (!(book.getItemMeta() instanceof EnchantmentStorageMeta meta)) {
-            return new ItemStack(Material.EXPERIENCE_BOTTLE);
-        }
-
-        List<Enchantment> enchants = new ArrayList<>();
-        for (Enchantment enchantment : RegistryAccess.registryAccess().getRegistry(RegistryKey.ENCHANTMENT)) {
-            if (enchantment != null) {
-                enchants.add(enchantment);
-            }
-        }
-        if (enchants.isEmpty()) {
-            return new ItemStack(Material.EXPERIENCE_BOTTLE);
-        }
-
-        Enchantment chosen = enchants.get(ThreadLocalRandom.current().nextInt(enchants.size()));
-        int level = Math.max(1, ThreadLocalRandom.current().nextInt(chosen.getMaxLevel()) + 1);
-        meta.addStoredEnchant(chosen, level, true);
-        book.setItemMeta(meta);
-        return book;
     }
 
     private String formatPercent(double chance) {
@@ -5471,7 +8369,7 @@ public final class SuperpowerManager implements Listener {
             if (type == currentPower) {
                 continue;
             }
-            if (excludeHuman && type == SuperpowerType.HUMAN) {
+            if (excludeHuman && type == SuperpowerType.MORTAL) {
                 continue;
             }
             choices.add(type);
@@ -5507,13 +8405,13 @@ public final class SuperpowerManager implements Listener {
         }
 
         boolean active = shouldBeImmovable
-            && hasPower(player, SuperpowerType.TANK)
+            && hasPower(player, SuperpowerType.JUGGERNAUT)
             && !player.isDead()
             && player.getGameMode() != GameMode.SPECTATOR;
 
         if (active) {
             if (existing == null) {
-                attribute.addModifier(new AttributeModifier(
+                attribute.addTransientModifier(new AttributeModifier(
                     keyTankImmovableModifier,
                     TANK_CROUCH_KNOCKBACK_RESISTANCE,
                     AttributeModifier.Operation.ADD_NUMBER,
@@ -5554,7 +8452,7 @@ public final class SuperpowerManager implements Listener {
         if (player == null || enchanting == null) {
             return;
         }
-        if (!player.isOnline() || !hasPower(player, SuperpowerType.ENCHANTER)) {
+        if (!player.isOnline() || !hasPower(player, SuperpowerType.ARCANIST)) {
             clearVirtualEnchanterLapis(enchanting);
             return;
         }
@@ -5602,21 +8500,31 @@ public final class SuperpowerManager implements Listener {
     private record TimeStopState(UUID ownerId, Location center, long expiresAt) {}
     private record FrozenMobState(boolean hadAi, boolean hadGravity) {}
     private record FrozenProjectileState(Location location, Vector velocity, boolean hadGravity) {}
-    private record PowerInfoHolder() implements InventoryHolder {
+    private record HonoredDomainState(
+        UUID ownerId,
+        Location domainCenter,
+        long expiresAt,
+        Map<UUID, Location> returnLocations,
+        Set<UUID> participantIds,
+        List<BlockState> restoreBlocks
+    ) {}
+    private record HonoredFrozenProjectileState(UUID ownerId, Location location, Vector velocity, boolean hadGravity, long expiresAt) {}
+    private record ArmorCurseTarget(Player target, EquipmentSlot slot, ItemStack item) {}
+    private record PowerInfoHolder() implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;
         }
     }
 
-    private record PowerChoiceHolder(UUID ownerId, EquipmentSlot hand, int page) implements InventoryHolder {
+    private record PowerChoiceHolder(UUID ownerId, EquipmentSlot hand, int page) implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;
         }
     }
 
-    private record DruidGrimoireHolder(UUID ownerId) implements InventoryHolder {
+    private record DruidGrimoireHolder(UUID ownerId) implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;
@@ -5624,26 +8532,54 @@ public final class SuperpowerManager implements Listener {
     }
 
     private enum DruidBlessing {
-        STRENGTH(10, Material.IRON_SWORD, "<red><bold>Strength</bold></red>", "<gray>Grants <white>Strength I</white>.</gray>", Particle.CRIT, Sound.ENTITY_PLAYER_ATTACK_STRONG),
-        SPEED(11, Material.SUGAR, "<aqua><bold>Speed</bold></aqua>", "<gray>Grants <white>Speed I</white>.</gray>", Particle.CLOUD, Sound.ENTITY_BREEZE_SLIDE),
-        REGENERATION(12, Material.GLISTERING_MELON_SLICE, "<light_purple><bold>Regeneration</bold></light_purple>", "<gray>Grants <white>Regeneration I</white>.</gray>", Particle.HEART, Sound.BLOCK_AMETHYST_BLOCK_CHIME),
-        RESISTANCE(13, Material.SHIELD, "<gray><bold>Resistance</bold></gray>", "<gray>Grants <white>Resistance I</white>.</gray>", Particle.ANGRY_VILLAGER, Sound.ITEM_ARMOR_EQUIP_NETHERITE),
-        FIRE_RESISTANCE(14, Material.MAGMA_CREAM, "<gold><bold>Fire Resistance</bold></gold>", "<gray>Grants <white>Fire Resistance I</white>.</gray>", Particle.FLAME, Sound.ITEM_FIRECHARGE_USE),
-        ABSORPTION(15, Material.GOLDEN_APPLE, "<yellow><bold>Absorption</bold></yellow>", "<gray>Grants <white>Absorption I</white>.</gray>", Particle.TOTEM_OF_UNDYING, Sound.BLOCK_BEACON_POWER_SELECT),
-        INSTANT_HEALTH(16, Material.SPLASH_POTION, "<green><bold>Instant Health</bold></green>", "<gray>Restores a quick burst of health.</gray>", Particle.HAPPY_VILLAGER, Sound.ENTITY_PLAYER_LEVELUP);
+        STRENGTH(10, Material.IRON_SWORD, "<red><bold>Strength</bold></red>", "<gray>Grants <white>Strength I</white>.</gray>", PotionEffectType.STRENGTH, 0, false, Particle.CRIT, Sound.ENTITY_PLAYER_ATTACK_STRONG),
+        SPEED(11, Material.SUGAR, "<aqua><bold>Speed</bold></aqua>", "<gray>Grants <white>Speed I</white>.</gray>", PotionEffectType.SPEED, 0, false, Particle.CLOUD, Sound.ENTITY_BREEZE_SLIDE),
+        HASTE(12, Material.GOLDEN_PICKAXE, "<yellow><bold>Haste</bold></yellow>", "<gray>Grants <white>Haste I</white>.</gray>", PotionEffectType.HASTE, 0, false, Particle.ELECTRIC_SPARK, Sound.BLOCK_BEACON_POWER_SELECT),
+        JUMP_BOOST(13, Material.RABBIT_FOOT, "<green><bold>Jump Boost</bold></green>", "<gray>Grants <white>Jump Boost I</white>.</gray>", PotionEffectType.JUMP_BOOST, 0, false, Particle.HAPPY_VILLAGER, Sound.ENTITY_RABBIT_JUMP),
+        REGENERATION(14, Material.GLISTERING_MELON_SLICE, "<light_purple><bold>Regeneration</bold></light_purple>", "<gray>Grants <white>Regeneration I</white>.</gray>", PotionEffectType.REGENERATION, 0, false, Particle.HEART, Sound.BLOCK_AMETHYST_BLOCK_CHIME),
+        RESISTANCE(15, Material.SHIELD, "<gray><bold>Resistance</bold></gray>", "<gray>Grants <white>Resistance I</white>.</gray>", PotionEffectType.RESISTANCE, 0, false, Particle.ANGRY_VILLAGER, Sound.ITEM_ARMOR_EQUIP_NETHERITE),
+        FIRE_RESISTANCE(16, Material.MAGMA_CREAM, "<gold><bold>Fire Resistance</bold></gold>", "<gray>Grants <white>Fire Resistance I</white>.</gray>", PotionEffectType.FIRE_RESISTANCE, 0, false, Particle.FLAME, Sound.ITEM_FIRECHARGE_USE),
+        WATER_BREATHING(19, Material.PUFFERFISH, "<blue><bold>Water Breathing</bold></blue>", "<gray>Grants <white>Water Breathing I</white>.</gray>", PotionEffectType.WATER_BREATHING, 0, false, Particle.BUBBLE_POP, Sound.BLOCK_BUBBLE_COLUMN_UPWARDS_INSIDE),
+        NIGHT_VISION(20, Material.GOLDEN_CARROT, "<yellow><bold>Night Vision</bold></yellow>", "<gray>Grants <white>Night Vision I</white>.</gray>", PotionEffectType.NIGHT_VISION, 0, false, Particle.GLOW, Sound.BLOCK_AMETHYST_BLOCK_CHIME),
+        ABSORPTION(21, Material.GOLDEN_APPLE, "<yellow><bold>Absorption</bold></yellow>", "<gray>Grants <white>Absorption I</white>.</gray>", PotionEffectType.ABSORPTION, 0, false, Particle.TOTEM_OF_UNDYING, Sound.BLOCK_BEACON_POWER_SELECT),
+        HEALTH_BOOST(22, Material.APPLE, "<red><bold>Health Boost</bold></red>", "<gray>Grants <white>Health Boost I</white>.</gray>", PotionEffectType.HEALTH_BOOST, 0, false, Particle.HEART, Sound.ENTITY_PLAYER_LEVELUP),
+        LUCK(23, Material.EMERALD, "<green><bold>Luck</bold></green>", "<gray>Grants <white>Luck I</white>.</gray>", PotionEffectType.LUCK, 0, false, Particle.HAPPY_VILLAGER, Sound.BLOCK_AMETHYST_BLOCK_CHIME),
+        SLOW_FALLING(24, Material.PHANTOM_MEMBRANE, "<white><bold>Slow Falling</bold></white>", "<gray>Grants <white>Slow Falling I</white>.</gray>", PotionEffectType.SLOW_FALLING, 0, false, Particle.CLOUD, Sound.ENTITY_PHANTOM_FLAP),
+        DOLPHINS_GRACE(25, Material.TROPICAL_FISH, "<aqua><bold>Dolphin's Grace</bold></aqua>", "<gray>Grants <white>Dolphin's Grace I</white>.</gray>", PotionEffectType.DOLPHINS_GRACE, 0, false, Particle.SPLASH, Sound.ENTITY_DOLPHIN_PLAY),
+        CONDUIT_POWER(28, Material.HEART_OF_THE_SEA, "<aqua><bold>Conduit Power</bold></aqua>", "<gray>Grants <white>Conduit Power I</white>.</gray>", PotionEffectType.CONDUIT_POWER, 0, false, Particle.NAUTILUS, Sound.BLOCK_CONDUIT_ACTIVATE),
+        SATURATION(29, Material.COOKED_BEEF, "<gold><bold>Saturation</bold></gold>", "<gray>Restores hunger quickly.</gray>", PotionEffectType.SATURATION, 0, true, Particle.HAPPY_VILLAGER, Sound.ENTITY_GENERIC_EAT),
+        HERO_OF_THE_VILLAGE(30, Material.BELL, "<gold><bold>Hero of the Village</bold></gold>", "<gray>Grants <white>Hero of the Village I</white>.</gray>", PotionEffectType.HERO_OF_THE_VILLAGE, 0, false, Particle.TOTEM_OF_UNDYING, Sound.UI_TOAST_CHALLENGE_COMPLETE),
+        INVISIBILITY(31, Material.GLASS_BOTTLE, "<gray><bold>Invisibility</bold></gray>", "<gray>Grants <white>Invisibility I</white>.</gray>", PotionEffectType.INVISIBILITY, 0, false, Particle.PORTAL, Sound.BLOCK_AMETHYST_BLOCK_RESONATE),
+        INSTANT_HEALTH(32, Material.SPLASH_POTION, "<green><bold>Instant Health</bold></green>", "<gray>Restores a quick burst of health.</gray>", PotionEffectType.INSTANT_HEALTH, 0, true, Particle.HAPPY_VILLAGER, Sound.ENTITY_PLAYER_LEVELUP);
 
         private final int slot;
         private final Material icon;
         private final String display;
         private final String lore;
+        private final PotionEffectType effectType;
+        private final int amplifier;
+        private final boolean instant;
         private final Particle particle;
         private final Sound sound;
 
-        DruidBlessing(int slot, Material icon, String display, String lore, Particle particle, Sound sound) {
+        DruidBlessing(
+            int slot,
+            Material icon,
+            String display,
+            String lore,
+            PotionEffectType effectType,
+            int amplifier,
+            boolean instant,
+            Particle particle,
+            Sound sound
+        ) {
             this.slot = slot;
             this.icon = icon;
             this.display = display;
             this.lore = lore;
+            this.effectType = effectType;
+            this.amplifier = amplifier;
+            this.instant = instant;
             this.particle = particle;
             this.sound = sound;
         }
@@ -5676,28 +8612,36 @@ public final class SuperpowerManager implements Listener {
             return switch (this) {
                 case STRENGTH -> "Strength";
                 case SPEED -> "Speed";
+                case HASTE -> "Haste";
+                case JUMP_BOOST -> "Jump Boost";
                 case REGENERATION -> "Regeneration";
                 case RESISTANCE -> "Resistance";
                 case FIRE_RESISTANCE -> "Fire Resistance";
+                case WATER_BREATHING -> "Water Breathing";
+                case NIGHT_VISION -> "Night Vision";
                 case ABSORPTION -> "Absorption";
+                case HEALTH_BOOST -> "Health Boost";
+                case LUCK -> "Luck";
+                case SLOW_FALLING -> "Slow Falling";
+                case DOLPHINS_GRACE -> "Dolphin's Grace";
+                case CONDUIT_POWER -> "Conduit Power";
+                case SATURATION -> "Saturation";
+                case HERO_OF_THE_VILLAGE -> "Hero of the Village";
+                case INVISIBILITY -> "Invisibility";
                 case INSTANT_HEALTH -> "Instant Health";
             };
         }
 
         String durationText() {
-            return this == INSTANT_HEALTH ? "Instant" : (DRUID_BUFF_DURATION_SECONDS + "s");
+            return instant ? "Instant" : (DRUID_BUFF_DURATION_SECONDS + "s");
         }
 
         void apply(SuperpowerManager manager, Player target) {
-            switch (this) {
-                case STRENGTH -> manager.applyPotion(target, PotionEffectType.STRENGTH, DRUID_BUFF_DURATION_SECONDS * 20, 0);
-                case SPEED -> manager.applyPotion(target, PotionEffectType.SPEED, DRUID_BUFF_DURATION_SECONDS * 20, 0);
-                case REGENERATION -> manager.applyPotion(target, PotionEffectType.REGENERATION, DRUID_BUFF_DURATION_SECONDS * 20, 0);
-                case RESISTANCE -> manager.applyPotion(target, PotionEffectType.RESISTANCE, DRUID_BUFF_DURATION_SECONDS * 20, 0);
-                case FIRE_RESISTANCE -> manager.applyPotion(target, PotionEffectType.FIRE_RESISTANCE, DRUID_BUFF_DURATION_SECONDS * 20, 0);
-                case ABSORPTION -> manager.applyPotion(target, PotionEffectType.ABSORPTION, DRUID_BUFF_DURATION_SECONDS * 20, 0);
-                case INSTANT_HEALTH -> target.addPotionEffect(new PotionEffect(PotionEffectType.INSTANT_HEALTH, 1, 0, true, true, true));
+            if (instant) {
+                target.addPotionEffect(new PotionEffect(effectType, 1, amplifier, true, true, true));
+                return;
             }
+            manager.applyPotion(target, effectType, DRUID_BUFF_DURATION_SECONDS * 20, amplifier);
         }
 
         static DruidBlessing fromSlot(int slot) {
@@ -5710,5 +8654,56 @@ public final class SuperpowerManager implements Listener {
         }
     }
 
-    private record PortalPair(UUID ownerId, Location source, Location target, long expiresAt) {}
+    private static final class PortalPair {
+        private final UUID ownerId;
+        private final Location source;
+        private final Location target;
+        private final long expiresAt;
+        private Location safeSource;
+        private Location safeTarget;
+
+        private PortalPair(
+            UUID ownerId,
+            Location source,
+            Location target,
+            Location safeSource,
+            Location safeTarget,
+            long expiresAt
+        ) {
+            this.ownerId = ownerId;
+            this.source = source.clone();
+            this.target = target.clone();
+            this.safeSource = safeSource == null ? null : safeSource.clone();
+            this.safeTarget = safeTarget == null ? null : safeTarget.clone();
+            this.expiresAt = expiresAt;
+        }
+
+        private UUID ownerId() {
+            return ownerId;
+        }
+
+        private Location source() {
+            return source;
+        }
+
+        private Location target() {
+            return target;
+        }
+
+        private long expiresAt() {
+            return expiresAt;
+        }
+
+        private Location cachedDestination(boolean targetDestination) {
+            return targetDestination ? safeTarget : safeSource;
+        }
+
+        private void cacheDestination(boolean targetDestination, Location destination) {
+            if (targetDestination) {
+                safeTarget = destination == null ? null : destination.clone();
+            } else {
+                safeSource = destination == null ? null : destination.clone();
+            }
+        }
+    }
 }

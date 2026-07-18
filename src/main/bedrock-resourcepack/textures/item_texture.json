@@ -1,0 +1,15 @@
+{
+  "resource_pack_name": "SMPCore - Season of the Veil",
+  "texture_name": "atlas.items",
+  "texture_data": {
+    "smpcore:backpack": {
+      "textures": "textures/items/backpack"
+    },
+    "smpcore:expanded_backpack": {
+      "textures": "textures/items/expanded_backpack"
+    },
+    "smpcore:team_leader_crown": {
+      "textures": "textures/items/team_leader_crown"
+    }
+  }
+}

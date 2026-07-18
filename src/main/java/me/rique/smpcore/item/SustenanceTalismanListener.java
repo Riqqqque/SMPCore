@@ -2,6 +2,7 @@ package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.ItemModelUtil;
 import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
@@ -32,6 +33,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -56,13 +58,19 @@ public final class SustenanceTalismanListener implements Listener {
     private final SMPCore plugin;
     private final NamespacedKey keyTalismanId;
     private final Map<UUID, Long> nextPassiveTick = new ConcurrentHashMap<>();
+    private final BukkitTask passiveTask;
 
     public SustenanceTalismanListener(SMPCore plugin) {
         this.plugin = plugin;
         this.keyTalismanId = new NamespacedKey(plugin, ITEM_ID);
 
-        Bukkit.getScheduler().runTaskTimer(plugin, this::tickTalismans, 20L, 20L);
+        passiveTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickTalismans, 20L, 20L);
         Bukkit.getScheduler().runTask(plugin, () -> Bukkit.getOnlinePlayers().forEach(this::refreshPlayerTalismans));
+    }
+
+    public void shutdown() {
+        passiveTask.cancel();
+        nextPassiveTick.clear();
     }
 
     public Map<Material, Integer> recipeIngredients() {
@@ -263,6 +271,9 @@ public final class SustenanceTalismanListener implements Listener {
         if (healAmount <= 0.0 || player.getHealth() <= 0.0) {
             return;
         }
+        if (plugin.getBossManager() != null && plugin.getBossManager().blockHealingIfSuppressed(player, healAmount)) {
+            return;
+        }
 
         double maxHealth = 20.0;
         var maxHealthAttribute = player.getAttribute(Attribute.MAX_HEALTH);
@@ -330,7 +341,7 @@ public final class SustenanceTalismanListener implements Listener {
 
     private void applyTalismanState(ItemMeta meta) {
         meta.getPersistentDataContainer().set(keyTalismanId, PersistentDataType.STRING, ITEM_ID);
-        meta.setItemModel(null);
+        ItemModelUtil.apply(meta, ITEM_ID);
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         CustomLoreUtil.applyStyledItemFlags(meta);
     }
