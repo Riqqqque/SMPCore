@@ -9,6 +9,7 @@ import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import io.papermc.paper.command.brigadier.argument.resolvers.selector.PlayerSelectorArgumentResolver;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.team.TeamManager;
+import me.rique.smpcore.util.CommandSuggestionUtil;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -35,6 +36,7 @@ public final class TeamCommands {
                     .executes(ctx -> openTeams(ctx.getSource().getSender() instanceof Player player ? player : null, plugin, null)))
                 .then(Commands.literal("search")
                     .then(Commands.argument("name", StringArgumentType.greedyString())
+                        .suggests((ctx, builder) -> suggestTeams(plugin, builder))
                         .executes(ctx -> openTeams(
                             ctx.getSource().getSender() instanceof Player player ? player : null,
                             plugin,
@@ -78,6 +80,7 @@ public final class TeamCommands {
                         })))
                 .then(Commands.literal("color")
                     .then(Commands.argument("color", StringArgumentType.word())
+                        .suggests((ctx, builder) -> CommandSuggestionUtil.suggestMatching(builder, plugin.getTeamManager().teamColorIds()))
                         .executes(ctx -> {
                             Player player = (Player) ctx.getSource().getSender();
                             String color = StringArgumentType.getString(ctx, "color");
@@ -322,6 +325,7 @@ public final class TeamCommands {
                 .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.team"))
                 .executes(ctx -> openTeams(ctx.getSource().getSender() instanceof Player player ? player : null, plugin, null))
                 .then(Commands.argument("search", StringArgumentType.greedyString())
+                    .suggests((ctx, builder) -> suggestTeams(plugin, builder))
                     .executes(ctx -> openTeams(
                         ctx.getSource().getSender() instanceof Player player ? player : null,
                         plugin,

@@ -1,0 +1,640 @@
+content-version: 3
+
+dialogues:
+  mira_first_arrival:
+    speaker: Mira
+    trigger: FIRST_STORY_JOIN
+    context: join
+    priority: 100
+    once: true
+    lines:
+      - text: "<gray>Welcome to Veilward. If you are new, start by talking to Mayor Bah.</gray>"
+        delayTicks: 30
+        sound: BLOCK_AMETHYST_BLOCK_CHIME
+      - text: "<gray>You can also use <white>/menu</white> whenever you need help finding a system.</gray>"
+        delayTicks: 62
+    actions:
+      - setStage:PROLOGUE_FIND_MIRA
+      - unlockCodex:people.mira
+
+  mira_epilogue:
+    speaker: Mira
+    trigger: NPC_INTERACT
+    context: mira
+    priority: 100
+    once: false
+    cooldown-seconds: 60
+    conditions:
+      chapter: EPILOGUE
+    lines:
+      - text: "<gray>Veilward made it through. We still have a lot to repair, but we have time now.</gray>"
+        delayTicks: 0
+  mira_after_matriarch:
+    speaker: Mira
+    trigger: NPC_INTERACT
+    context: mira
+    priority: 80
+    once: true
+    conditions:
+      has-memory: vesper_the_widow_queen
+    lines:
+      - text: "<gray>What we learned from the Matriarch changes things. Those refugees deserved better.</gray>"
+        delayTicks: 0
+  mira_after_bah:
+    speaker: Mira
+    trigger: NPC_INTERACT
+    context: mira
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>Mayor Bah has plenty of work if you are looking for a place to start.</gray>"
+        delayTicks: 0
+      - text: "<gray>Malakar runs the boss arena, and Orin handles gear upgrades.</gray>"
+        delayTicks: 26
+      - text: "<gray>If you get lost, <white>/menu</white> has directions to the main systems.</gray>"
+        delayTicks: 52
+
+  bah_epilogue:
+    speaker: Mayor Bah
+    trigger: NPC_INTERACT
+    context: mayor_bah
+    priority: 100
+    once: false
+    cooldown-seconds: 60
+    conditions:
+      chapter: EPILOGUE
+    lines:
+      - text: "<gray>We will record every name we recovered, including the difficult ones.</gray>"
+        delayTicks: 0
+  bah_before_oathkeeper:
+    speaker: Mayor Bah
+    trigger: NPC_INTERACT
+    context: mayor_bah
+    priority: 90
+    once: true
+    conditions:
+      has-memory: voralith_the_crimson_warden
+      missing-memory: corrupted_oathkeeper
+    lines:
+      - text: "<gray>Be careful down there. Find the truth, but make sure your team comes home.</gray>"
+        delayTicks: 0
+  bah_after_cindervale:
+    speaker: Mayor Bah
+    trigger: NPC_INTERACT
+    context: mayor_bah
+    priority: 70
+    once: true
+    conditions:
+      has-memory: kael_the_ashen
+    lines:
+      - text: "<gray>Cindervale was sacrificed on purpose. Veilward needs to face that.</gray>"
+        delayTicks: 0
+  bah_introduction:
+    speaker: Mayor Bah
+    trigger: NPC_INTERACT
+    context: mayor_bah
+    priority: 20
+    once: true
+    lines:
+      - text: "<gray>Welcome to Veilward. I have a list of jobs if you are ready to help.</gray>"
+        delayTicks: 0
+    actions:
+      - unlockCodex:people.mayor_bah
+      - setStage:PROLOGUE_MEET_KEEPERS
+
+  bah_default:
+    speaker: Mayor Bah
+    trigger: NPC_INTERACT
+    context: mayor_bah
+    priority: 10
+    once: false
+    cooldown-seconds: 60
+    lines:
+      - text: "<gray>Check my menu when you are ready for another town job.</gray>"
+        delayTicks: 0
+      - text: "<gray>The work starts simple, but later tasks will send you after bosses.</gray>"
+        delayTicks: 26
+      - text: "<gray>Bring the listed materials back here and I will handle the rest.</gray>"
+        delayTicks: 52
+
+  malakar_before_oathkeeper:
+    speaker: Malakar
+    trigger: NPC_INTERACT
+    context: malakar
+    priority: 100
+    once: true
+    conditions:
+      has-memory: voralith_the_crimson_warden
+      missing-memory: corrupted_oathkeeper
+    lines:
+      - text: "<gray>The Oathkeeper's real name was Aurel Voss. Remember that when you face him.</gray>"
+        delayTicks: 0
+  malakar_before_noctyr:
+    speaker: Malakar
+    trigger: NPC_INTERACT
+    context: malakar
+    priority: 80
+    once: true
+    conditions:
+      has-memory: morvessa_the_runebloom_witch
+      missing-memory: voralith_the_crimson_warden
+    lines:
+      - text: "<gray>Noctyr hid the truth, and I helped guard it. I should have questioned it sooner.</gray>"
+        delayTicks: 0
+  malakar_before_marshal:
+    speaker: Malakar
+    trigger: NPC_INTERACT
+    context: malakar
+    priority: 60
+    once: true
+    conditions:
+      missing-memory: yule_the_minion
+    lines:
+      - text: "<gray>The Marshal still follows orders from a country that no longer exists. Stay alert.</gray>"
+        delayTicks: 0
+  malakar_first:
+    speaker: Malakar
+    trigger: NPC_INTERACT
+    context: malakar
+    priority: 20
+    once: false
+    cooldown-seconds: 60
+    lines:
+      - text: "<gray>I manage the boss arena. Choose a boss, pay the entry cost, and I will send your group in.</gray>"
+        delayTicks: 0
+      - text: "<gray>Nearby teammates enter with you. If the arena is busy, your group joins the queue.</gray>"
+        delayTicks: 28
+      - text: "<gray>Dead fighters spectate until the fight ends, and unclaimed loot is returned safely.</gray>"
+        delayTicks: 56
+    actions:
+      - unlockCodex:people.malakar
+
+  orin_after_morvessa:
+    speaker: Orin
+    trigger: NPC_INTERACT
+    context: orin
+    priority: 90
+    once: true
+    conditions:
+      has-memory: morvessa_the_runebloom_witch
+    lines:
+      - text: "<gray>Morvessa confirmed it: the Dominion developed enchanting with stolen memories.</gray>"
+        delayTicks: 0
+  orin_gear_help:
+    speaker: Orin
+    trigger: NPC_INTERACT
+    context: orin
+    priority: 20
+    once: false
+    cooldown-seconds: 60
+    lines:
+      - text: "<gray>I can explain reforges, awakening, corruption, orbs, and every upgrade station.</gray>"
+        delayTicks: 0
+      - text: "<gray>Check the upgrade order before changing valuable gear. Some final upgrades lock later edits.</gray>"
+        delayTicks: 28
+      - text: "<gray>Reforge first, then use orbs and the Runic Loom before awakening a finished item.</gray>"
+        delayTicks: 56
+      - text: "<gray>Awakened gear cannot be corrupted. My menu explains every station in detail.</gray>"
+        delayTicks: 84
+    actions:
+      - unlockCodex:people.orin
+  orin_soul_imprint:
+    speaker: Orin
+    trigger: SOUL_IMPRINT_DISCOVERED
+    context: soul_imprint
+    priority: 100
+    once: true
+    lines:
+      - text: "<gray>That is a Soul Imprint: a person's stolen memory, not ordinary crafting material.</gray>"
+        delayTicks: 20
+        sound: BLOCK_AMETHYST_BLOCK_RESONATE
+  orin_first_awakening:
+    speaker: Orin
+    trigger: ITEM_AWAKENED
+    context: first
+    priority: 100
+    once: true
+    lines:
+      - text: "<gray>It worked. Your item is awakened now, so it can never be corrupted.</gray>"
+        delayTicks: 12
+
+  veyr_before_oathkeeper:
+    speaker: Veyr
+    trigger: NPC_INTERACT
+    context: veyr
+    priority: 100
+    once: true
+    conditions:
+      has-memory: voralith_the_crimson_warden
+      missing-memory: corrupted_oathkeeper
+    lines:
+      - text: "<gray>Aurel tried to protect too many Soul Imprints at once. It broke him, just as it nearly broke me.</gray>"
+        delayTicks: 0
+  veyr_first:
+    speaker: Veyr
+    trigger: NPC_INTERACT
+    context: veyr
+    priority: 20
+    once: false
+    cooldown-seconds: 60
+    lines:
+      - text: "<gray>Corruption can improve an item, weaken it, or destroy it. Read the odds before you commit.</gray>"
+        delayTicks: 0
+      - text: "<gray>A corrupted item is final. It cannot be awakened or corrupted again.</gray>"
+        delayTicks: 28
+      - text: "<gray>Use ordinary gear until you can afford to lose the item you place on my table.</gray>"
+        delayTicks: 56
+    actions:
+      - unlockCodex:people.veyr
+  veyr_corruption_success:
+    speaker: Veyr
+    trigger: ITEM_CORRUPTED
+    context: first
+    priority: 100
+    once: true
+    lines:
+      - text: "<gray>The corruption worked. The item is sealed now, so check the result carefully.</gray>"
+        delayTicks: 12
+  veyr_corruption_loss:
+    speaker: Veyr
+    trigger: ITEM_CORRUPTION_FAILED
+    context: first
+    priority: 100
+    once: true
+    lines:
+      - text: "<gray>The corruption failed. That is the risk every attempt carries.</gray>"
+        delayTicks: 12
+
+  brannik_default:
+    speaker: Brannik
+    trigger: NPC_INTERACT
+    context: brannik
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>Need a reforge? Bring me one gear item and a Reforge Stone.</gray>"
+        delayTicks: 0
+      - text: "<gray>Each stone rolls one prefix. A new roll replaces the old one.</gray>"
+        delayTicks: 28
+      - text: "<gray>The menu shows the possible stats and the Reforge Stone recipe.</gray>"
+        delayTicks: 56
+      - text: "<gray>Reforge Stones also appear in boss rewards and selected quest rewards.</gray>"
+        delayTicks: 84
+    actions:
+      - unlockCodex:principles.reforging
+
+  aldren_after_confessor:
+    speaker: Father Aldren
+    trigger: NPC_INTERACT
+    context: father_aldren
+    priority: 90
+    once: true
+    conditions:
+      has-memory: iron_saint
+    lines:
+      - text: "<gray>The Confessor's machinery contains one of our oldest prayers.</gray>"
+        delayTicks: 0
+      - text: "<gray>I need time to understand why it was put there.</gray>"
+        delayTicks: 28
+  aldren_default:
+    speaker: Father Aldren
+    trigger: NPC_INTERACT
+    context: father_aldren
+    priority: 20
+    once: false
+    cooldown-seconds: 60
+    lines:
+      - text: "<gray>I trade Essence for temporary blessings. Check the menu for prices and durations.</gray>"
+        delayTicks: 0
+      - text: "<gray>Only one of my blessings can be active at a time.</gray>"
+        delayTicks: 28
+      - text: "<gray>The menu shows exactly what each blessing changes before you buy it.</gray>"
+        delayTicks: 56
+    actions:
+      - unlockCodex:people.father_aldren
+
+  grikk_all_found:
+    speaker: Grikk
+    trigger: QUEST_STAGE_CHANGED
+    context: goblin:all_found
+    priority: 100
+    once: true
+    lines:
+      - text: "<gray>That is every goblin currently hidden around spawn. Nice work.</gray>"
+        delayTicks: 8
+    actions:
+      - unlockCodex:threads.listening_posts
+  grikk_discovery:
+    speaker: Grikk
+    trigger: QUEST_STAGE_CHANGED
+    context: goblin:discovery
+    priority: 80
+    once: false
+    cooldown-seconds: 8
+    lines:
+      - text: "<gray>Another one found. Keep looking; there are still more around spawn.</gray>"
+        delayTicks: 5
+  grikk_default:
+    speaker: Grikk
+    trigger: NPC_INTERACT
+    context: grikk
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>Goblin heads are hidden around spawn. Find them for Essence, then bring the findings to me.</gray>"
+        delayTicks: 0
+      - text: "<gray>Every five findings can be turned in for more mining luck.</gray>"
+        delayTicks: 28
+      - text: "<gray>Find every active goblin and you also earn a small permanent damage bonus.</gray>"
+        delayTicks: 56
+
+  torren_final:
+    speaker: Torren
+    trigger: QUEST_STAGE_CHANGED
+    context: miner:diamond_heart
+    priority: 100
+    once: true
+    lines:
+      - text: "<gray>That is the diamond shipment. You finished every mining job I had.</gray>"
+        delayTicks: 8
+  torren_default:
+    speaker: Torren
+    trigger: NPC_INTERACT
+    context: torren
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>I need ore from all over the world. Start with coal and work through the list.</gray>"
+        delayTicks: 0
+      - text: "<gray>You earn the Veinwake Pick halfway through and the Miner Familiar at the end.</gray>"
+        delayTicks: 28
+      - text: "<gray>The pick and familiar can both trigger on the same ore, but each rolls separately.</gray>"
+        delayTicks: 56
+      - text: "<gray>Silk-touched ore still works when placed and mined later, with abuse checks in place.</gray>"
+        delayTicks: 84
+
+  rowan_final:
+    speaker: Rowan
+    trigger: QUEST_STAGE_CHANGED
+    context: farmer:harvest_moon
+    priority: 100
+    once: true
+    lines:
+      - text: "<gray>That is a proper harvest. You finished every farming job I had.</gray>"
+        delayTicks: 8
+  rowan_default:
+    speaker: Rowan
+    trigger: NPC_INTERACT
+    context: rowan
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>I could use help with the fields and kitchen. Check the menu for the next order.</gray>"
+        delayTicks: 0
+      - text: "<gray>Finish the full set of jobs and Tiller will join you.</gray>"
+        delayTicks: 28
+      - text: "<gray>Later orders include cooking, so keep your crops instead of selling everything.</gray>"
+        delayTicks: 56
+      - text: "<gray>Tiller uses the same familiar menu as your other companions.</gray>"
+        delayTicks: 84
+
+  vespera_familiar:
+    speaker: Vespera
+    trigger: FAMILIAR_UNLOCKED
+    context: morrow
+    priority: 100
+    once: true
+    lines:
+      - text: "<gray>Morrow trusts you now. Keep it summoned when you want its potion bonuses.</gray>"
+        delayTicks: 8
+  vespera_default:
+    speaker: Vespera
+    trigger: NPC_INTERACT
+    context: vespera
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>I teach brewing in stages, starting with basic ingredients.</gray>"
+        delayTicks: 0
+      - text: "<gray>Complete every lesson to unlock boss brews and Morrow.</gray>"
+        delayTicks: 28
+      - text: "<gray>My menu tracks the exact ingredient and amount needed for the current lesson.</gray>"
+        delayTicks: 56
+      - text: "<gray>Boss brews are for PvE encounters; their effects are kept out of normal PvP.</gray>"
+        delayTicks: 84
+
+  overseer_after_noctyr:
+    speaker: Veil Overseer
+    trigger: NPC_INTERACT
+    context: veil_overseer
+    priority: 90
+    once: true
+    conditions:
+      has-memory: voralith_the_crimson_warden
+    lines:
+      - text: "<gray>Noctyr's records show what happens when authority goes unchecked. We will keep better records.</gray>"
+        delayTicks: 0
+  overseer_default:
+    speaker: Veil Overseer
+    trigger: NPC_INTERACT
+    context: veil_overseer
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>I assign one daily directive and one weekly goal. Finish them for Essence, XP bottles, and Authority.</gray>"
+        delayTicks: 0
+      - text: "<gray>Authority is your directive rank. Higher ranks unlock titles and better reward tracks.</gray>"
+        delayTicks: 28
+      - text: "<gray>Open the menu to see progress; completed objectives must still be claimed here.</gray>"
+        delayTicks: 56
+
+  overseer_authority:
+    speaker: Veil Overseer
+    trigger: QUEST_STAGE_CHANGED
+    context: overseer:authority
+    priority: 100
+    once: false
+    cooldown-seconds: 5
+    lines:
+      - text: "<gray>Your Authority rank increased. Check the menu to see your current title.</gray>"
+        delayTicks: 8
+
+  bram_cellarmaster:
+    speaker: Bram
+    trigger: TAVERN_GAME_COMPLETED
+    context: bram_cellarmaster
+    priority: 100
+    once: true
+    lines:
+      - text: "<gray>Good work. That canteen is yours; it gives Speed and Haste when used.</gray>"
+        delayTicks: 8
+    actions:
+      - unlockCodex:threads.dream_rumors
+  bram_default:
+    speaker: Bram
+    trigger: NPC_INTERACT
+    context: bram
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>Looking for a drink? I sell the full bar, luck food, and a short quest.</gray>"
+        delayTicks: 0
+      - text: "<gray>Drunkenness lasts until a full night's sleep, but every drink gives a wake-up bonus.</gray>"
+        delayTicks: 28
+      - text: "<gray>The house drink helps tavern luck briefly. The food costs more and lasts longer.</gray>"
+        delayTicks: 56
+
+  rook_epilogue:
+    speaker: Rook
+    trigger: NPC_INTERACT
+    context: rook
+    priority: 100
+    once: false
+    cooldown-seconds: 60
+    conditions:
+      chapter: EPILOGUE
+    lines:
+      - text: "<gray>You made it through. Take a break; you have earned one.</gray>"
+        delayTicks: 0
+  rook_trial:
+    speaker: Rook
+    trigger: TAVERN_GAME_COMPLETED
+    context: rook_trial
+    priority: 100
+    once: true
+    lines:
+      - text: "<gray>You cleared all three tavern challenges. Here is your reward.</gray>"
+        delayTicks: 8
+    actions:
+      - unlockCodex:people.rook
+  rook_default:
+    speaker: Rook
+    trigger: NPC_INTERACT
+    context: rook
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>Want a challenge? Win at slots and Crown & Casks, then hit a dart bullseye.</gray>"
+        delayTicks: 0
+      - text: "<gray>Each game explains its rules and payouts inside its menu.</gray>"
+        delayTicks: 28
+      - text: "<gray>Wins are announced nearby, and each game keeps its own leaderboard.</gray>"
+        delayTicks: 56
+
+  silas_epilogue:
+    speaker: Silas
+    trigger: NPC_INTERACT
+    context: silas
+    priority: 100
+    once: true
+    conditions:
+      chapter: EPILOGUE
+    lines:
+      - text: "<gray>This card has your face on it, but no name. I have never seen one like it.</gray>"
+        delayTicks: 0
+        sound: BLOCK_ENCHANTMENT_TABLE_USE
+    actions:
+      - unlockCodex:threads.blank_card
+      - setStage:EPILOGUE
+  silas_default:
+    speaker: Silas
+    trigger: NPC_INTERACT
+    context: silas
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>I run blackjack. Beat the dealer without going over 21.</gray>"
+        delayTicks: 0
+      - text: "<gray>Choose your wager in the menu, then hit or stand when it is your turn.</gray>"
+        delayTicks: 28
+      - text: "<gray>Wins pay twice the wager. Ties return it; dealer wins take it.</gray>"
+        delayTicks: 56
+      - text: "<gray>Leave enough inventory space; overflow winnings are dropped safely at your feet.</gray>"
+        delayTicks: 84
+
+  renn_default:
+    speaker: Renn
+    trigger: NPC_INTERACT
+    context: renn
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>I run European roulette: one green zero and 36 numbered pockets.</gray>"
+        delayTicks: 0
+      - text: "<gray>Pick a number for the biggest payout, or use a safer outside bet.</gray>"
+        delayTicks: 28
+      - text: "<gray>The menu shows the exact chance and return before you confirm.</gray>"
+        delayTicks: 56
+
+  kael_default:
+    speaker: Kael
+    trigger: NPC_INTERACT
+    context: kael
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>I train riders and familiars. Finish my beast trials to unlock both systems.</gray>"
+        delayTicks: 0
+      - text: "<gray>The full Wildguard set boosts damage against normal mobs, guarantees taming, and calls your steed.</gray>"
+        delayTicks: 28
+      - text: "<gray>After the trials, spend training points in a separate skill tree for each familiar.</gray>"
+        delayTicks: 56
+      - text: "<gray>Only one familiar can be active, but you can change it from the familiar menu.</gray>"
+        delayTicks: 84
+
+  mogrik_default:
+    speaker: Mogrik
+    trigger: NPC_INTERACT
+    context: mogrik
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>I pay for boss work. Pick a boss and complete its five mastery tiers.</gray>"
+        delayTicks: 0
+      - text: "<gray>Only successful arena kills count. Practice and admin fights do not.</gray>"
+        delayTicks: 28
+      - text: "<gray>Higher tiers award unique gear, trinkets, and trophies instead of loose rare materials.</gray>"
+        delayTicks: 56
+
+  sable_default:
+    speaker: Sable
+    trigger: NPC_INTERACT
+    context: sable
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>I sell placeable souvenirs for bosses you have already defeated.</gray>"
+        delayTicks: 0
+      - text: "<gray>Every trophy is decorative. It does not grant hidden combat stats.</gray>"
+        delayTicks: 28
+      - text: "<gray>If a trophy is broken, it returns as an item so you can move it safely.</gray>"
+        delayTicks: 56
+
+  corin_default:
+    speaker: Corin
+    trigger: NPC_INTERACT
+    context: corin
+    priority: 20
+    once: false
+    cooldown-seconds: 45
+    lines:
+      - text: "<gray>Need a boat? I give every traveler one free boat when we first meet.</gray>"
+        delayTicks: 0
+      - text: "<gray>My coastal errands start with common fish and end with a useful enchanted rod.</gray>"
+        delayTicks: 28
+      - text: "<gray>The rod is meant for early exploration, not to replace late-game fishing gear.</gray>"
+        delayTicks: 56

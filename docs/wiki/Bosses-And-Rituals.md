@@ -1,429 +1,91 @@
-# Bosses and Rituals
+# Boss Dungeon
 
-Bosses can be spawned by staff through `/bosses`, but survival players use shrine rituals from `/bossrituals`.
+Survival bosses are fought in the shared Boss Dungeon. Players no longer build shrines or summon bosses in normal worlds.
 
-Every custom boss has a boss bar, a live hologram, tracked cleanup, custom particles and sounds, phase mechanics, public kill announcements, server-wide damage leaderboards, personal after-action reports, and boss trophy drops for Covenant recipes.
+## Entering and summoning
 
-## How Rituals Work
+1. Speak to **Malakar the Gatekeeper** at spawn.
+2. Enter the protected dungeon.
+3. Speak to Malakar inside the arena.
+4. Pick a boss and review the materials.
+5. Confirm the summon. Essence and materials are consumed only when your queued fight actually begins.
 
-1. Build the shrine exactly as shown below or in `/bossrituals`.
-2. Hold the listed catalyst item.
-3. Right-click the focus block or any shrine block touching the focus.
-4. If the shrine is valid, the catalyst is consumed and the shrine blocks disappear.
-5. If the shrine is invalid, chat tells you what piece is wrong or missing.
+Only one boss can be active at a time. If the arena is busy, confirmed summons enter a queue and keep their Essence and materials until their turn. Visitors can still enter as spectators.
 
-Important rules:
+When a queued summon reaches the front, a **10-second boss countdown** begins. Teammates already inside the dungeon join the fight automatically. Online teammates and allied-team members elsewhere receive an invitation and can use its chat button or `/bossjoin accept` during that countdown. The short delay gives everyone time to equip gear and accept before the boss appears.
 
-- Aurelion the Rift Seraph only answers in the End.
-- Successful rituals delete the shrine on use, so do not build it out of blocks you are not ready to spend.
-- If a ritual fizzles because the area unloads or the boss cannot form, the catalyst is refunded.
-- Stronger bosses may create arena pressure. Edge camping and high-ground cheese are punished.
-- If everyone in the fight area dies or leaves after the fight starts, the boss despawns and the fight counts as a failure.
-- Boss rewards spawn in a labeled loot chest at or near the death spot. The plugin first looks for a safe space, then force-clears a nearby non-protected block if needed. It will not overwrite containers, existing boss loot, portals, bedrock/barriers, command blocks, structure blocks, or jigsaw blocks. Natural item drops are only used as the final emergency fallback.
-- Every boss victory is guaranteed to produce at least one reward item. Random bonus drops can fail, but the base reward cannot.
-- Boss drops are doubled from 4-6 PM America/Denver by default. The server announces when double loot starts, warns before it ends, and announces when it ends.
+Anyone else in the dungeon becomes a spectator. A participant who dies or leaves cannot rejoin that fight and watches the survivors instead.
 
-## Ritual Cheat Sheet
+`/bossrituals` opens the same boss catalog. Outside the dungeon it is a cost preview; summoning still requires the Gatekeeper and arena.
 
-| Boss | Focus | Catalyst | Main Reward Path |
-| --- | --- | --- | --- |
-| Yule the Minion | Bell | Golden Sword | Gilded Skull, Oathbound Plate |
-| Kael the Ashen | Soul Campfire | Bow | Solar Ember, Titan Gear |
-| Vesper the Widow Queen | Cobweb | Fermented Spider Eye | Widow Silk, Verdant Heart |
-| Voralith the Crimson Warden | Sculk Shrieker | Echo Shard | Crimson Rib, Sculk Heart, Dominion Core |
-| Aurelion the Rift Seraph | End Rod | Eye of Ender | Rift Lens, Void Halo, Awakening Table chance |
-| Nereida the Abyss Mother | Conduit | Heart of the Sea | Abyssal Pearl, Tideheart |
-| The Iron Saint | Anvil | Iron Block | Titan Gear, Saint Alloy |
-| Mirewood the Root Tyrant | Mangrove Roots | Spore Blossom | Living Bark, Verdant Heart |
+## Summon costs
 
-## How to Read the Shrine Diagrams
+Essence is the main repeatable entry stake. The former shrine materials remain as a smaller themed cost, but their bulk quantities are reduced. Only the summoner pays; teammates, allies, and spectators join free.
 
-The diagrams below are top-down views of each shrine. North is the top of the diagram.
+| Tier | Boss | Essence | Materials |
+|---:|---|---:|---|
+| 1 | The Veilbound Marshal | 25 | 1 Bell, 1 Golden Sword, 1 Soul Sand, 2 Gold Blocks |
+| 2 | Cindervale Arbalest | 40 | 1 Soul Campfire, 1 Bow, 3 Bone Blocks |
+| 3 | The Gloam Matriarch | 60 | 1 Cobweb, 1 Fermented Spider Eye, 1 Moss Block, 2 Black Candles |
+| 4 | The Briarveil Regent | 80 | 1 Mangrove Roots, 1 Spore Blossom, 1 Moss Block, 2 Oak Saplings |
+| 5 | Thalassa the Drowned Veil | 105 | 1 Conduit, 1 Heart of the Sea, 1 Prismarine, 2 Sea Lanterns |
+| 6 | The Argent Confessor | 130 | 1 Anvil, 2 Iron Blocks, 1 Smithing Table |
+| 7 | Asterion the Rift Oracle | 160 | 1 End Rod, 1 Eye of Ender, 1 Purpur Block, 2 End Stone Bricks |
+| 8 | Morvessa the Runebloom Witch | 195 | 1 Brewing Stand, 1 Dragon's Breath, 1 Amethyst Block, 2 Flowering Azalea Leaves |
+| 9 | Noctyr the Veil Warden | 235 | 1 Sculk Shrieker, 1 Echo Shard, 1 Sculk Catalyst, 1 Redstone Block, 2 Soul Lanterns |
+| 10 | Corrupted Oathkeeper | 300 | 1 Respawn Anchor, 1 Nether Star, 1 Crying Obsidian, 2 Magma Blocks, 2 Sculk Catalysts |
 
-- `Y=0` is the ground or base layer.
-- `Y=1` is the layer directly above the center base block.
-- `F` is the focus block. Right-click this block, or any shrine block touching it, while holding the catalyst.
-- `.` means the slot should be empty or does not matter for the ritual.
-- The center stack must be vertical: the `F` block sits directly above the center base block unless the diagram says otherwise.
+Only ordinary versions of these materials count. Custom items disguised as a vanilla material cannot be consumed as summon payment.
 
-## Ritual Layouts
+Losing a started fight consumes the entry payment. If the boss fails to spawn, an administrator interrupts the encounter, or the server shuts down mid-fight, the plugin returns both portions. Offline Essence refunds are saved and delivered on the player's next join.
 
-### Yule the Minion - Gilded Muster
+## Combat difficulty
 
-Yule is the first bruiser boss. He is fast, wears gold armor, and phase two gains Strength, heavier knockback, and Yule's Thralls.
+Boss mechanics become lethal from tier 2 onward. A failed mechanic removes 72% of maximum health at tier 2, then 78%, 84%, 88%, 92%, 96%, and 98% from tier 8 onward. Repeated floor and beam hazards use smaller percentage hits, but staying in them will still kill quickly.
 
-Build:
+From tier 5 onward, successfully clearing a positional mechanic gives a small reward. Movement checks grant Speed I for four seconds, while escape and sigil checks restore up to two hearts. Oath Rings also require a clean spread before the reward applies.
 
-- Put Soul Sand on the ground.
-- Place a Bell directly on top of the Soul Sand.
-- Put Gold Blocks touching the Soul Sand on north, south, east, and west.
-- Hold a Golden Sword and right-click the Bell or any shrine block.
+Every mechanic starts with a title, a short chat explanation, the exact failure damage, an action-bar reminder, and one warning sound. Mechanics that change instructions mid-cast announce the new step once. Repeated action-bar updates do not repeat chat or sounds.
 
-Visualization:
+Late bosses also have short casts that seal all healing. Natural regeneration, potions, powers, enchants, relics, and healing from teammates cannot restore health until the cast ends. The seal appears in the title, chat explanation, and action bar.
 
-```text
-Legend: F = Bell, S = Soul Sand, G = Gold Block
+Extra players increase boss health, attack damage, ability pressure, target counts, and mechanic frequency. The scaling follows the current number of surviving fighters so a larger group cannot erase a boss with raw damage alone.
 
-Y=1 top layer
-. . .
-. F .
-. . .
+Class identity still works in normal combat, but boss encounters resist effects that skip their mechanics. Bosses resist health-deleting backstabs, hard crowd control, summon swarms, and Infinity projectile blocking. Time Stop, Domain Expansion, Voidstep, Wayfarer portals, Oath Summon, and Skybound flight cannot move players around an active encounter. Failed mechanics also bypass Phoenix Rebirth and Graveborn's second chance. Druid blessings are unchanged, though healing blessings still obey healing-seal casts.
 
-Y=0 base layer
-. G .
-G S G
-. G .
+Every summon opens with a short protected reveal. The boss cannot attack or take damage until the final sound and expanding ring release it. Each boss has its own entrance spiral, attack trail, impact sound, and phase-shift burst; the effects are paced so repeated hits do not stack audio or flood nearby clients.
 
-Center side view
-Y=1  F  Bell
-Y=0  S  Soul Sand
-```
+Every boss also has a different original note-block battle theme. It begins with the encounter, loops without a gap through every phase, and stops when the boss dies, the fight resets, or the listener leaves. Fighters and dungeon spectators hear the same theme through the **Jukebox/Note Blocks** volume setting.
 
-Final shape:
+Use `/settings` to mute only the boss music. Mechanic warnings and combat sounds stay enabled so the fight remains readable.
 
-```text
-      Bell
-       |
-  Gold Soul Sand Gold
-       |
-      Gold
-```
+Successful participants also build permanent progress with [Mogrik's Boss Mastery](Boss-Mastery). Each boss has five cumulative ranks with Essence, common materials, utility relics, permanent Huntmarks, and unique gear without giving away rare progression materials.
 
-Rewards: 1 Gilded Skull, 35% Oathbound Plate. XP: 225.
+## Arena rules
 
-### Kael the Ashen - Ashen Wake
+- Building, breaking, explosions, natural mob spawning, fire spread, weather, PvP, and random block ticks are disabled.
+- The arena is a void world with a safety return if a player falls out.
+- The supplied arena world is installed automatically the first time the plugin starts.
+- Boss loot and progression are unchanged; only the summoning location and interaction changed.
+- A defeated boss creates a protected participant-only chest. It disappears when empty or after two minutes, then everyone returns to spawn.
+- Player-dropped items are owner-tagged. Anything still in the arena at cleanup is returned to its owner; unclaimed boss loot returns to the summoner.
 
-Kael is a skeleton marksman that punishes open sight lines. Phase two adds faster burning control shots.
+## Staff setup
 
-Build:
+Use `/dungeonkeeper spawn` while standing at the desired spawn location. Aliases: `/dungeonnpc` and `/bosskeeper`.
 
-- Put a Bone Block on the ground.
-- Place a Soul Campfire directly on top of that Bone Block.
-- Put Bone Blocks touching the center Bone Block on north, south, east, and west.
-- Hold a Bow and right-click the Soul Campfire or any shrine block.
+Set arena points while standing at each desired position:
 
-Visualization:
+- `/bossdungeon setentry` - idle arrival and lobby point.
+- `/bossdungeon setfight` - participant arrival point.
+- `/bossdungeon setspectator` - spectator and eliminated-player point.
+- `/bossdungeon setboss` - boss spawn point.
+- `/bossdungeon setkeeper` - expected position of the internal summoning NPC.
+- `/bossdungeon` - show current points, phase, and queue length.
+- `/bossdungeon loadouts` - open the one-click pre-boss test kit GUI. `/bossloadout <boss>` equips a kit directly.
 
-```text
-Legend: F = Soul Campfire, B = Bone Block
+Use `/bossqueue leave` to cancel a queued summon before it starts. After changing the keeper point, remove the old internal NPC with `/dungeonkeeper remove` and place it at the new point with `/dungeonkeeper spawn`.
 
-Y=1 top layer
-. . .
-. F .
-. . .
+The plugin creates a second Gatekeeper inside the dungeon automatically. `/bosses spawn` remains available to operators for testing, but survival players cannot use the old world shrine system.
 
-Y=0 base layer
-. B .
-B B B
-. B .
-
-Center side view
-Y=1  F  Soul Campfire
-Y=0  B  Bone Block
-```
-
-Final shape:
-
-```text
-        Soul Campfire
-             |
-  Bone Block Bone Block Bone Block
-             |
-        Bone Block
-```
-
-Rewards: 2 Solar Ember, 25% Titan Gear. XP: 300.
-
-### Vesper the Widow Queen - Widow's Bloom
-
-Vesper is a spider boss built around leap pressure, poison, and dragging strikes. Phase two is faster and punishes spacing harder.
-
-Build:
-
-- Put a Moss Block on the ground.
-- Place a Cobweb directly on top of the Moss Block.
-- Put Black Candles on the same height as the Cobweb, touching it north, south, east, and west.
-- Hold a Fermented Spider Eye and right-click the Cobweb or any shrine block.
-
-Visualization:
-
-```text
-Legend: F = Cobweb, C = Black Candle, M = Moss Block
-
-Y=1 top layer
-. C .
-C F C
-. C .
-
-Y=0 base layer
-. . .
-. M .
-. . .
-
-Center side view
-Y=1  F  Cobweb
-Y=0  M  Moss Block
-```
-
-Final shape:
-
-```text
-       Black Candle
-            |
-Black Candle Cobweb Black Candle
-            |
-       Black Candle
-
-Moss Block is directly under the Cobweb.
-```
-
-Rewards: 2 Widow Silk, 25% Verdant Heart. XP: 320.
-
-### Voralith the Crimson Warden - Crimson Dominion Gate
-
-Voralith is the hardest Warden boss. He uses darkness, dominion pulses, resonance blasts, and heavy melee punishment.
-
-Build:
-
-- Put Reinforced Deepslate on the ground.
-- Place a Sculk Shrieker directly on top of the Reinforced Deepslate.
-- Put Sculk Catalysts touching the Shrieker on north and south.
-- Put Redstone Blocks touching the Shrieker on east and west.
-- Put Soul Lanterns on all four diagonal corners from the Shrieker.
-- Hold an Echo Shard and right-click the Shrieker or any shrine block.
-
-Visualization:
-
-```text
-Legend:
-F = Sculk Shrieker
-D = Reinforced Deepslate
-C = Sculk Catalyst
-R = Redstone Block
-L = Soul Lantern
-
-Y=1 top layer
-L C L
-R F R
-L C L
-
-Y=0 base layer
-. . .
-. D .
-. . .
-
-Center side view
-Y=1  F  Sculk Shrieker
-Y=0  D  Reinforced Deepslate
-```
-
-Important: the Sculk Catalysts are north and south of the Shrieker. The Redstone Blocks are east and west. The four Soul Lanterns are diagonal corners on the same height as the Shrieker.
-
-Rewards: Dominion Core, 2 Crimson Rib, 1 Sculk Heart. The Dominion Core repairs Crimson Dominion in an anvil. XP: 950.
-
-### Aurelion the Rift Seraph - Rift Coronation
-
-Aurelion is an End-only Enderman boss that bends distance into a weapon. Phase two increases rift pressure and displacement.
-
-Build:
-
-- This ritual only works in the End.
-- Put a Purpur Block on the ground.
-- Place an End Rod directly on top of the Purpur Block.
-- Put End Stone Bricks touching the Purpur Block on north, south, east, and west.
-- Hold an Eye of Ender and right-click the End Rod or any shrine block.
-
-Visualization:
-
-```text
-Legend: F = End Rod, P = Purpur Block, E = End Stone Bricks
-
-Y=1 top layer
-. . .
-. F .
-. . .
-
-Y=0 base layer
-. E .
-E P E
-. E .
-
-Center side view
-Y=1  F  End Rod
-Y=0  P  Purpur Block
-```
-
-Final shape:
-
-```text
-           End Rod
-              |
-End Stone Bricks Purpur Block End Stone Bricks
-              |
-      End Stone Bricks
-```
-
-Rewards: 2 Rift Lens, 30% Void Halo, 50% Awakening Table. XP: 600.
-
-Awakening Table note: this boss is the normal player source for Awakening Tables. The chance is controlled by `awakening-table.rift-seraph-drop-chance` in `config.yml`.
-
-### Nereida the Abyss Mother - Abyssal Baptism
-
-Nereida is a drowned boss that turns water and rain into pressure. Phase two gains stronger waves and water-based regeneration.
-
-Build:
-
-- Put a Prismarine block on the ground.
-- Place a Conduit directly on top of the Prismarine.
-- Put Sea Lanterns touching the Prismarine on north, south, east, and west.
-- Hold a Heart of the Sea and right-click the Conduit or any shrine block.
-
-Visualization:
-
-```text
-Legend: F = Conduit, P = Prismarine, S = Sea Lantern
-
-Y=1 top layer
-. . .
-. F .
-. . .
-
-Y=0 base layer
-. S .
-S P S
-. S .
-
-Center side view
-Y=1  F  Conduit
-Y=0  P  Prismarine
-```
-
-Final shape:
-
-```text
-       Conduit
-          |
-Sea Lantern Prismarine Sea Lantern
-          |
-     Sea Lantern
-```
-
-This shrine works on land or underwater.
-
-Rewards: 2 Abyssal Pearl, 30% Tideheart. XP: 475.
-
-### The Iron Saint - Iron Litany
-
-The Iron Saint is a slow, heavy Iron Golem boss. Phase two adds slam pulses and Weakness pressure.
-
-Build:
-
-- Put a Smithing Table on the ground.
-- Place an Anvil directly on top of the Smithing Table.
-- Put Iron Blocks touching the Smithing Table on north, south, east, and west.
-- Hold an Iron Block and right-click the Anvil or any shrine block.
-
-Visualization:
-
-```text
-Legend: F = Anvil, S = Smithing Table, I = Iron Block
-
-Y=1 top layer
-. . .
-. F .
-. . .
-
-Y=0 base layer
-. I .
-I S I
-. I .
-
-Center side view
-Y=1  F  Anvil
-Y=0  S  Smithing Table
-```
-
-Final shape:
-
-```text
-         Anvil
-           |
-Iron Block Smithing Table Iron Block
-           |
-      Iron Block
-```
-
-Rewards: 2 Titan Gear, 30% Saint Alloy. XP: 700.
-
-### Mirewood the Root Tyrant - Root Tyrant's Wake
-
-Mirewood is a root-bound husk boss that slows players and regenerates in phase two.
-
-Build:
-
-- Put a Moss Block on the ground.
-- Place Mangrove Roots directly on top of the Moss Block.
-- Put Oak Saplings touching the Moss Block on north, south, east, and west.
-- Hold a Spore Blossom and right-click the Mangrove Roots or any shrine block.
-
-Visualization:
-
-```text
-Legend: F = Mangrove Roots, M = Moss Block, O = Oak Sapling
-
-Y=1 top layer
-. . .
-. F .
-. . .
-
-Y=0 base layer
-. O .
-O M O
-. O .
-
-Center side view
-Y=1  F  Mangrove Roots
-Y=0  M  Moss Block
-```
-
-Final shape:
-
-```text
-       Mangrove Roots
-             |
-Oak Sapling Moss Block Oak Sapling
-             |
-       Oak Sapling
-```
-
-Rewards: 2 Living Bark, 30% Verdant Heart. XP: 440.
-
-## Boss Brews
-
-Boss materials can be brewed into stronger potions in a normal Brewing Stand.
-
-How to brew:
-
-- Open `/bossbrews`, `/bosspotions`, or `/brews` to view the guide.
-- Use an Awkward Potion, Splash Awkward Potion, or Lingering Awkward Potion in the bottle slot.
-- Put the listed boss material in the ingredient slot.
-- The output keeps the same potion form and gains the boss-brew effects.
-
-Current brews:
-
-- Sunforged Ichor: Solar Ember. Fire Resistance I for 20:00, Speed III for 8:00, Haste III for 8:00, Strength I for 8:00.
-- Dominion Blood: Crimson Rib or Sculk Heart. Strength III for 6:00, Resistance II for 8:00, Absorption IV for 6:00, Regeneration II for 2:00.
-- Rift Draught: Rift Lens or Void Halo. Speed IV for 5:00, Jump Boost III for 5:00, Slow Falling I for 8:00, Invisibility I for 2:00.
-- Abyssal Tonic: Abyssal Pearl or Tideheart. Water Breathing I for 30:00, Conduit Power I for 10:00, Dolphin's Grace III for 8:00, Night Vision I for 15:00.
-- Verdant Elixir: Living Bark or Verdant Heart. Regeneration III for 3:00, Absorption III for 8:00, Saturation I for 0:20.
-- Saint's Resolve: Gilded Skull, Oathbound Plate, Titan Gear, or Saint Alloy. Resistance III for 6:00, Absorption IV for 8:00, Health Boost II for 8:00, Regeneration II for 2:00.
-- Widowstep Vial: Widow Silk. Invisibility I for 5:00, Speed III for 5:00, Jump Boost III for 5:00, Strength I for 3:00.
-
-## Troubleshooting Rituals
-
-- If nothing happens, make sure you are right-clicking with the catalyst in your main hand.
-- If chat says the catalyst is wrong, the shrine focus was recognized but you used the wrong item.
-- If chat says a piece is missing, compare your shrine to the layout above and check block heights.
-- If the shrine remains after activation, the ritual did not successfully start.
-- If Aurelion refuses to spawn, move the ritual to the End.
-- If a boss or visual gets stuck, staff can use `/bosses clearall`.
+On Paper 26.2, the arena is stored inside the primary world's `dimensions/minecraft/boss_dungeon` folder after its first load. Copy the complete primary world and SMPCore data when moving the season to another server. This preserves the arena and both Gatekeeper locations.

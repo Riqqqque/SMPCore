@@ -1,14 +1,21 @@
 name: SMPCore
 version: '${version}'
 main: me.rique.smpcore.SMPCore
-description: Core SMP plugin for spawners, homes, custom items, bosses, powers, and essentials
+description: Core SMP plugin for spawners, homes, custom items, bosses, classes, and essentials
 authors:
   - Rique
-api-version: '26.1.2'
+api-version: '26.2'
 
 dependencies:
   server:
     floodgate:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    Citizens:
+      load: BEFORE
+      required: false
+    HeadDatabase:
       load: BEFORE
       required: false
 
@@ -41,21 +48,81 @@ permissions:
     default: op
   smpcore.spawn:
     description: Use /spawn
+    default: true
+  smpcore.spawn.cooldown.bypass:
+    description: Bypass the /spawn cooldown
     default: op
   smpcore.help:
     description: Use /help
     default: true
+  smpcore.changelog:
+    description: Use /changelog, /changes, and /updates
+    default: true
+  smpcore.spinbet:
+    description: Use /spinbet item wagers
+    default: true
+  smpcore.blackjack:
+    description: Play blackjack through Silas and recover interrupted payouts
+    default: true
+  smpcore.roulette:
+    description: Play European roulette through Renn and recover interrupted payouts
+    default: true
+  smpcore.bossmastery.use:
+    description: Use Mogrik's boss mastery ledger
+    default: true
+  smpcore.bossmastery.admin:
+    description: Test and repair boss mastery progress
+    default: op
+  smpcore.blackmarket.use:
+    description: Claim and replace unlocked boss souvenirs from Sable
+    default: true
+  smpcore.essence:
+    description: Use /essence and view Essence balance
+    default: true
+  smpcore.reforge.use:
+    description: Use Brannik reforger NPCs
+    default: true
+  smpcore.priest.use:
+    description: Use Father Aldren priest NPCs
+    default: true
+  smpcore.corruption.use:
+    description: Use Corruption Anchors
+    default: true
   smpcore.menu:
     description: Use /menu and /smpmenu
+    default: true
+  smpcore.crossplay:
+    description: Use /bedrock and /ability crossplay controls
+    default: true
+  smpcore.customanvil:
+    description: Use crossplay-safe custom recipes from a placed anvil
     default: true
   smpcore.settings:
     description: Use /settings, /playersettings, and personal menu settings
     default: true
+  smpcore.tab.title.owner:
+    description: Show the Owner title in the server tab list
+    default: false
+  smpcore.tab.title.admin:
+    description: Show the Admin title in the server tab list
+    default: false
+  smpcore.tab.title.moderator:
+    description: Show the Moderator title in the server tab list
+    default: false
+  smpcore.tab.title.builder:
+    description: Show the Builder title in the server tab list
+    default: false
   smpcore.leaderboard:
     description: Use /leaderboards, /leaderboard, /lb, and /topstats
     default: true
   smpcore.bossbrews:
     description: Use /bossbrews, /bosspotions, and /brews
+    default: true
+  smpcore.bossrituals:
+    description: Use /bossrituals, /bossritual, and /rituals
+    default: true
+  smpcore.dungeon.use:
+    description: Enter the boss dungeon and summon bosses
     default: true
   smpcore.legendary.recipe:
     description: Use /lrecipe, /reliquary, and /mythics item menus
@@ -64,7 +131,7 @@ permissions:
     description: Use /team and /tvault commands
     default: true
   smpcore.teamglow:
-    description: Use /teamglow to privately highlight teammates
+    description: Use /teamglow to privately outline teammates through walls
     default: true
   smpcore.waystone.use:
     description: Use waystones
@@ -72,6 +139,12 @@ permissions:
   smpcore.backpack.use:
     description: Use backpacks
     default: true
+  smpcore.goblins.admin:
+    description: Give and move hidden goblin collectibles
+    default: op
+  smpcore.bedrockskulls.admin:
+    description: Register custom player heads for Geyser Bedrock clients
+    default: op
   smpcore.enchants:
     description: Use /enchants
     default: true
@@ -84,11 +157,26 @@ permissions:
   smpcore.wiki:
     description: Use /wiki, /guide, and /smpwiki
     default: true
+  smpcore.story:
+    description: Use The Eleventh Oath journal and story commands
+    default: true
   smpcore.shop:
     description: Use /shops and create player chest shops
     default: true
+  smpcore.stall.use:
+    description: Buy and manage protected market stalls
+    default: true
+  smpcore.changelog.reload:
+    description: Reload the player-facing changelog
+    default: op
+  smpcore.story.admin:
+    description: Inspect, migrate, and edit The Eleventh Oath story profiles
+    default: op
 
   # Admin
+  smpcore.dungeon.admin:
+    description: Build inside the protected boss dungeon and use boss test loadouts
+    default: op
   smpcore.gmc:
     description: Use /gmc
     default: op
@@ -147,19 +235,34 @@ permissions:
     description: Use /setspawn
     default: op
   smpcore.spawnprotect.admin:
-    description: Use /spawnprotect to manage spawn build access
+    description: Use /spawnprotect to manage the protected spawn region and flags
+    default: op
+  smpcore.tavern.admin:
+    description: Place and manage tavern stations and leaderboards
+    default: op
+  smpcore.spawnprotect.build:
+    description: Build and edit armor stands/decorations inside protected spawn
     default: op
   smpcore.spawnprotect.bypass:
     description: Bypass spawn grief protection
+    default: op
+  smpcore.pvpguard.bypass:
+    description: Bypass naked PvP protection
     default: op
   smpcore.startsmp:
     description: Use /startsmp
     default: op
   smpcore.startsmp.reset:
-    description: Reset the SMP start border and grace state
+    description: Reset the SMP staging barrier and grace state
     default: op
   smpcore.startsmp.lock:
     description: Re-enable the pre-start SMP spawn barrier and lockdown
+    default: op
+  smpcore.launchaccess.admin:
+    description: Lock launch access to approved owners or open the server to everyone
+    default: op
+  smpcore.startsmp.bypass-dimension-lock:
+    description: Enter the Nether or End before its scheduled SMP unlock
     default: op
   smpcore.time:
     description: Use /day and /night
@@ -200,12 +303,69 @@ permissions:
   smpcore.customitem.admin:
     description: Use /customitem give
     default: op
+  smpcore.reforge.admin:
+    description: Spawn Brannik and give the Reforge Stone
+    default: op
+  smpcore.priest.admin:
+    description: Spawn and manage Father Aldren priest NPCs
+    default: op
+  smpcore.guide.admin:
+    description: Spawn and manage guide, gear-help, and corruption NPCs
+    default: op
+  smpcore.guide.use:
+    description: Use guide and corruption NPC menus
+    default: true
+  smpcore.duel.use:
+    description: Use duel matchmaking, spectating, and betting
+    default: true
+  smpcore.duel.admin:
+    description: Configure and manage the Veilward duel arena and leaderboards
+    default: op
+  smpcore.spawnlife.use:
+    description: Talk to ambient animals, townsfolk, and hidden spawn characters
+    default: true
+  smpcore.spawnlife.admin:
+    description: Place and manage ambient spawn NPCs
+    default: op
+  smpcore.mayor.use:
+    description: Use Mayor Bah quest NPCs
+    default: true
+  smpcore.familiar:
+    description: Use /familiar and manage unlocked familiars
+    default: true
+  smpcore.familiar.admin:
+    description: Give and remove Mayor Bah familiar rewards
+    default: op
+  smpcore.beastwarden.use:
+    description: Use the Beastwarden quest, familiar training, and /steed
+    default: true
+  smpcore.beastwarden.admin:
+    description: Test and manage Beastwarden progression
+    default: op
+  smpcore.mayor.admin:
+    description: Give and remove Mayor Bah familiar rewards
+    default: op
+  smpcore.corruption.admin:
+    description: Give, place, and break Corruption Anchors
+    default: op
+  smpcore.essence.admin:
+    description: Manage player Essence balances and progress
+    default: op
   smpcore.itemaudit.admin:
     description: Use /itemaudit
+    default: op
+  smpcore.admin.deathinventory:
+    description: Inspect and safely restore exact player death inventory records
     default: op
   smpcore.superpower.admin:
     description: Use /powerinfo
     default: true
+  smpcore.superpower.command:
+    description: Use class ability commands for your current class
+    default: true
+  smpcore.superpower.command.all:
+    description: See and run all class ability commands
+    default: op
   smpcore.superpower.assign:
     description: Use /setpower
     default: op
@@ -214,4 +374,7 @@ permissions:
     default: op
   smpcore.shop.admin:
     description: Manage shops and create infinite admin shops
+    default: op
+  smpcore.stall.admin:
+    description: Create and manage protected market stalls
     default: op

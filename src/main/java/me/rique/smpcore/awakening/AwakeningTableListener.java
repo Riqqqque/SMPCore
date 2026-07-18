@@ -8,6 +8,9 @@ import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.ItemModelUtil;
+import me.rique.smpcore.util.MenuDupeGuardListener;
+import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
@@ -43,6 +46,7 @@ import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.entity.EntityShootBowEvent;
 import org.bukkit.event.entity.ProjectileLaunchEvent;
 import org.bukkit.event.inventory.ClickType;
@@ -99,7 +103,8 @@ public final class AwakeningTableListener implements Listener {
     private static final int STATUS_SLOT = 4;
     private static final int ITEM_SLOT = 11;
     private static final int ACTION_SLOT = 13;
-    private static final int STAR_SLOT = 15;
+    private static final int CATALYST_SLOT = 15;
+    private static final String AWAKENING_SHARD_ID = "awakening_shard";
     private static final long TRIDENT_MARK_WINDOW_MS = 1_500L;
     private static final double PLAYER_BASE_ATTACK_SPEED = 4.0;
 
@@ -152,6 +157,7 @@ public final class AwakeningTableListener implements Listener {
 
     public void shutdown() {
         for (Player player : Bukkit.getOnlinePlayers()) {
+            returnOpenAwakeningMenuItems(player);
             clearEquippedAwakeningArmorBonuses(player);
         }
         for (World world : Bukkit.getWorlds()) {
@@ -159,6 +165,16 @@ public final class AwakeningTableListener implements Listener {
                 removeStaleChunkHolograms(chunk, true);
             }
         }
+    }
+
+    private void returnOpenAwakeningMenuItems(Player player) {
+        Inventory top = player.getOpenInventory().getTopInventory();
+        if (!(top.getHolder() instanceof AwakeningMenuHolder)) {
+            return;
+        }
+        returnMenuItem(player, top, ITEM_SLOT);
+        returnMenuItem(player, top, CATALYST_SLOT);
+        player.closeInventory();
     }
 
     public ItemStack createAwakeningTableItem() {
@@ -169,20 +185,21 @@ public final class AwakeningTableListener implements Listener {
         }
 
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.MYTHIC, "Awakening Table"));
+        ItemModelUtil.apply(meta, "awakening_table");
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.ENCHANTING_TABLE,
             CustomLoreUtil.Rarity.MYTHIC.label(),
             "TABLE",
             List.of(
-                "<gray>Dropped by <white>Aurelion the Rift Seraph</white>.</gray>",
+                "<gray>Dropped by <white>Asterion the Rift Oracle</white>.</gray>",
                 "<gray>Success chance: <white>" + formatPercent(plugin.getConfigManager().awakeningTableSuccessChance) + "</white></gray>"
             ),
             List.of(CustomLoreUtil.section(
                 "Use",
                 "Awaken Gear",
                 "<gray>Insert a weapon, tool, armor piece, or Ancient Scroll.</gray>",
-                "<gray>Spend a <white>Nether Star</white> to attempt an awakening.</gray>"
+                "<gray>Spend an <white>Awakening Shard</white> to attempt an awakening.</gray>"
             ))
         ));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
@@ -253,7 +270,7 @@ public final class AwakeningTableListener implements Listener {
         ensureAwakeningTableHologram(event.getBlockPlaced().getLocation());
     }
 
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onInteract(PlayerInteractEvent event) {
         if (event.getHand() != EquipmentSlot.HAND) {
             return;
@@ -404,10 +421,13 @@ public final class AwakeningTableListener implements Listener {
         if (rawSlot < top.getSize()) {
             event.setCancelled(true);
             if (rawSlot == ACTION_SLOT) {
+                if (!isIntentionalMenuAction(event) || !MenuItemUtil.isVisibleItem(event.getCurrentItem())) {
+                    return;
+                }
                 attemptAwakening(player, top, holder);
                 return;
             }
-            if (rawSlot == ITEM_SLOT || rawSlot == STAR_SLOT) {
+            if (rawSlot == ITEM_SLOT || rawSlot == CATALYST_SLOT) {
                 handleMenuSlotInteraction(player, top, rawSlot);
                 refreshMenu(top);
             }
@@ -424,16 +444,28 @@ public final class AwakeningTableListener implements Listener {
     private boolean isUnsafeAwakeningClick(InventoryClickEvent event) {
         ClickType click = event.getClick();
         InventoryAction action = event.getAction();
+        String actionName = action == null ? "" : action.name();
         return click == ClickType.DOUBLE_CLICK
+            || click == ClickType.DROP
+            || click == ClickType.CONTROL_DROP
             || click == ClickType.MIDDLE
             || click == ClickType.NUMBER_KEY
             || click == ClickType.SWAP_OFFHAND
             || click == ClickType.CREATIVE
             || click == ClickType.UNKNOWN
             || action == InventoryAction.COLLECT_TO_CURSOR
+            || action == InventoryAction.DROP_ALL_CURSOR
+            || action == InventoryAction.DROP_ALL_SLOT
+            || action == InventoryAction.DROP_ONE_CURSOR
+            || action == InventoryAction.DROP_ONE_SLOT
             || action == InventoryAction.HOTBAR_SWAP
+            || "HOTBAR_MOVE_AND_READD".equals(actionName)
             || action == InventoryAction.CLONE_STACK
             || action == InventoryAction.UNKNOWN;
+    }
+
+    private boolean isIntentionalMenuAction(InventoryClickEvent event) {
+        return event.getClick() == ClickType.LEFT || event.getClick() == ClickType.RIGHT;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -457,7 +489,24 @@ public final class AwakeningTableListener implements Listener {
 
         Inventory top = event.getView().getTopInventory();
         returnMenuItem(event.getPlayer(), top, ITEM_SLOT);
-        returnMenuItem(event.getPlayer(), top, STAR_SLOT);
+        returnMenuItem(event.getPlayer(), top, CATALYST_SLOT);
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onPlayerDeath(PlayerDeathEvent event) {
+        Inventory top = event.getEntity().getOpenInventory().getTopInventory();
+        if (top.getHolder(false) instanceof AwakeningMenuHolder) {
+            evacuateDeathInput(top, event.getDrops(), ITEM_SLOT);
+            evacuateDeathInput(top, event.getDrops(), CATALYST_SLOT);
+        }
+    }
+
+    private static void evacuateDeathInput(Inventory inventory, List<ItemStack> drops, int slot) {
+        ItemStack item = inventory.getItem(slot);
+        if (item != null && !item.getType().isAir()) {
+            drops.add(item.clone());
+            inventory.setItem(slot, null);
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -598,7 +647,7 @@ public final class AwakeningTableListener implements Listener {
         Inventory top = player.getOpenInventory().getTopInventory();
         if (top.getHolder() instanceof AwakeningMenuHolder) {
             returnMenuItem(player, top, ITEM_SLOT);
-            returnMenuItem(player, top, STAR_SLOT);
+            returnMenuItem(player, top, CATALYST_SLOT);
         }
         pendingTridentLaunches.remove(player.getUniqueId());
         clearEquippedAwakeningArmorBonuses(player);
@@ -626,29 +675,30 @@ public final class AwakeningTableListener implements Listener {
 
     private void refreshMenu(Inventory inventory) {
         for (int slot = 0; slot < inventory.getSize(); slot++) {
-            if (slot == ITEM_SLOT || slot == ACTION_SLOT || slot == STAR_SLOT || slot == STATUS_SLOT) {
+            if (slot == ITEM_SLOT || slot == ACTION_SLOT || slot == CATALYST_SLOT || slot == STATUS_SLOT) {
                 continue;
             }
             inventory.setItem(slot, fillerPane());
         }
 
         ItemStack input = inventory.getItem(ITEM_SLOT);
-        ItemStack star = inventory.getItem(STAR_SLOT);
-        inventory.setItem(STATUS_SLOT, statusIcon(input, star));
-        inventory.setItem(ACTION_SLOT, actionIcon(input, star));
+        ItemStack catalyst = inventory.getItem(CATALYST_SLOT);
+        inventory.setItem(STATUS_SLOT, statusIcon(input, catalyst));
+        inventory.setItem(ACTION_SLOT, actionIcon(input, catalyst));
     }
 
     private ItemStack fillerPane() {
         ItemStack pane = new ItemStack(Material.BLACK_STAINED_GLASS_PANE);
         ItemMeta meta = pane.getItemMeta();
         if (meta != null) {
-            meta.displayName(Component.empty());
+            meta.displayName(MenuItemUtil.visibleName(Component.empty()));
+            meta.lore(MenuItemUtil.visibleLore(Component.empty(), List.of()));
             pane.setItemMeta(meta);
         }
         return pane;
     }
 
-    private ItemStack statusIcon(ItemStack input, ItemStack star) {
+    private ItemStack statusIcon(ItemStack input, ItemStack catalyst) {
         ItemStack info = new ItemStack(Material.BOOK);
         ItemMeta meta = info.getItemMeta();
         if (meta == null) {
@@ -658,20 +708,22 @@ public final class AwakeningTableListener implements Listener {
         meta.displayName(MM.deserialize("<gold><bold>Awakening Info</bold></gold>"));
         List<Component> lore = new ArrayList<>();
         lore.add(MM.deserialize("<gray>Success chance: <white>" + formatPercent(plugin.getConfigManager().awakeningTableSuccessChance) + "</white></gray>"));
-        lore.add(MM.deserialize("<gray>Material cost: <white>1 Nether Star</white></gray>"));
+        lore.add(MM.deserialize("<gray>Material cost: <white>1 Awakening Shard</white></gray>"));
         lore.add(Component.empty());
         if (input == null || input.getType() == Material.AIR) {
             lore.add(MM.deserialize("<yellow>Place a weapon, tool, armor piece, or Ancient Scroll in the left slot.</yellow>"));
+        } else if (isCorruptionLocked(input)) {
+            lore.add(MM.deserialize("<red>Corrupted items cannot be awakened.</red>"));
         } else if (!isAwakenable(input)) {
             lore.add(MM.deserialize("<red>That item cannot be awakened.</red>"));
         } else if (isAwakened(input)) {
             lore.add(MM.deserialize("<red>That item is already awakened.</red>"));
-        } else if (star == null || star.getType() != Material.NETHER_STAR || star.getAmount() <= 0) {
-            lore.add(MM.deserialize("<yellow>Place a Nether Star in the right slot.</yellow>"));
+        } else if (!isAwakeningCatalyst(catalyst)) {
+            lore.add(MM.deserialize("<yellow>Place an Awakening Shard in the right slot.</yellow>"));
         } else {
             lore.add(MM.deserialize("<green>Ready to attempt an awakening.</green>"));
             if (isAncientScroll(input)) {
-                lore.add(MM.deserialize("<gray>Success upgrades the scroll into a power-choice scroll.</gray>"));
+                lore.add(MM.deserialize("<gray>Success upgrades the scroll into a class-choice scroll.</gray>"));
                 lore.add(MM.deserialize("<gray>Failure destroys the scroll.</gray>"));
             } else {
                 lore.add(MM.deserialize("<gray>Failure removes <white>" + formatPercent(plugin.getConfigManager().awakeningTableFailureDurabilityLossFraction) + "</white> of remaining durability.</gray>"));
@@ -683,9 +735,9 @@ public final class AwakeningTableListener implements Listener {
         return info;
     }
 
-    private ItemStack actionIcon(ItemStack input, ItemStack star) {
-        boolean ready = canAttemptAwakening(input, star);
-        ItemStack icon = new ItemStack(ready ? Material.NETHER_STAR : Material.BARRIER);
+    private ItemStack actionIcon(ItemStack input, ItemStack catalyst) {
+        boolean ready = canAttemptAwakening(input, catalyst);
+        ItemStack icon = new ItemStack(ready ? Material.AMETHYST_SHARD : Material.BARRIER);
         ItemMeta meta = icon.getItemMeta();
         if (meta == null) {
             return icon;
@@ -693,13 +745,15 @@ public final class AwakeningTableListener implements Listener {
 
         if (ready) {
             meta.displayName(MM.deserialize("<gradient:#ff6b6b:#c1121f><bold>Awaken Item</bold></gradient>"));
-            meta.lore(List.of(
-                MM.deserialize("<gray>Click to consume <white>1 Nether Star</white></gray>"),
+            meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
+                MM.deserialize("<gray>Click to consume <white>1 Awakening Shard</white></gray>"),
                 MM.deserialize("<gray>and roll for an awakening.</gray>")
-            ));
+            )));
         } else {
             meta.displayName(MM.deserialize("<red><bold>Cannot Awaken Yet</bold></red>"));
-            meta.lore(List.of(MM.deserialize("<gray>Insert a valid item and a Nether Star first.</gray>")));
+            meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
+                MM.deserialize("<gray>Insert a valid item and an Awakening Shard first.</gray>")
+            )));
         }
         icon.setItemMeta(meta);
         return icon;
@@ -721,9 +775,9 @@ public final class AwakeningTableListener implements Listener {
             return;
         }
 
-        if (slot == STAR_SLOT) {
+        if (slot == CATALYST_SLOT) {
             ItemStack updated = cursor.clone();
-            if (current != null && current.getType() == Material.NETHER_STAR) {
+            if (isAwakeningCatalyst(current)) {
                 int max = updated.getMaxStackSize();
                 int transfer = Math.min(cursor.getAmount(), max - current.getAmount());
                 if (transfer <= 0) {
@@ -761,8 +815,8 @@ public final class AwakeningTableListener implements Listener {
         if (current == null || current.getType() == Material.AIR) {
             return;
         }
-        if (current.getType() == Material.NETHER_STAR && isEmpty(top.getItem(STAR_SLOT))) {
-            top.setItem(STAR_SLOT, current.clone());
+        if (isAwakeningCatalyst(current) && isEmpty(top.getItem(CATALYST_SLOT))) {
+            top.setItem(CATALYST_SLOT, current.clone());
             event.setCurrentItem(null);
             return;
         }
@@ -781,9 +835,9 @@ public final class AwakeningTableListener implements Listener {
 
     private void attemptAwakening(Player player, Inventory top, AwakeningMenuHolder holder) {
         ItemStack input = top.getItem(ITEM_SLOT);
-        ItemStack star = top.getItem(STAR_SLOT);
-        if (!canAttemptAwakening(input, star)) {
-            player.sendMessage(MessageUtil.warn("Place a valid item and a Nether Star into the Awakening Table first."));
+        ItemStack catalyst = top.getItem(CATALYST_SLOT);
+        if (!canAttemptAwakening(input, catalyst)) {
+            player.sendMessage(MessageUtil.warn("Place a valid item and an Awakening Shard into the Awakening Table first."));
             refreshMenu(top);
             return;
         }
@@ -793,18 +847,21 @@ public final class AwakeningTableListener implements Listener {
             return;
         }
 
-        consumeOne(top, STAR_SLOT);
+        consumeOne(top, CATALYST_SLOT);
         ItemStack working = input.clone();
         if (ThreadLocalRandom.current().nextDouble() < plugin.getConfigManager().awakeningTableSuccessChance) {
             ItemStack awakened = awakenItem(working);
             top.setItem(ITEM_SLOT, awakened);
             if (isAncientScroll(awakened)) {
-                player.sendMessage(MessageUtil.success("Awakening succeeded. The scroll can now choose a superpower."));
+                player.sendMessage(MessageUtil.success("Awakening succeeded. The scroll can now choose a class."));
             } else {
                 player.sendMessage(MessageUtil.success("Awakening succeeded. Your item is now awakened."));
             }
             playSuccessAnimation(player, holder.tableLocation());
             announceAwakening(player, awakened);
+            if (plugin.getStoryService() != null) {
+                plugin.getStoryService().onItemAwakened(player, UUID.randomUUID().toString());
+            }
         } else {
             ItemStack failed = failAwakening(working);
             if (failed == null || failed.getType() == Material.AIR) {
@@ -989,12 +1046,8 @@ public final class AwakeningTableListener implements Listener {
         List<Component> lore = meta.hasLore() && meta.lore() != null
             ? new ArrayList<>(meta.lore())
             : new ArrayList<>();
-        if (!lore.isEmpty()) {
-            lore.add(Component.empty());
-        }
-        lore.add(AWAKENING_BONUS_HEADER);
         lore.addAll(bonusLore);
-        meta.lore(lore);
+        meta.lore(CustomLoreUtil.normalizeLore(lore));
     }
 
     private void stripManagedAwakeningLore(ItemMeta meta) {
@@ -1007,8 +1060,20 @@ public final class AwakeningTableListener implements Listener {
 
         List<Component> cleaned = new ArrayList<>();
         int index = 0;
+        boolean removingContinuation = false;
         while (index < lore.size()) {
-            String plain = plainLoreLine(lore.get(index));
+            String rawPlain = lore.get(index) == null ? "" : PLAIN.serialize(lore.get(index));
+            String plain = rawPlain.trim();
+            if (plain.startsWith("Awakened:")) {
+                removingContinuation = true;
+                index++;
+                continue;
+            }
+            if (removingContinuation && rawPlain.startsWith("  ")) {
+                index++;
+                continue;
+            }
+            removingContinuation = false;
             if (!AWAKENING_BONUS_HEADER_PLAIN.equalsIgnoreCase(plain)) {
                 cleaned.add(lore.get(index));
                 index++;
@@ -1028,38 +1093,39 @@ public final class AwakeningTableListener implements Listener {
     }
 
     private List<Component> buildAwakeningBonusLore(Material material, AwakeningBaseStats baseStats) {
-        List<Component> lore = new ArrayList<>();
+        List<String> stats = new ArrayList<>();
         if (isToolOrWeapon(material)) {
             double damageMultiplier = plugin.getConfigManager().awakeningTableWeaponDamageMultiplier;
             if (damageMultiplier > 1.0) {
-                lore.add(MM.deserialize("<gray>Damage Multiplier: <red>x" + formatAmount(damageMultiplier) + "</red></gray>"));
+                stats.add("Damage x" + formatAmount(damageMultiplier));
             }
             double attackSpeedMultiplier = plugin.getConfigManager().awakeningTableAttackSpeedMultiplier;
             if (attackSpeedMultiplier > 1.0 && !Double.isNaN(baseStats.attackSpeedBase())) {
-                lore.add(MM.deserialize("<gray>Attack Speed Multiplier: <red>x" + formatAmount(attackSpeedMultiplier) + "</red></gray>"));
+                stats.add("Speed x" + formatAmount(attackSpeedMultiplier));
             }
         }
         if (isArmor(material)) {
-            appendArmorTotalLore(
-                lore,
-                baseStats.armorBase(),
-                plugin.getConfigManager().awakeningTableArmorMultiplier,
-                "Armor"
-            );
-            appendArmorTotalLore(
-                lore,
-                baseStats.armorToughnessBase(),
-                plugin.getConfigManager().awakeningTableArmorToughnessMultiplier,
-                "Armor Toughness"
-            );
-            appendArmorTotalLore(
-                lore,
-                baseStats.knockbackResistanceBase(),
-                plugin.getConfigManager().awakeningTableKnockbackResistanceMultiplier,
-                "Knockback Resistance"
-            );
+            appendArmorTotal(stats, baseStats.armorBase(), plugin.getConfigManager().awakeningTableArmorMultiplier, "Armor");
+            appendArmorTotal(stats, baseStats.armorToughnessBase(), plugin.getConfigManager().awakeningTableArmorToughnessMultiplier, "Toughness");
+            appendArmorTotal(stats, baseStats.knockbackResistanceBase(), plugin.getConfigManager().awakeningTableKnockbackResistanceMultiplier, "KB Resist");
+        }
+        if (stats.isEmpty()) {
+            return List.of();
+        }
+        List<Component> lore = new ArrayList<>();
+        for (int start = 0; start < stats.size(); start += 2) {
+            int end = Math.min(stats.size(), start + 2);
+            lore.add(MM.deserialize("<red><bold>Awakened:</bold></red> <white>"
+                + String.join(" <dark_gray>•</dark_gray> ", stats.subList(start, end)) + "</white>"));
         }
         return lore;
+    }
+
+    private void appendArmorTotal(List<String> stats, double baseAmount, double multiplier, String label) {
+        double bonus = awakeningArmorBonus(baseAmount, multiplier);
+        if (bonus > 0.0) {
+            stats.add(label + " " + formatAmount(baseAmount + bonus));
+        }
     }
 
     private void appendArmorTotalLore(List<Component> lore, double baseAmount, double multiplier, String label) {
@@ -1435,12 +1501,23 @@ public final class AwakeningTableListener implements Listener {
                 if (modifier.getOperation() != AttributeModifier.Operation.ADD_NUMBER) {
                     continue;
                 }
+                if (!appliesToSlot(modifier, slot)) {
+                    continue;
+                }
                 total += modifier.getAmount();
                 found = true;
             }
         }
 
         return found ? total : Double.NaN;
+    }
+
+    private boolean appliesToSlot(AttributeModifier modifier, EquipmentSlot slot) {
+        EquipmentSlotGroup slotGroup = modifier.getSlotGroup();
+        return slotGroup == null
+            || slot == null
+            || slotGroup == EquipmentSlotGroup.ANY
+            || slotGroup.test(slot);
     }
 
     private AwakeningBaseStats collectBaseStats(ItemMeta meta, Material material) {
@@ -1460,20 +1537,18 @@ public final class AwakeningTableListener implements Listener {
         return new AwakeningBaseStats(attackSpeedBase, armorBase, armorToughnessBase, knockbackResistanceBase);
     }
 
-    private boolean canAttemptAwakening(ItemStack input, ItemStack star) {
+    private boolean canAttemptAwakening(ItemStack input, ItemStack catalyst) {
         return isAwakenable(input)
             && !isAwakened(input)
-            && star != null
-            && star.getType() == Material.NETHER_STAR
-            && star.getAmount() > 0;
+            && isAwakeningCatalyst(catalyst);
     }
 
     private boolean acceptsItem(int slot, ItemStack item) {
         if (slot == ITEM_SLOT) {
             return isAwakenable(item) && item.getAmount() > 0;
         }
-        if (slot == STAR_SLOT) {
-            return item != null && item.getType() == Material.NETHER_STAR;
+        if (slot == CATALYST_SLOT) {
+            return isAwakeningCatalyst(item);
         }
         return false;
     }
@@ -1482,11 +1557,26 @@ public final class AwakeningTableListener implements Listener {
         if (item == null || item.getType() == Material.AIR || item.getAmount() <= 0) {
             return false;
         }
+        if (isCorruptionLocked(item)) {
+            return false;
+        }
         if (isAncientScroll(item)) {
             return true;
         }
         return item.getType().getMaxDurability() > 0
             && (isArmor(item.getType()) || isToolOrWeapon(item.getType()));
+    }
+
+    private boolean isAwakeningCatalyst(ItemStack item) {
+        return item != null
+            && !item.getType().isAir()
+            && item.getAmount() > 0
+            && plugin.getSeasonRelicManager() != null
+            && AWAKENING_SHARD_ID.equals(plugin.getSeasonRelicManager().relicId(item));
+    }
+
+    private boolean isCorruptionLocked(ItemStack item) {
+        return plugin.getCorruptionManager() != null && plugin.getCorruptionManager().isCorruptionLocked(item);
     }
 
     private boolean isToolOrWeapon(Material material) {
@@ -1580,7 +1670,7 @@ public final class AwakeningTableListener implements Listener {
         return meta != null && isMarked(meta.getPersistentDataContainer(), keyAwakeningTableItem);
     }
 
-    private boolean isAwakeningTableBlock(Block block) {
+    public boolean isAwakeningTableBlock(Block block) {
         if (block == null || block.getType() != Material.ENCHANTING_TABLE) {
             return false;
         }
@@ -1811,7 +1901,7 @@ public final class AwakeningTableListener implements Listener {
     private Component buildAwakeningTableHologramText() {
         return MM.deserialize(
             "<gradient:#ff8a5b:#ff3d3d><bold>Awakening Table</bold></gradient>\n"
-                + "<white>Nether Star</white><gray> Required</gray>\n"
+                + "<white>Awakening Shard</white><gray> Required</gray>\n"
                 + "<gray>Success: <white>"
                 + formatPercent(plugin.getConfigManager().awakeningTableSuccessChance)
                 + "</white></gray>"
@@ -1972,7 +2062,7 @@ public final class AwakeningTableListener implements Listener {
         return String.format(Locale.US, "%.2f", amount);
     }
 
-    private record AwakeningMenuHolder(Location tableLocation) implements InventoryHolder {
+    private record AwakeningMenuHolder(Location tableLocation) implements InventoryHolder, MenuDupeGuardListener.MutableMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;

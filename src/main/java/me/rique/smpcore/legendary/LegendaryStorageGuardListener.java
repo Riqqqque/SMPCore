@@ -19,8 +19,6 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 
-import java.util.Map;
-
 public final class LegendaryStorageGuardListener implements Listener {
 
     private final SMPCore plugin;
@@ -169,16 +167,30 @@ public final class LegendaryStorageGuardListener implements Listener {
 
     private int ejectRestrictedItems(Inventory inventory, Player player) {
         int moved = 0;
+        boolean inventoryFull = false;
         ItemStack[] contents = inventory.getStorageContents();
         for (int slot = 0; slot < contents.length; slot++) {
             ItemStack item = contents[slot];
             if (!containsRestrictedLegendary(item)) {
                 continue;
             }
+            if (!canFitInPlayerStorage(player, item)) {
+                inventoryFull = true;
+                continue;
+            }
 
+            ItemStack[] playerStorageBefore = cloneContents(player.getInventory().getStorageContents());
             inventory.setItem(slot, null);
-            giveOrDrop(player, item);
+            if (!player.getInventory().addItem(item.clone()).isEmpty()) {
+                player.getInventory().setStorageContents(playerStorageBefore);
+                inventory.setItem(slot, item);
+                inventoryFull = true;
+                continue;
+            }
             moved++;
+        }
+        if (inventoryFull) {
+            player.sendMessage(MessageUtil.warn("Free some inventory space to remove protected legendaries from this container."));
         }
         return moved;
     }
@@ -203,14 +215,32 @@ public final class LegendaryStorageGuardListener implements Listener {
             + (moved == 1 ? "" : "s") + " back to you."));
     }
 
-    private void giveOrDrop(Player player, ItemStack item) {
-        if (item == null || item.getType().isAir()) {
-            return;
+    private boolean canFitInPlayerStorage(Player player, ItemStack item) {
+        if (player == null || item == null || item.getType().isAir()) {
+            return false;
         }
-        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(item.clone());
-        leftovers.values().forEach(leftover ->
-            player.getWorld().dropItemNaturally(player.getLocation(), leftover)
-        );
+        int remaining = item.getAmount();
+        int maxStackSize = Math.max(1, item.getMaxStackSize());
+        for (ItemStack existing : player.getInventory().getStorageContents()) {
+            if (existing == null || existing.getType().isAir()) {
+                remaining -= maxStackSize;
+            } else if (existing.isSimilar(item)) {
+                remaining -= Math.max(0, maxStackSize - existing.getAmount());
+            }
+            if (remaining <= 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private ItemStack[] cloneContents(ItemStack[] contents) {
+        ItemStack[] cloned = new ItemStack[contents == null ? 0 : contents.length];
+        for (int slot = 0; slot < cloned.length; slot++) {
+            ItemStack item = contents[slot];
+            cloned[slot] = item == null ? null : item.clone();
+        }
+        return cloned;
     }
 
     private boolean isUnsafeStorageClick(InventoryClickEvent event) {
@@ -236,6 +266,9 @@ public final class LegendaryStorageGuardListener implements Listener {
     }
 
     private String storageName(Inventory inventory) {
-        return inventory != null && inventory.getType() == InventoryType.ENDER_CHEST ? "Ender chests" : "Team vaults";
+        if (inventory != null && inventory.getType() == InventoryType.ENDER_CHEST) {
+            return "Ender chests";
+        }
+        return "Team vaults";
     }
 }

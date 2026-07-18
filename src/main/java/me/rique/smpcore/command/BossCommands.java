@@ -63,7 +63,7 @@ public final class BossCommands {
 
         commands.register(
             Commands.literal("bossrituals")
-                .requires(src -> src.getSender() instanceof Player)
+                .requires(src -> src.getSender() instanceof Player player && player.hasPermission("smpcore.bossrituals"))
                 .executes(ctx -> openRitualMenu(plugin, ctx.getSource().getSender()))
                 .build(),
             "Open the boss ritual guide",

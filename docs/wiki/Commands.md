@@ -1,71 +1,202 @@
 # Commands
 
-## Player Commands
+Use `/help` in game for the short player list. This page groups the important commands by job so you do not need to memorize every alias. Tab completion shows valid subcommands, player names, boss IDs, and other accepted values.
 
-- `/menu`, `/smpmenu` - opens the main player menu with Reliquary, mythics, bosses, powers, teams, leaderboards, settings, enchants, and wiki links.
-- `/settings`, `/playersettings`, `/prefs` - opens personal settings, including important-item drop safety.
-- `/reliquary`, `/lrecipe`, `/lrecipes` - opens the item and recipe guide.
-- `/mythics`, `/mythicfusions`, `/mythicnexus`, `/nexus` - opens Mythic Nexus recipes.
-- `/enchants` - opens the custom enchant guide menu.
-- `/bossrituals`, `/bossritual`, `/rituals` - opens the boss ritual guide.
-- `/bossbrews`, `/bosspotions`, `/brews` - opens the boss-material potion guide.
-- `/leaderboards`, `/leaderboard`, `/lb`, `/topstats` - opens persistent server leaderboards.
-- `/wiki`, `/guide`, `/smpwiki` - shows the clickable wiki link.
-- `/shops`, `/shop` - shows how to create chest-based player shops. OPs and `smpcore.shop.admin` also see admin-shop setup help.
-- `/team` - team management commands. Leaders can use `/team color <color>`, `/team rename "new name"`, and `/team ally ...`.
-- `/teams [search]`, `/team list`, `/team search <name>` - opens the searchable team browser with member counts, online counts, deaths, kills, boss stats, and playtime.
-- `/tvault`, `/teamvault` - opens team vault storage.
-- `/team ally add <team>` - request an alliance with another team. Owner only.
-- `/team ally accept <team>` or `/team ally deny <team>` - accept or deny an alliance request. Owner only.
-- `/team ally remove <team>` - end an alliance. Owner only.
-- `/team allies` - view current allied teams and pending alliance requests.
-- `/teamglow`, `/allyglow`, `/teammateglow` - privately highlights teammates and allied teams for your client with a glowing ally marker.
-- `/powerinfo` - opens superpower information.
-- `/stormcaller on|off|toggle|status` - Stormcaller-only lightning strike toggle.
-- `/home`, `/sethome`, `/delhome`, `/homes` - home system.
-- `/spawn` - OP-only spawn command on this server.
-- `/back` - OP-only back command on this server.
-- `/veinminer` - vein miner toggle if enabled.
-- `/veinminer addblock [block]` or `/veinminer add block [block]` - add the block you are looking at, holding, or typing to your personal veinminer list.
-- `/veinminer removeblock [block]` or `/veinminer remove block [block]` - remove a block from your personal veinminer list.
-- `/veinminer blocks` - list your personal veinminer blocks.
-- `/msummon` - Sovereign-only command to summon 1 stored hostile mob.
-- `/msummon <amount>` - Sovereign-only command to summon multiple stored hostile mobs.
-- `/msummon despawn` - Sovereign-only command to unsummon active mobs.
+Commands you cannot use are normally staff-only, class-only, or locked until `/startsmp`.
 
-## Admin Commands
+## Main Player Commands
 
-- `/bosses` - boss control GUI.
-- `/bosses spawn <boss>` - spawn a boss at your location.
-- `/bosses despawn <boss>` - remove active copies of a specific boss.
-- `/bosses clearall` - remove all tracked custom bosses.
-- `/spawner info` - inspect the spawner you are looking at within 8 blocks.
-- `/spawner reset` - reset modifiers on the spawner you are looking at within 8 blocks.
-- `/spawnermgr` - alias for `/spawner`.
-- `/legendary give <item> [player]` - give legendary items.
-- `/customitem give <item> [player]` - give non-legendary custom items, Covenant items, boss trophies, and utility relics.
-- `/itemaudit <player> [item]` - view custom item origin and anomaly logs.
-- `/day` - sets the current world to day.
-- `/night` - sets the current world to night.
-- `/sun` - clears weather.
-- `/storm` - starts a storm.
-- `/setpower <player> <power>` - assign a superpower.
-- `/admin reward <player>` - give a reward soul lantern.
-- `/admin reward revoke <player>` - revoke reward lantern usage privilege.
-- `/announce <message>` - console-safe server announcement.
-- `/smite <player>` - strikes a player with harmless lightning effects.
-- `/freeze <player> [on|off]` - freezes or toggles an online player.
-- `/unfreeze <player>` - unfreezes an online player.
-- `/viewteamvault <team>`, `/teamvaultsee <team>`, `/tvaultsee <team>` - owner-only safe team vault inspector.
-- `/spawnprotect` - show spawn protection status.
-- `/spawnprotect allow <player>` - let a non-OP player build and edit inside protected spawn.
-- `/spawnprotect remove <player>` - remove a player from the spawn build allowlist.
-- `/spawnprotect radius <blocks>` - change the protected spawn radius.
-- `/spawnprotect on` or `/spawnprotect off` - enable or disable spawn protection.
-- `/startsmp [graceMinutes]` - expands the world border and starts grace timing. The optional number controls PvP grace for this launch.
-- `/startsmp reset` - resets the start state.
-- `/startsmp lock` - puts the world back into the pre-start lockdown.
-- `/startsmp barrier` - reapplies the configured pre-start barrier around spawn.
-- `/unban <player>` - profile unban helper.
+### Menus and information
 
-Permissions are defined in `src/main/resources/paper-plugin.yml`.
+- `/menu` - main player hub.
+- `/settings` - Drop Safety, Spawn Music, and Boss Music.
+- `/reliquary` - custom items, recipes, Armory, utilities, and Mythic links.
+- `/enchants` - custom enchant guide and boss-enchant recipes.
+- `/powerinfo` - class information.
+- `/familiar` - summon, dismiss, and inspect unlocked familiars.
+- `/leaderboards` - persistent server stat boards.
+- `/playtime` - your saved playtime.
+- `/wiki` - public wiki link.
+- `/changelog` - recent server changes.
+
+Common aliases include `/smpmenu`, `/prefs`, `/lrecipes`, `/familiars`, `/lb`, `/ptime`, `/guide`, and `/changes`.
+
+### Essence, storage, and trading
+
+- `/essence` - current Essence balance.
+- `/shops` - chest-shop setup guide and pending-payment commands.
+- `/shops balance` - view payments waiting outside stock chests.
+- `/shops collect` - collect waiting payments when inventory space is available.
+- `/stall` - current rented-stall status.
+- `/stall sell` - sell your stall back for 75% after removing player fixtures.
+- `/stall transfer <player>` - offer ownership and its shops to an online player.
+- `/stall accept` or `/stall deny` - answer a transfer offer.
+- `/backpack label <text>` - add a 1-24 character suffix to the held backpack.
+- `/backpack clear` - remove the held backpack's suffix.
+- `/spinbet <player>` - offer the exact main-hand item shown in the confirmation menu.
+- `/spinbet accept <player>` or `/spinbet deny <player>` - answer an item-bet offer.
+- `/spinbet cancel` - cancel your unaccepted offer.
+- `/spinbet claim` - recover an interrupted item-bet payout.
+- `/blackjack claim` - recover an interrupted Blackjack payout; new games start only through Silas.
+- `/roulette claim` - recover an interrupted material payout; new spins start only through Renn.
+
+### Bosses and story
+
+- `/bossrituals` - preview all Boss Dungeon entry costs.
+- `/bossjoin accept` or `/bossjoin deny` - answer a teammate or ally invitation during the 10-second countdown.
+- `/bossqueue leave` - cancel your queued summon before it starts and before payment is taken.
+- `/veil` or `/veil journal` - open The Eleventh Oath journal.
+- `/veil objective` - current story objective.
+- `/veil memories` - recovered boss memories in order.
+- `/veil text` - chat-based journal fallback.
+- `/veil skip` - skip the current personal dialogue sequence.
+- `/veil choose <mend|bind|sever>` - make the final choice when it becomes available.
+
+### Teams and community
+
+- `/team create "name" [color]` - create a team.
+- `/team invite <player>` - owner invitation.
+- `/team leave` - leave your team.
+- `/team disband` - owner-only team deletion; the vault must be empty.
+- `/team info` - members, owner, color, and allies.
+- `/team rename "name"` and `/team color <color>` - owner customization.
+- `/team ally add|accept|deny|remove <team>` - alliance management.
+- `/teams [search]` - searchable team browser.
+- `/teamvault` - team storage.
+- `/teamglow` - privately outline only your teammates through walls; no extra name label is added.
+
+### Duels
+
+- `/duel` - polished matchmaking, challenge, party, spectate, and betting menu.
+- `/duel find` - find a duel with the setup selected in the menu.
+- `/duel challenge <player>` - challenge a player using the selected setup.
+- `/duel queue <rounds> <open|noheal|melee> [team-size]` - direct 1v1, 2v2, or 3v3 queue command.
+- `/duel party` - temporary duo/trio roster menu.
+- `/duel party invite|accept|deny|leave|kick|disband|status` - roster commands.
+- `/duel accept <player>`, `/duel deny`, `/duel leave` - challenge and match controls.
+- `/duel spectate` - watch the current fight from the protected spectator area.
+- `/duel bet essence <amount>` - wager any valid Essence amount during the betting window.
+- `/duel bet item [amount]` - wager some or all of the held item stack.
+
+Read [Duels and Betting](Duels-And-Betting) before placing a wager.
+
+### Travel and survival
+
+- `/spawn` - exact spawn, with a short cooldown.
+- `/sethome`, `/home`, `/homes`, `/delhome` - personal homes with safe landing checks.
+- `/veinminer on|off|status` - toggle or inspect Vein Miner.
+- `/veinminer blocks` - personal vein list.
+- `/veinminer addblock [block]` and `/veinminer removeblock [block]` - edit that list.
+- `/steed summon`, `/steed recall`, `/steed status` - Wildbound Regalia mount controls.
+
+## Class Commands
+
+Only the matching class can normally use these. Read [Classes](Superpowers) for costs, cooldowns, and boss restrictions.
+
+- Veil Assassin: `/smokebomb`
+- Juggernaut: `/unstoppableforce`
+- Nightshade: `/shadow`, `/nightshadevision on|off|toggle|status`
+- Deadeye: `/deadeyearrows on|off|toggle|status`
+- Stormcaller: `/stormcaller on|off|toggle|status`
+- Arcanist: `/arcanebook`
+- Oathbound: `/oathsummon <player>`
+- Bloodmender: `/bloodsacrifice`, `/curse`
+- Shadow Monarch: `/msummon [amount]`, `/msummon despawn`
+- Voidwalker: `/voidstep`, `/voidvision`
+- Oracle Eye: `/xray`
+- Wayfarer: `/travel <x> <y> <z> <dimension>`, `/travel close`
+- The Honored One: `/infinity on|off|toggle|status`, `/domainexpansion`
+
+## Staff Commands
+
+### Launch, spawn, and access
+
+- `/launchaccess status|open|lock|allowme` - owner-only launch gate. Opening access does not start the season.
+- `/startsmp [graceMinutes]` - begin the season, remove staging lockdown, and start PvP grace.
+- `/startsmp status|barrier|lock|reset|preview` - inspect or repair start state.
+- `/setspawn` - save exact spawn and facing.
+- `/spawnprotect` - protection summary.
+- `/spawnprotect pos1|pos2` - mark the permanent spawn cuboid.
+- `/spawnprotect check|see|flags|list` - inspect protection.
+- `/spawnprotect flag <flag> on|off` - change one protection rule.
+- `/spawnprotect allow|remove <player>` - builder allowlist.
+- `/spawnprotect stick` - give the public-interaction marking stick.
+- `/spawnprotect public list` - list exact public-use blocks.
+- `/spawnprotect public clear confirm` - clear exact public-use marks.
+- `/spawnprotect clean` - remove loaded stray mobs from spawn.
+- `/spawnprotect radius <blocks>` or `/spawnprotect clearregion` - fallback-radius controls.
+
+### Guide NPCs
+
+Every main NPC root supports `spawn`, `remove`, `list`, and `refresh`:
+
+`/spawnnpc`, `/corruptionwarden`, `/mayor`, `/artificer`, `/dungeonkeeper`, `/brewmaster`, `/adventurer`, `/dealer`, `/croupier`, `/duelmaster`, `/goblinhunter`, `/miner`, `/farmer`, `/witch`, `/overseer`, `/beastwarden`, `/bossbroker`, `/blackmarket`, and `/fisher`.
+
+Run the root without a subcommand for its usage. See [NPC Directory](NPC-Directory) for names and player-facing jobs.
+
+### Boss Dungeon and testing
+
+- `/bossdungeon` - configured points, active phase, and queue state.
+- `/bossdungeon setentry|setfight|setspectator|setboss|setkeeper` - save points while standing inside the dungeon.
+- `/bossdungeon tp <point>` - jump to a saved point.
+- `/bossdungeon test <boss>` - no-cost, no-loot encounter test.
+- `/bossdungeon join|spectate|reset` - enter or safely clear a test.
+- `/bossloadout [boss]` - realistic pre-boss gear; `/bossloadout clear` removes only generated kit items.
+- `/bosses` - direct boss control GUI.
+- `/bosses spawn|despawn <boss>`, `/bosses clearall`, `/bosses status` - tracked boss controls.
+- `/bossmasteryadmin setkills <player> <boss> <amount>` or `reset <player>` - mastery testing.
+
+### Duel arena and tavern
+
+- `/duel admin set <lobby|fighter1|fighter1b|fighter1c|fighter2|fighter2b|fighter2c|spectator|corner1|corner2>` - arena points.
+- `/duel admin status|forcestop` - verify or safely stop a duel.
+- `/duel admin leaderboard wins|bets` - place the two physical boards.
+- `/duel admin removeleaderboard` - remove the nearest duel board.
+- `/tavernadmin set <slots|table|darts|rumors>` - register the targeted station block.
+- `/tavernadmin remove <type>` and `/tavernadmin list` - station maintenance.
+- `/tavernadmin leaderboard spawn <slots|cards|darts>` - place one game's physical board.
+- `/tavernadmin leaderboard remove` - remove the nearest tavern board.
+
+### Market stalls and shops
+
+- `/stall admin wand` - corner-selection wand.
+- `/stall admin create <id> <price>` - create the selected stall using the sign you are looking at.
+- `/stall admin setprice <id> <price>` - update price and sign.
+- `/stall admin list` - owners, fixtures, and template hashes.
+- `/stall admin restore <id>` - preview, then repeat within 15 seconds to restore.
+- `/stall admin snapshot <id> confirm` - deliberately replace one launch template.
+- `/stall admin snapshotall confirm` - replace every eligible unowned template.
+- `/stall admin remove <id>` - remove an empty, unowned stall definition.
+
+### Items, Essence, and recovery
+
+- `/customitem give <item> [player]` - custom utility, boss trophy, and Veil items.
+- `/legendary give <item> [player]` - legendary test item.
+- `/reforger spawn|remove|list|refresh` and `/reforger stone [player]` - Brannik and test stones.
+- `/priest spawn|remove|list|refresh` - Father Aldren.
+- `/corruptionstation give [player]` and `/corruptionstation list` - Corruption Anchors.
+- `/essenceadmin balance|progress <player>` - inspect an account.
+- `/essenceadmin give|take|set <player> <amount>` - audited balance changes.
+- `/essenceadmin reset <player> confirm` - destructive account reset.
+- `/itemaudit <player> [item]` - item origin and anomaly history.
+- `/deathinventory list <player> [page]` - exact saved death snapshots.
+- `/deathinventory view <player> [snapshot]` - read-only inspection.
+- `/deathinventory restore <player> [snapshot]`, then `/deathinventory confirm` - guarded restore.
+- `/deathinventory cancel` - abandon the pending restore.
+- `/familiaradmin list|give|take ...` - test any current familiar.
+- `/beastwardenadmin complete|reset|armor|preview ...` - Beastwarden testing.
+
+### World systems and diagnostics
+
+- `/spawner info|reset` - targeted custom spawner inspection.
+- `/goblins give [amount]` and `/goblins count` - hidden collectibles.
+- `/spawnlife spawn|remove|list <type>` and `/spawnlife refresh` - ambient characters.
+- `/bedrockskulls register|scan [radius]|status` - Geyser custom-head mappings.
+- `/smpcore bedrock` - Floodgate, Geyser, ViaVersion, and online Bedrock status.
+- `/veil admin reload|status|setchapter|setstage|flag|unlock|lock|replay|reset|debug|migrate ...` - story maintenance.
+
+### General staff utilities
+
+SMPCore also provides permission-gated moderation and convenience commands including `/fly`, `/speed`, `/heal`, `/feed`, `/god`, `/vanish`, `/freeze`, `/unfreeze`, `/invsee`, `/enderchest`, `/nick`, `/announce`, `/smite`, `/day`, `/night`, `/sun`, `/storm`, `/gmc`, `/gms`, `/gma`, and `/gmsp`.
+
+Permissions are defined in `paper-plugin.yml`. The [Admin Setup Checklist](Admin-Setup-Checklist) gives the safest order for configuring a fresh server.

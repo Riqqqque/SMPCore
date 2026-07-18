@@ -8,11 +8,13 @@ import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.Color;
 import org.bukkit.Location;
+import org.bukkit.NamespacedKey;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.CreatureSpawner;
 import org.bukkit.entity.Display;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.EntityType;
 import org.bukkit.entity.TextDisplay;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
@@ -24,7 +26,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 /**
  * Central manager for custom spawner data, persistence, and holograms.
@@ -40,16 +44,20 @@ public final class SpawnerManager {
         SUCCESS,
         NOT_TRACKED,
         TYPE_MISMATCH,
+        INVALID_AMOUNT,
         WOULD_EXCEED_MAX
     }
 
     private final SMPCore plugin;
+    private final NamespacedKey keySpawnerHologram;
     private final Map<String, SpawnerData> cache = new ConcurrentHashMap<>();
     private final Map<String, UUID> holograms = new ConcurrentHashMap<>();
     private final Map<String, Set<String>> chunkIndex = new ConcurrentHashMap<>();
+    private final Map<String, CompletableFuture<Void>> pendingPersistence = new ConcurrentHashMap<>();
 
     public SpawnerManager(SMPCore plugin) {
         this.plugin = plugin;
+        this.keySpawnerHologram = new NamespacedKey(plugin, "spawner_hologram");
     }
 
     public static String key(String world, int x, int y, int z) {
@@ -60,31 +68,38 @@ public final class SpawnerManager {
         return key(loc.getWorld().getName(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ());
     }
 
-    public void loadAll() {
-        plugin.getDatabase().loadAllSpawners()
-            .thenAccept(list -> Bukkit.getScheduler().runTask(plugin, () -> {
-                if (!plugin.isEnabled()) return;
-                for (SpawnerData data : list) {
-                    String blockKey = key(data.world(), data.x(), data.y(), data.z());
-                    cache.put(blockKey, data);
-                    index(blockKey, data.world(), data.x(), data.z());
+    /**
+     * Load the authoritative spawner cache before listeners are registered. Startup must not
+     * accept player edits while an older database snapshot can still overwrite them.
+     */
+    public void loadAllBlocking() {
+        List<SpawnerData> loaded;
+        try {
+            loaded = plugin.getDatabase().loadAllSpawners().join();
+        } catch (CompletionException ex) {
+            throw new IllegalStateException("Failed to load spawners", ex.getCause());
+        }
 
-                    World world = Bukkit.getWorld(data.world());
-                    if (world == null || !world.isChunkLoaded(data.x() >> 4, data.z() >> 4)) continue;
+        for (SpawnerData raw : loaded) {
+            SpawnerData data = normalizeLoadedData(raw);
+            String blockKey = key(data.world(), data.x(), data.y(), data.z());
+            cache.put(blockKey, data);
+            index(blockKey, data.world(), data.x(), data.z());
+            if (!sameStoredState(raw, data)) {
+                queueSave(blockKey, data);
+            }
 
-                    Location loc = new Location(world, data.x(), data.y(), data.z());
-                    if (loc.getBlock().getType() != org.bukkit.Material.SPAWNER) {
-                        removeStaleEntry(blockKey, data);
-                        continue;
-                    }
-                    applySpeedToBlock(loc, data);
-                    spawnHologram(data);
-                }
-            }))
-            .exceptionally(ex -> {
-                plugin.getLogger().severe("Failed to load spawners: " + ex.getMessage());
-                return null;
-            });
+            World world = Bukkit.getWorld(data.world());
+            if (world == null || !world.isChunkLoaded(data.x() >> 4, data.z() >> 4)) continue;
+
+            Location loc = new Location(world, data.x(), data.y(), data.z());
+            if (loc.getBlock().getType() != org.bukkit.Material.SPAWNER) {
+                removeStaleEntry(blockKey, data);
+                continue;
+            }
+            applySpeedToBlock(loc, data);
+            spawnHologram(data);
+        }
     }
 
     public void shutdown() {
@@ -92,7 +107,8 @@ public final class SpawnerManager {
         List<CompletableFuture<Void>> saves = new ArrayList<>();
         cache.values().stream()
             .filter(SpawnerData::isDirty)
-            .forEach(d -> saves.add(plugin.getDatabase().saveSpawner(d)));
+            .forEach(data -> saves.add(queueSave(key(data.world(), data.x(), data.y(), data.z()), data)));
+        saves.addAll(pendingPersistence.values());
         if (!saves.isEmpty()) {
             try {
                 CompletableFuture.allOf(saves.toArray(CompletableFuture[]::new)).join();
@@ -139,7 +155,7 @@ public final class SpawnerManager {
                          int sugarCount, boolean redstoneControlled, boolean aiNerfed) {
         int clampedStack = Math.max(1, Math.min(stackCount, plugin.getConfigManager().spawnerMaxStack));
         int clampedSugar = Math.max(0, Math.min(sugarCount, plugin.getConfigManager().spawnerMaxSugar));
-        String normalizedType = entityType == null ? "PIG" : entityType.toUpperCase(Locale.ROOT);
+        String normalizedType = normalizeEntityType(entityType);
         SpawnerData data = new SpawnerData(
             loc.getWorld().getName(),
             loc.getBlockX(), loc.getBlockY(), loc.getBlockZ(),
@@ -148,7 +164,7 @@ public final class SpawnerManager {
         String blockKey = key(loc);
         cache.put(blockKey, data);
         index(blockKey, data.world(), data.x(), data.z());
-        plugin.getDatabase().saveSpawner(data);
+        queueSave(blockKey, data);
         applySpeedToBlock(loc, data);
         Bukkit.getScheduler().runTask(plugin, () -> spawnHologram(data));
     }
@@ -160,9 +176,7 @@ public final class SpawnerManager {
             unindex(blockKey, removed.world(), removed.x(), removed.z());
         }
         destroyHologram(blockKey);
-        plugin.getDatabase().deleteSpawner(
-            loc.getWorld().getName(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ()
-        );
+        queueDelete(blockKey, loc.getWorld().getName(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ());
     }
 
     public int addSugar(Location loc, int amount) {
@@ -199,7 +213,7 @@ public final class SpawnerManager {
     }
 
     public void setEntityType(Location loc, String entityType) {
-        String normalizedType = entityType == null ? "PIG" : entityType.toUpperCase(Locale.ROOT);
+        String normalizedType = normalizeEntityType(entityType);
         SpawnerData data = getData(loc);
         if (data == null) {
             if (loc.getBlock().getState() instanceof CreatureSpawner cs) {
@@ -229,10 +243,13 @@ public final class SpawnerManager {
     public MergeResult mergeStack(Location loc, String entityType, int addCount) {
         SpawnerData data = getData(loc);
         if (data == null) return MergeResult.NOT_TRACKED;
-        if (!data.entityType().equalsIgnoreCase(entityType)) return MergeResult.TYPE_MISMATCH;
+        if (addCount <= 0) return MergeResult.INVALID_AMOUNT;
+        String normalizedType = normalizeEntityType(entityType);
+        if (!data.entityType().equals(normalizedType)) return MergeResult.TYPE_MISMATCH;
         int maxStack = plugin.getConfigManager().spawnerMaxStack;
-        if (data.stackCount() + addCount > maxStack) return MergeResult.WOULD_EXCEED_MAX;
-        data.setStackCount(data.stackCount() + addCount);
+        long mergedCount = (long) data.stackCount() + addCount;
+        if (mergedCount > maxStack) return MergeResult.WOULD_EXCEED_MAX;
+        data.setStackCount((int) mergedCount);
         applySpeedToBlock(loc, data);
         persistAndUpdateHologram(loc, data);
         return MergeResult.SUCCESS;
@@ -287,6 +304,7 @@ public final class SpawnerManager {
             entity.setPersistent(false);
             entity.setSeeThrough(false);
             entity.setBackgroundColor(Color.fromARGB(160, 0, 0, 0));
+            entity.getPersistentDataContainer().set(keySpawnerHologram, PersistentDataType.BYTE, (byte) 1);
         });
 
         holograms.put(blockKey, display.getUniqueId());
@@ -424,7 +442,7 @@ public final class SpawnerManager {
     }
 
     private void persistAndUpdateHologram(Location loc, SpawnerData data) {
-        plugin.getDatabase().saveSpawner(data);
+        queueSave(key(loc), data);
         if (!plugin.isEnabled()) return;
         Bukkit.getScheduler().runTask(plugin, () -> {
             if (!plugin.isEnabled()) return;
@@ -453,10 +471,77 @@ public final class SpawnerManager {
         cache.remove(blockKey);
         unindex(blockKey, data.world(), data.x(), data.z());
         destroyHologram(blockKey);
-        plugin.getDatabase().deleteSpawner(data.world(), data.x(), data.y(), data.z())
-            .exceptionally(ex -> {
-                plugin.getLogger().severe("Failed to delete stale spawner " + blockKey + ": " + ex.getMessage());
-                return null;
-            });
+        queueDelete(blockKey, data.world(), data.x(), data.y(), data.z());
+    }
+
+    public static String normalizeEntityType(String entityType) {
+        if (entityType == null || entityType.isBlank()) return EntityType.PIG.name();
+        try {
+            EntityType type = EntityType.valueOf(entityType.trim().toUpperCase(Locale.ROOT));
+            return type.isSpawnable() && type.isAlive() ? type.name() : EntityType.PIG.name();
+        } catch (IllegalArgumentException ignored) {
+            return EntityType.PIG.name();
+        }
+    }
+
+    public static int clampStackCount(int stackCount, int maxStack) {
+        return Math.max(1, Math.min(stackCount, Math.max(1, maxStack)));
+    }
+
+    public static int clampSugarCount(int sugarCount, int maxSugar) {
+        return Math.max(0, Math.min(sugarCount, Math.max(0, maxSugar)));
+    }
+
+    public static int breakExperience(int stackCount, int maxStack) {
+        long normalized = clampStackCount(stackCount, maxStack);
+        return (int) Math.min(Integer.MAX_VALUE, 15L + (normalized - 1L) * 5L);
+    }
+
+    private SpawnerData normalizeLoadedData(SpawnerData raw) {
+        return new SpawnerData(
+            raw.world(), raw.x(), raw.y(), raw.z(),
+            normalizeEntityType(raw.entityType()),
+            clampStackCount(raw.stackCount(), plugin.getConfigManager().spawnerMaxStack),
+            clampSugarCount(raw.sugarCount(), plugin.getConfigManager().spawnerMaxSugar),
+            raw.redstoneControlled(), raw.aiNerfed()
+        );
+    }
+
+    private static boolean sameStoredState(SpawnerData left, SpawnerData right) {
+        return left.entityType().equals(right.entityType())
+            && left.stackCount() == right.stackCount()
+            && left.sugarCount() == right.sugarCount()
+            && left.redstoneControlled() == right.redstoneControlled()
+            && left.aiNerfed() == right.aiNerfed();
+    }
+
+    private CompletableFuture<Void> queueSave(String blockKey, SpawnerData data) {
+        SpawnerData snapshot = data.snapshot();
+        return queuePersistence(blockKey, () -> plugin.getDatabase().saveSpawner(snapshot));
+    }
+
+    private CompletableFuture<Void> queueDelete(String blockKey, String world, int x, int y, int z) {
+        return queuePersistence(blockKey, () -> plugin.getDatabase().deleteSpawner(world, x, y, z));
+    }
+
+    private CompletableFuture<Void> queuePersistence(
+        String blockKey,
+        Supplier<CompletableFuture<Void>> operation
+    ) {
+        CompletableFuture<Void> queued = pendingPersistence.compute(blockKey, (ignored, previous) -> {
+            CompletableFuture<Void> ordered = previous == null
+                ? CompletableFuture.completedFuture(null)
+                : previous.handle((result, failure) -> null);
+            return ordered.thenCompose(result -> operation.get());
+        });
+        queued.whenComplete((result, failure) -> {
+            pendingPersistence.remove(blockKey, queued);
+            if (failure != null) {
+                plugin.getLogger().severe(
+                    "Failed to persist spawner " + blockKey + ": " + failure.getMessage()
+                );
+            }
+        });
+        return queued;
     }
 }

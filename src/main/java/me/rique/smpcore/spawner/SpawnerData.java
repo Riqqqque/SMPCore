@@ -41,6 +41,15 @@ public final class SpawnerData {
     public boolean isDirty()           { return dirty; }
     public void clearDirty()           { dirty = false; }
 
+    /**
+     * Immutable-in-practice copy used by asynchronous persistence work.
+     */
+    public SpawnerData snapshot() {
+        return new SpawnerData(
+            world, x, y, z, entityType, stackCount, sugarCount, redstoneControlled, aiNerfed
+        );
+    }
+
     // ── Mutators (each marks dirty) ───────────────────────────────────────────
 
     public void setEntityType(String type)    { entityType = type; dirty = true; }

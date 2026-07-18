@@ -1,0 +1,95 @@
+low-health-threshold: 0.20
+
+bosses:
+  yule_the_minion:
+    display: Veilbound Marshal
+    entrance: "State your rank. No? Then they erased that too."
+    phases:
+      - "Order revised. Witness becomes casualty."
+    low-health: "Command must survive the commander."
+    defeat: "Find... who changed the order."
+    memory: "The breach began as an order."
+    memory-entry: memories.yule_the_minion
+  kael_the_ashen:
+    display: Cindervale Arbalest
+    entrance: "Cindervale held until Veilward closed the gate."
+    phases:
+      - "Relief is approaching. Hold another minute."
+    low-health: "The sunrise was smoke. We saluted it anyway."
+    defeat: "Tell them... we were still waiting."
+    memory: "Cindervale was not lost. It was offered."
+    memory-entry: memories.kael_the_ashen
+  vesper_the_widow_queen:
+    display: Gloam Matriarch
+    entrance: "You call us brood because survivor sounds too human."
+    phases:
+      - "Children, into the dark. I will make them afraid."
+    low-health: "We learned hunger from your walls."
+    defeat: "Do not let them rename us again."
+    memory: "The monsters were survivors."
+    memory-entry: memories.vesper_the_widow_queen
+  mirewood_the_root_tyrant:
+    display: Briarveil Regent
+    entrance: "Every root beneath Veilward drinks from a name."
+    phases:
+      - "The buried are voting."
+    low-health: "Cut me down. The soil has learned the story."
+    defeat: "Plant... markers."
+    memory: "The earth was taught to forget."
+    memory-entry: memories.mirewood_the_root_tyrant
+  nereida_the_abyss_mother:
+    display: Thalassa the Drowned Veil
+    entrance: "We reached the harbor. The harbor refused us."
+    phases:
+      - "All hands below. The living have closed the sea."
+    low-health: "I can still hear passengers counting breaths."
+    defeat: "Open the gate... this time."
+    memory: "We reached the harbor. The harbor refused us."
+    memory-entry: memories.nereida_the_abyss_mother
+  iron_saint:
+    display: Argent Confessor
+    entrance: "Mercy is compliance without complaint."
+    phases:
+      - "Resistance diagnosed. Treatment escalated."
+    low-health: "Pain confirms the soul remains reachable."
+    defeat: "Doctrine... inconsistent."
+    memory: "Mercy was rewritten as obedience."
+    memory-entry: memories.iron_saint
+  aurelion_the_rift_seraph:
+    display: Asterion the Rift Oracle
+    entrance: "You entered through a door that has not been built."
+    phases:
+      - "Observe: your death has several valid locations."
+    low-health: "The End is not distant. It is underneath the moment."
+    defeat: "The eleventh pattern... has a witness."
+    memory: "The Veil does not surround the world. It passes through it."
+    memory-entry: memories.aurelion_the_rift_seraph
+  morvessa_the_runebloom_witch:
+    display: Morvessa the Runebloom Witch
+    entrance: "I grew flowers from thoughts your saints discarded."
+    phases:
+      - "Bloom, little memories. Defend your gardener."
+    low-health: "Do not pretend you came for ethics. You came for power."
+    defeat: "Then prove... it can be used gently."
+    memory: "Every enchantment is a borrowed memory."
+    memory-entry: memories.morvessa_the_runebloom_witch
+  voralith_the_crimson_warden:
+    display: Noctyr the Veil Warden
+    entrance: "I buried the Dominion to keep it from becoming history twice."
+    phases:
+      - "Some truths are weapons with no safe direction."
+    low-health: "Ignorance was cruel. I chose it because it was survivable."
+    defeat: "The Oathkeeper guarded the truth... not the gate."
+    memory: "The Oathkeeper guarded the truth, not the gate."
+    memory-entry: memories.voralith_the_crimson_warden
+  corrupted_oathkeeper:
+    display: Corrupted Oathkeeper
+    entrance: "Turn back. I have already remembered your deaths."
+    phases:
+      - "The Engine requires witnesses. It always means victims."
+      - "Mira? Malakar? No—different faces. Same marks."
+      - "I did not break the oath. I refused its final victim."
+    low-health: "If I fall, do not let them turn memory into law again."
+    defeat: "My name... was Aurel."
+    memory: "Your Veilmark is the missing witness."
+    memory-entry: memories.corrupted_oathkeeper

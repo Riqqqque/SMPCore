@@ -44,7 +44,7 @@ public final class ServerUtilityCommands {
             Commands.literal("sun")
                 .requires(src -> src.getSender().hasPermission("smpcore.weather"))
                 .executes(ctx -> {
-                    setWeather(ctx.getSource().getSender(), false, false, "clear weather");
+                    setWeather(plugin, ctx.getSource().getSender(), false, false, "clear weather");
                     return Command.SINGLE_SUCCESS;
                 })
                 .build(),
@@ -55,7 +55,7 @@ public final class ServerUtilityCommands {
             Commands.literal("storm")
                 .requires(src -> src.getSender().hasPermission("smpcore.weather"))
                 .executes(ctx -> {
-                    setWeather(ctx.getSource().getSender(), true, true, "storm");
+                    setWeather(plugin, ctx.getSource().getSender(), true, true, "storm");
                     return Command.SINGLE_SUCCESS;
                 })
                 .build(),
@@ -71,15 +71,29 @@ public final class ServerUtilityCommands {
         sender.sendMessage(MessageUtil.success("Set <white>" + worldLabel(sender, worlds) + "</white> to <white>" + label + "</white>."));
     }
 
-    private static void setWeather(CommandSender sender, boolean storm, boolean thunder, String label) {
+    private static void setWeather(SMPCore plugin, CommandSender sender, boolean storm, boolean thunder, String label) {
         List<World> worlds = targetWorlds(sender);
         for (World world : worlds) {
-            world.setStorm(storm);
-            world.setThundering(thunder);
-            world.setWeatherDuration(storm ? 20 * 60 * 10 : 20 * 60 * 20);
-            world.setThunderDuration(thunder ? 20 * 60 * 10 : 20 * 60 * 20);
+            if (plugin.getSpawnProtectionListener() != null) {
+                plugin.getSpawnProtectionListener().runWithWeatherLockBypass(
+                    world,
+                    () -> applyWeather(world, storm, thunder)
+                );
+            } else {
+                applyWeather(world, storm, thunder);
+            }
         }
         sender.sendMessage(MessageUtil.success("Set <white>" + worldLabel(sender, worlds) + "</white> to <white>" + label + "</white>."));
+    }
+
+    private static void applyWeather(World world, boolean storm, boolean thunder) {
+        world.setStorm(storm);
+        world.setThundering(thunder);
+        world.setWeatherDuration(storm ? 20 * 60 * 10 : 20 * 60 * 20);
+        world.setThunderDuration(thunder ? 20 * 60 * 10 : 20 * 60 * 20);
+        if (!storm && !thunder) {
+            world.setClearWeatherDuration(20 * 60 * 20);
+        }
     }
 
     private static List<World> targetWorlds(CommandSender sender) {

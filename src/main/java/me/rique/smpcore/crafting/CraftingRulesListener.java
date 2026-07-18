@@ -24,6 +24,8 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.SmithingInventory;
+import org.bukkit.inventory.SmithingTrimRecipe;
+import org.bukkit.inventory.meta.ArmorMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 
@@ -31,7 +33,7 @@ import java.util.Locale;
 
 /**
  * Global crafting rules:
- * - Golden apple uses nuggets instead of ingots.
+ * - Golden apple uses gold ingots around an apple.
  * - 9 Rotten Flesh can be crafted into Leather.
  * - Iron, copper, and gold can be crafted into Bells.
  * - Optional block for netherite armor smithing upgrades.
@@ -39,13 +41,14 @@ import java.util.Locale;
 public final class CraftingRulesListener implements Listener {
 
     private final SMPCore plugin;
-    private final NamespacedKey goldenAppleNuggetRecipeKey;
+    private final NamespacedKey goldenAppleRecipeKey;
     private final NamespacedKey leatherFromRottenFleshRecipeKey;
     private final NamespacedKey bellRecipeKey;
 
     public CraftingRulesListener(SMPCore plugin) {
         this.plugin = plugin;
-        this.goldenAppleNuggetRecipeKey = new NamespacedKey(plugin, "golden_apple_nugget_recipe");
+        // Keep the original key so existing player recipe books do not retain an unknown recipe ID.
+        this.goldenAppleRecipeKey = new NamespacedKey(plugin, "golden_apple_nugget_recipe");
         this.leatherFromRottenFleshRecipeKey = new NamespacedKey(plugin, "leather_from_rotten_flesh");
         this.bellRecipeKey = new NamespacedKey(plugin, "bell_recipe");
         registerGoldenAppleRecipe();
@@ -124,19 +127,30 @@ public final class CraftingRulesListener implements Listener {
     public void onPrepareSmithing(PrepareSmithingEvent event) {
         ItemStack source = null;
         boolean preserveCustomEnchants = false;
+        boolean preserveVeilArmorTrim = false;
         if (event.getInventory() instanceof SmithingInventory smithing) {
             source = smithing.getInputEquipment();
             preserveCustomEnchants = isCustomEnchantedVanillaGear(source);
             if (isProtectedCustomItem(source) && !preserveCustomEnchants) {
-                event.setResult(null);
-                return;
+                preserveVeilArmorTrim = isVeilArmorTrimRecipe(smithing, source, event.getResult());
+                if (!preserveVeilArmorTrim) {
+                    event.setResult(null);
+                    return;
+                }
             }
         }
 
         ItemStack result = event.getResult();
         if (result == null || result.getType() == Material.AIR) return;
-        if (plugin.getConfigManager().blockNetheriteArmorUpgrade && isNetheriteArmor(result.getType())) {
+        if (plugin.getConfigManager().blockNetheriteArmorUpgrade
+            && event.getInventory() instanceof SmithingInventory smithing
+            && !isArmorTrimRecipe(smithing)
+            && isNetheriteArmor(result.getType())) {
             event.setResult(null);
+            return;
+        }
+        if (preserveVeilArmorTrim) {
+            event.setResult(preserveVeilArmorTrim(source, result));
             return;
         }
         if (!preserveCustomEnchants) return;
@@ -162,14 +176,17 @@ public final class CraftingRulesListener implements Listener {
 
         ItemStack source = smith.getInputEquipment();
         if (isProtectedCustomItem(source) && !isCustomEnchantedVanillaGear(source)) {
-            event.setCancelled(true);
-            player.sendMessage(MessageUtil.warn("Custom items cannot be used in vanilla smithing recipes."));
-            return;
+            if (!isVeilArmorTrimRecipe(smith, source, smith.getResult())) {
+                event.setCancelled(true);
+                player.sendMessage(MessageUtil.warn("Custom items cannot be used in vanilla smithing recipes."));
+                return;
+            }
         }
 
         ItemStack result = smith.getResult();
         if (result == null || result.getType() == Material.AIR) return;
         if (!plugin.getConfigManager().blockNetheriteArmorUpgrade) return;
+        if (isArmorTrimRecipe(smith)) return;
         if (!isNetheriteArmor(result.getType())) return;
 
         event.setCancelled(true);
@@ -178,12 +195,12 @@ public final class CraftingRulesListener implements Listener {
 
     private void registerGoldenAppleRecipe() {
         Bukkit.removeRecipe(NamespacedKey.minecraft("golden_apple"));
-        Bukkit.removeRecipe(goldenAppleNuggetRecipeKey);
+        Bukkit.removeRecipe(goldenAppleRecipeKey);
 
         ItemStack result = new ItemStack(Material.GOLDEN_APPLE, 1);
-        ShapedRecipe shaped = new ShapedRecipe(goldenAppleNuggetRecipeKey, result);
-        shaped.shape("NNN", "NAN", "NNN");
-        shaped.setIngredient('N', plugin.getConfigManager().goldenAppleSurroundMaterial);
+        ShapedRecipe shaped = new ShapedRecipe(goldenAppleRecipeKey, result);
+        shaped.shape("GGG", "GAG", "GGG");
+        shaped.setIngredient('G', plugin.getConfigManager().goldenAppleSurroundMaterial);
         shaped.setIngredient('A', Material.APPLE);
         shaped.setGroup("smpcore_crafting");
         Bukkit.addRecipe(shaped);
@@ -225,7 +242,7 @@ public final class CraftingRulesListener implements Listener {
     }
 
     private void discoverCustomRecipes(Player player) {
-        player.discoverRecipe(goldenAppleNuggetRecipeKey);
+        player.discoverRecipe(goldenAppleRecipeKey);
         player.discoverRecipe(leatherFromRottenFleshRecipeKey);
         player.discoverRecipe(bellRecipeKey);
     }
@@ -265,7 +282,7 @@ public final class CraftingRulesListener implements Listener {
             return false;
         }
         NamespacedKey key = keyed.getKey();
-        return goldenAppleNuggetRecipeKey.equals(key)
+        return goldenAppleRecipeKey.equals(key)
             || leatherFromRottenFleshRecipeKey.equals(key)
             || bellRecipeKey.equals(key);
     }
@@ -289,6 +306,39 @@ public final class CraftingRulesListener implements Listener {
         return event.getView().getTopInventory().getType() == InventoryType.SMITHING
             && (event.getClickedInventory() == event.getView().getTopInventory() || event.getRawSlot() == 3)
             && (event.getSlotType() == InventoryType.SlotType.RESULT || event.getRawSlot() == 3);
+    }
+
+    private boolean isVeilArmorTrimRecipe(SmithingInventory smithing, ItemStack source, ItemStack result) {
+        if (!isArmorTrimRecipe(smithing)) {
+            return false;
+        }
+        if (plugin.getSeasonRelicManager() == null || !plugin.getSeasonRelicManager().isVeilArmor(source)) {
+            return false;
+        }
+        if (!(source.getItemMeta() instanceof ArmorMeta) || result == null || result.getType().isAir()) {
+            return false;
+        }
+        return result.getItemMeta() instanceof ArmorMeta armorMeta && armorMeta.hasTrim();
+    }
+
+    private boolean isArmorTrimRecipe(SmithingInventory smithing) {
+        return smithing != null && smithing.getRecipe() instanceof SmithingTrimRecipe;
+    }
+
+    private ItemStack preserveVeilArmorTrim(ItemStack source, ItemStack result) {
+        ItemStack updated = source.clone();
+        updated.setAmount(1);
+
+        ItemMeta resultMeta = result.getItemMeta();
+        ItemMeta updatedMeta = updated.getItemMeta();
+        if (!(resultMeta instanceof ArmorMeta resultArmor) || !resultArmor.hasTrim()
+            || !(updatedMeta instanceof ArmorMeta updatedArmor)) {
+            return result.clone();
+        }
+
+        updatedArmor.setTrim(resultArmor.getTrim());
+        updated.setItemMeta(updatedArmor);
+        return updated;
     }
 
     private boolean containsProtectedCustomItem(ItemStack[] contents) {

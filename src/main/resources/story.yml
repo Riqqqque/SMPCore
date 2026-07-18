@@ -1,0 +1,38 @@
+enabled: true
+story-version: 1
+
+dialogue:
+  mode: chat
+  choice-timeout-seconds: 90
+  cancel-previous-sequence: true
+  max-lines: 8
+  sync-bundled-content: true
+  npc-repeat-cooldown-seconds: 600
+
+mappings:
+  npcs:
+    spawn_guide: mira
+    mayor: mayor_bah
+    dungeon_keeper: malakar
+    gear_expert: orin
+    corruption_warden: veyr
+    reforger: brannik
+    priest: father_aldren
+    goblin_hunter: grikk
+    miner: torren
+    farmer: rowan
+    witch: vespera
+    overseer: veil_overseer
+    brewmaster: bram
+    cardsharp: rook
+    dealer: silas
+    roulette_croupier: renn
+    beastwarden: kael
+    bossbroker: mogrik
+    black_marketeer: sable
+    fisher: corin
+
+features:
+  public-recovered-truths: false
+  private-alignments: true
+  future-content-hooks: true

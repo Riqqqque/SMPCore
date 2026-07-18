@@ -1,0 +1,49 @@
+{
+  "format_version": 2,
+  "items": {
+    "minecraft:flower_pot": [
+      {
+        "type": "definition",
+        "model": "smpcore:backpack",
+        "bedrock_identifier": "smpcore:backpack",
+        "display_name": "Backpack",
+        "bedrock_options": {
+          "icon": "smpcore:backpack"
+        },
+        "components": {
+          "minecraft:max_stack_size": 1
+        }
+      },
+      {
+        "type": "definition",
+        "model": "smpcore:expanded_backpack",
+        "bedrock_identifier": "smpcore:expanded_backpack",
+        "display_name": "Expanded Backpack",
+        "bedrock_options": {
+          "icon": "smpcore:expanded_backpack"
+        },
+        "components": {
+          "minecraft:max_stack_size": 1
+        }
+      }
+    ],
+    "minecraft:netherite_helmet": [
+      {
+        "type": "definition",
+        "model": "smpcore:team_leader_crown",
+        "bedrock_identifier": "smpcore:team_leader_crown",
+        "display_name": "Team Leader Crown",
+        "bedrock_options": {
+          "icon": "smpcore:team_leader_crown",
+          "protection_value": 3
+        },
+        "components": {
+          "minecraft:equippable": {
+            "slot": "head"
+          },
+          "minecraft:max_stack_size": 1
+        }
+      }
+    ]
+  }
+}

@@ -1,6 +1,8 @@
 package me.rique.smpcore.death;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.power.SuperpowerManager;
+import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -32,6 +34,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -49,29 +52,47 @@ public final class DeathChestListener implements Listener {
     private static final long CLEANUP_INTERVAL_TICKS = 20L * 60L;
     private static final long NOTE_RETRY_INTERVAL_TICKS = 20L * 10L;
 
-    private enum PlacementMode {
-        SAFE,
-        FORCE_NON_PROTECTED,
-        FORCE_ANY
-    }
-
     private final SMPCore plugin;
     private final NamespacedKey keyDeathChestId;
     private final NamespacedKey keyDeathChestExpiresAt;
     private final Set<UUID> pendingChunkScan = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<UUID, List<ItemStack>> pendingRespawnNotes = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, DeathChestAudit> recentDeathChestAudits = new ConcurrentHashMap<>();
+    private final BukkitTask cleanupTask;
+    private final BukkitTask noteRetryTask;
 
     public DeathChestListener(SMPCore plugin) {
         this.plugin = plugin;
         this.keyDeathChestId = new NamespacedKey(plugin, "death_chest_id");
         this.keyDeathChestExpiresAt = new NamespacedKey(plugin, "death_chest_expires_at");
         Bukkit.getScheduler().runTask(plugin, this::cleanupLoadedDeathChests);
-        Bukkit.getScheduler().runTaskTimer(plugin, this::cleanupLoadedDeathChests, CLEANUP_INTERVAL_TICKS, CLEANUP_INTERVAL_TICKS);
-        Bukkit.getScheduler().runTaskTimer(plugin, this::retryPendingDeathChestNotes, NOTE_RETRY_INTERVAL_TICKS, NOTE_RETRY_INTERVAL_TICKS);
+        cleanupTask = Bukkit.getScheduler().runTaskTimer(
+            plugin,
+            this::cleanupLoadedDeathChests,
+            CLEANUP_INTERVAL_TICKS,
+            CLEANUP_INTERVAL_TICKS
+        );
+        noteRetryTask = Bukkit.getScheduler().runTaskTimer(
+            plugin,
+            this::retryPendingDeathChestNotes,
+            NOTE_RETRY_INTERVAL_TICKS,
+            NOTE_RETRY_INTERVAL_TICKS
+        );
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    public void shutdown() {
+        cleanupTask.cancel();
+        noteRetryTask.cancel();
+        pendingChunkScan.clear();
+        pendingRespawnNotes.clear();
+        recentDeathChestAudits.clear();
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onDeath(PlayerDeathEvent event) {
+        Player player = event.getPlayer();
+        recentDeathChestAudits.remove(player.getUniqueId());
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().isDuelParticipant(player)) return;
         if (!plugin.getConfigManager().deathChestEnabled) {
             return;
         }
@@ -79,7 +100,6 @@ public final class DeathChestListener implements Listener {
             return;
         }
 
-        Player player = event.getPlayer();
         if (plugin.getConfigManager().deathChestDisableInPlayerCombat
             && plugin.getCombatLogListener() != null
             && plugin.getCombatLogListener().isInPlayerCombat(player)) {
@@ -91,9 +111,11 @@ public final class DeathChestListener implements Listener {
             return;
         }
 
-        DeathChestPlacement placement = findPlacement(player.getLocation(), drops.size());
+        DeathChestOrigin origin = deathChestOrigin(player);
+        DeathChestPlacement placement = findPlacement(origin.location(), drops.size());
         if (placement == null) {
             maybeNotifyNoSpace(player);
+            dropHonoredDomainFallbackDrops(event, origin, drops);
             return;
         }
 
@@ -110,13 +132,33 @@ public final class DeathChestListener implements Listener {
         if (storage == null) {
             clearDeathChestBlocks(placement.blocks(), chestId);
             maybeNotifyNoSpace(player);
+            dropHonoredDomainFallbackDrops(event, origin, drops);
             return;
         }
 
         List<ItemStack> overflow = storeItems(storage, drops);
-        auditDeathChest(player, storage);
         event.getDrops().clear();
-        if (!overflow.isEmpty() && !plugin.getConfigManager().deathChestDropOverflowItems) {
+        Location chestLocation = placement.primary().getLocation();
+        recentDeathChestAudits.put(
+            player.getUniqueId(),
+            new DeathChestAudit(
+                chestId,
+                chestLocation.getWorld().getUID(),
+                chestLocation.getWorld().getName(),
+                chestLocation.getBlockX(),
+                chestLocation.getBlockY(),
+                chestLocation.getBlockZ(),
+                placement.blocks().size(),
+                expiresAt
+            )
+        );
+        try {
+            auditDeathChest(player, storage);
+        } catch (RuntimeException ex) {
+            plugin.getLogger().warning("Could not audit death chest " + chestId + " for " + player.getName()
+                + ": " + ex.getMessage());
+        }
+        if (!overflow.isEmpty() && !plugin.getConfigManager().deathChestDropOverflowItems && !origin.fromHonoredDomain()) {
             event.getDrops().addAll(cloneDrops(overflow));
         } else if (!overflow.isEmpty()) {
             dropItems(placement.primary().getLocation().add(0.5, 0.5, 0.5), overflow);
@@ -124,6 +166,90 @@ public final class DeathChestListener implements Listener {
 
         maybeSendChestMessage(player, placement.primary().getLocation(), plugin.getConfigManager().deathChestLifetimeMinutes);
         queueDeathChestNote(player, placement.primary().getLocation(), plugin.getConfigManager().deathChestLifetimeMinutes);
+    }
+
+    public DeathChestAudit consumeRecentDeathChest(UUID playerId) {
+        return playerId == null ? null : recentDeathChestAudits.remove(playerId);
+    }
+
+    public DeathChestInspection inspectDeathChest(String chestId, UUID worldId, int x, int y, int z) {
+        if (chestId == null || chestId.isBlank() || worldId == null) {
+            return new DeathChestInspection(DeathChestState.ERROR, "unknown", 0);
+        }
+        World world = Bukkit.getWorld(worldId);
+        String location = (world == null ? worldId.toString() : world.getName()) + " " + x + ", " + y + ", " + z;
+        if (world == null) {
+            return new DeathChestInspection(DeathChestState.WORLD_UNAVAILABLE, location, 0);
+        }
+
+        try {
+            Chunk chunk = world.getChunkAt(x >> 4, z >> 4);
+            if (!chunk.isLoaded()) {
+                chunk.load(true);
+            }
+            Block block = world.getBlockAt(x, y, z);
+            if (!(block.getState() instanceof Chest chest) || !hasDeathChestId(block, chestId)) {
+                return new DeathChestInspection(DeathChestState.ABSENT, location, 0);
+            }
+            Inventory inventory = chest.getInventory();
+            int itemCount = 0;
+            for (ItemStack item : inventory.getContents()) {
+                if (item != null && !item.isEmpty()) {
+                    itemCount += item.getAmount();
+                }
+            }
+            return new DeathChestInspection(
+                itemCount > 0 ? DeathChestState.HAS_ITEMS : DeathChestState.EMPTY,
+                location,
+                itemCount
+            );
+        } catch (RuntimeException ex) {
+            plugin.getLogger().warning("Could not inspect linked death chest " + chestId + " at " + location + ": " + ex.getMessage());
+            return new DeathChestInspection(DeathChestState.ERROR, location, 0);
+        }
+    }
+
+    private DeathChestOrigin deathChestOrigin(Player player) {
+        Location current = player.getLocation();
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            return new DeathChestOrigin(current, false);
+        }
+        Location honoredOrigin = powers.consumeHonoredDomainDeathChestOrigin(player.getUniqueId());
+        if (honoredOrigin == null || honoredOrigin.getWorld() == null) {
+            return new DeathChestOrigin(current, false);
+        }
+        loadDeathChestOriginChunk(honoredOrigin);
+        return new DeathChestOrigin(honoredOrigin, true);
+    }
+
+    private void loadDeathChestOriginChunk(Location origin) {
+        if (origin == null || origin.getWorld() == null) {
+            return;
+        }
+        try {
+            Chunk chunk = origin.getChunk();
+            if (!chunk.isLoaded()) {
+                chunk.load(true);
+            }
+        } catch (RuntimeException ex) {
+            plugin.getLogger().warning("Could not load domain death chest origin chunk at "
+                + origin.getWorld().getName() + " "
+                + origin.getBlockX() + "," + origin.getBlockY() + "," + origin.getBlockZ()
+                + ": " + ex.getMessage());
+        }
+    }
+
+    private void dropHonoredDomainFallbackDrops(PlayerDeathEvent event, DeathChestOrigin origin, List<ItemStack> drops) {
+        if (!origin.fromHonoredDomain()) {
+            return;
+        }
+        Location fallback = deathChestSearchOrigin(origin.location());
+        if (fallback == null || fallback.getWorld() == null) {
+            return;
+        }
+        dropItems(fallback.clone().add(0.5, 0.5, 0.5), drops);
+        event.getDrops().clear();
     }
 
     @EventHandler
@@ -320,12 +446,12 @@ public final class DeathChestListener implements Listener {
     }
 
     private DeathChestStorage createDeathChestStorage(DeathChestPlacement placement, String chestId, long expiresAt, Component chestName) {
-        if (!placeChestBlock(placement.primary(), placement.facing(), placement.primaryType(), placement.mode(), chestId, expiresAt, chestName)) {
+        if (!placeChestBlock(placement.primary(), placement.facing(), placement.primaryType(), chestId, expiresAt, chestName)) {
             return null;
         }
 
         if (placement.isDoubleChest()
-            && !placeChestBlock(placement.secondary(), placement.facing(), placement.secondaryType(), placement.mode(), chestId, expiresAt, chestName)) {
+            && !placeChestBlock(placement.secondary(), placement.facing(), placement.secondaryType(), chestId, expiresAt, chestName)) {
             clearDeathChestBlocks(placement.blocks(), chestId);
             return null;
         }
@@ -348,20 +474,18 @@ public final class DeathChestListener implements Listener {
         Block block,
         BlockFace facing,
         org.bukkit.block.data.type.Chest.Type type,
-        PlacementMode mode,
         String chestId,
         long expiresAt,
         Component chestName
     ) {
         try {
-            prepareChestSpace(block, mode);
             block.setType(Material.CHEST, false);
             org.bukkit.block.data.type.Chest chestData = (org.bukkit.block.data.type.Chest) Bukkit.createBlockData(Material.CHEST);
             chestData.setFacing(facing);
             chestData.setType(type);
             block.setBlockData(chestData, false);
         } catch (RuntimeException ex) {
-            plugin.getLogger().warning("Failed to force-place death chest at " + block.getWorld().getName()
+            plugin.getLogger().warning("Failed to place death chest at " + block.getWorld().getName()
                 + " " + block.getX() + "," + block.getY() + "," + block.getZ() + ": " + ex.getMessage());
             return false;
         }
@@ -379,81 +503,33 @@ public final class DeathChestListener implements Listener {
     }
 
     private DeathChestPlacement findPlacement(Location deathLocation, int itemCount) {
-        DeathChestPlacement safe = findPlacement(deathLocation, itemCount, PlacementMode.SAFE);
-        if (safe != null) {
-            return safe;
-        }
-
-        DeathChestPlacement forcedNonProtected = findPlacement(deathLocation, itemCount, PlacementMode.FORCE_NON_PROTECTED);
-        if (forcedNonProtected != null) {
-            return forcedNonProtected;
-        }
-
-        DeathChestPlacement forcedAny = findPlacement(deathLocation, itemCount, PlacementMode.FORCE_ANY);
-        if (forcedAny != null) {
-            return forcedAny;
-        }
-
-        return emergencyPlacement(deathLocation, itemCount);
+        deathLocation = deathChestSearchOrigin(deathLocation);
+        return findSafePlacement(deathLocation, itemCount);
     }
 
-    private DeathChestPlacement emergencyPlacement(Location deathLocation, int itemCount) {
+    private Location deathChestSearchOrigin(Location deathLocation) {
+        if (deathLocation == null || deathLocation.getWorld() == null) {
+            return deathLocation;
+        }
+
         World world = deathLocation.getWorld();
-        if (world == null) {
-            return null;
+        int y = deathLocation.getBlockY();
+        if (y > world.getMinHeight() && y < world.getMaxHeight() - 1) {
+            return deathLocation;
         }
 
-        int x = deathLocation.getBlockX();
-        int y = clampDeathChestY(world, deathLocation.getBlockY());
-        int z = deathLocation.getBlockZ();
-        Block primary = world.getBlockAt(x, y, z);
-        if (isExistingDeathChestBlock(primary) || isExistingDeathChestBlock(primary.getRelative(BlockFace.UP))) {
-            return null;
-        }
-
-        boolean needsLargeChest = plugin.getConfigManager().deathChestLargeChestEnabled && itemCount > 27;
-        if (needsLargeChest) {
-            DeathChestPlacement doubleChest = emergencyDoubleChestPlacement(primary);
-            if (doubleChest != null) {
-                return doubleChest;
-            }
-        }
-
-        return new DeathChestPlacement(
-            primary,
-            null,
-            BlockFace.NORTH,
-            org.bukkit.block.data.type.Chest.Type.SINGLE,
-            org.bukkit.block.data.type.Chest.Type.SINGLE,
-            PlacementMode.FORCE_ANY
+        Location safe = LocationUtil.findNearestSafeStandingLocation(
+            deathLocation,
+            Math.max(plugin.getConfigManager().deathChestSearchRadius, 8),
+            Math.max(plugin.getConfigManager().deathChestVerticalSearchRadius, 8)
         );
+        return safe == null ? deathLocation : safe;
     }
 
-    private DeathChestPlacement emergencyDoubleChestPlacement(Block primary) {
-        for (BlockFace face : HORIZONTAL_FACES) {
-            Block secondary = primary.getRelative(face);
-            if (!isUsableDeathChestY(secondary.getWorld(), secondary.getY())) {
-                continue;
-            }
-            if (isExistingDeathChestBlock(secondary) || isExistingDeathChestBlock(secondary.getRelative(BlockFace.UP))) {
-                continue;
-            }
-
-            BlockFace facing = (face == BlockFace.EAST || face == BlockFace.WEST) ? BlockFace.NORTH : BlockFace.EAST;
-            boolean secondaryIsRightSide = face == rightOf(facing);
-            return new DeathChestPlacement(
-                primary,
-                secondary,
-                facing,
-                secondaryIsRightSide ? org.bukkit.block.data.type.Chest.Type.LEFT : org.bukkit.block.data.type.Chest.Type.RIGHT,
-                secondaryIsRightSide ? org.bukkit.block.data.type.Chest.Type.RIGHT : org.bukkit.block.data.type.Chest.Type.LEFT,
-                PlacementMode.FORCE_ANY
-            );
+    private DeathChestPlacement findSafePlacement(Location deathLocation, int itemCount) {
+        if (deathLocation == null) {
+            return null;
         }
-        return null;
-    }
-
-    private DeathChestPlacement findPlacement(Location deathLocation, int itemCount, PlacementMode mode) {
         World world = deathLocation.getWorld();
         if (world == null) {
             return null;
@@ -473,13 +549,13 @@ public final class DeathChestListener implements Listener {
             for (int[] horizontalOffset : orderedHorizontalOffsets(plugin.getConfigManager().deathChestSearchRadius)) {
                 Block block = world.getBlockAt(baseX + horizontalOffset[0], y, baseZ + horizontalOffset[1]);
                 if (needsLargeChest) {
-                    DeathChestPlacement largePlacement = findLargeChestPlacement(block, mode);
+                    DeathChestPlacement largePlacement = findLargeChestPlacement(block);
                     if (largePlacement != null) {
                         return largePlacement;
                     }
                 }
 
-                DeathChestPlacement singlePlacement = findSingleChestPlacement(block, mode);
+                DeathChestPlacement singlePlacement = findSingleChestPlacement(block);
                 if (singlePlacement != null) {
                     return singlePlacement;
                 }
@@ -488,8 +564,8 @@ public final class DeathChestListener implements Listener {
         return null;
     }
 
-    private DeathChestPlacement findSingleChestPlacement(Block block, PlacementMode mode) {
-        if (!canPlaceChest(block, mode)) {
+    private DeathChestPlacement findSingleChestPlacement(Block block) {
+        if (!canPlaceChest(block)) {
             return null;
         }
         if (hasChestNeighborConflict(block, null)) {
@@ -500,19 +576,18 @@ public final class DeathChestListener implements Listener {
             null,
             BlockFace.NORTH,
             org.bukkit.block.data.type.Chest.Type.SINGLE,
-            org.bukkit.block.data.type.Chest.Type.SINGLE,
-            mode
+            org.bukkit.block.data.type.Chest.Type.SINGLE
         );
     }
 
-    private DeathChestPlacement findLargeChestPlacement(Block block, PlacementMode mode) {
-        if (!canPlaceChest(block, mode)) {
+    private DeathChestPlacement findLargeChestPlacement(Block block) {
+        if (!canPlaceChest(block)) {
             return null;
         }
 
         for (BlockFace face : HORIZONTAL_FACES) {
             Block other = block.getRelative(face);
-            if (!canPlaceChest(other, mode)) {
+            if (!canPlaceChest(other)) {
                 continue;
             }
             if (hasChestNeighborConflict(block, other) || hasChestNeighborConflict(other, block)) {
@@ -526,14 +601,13 @@ public final class DeathChestListener implements Listener {
                 other,
                 facing,
                 secondaryIsRightSide ? org.bukkit.block.data.type.Chest.Type.LEFT : org.bukkit.block.data.type.Chest.Type.RIGHT,
-                secondaryIsRightSide ? org.bukkit.block.data.type.Chest.Type.RIGHT : org.bukkit.block.data.type.Chest.Type.LEFT,
-                mode
+                secondaryIsRightSide ? org.bukkit.block.data.type.Chest.Type.RIGHT : org.bukkit.block.data.type.Chest.Type.LEFT
             );
         }
         return null;
     }
 
-    private boolean canPlaceChest(Block block, PlacementMode mode) {
+    private boolean canPlaceChest(Block block) {
         if (block == null) {
             return false;
         }
@@ -545,12 +619,6 @@ public final class DeathChestListener implements Listener {
         }
         if (isExistingDeathChestBlock(block.getRelative(BlockFace.UP))) {
             return false;
-        }
-        if (mode == PlacementMode.FORCE_ANY) {
-            return true;
-        }
-        if (mode == PlacementMode.FORCE_NON_PROTECTED) {
-            return !isProtectedReplacementBlock(block) && !isProtectedReplacementBlock(block.getRelative(BlockFace.UP));
         }
         if (!block.isReplaceable()) {
             return false;
@@ -566,39 +634,6 @@ public final class DeathChestListener implements Listener {
             return false;
         }
         return true;
-    }
-
-    private void prepareChestSpace(Block block, PlacementMode mode) {
-        if (mode == PlacementMode.SAFE) {
-            return;
-        }
-
-        Block above = block.getRelative(BlockFace.UP);
-        clearBlockForDeathChest(block);
-        clearBlockForDeathChest(above);
-    }
-
-    private void clearBlockForDeathChest(Block block) {
-        if (isUsableBlockLocation(block) && !isExistingDeathChestBlock(block) && block.getType() != Material.AIR) {
-            block.setType(Material.AIR, false);
-        }
-    }
-
-    private boolean isProtectedReplacementBlock(Block block) {
-        if (block == null) {
-            return true;
-        }
-        if (isExistingDeathChestBlock(block)) {
-            return true;
-        }
-        if (block.getState() instanceof InventoryHolder) {
-            return true;
-        }
-        return switch (block.getType()) {
-            case END_PORTAL, END_GATEWAY, COMMAND_BLOCK, CHAIN_COMMAND_BLOCK, REPEATING_COMMAND_BLOCK,
-                STRUCTURE_BLOCK, JIGSAW, BARRIER -> true;
-            default -> false;
-        };
     }
 
     private boolean isExistingDeathChestBlock(Block block) {
@@ -889,13 +924,35 @@ public final class DeathChestListener implements Listener {
             .replace("{minutes}", Integer.toString(lifetimeMinutes));
     }
 
+    private record DeathChestOrigin(Location location, boolean fromHonoredDomain) {}
+
+    public record DeathChestAudit(
+        String chestId,
+        UUID worldUuid,
+        String worldName,
+        int x,
+        int y,
+        int z,
+        int blockCount,
+        long expiresAt
+    ) {}
+
+    public record DeathChestInspection(DeathChestState state, String location, int itemCount) {}
+
+    public enum DeathChestState {
+        ABSENT,
+        EMPTY,
+        HAS_ITEMS,
+        WORLD_UNAVAILABLE,
+        ERROR
+    }
+
     private record DeathChestPlacement(
         Block primary,
         Block secondary,
         BlockFace facing,
         org.bukkit.block.data.type.Chest.Type primaryType,
-        org.bukkit.block.data.type.Chest.Type secondaryType,
-        PlacementMode mode
+        org.bukkit.block.data.type.Chest.Type secondaryType
     ) {
         private boolean isDoubleChest() {
             return secondary != null;

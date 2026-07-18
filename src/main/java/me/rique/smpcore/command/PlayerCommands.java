@@ -10,6 +10,8 @@ import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.VeinMinerListener;
 import me.rique.smpcore.power.SuperpowerManager;
+import me.rique.smpcore.power.SuperpowerType;
+import me.rique.smpcore.util.CommandSuggestionUtil;
 import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
@@ -17,19 +19,27 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Survival-accessible player commands: /top, /suicide, /back, /spawn.
  */
 @SuppressWarnings("UnstableApiUsage")
 public final class PlayerCommands {
+
+    private static final Map<UUID, Long> SPAWN_COOLDOWNS = new ConcurrentHashMap<>();
+    private static final String POWER_COMMAND_PERMISSION = "smpcore.superpower.command";
+    private static final String POWER_COMMAND_BYPASS_PERMISSION = "smpcore.superpower.command.all";
 
     private PlayerCommands() {}
 
@@ -42,14 +52,49 @@ public final class PlayerCommands {
         registerTop(commands, plugin);
         registerSuicide(commands, plugin);
         registerShadow(commands, plugin);
+        registerNightshadeVision(commands, plugin);
         registerXray(commands, plugin);
         registerVoidstep(commands, plugin);
         registerVoidVision(commands, plugin);
+        registerSmokeBomb(commands, plugin);
         registerStormcaller(commands, plugin);
+        registerDomainExpansion(commands, plugin);
+        registerInfinity(commands, plugin);
+        registerUnstoppableForce(commands, plugin);
+        registerDeadeyeArrows(commands, plugin);
+        registerArcanistBook(commands, plugin);
+        registerOathSummon(commands, plugin);
+        registerBloodmenderCommands(commands, plugin);
         registerTravel(commands, plugin);
         registerMonarchSummon(commands, plugin);
+        registerBackpack(commands, plugin);
         registerBack(commands, plugin);
         registerSpawn(commands, plugin);
+    }
+
+    private static void registerBackpack(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("backpack")
+                .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.backpack.use"))
+                .executes(ctx -> {
+                    Player player = (Player) ctx.getSource().getSender();
+                    player.sendMessage(MessageUtil.info("Hold a backpack, then use <white>/backpack label \\<text></white> or <white>/backpack clear</white>."));
+                    return Command.SINGLE_SUCCESS;
+                })
+                .then(Commands.literal("label")
+                    .then(Commands.argument("label", StringArgumentType.greedyString())
+                        .executes(ctx -> plugin.getBackpackListener().setBackpackSuffix(
+                            (Player) ctx.getSource().getSender(),
+                            StringArgumentType.getString(ctx, "label")
+                        ) ? Command.SINGLE_SUCCESS : 0)))
+                .then(Commands.literal("clear")
+                    .executes(ctx -> plugin.getBackpackListener().clearBackpackSuffix(
+                        (Player) ctx.getSource().getSender()
+                    ) ? Command.SINGLE_SUCCESS : 0))
+                .build(),
+            "Label the backpack in your main hand",
+            List.of("backpacklabel")
+        );
     }
 
     // /help - show player command help menu
@@ -193,12 +238,12 @@ public final class PlayerCommands {
                 .then(Commands.literal("status")
                     .executes(ctx -> showTeamGlowStatus(plugin, (Player) ctx.getSource().getSender())))
                 .build(),
-            "Privately highlight your teammates",
+            "Privately outline teammates through walls",
             List.of("allyglow", "teammateglow")
         );
     }
 
-    // /top — teleport above the highest block at current x,z
+    // /top - teleport above the highest block at current x,z
     private static void registerTop(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("top")
@@ -221,16 +266,16 @@ public final class PlayerCommands {
         );
     }
 
-    // /suicide — kill the player
+    // /suicide - kill the player
     private static void registerSuicide(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("suicide")
                 .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.suicide"))
                 .executes(ctx -> {
                     Player player = (Player) ctx.getSource().getSender();
-                    SuperpowerManager powers = plugin.getSuperpowerManager();
-                    if (powers != null && powers.hasPower(player, me.rique.smpcore.power.SuperpowerType.IMMORTALITY)) {
-                        player.sendMessage(MessageUtil.warn("Nothing happens."));
+                    if (plugin.getSpawnProtectionListener() != null
+                        && plugin.getSpawnProtectionListener().blocksProtectedSpawnDeath(player)) {
+                        player.sendMessage(MessageUtil.warn("You cannot die in protected spawn."));
                         return 0;
                     }
                     player.setHealth(0.0);
@@ -244,33 +289,70 @@ public final class PlayerCommands {
     private static void registerShadow(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("shadow")
-                .requires(src -> src.getSender() instanceof Player)
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.NIGHTSHADE))
                 .executes(ctx -> toggleShadow(plugin, (Player) ctx.getSource().getSender()))
                 .then(Commands.literal("toggle")
                     .executes(ctx -> toggleShadow(plugin, (Player) ctx.getSource().getSender())))
                 .build(),
-            "Toggle the Shadow power"
+            "Toggle the Shadow class ability"
         );
     }
 
     private static int toggleShadow(SMPCore plugin, Player player) {
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers == null) {
-            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
             return 0;
         }
         return powers.handleShadowCommand(player) ? Command.SINGLE_SUCCESS : 0;
     }
 
+    private static void registerNightshadeVision(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("nightshadevision")
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.NIGHTSHADE))
+                .executes(ctx -> setNightshadeVision(plugin, (Player) ctx.getSource().getSender(), null))
+                .then(Commands.literal("toggle")
+                    .executes(ctx -> setNightshadeVision(plugin, (Player) ctx.getSource().getSender(), null)))
+                .then(Commands.literal("on")
+                    .executes(ctx -> setNightshadeVision(plugin, (Player) ctx.getSource().getSender(), true)))
+                .then(Commands.literal("off")
+                    .executes(ctx -> setNightshadeVision(plugin, (Player) ctx.getSource().getSender(), false)))
+                .then(Commands.literal("status")
+                    .executes(ctx -> showNightshadeVisionStatus(plugin, (Player) ctx.getSource().getSender())))
+                .build(),
+            "Toggle Nightshade night vision",
+            List.of("nvision", "nightshadenv")
+        );
+    }
+
+    private static int setNightshadeVision(SMPCore plugin, Player player, Boolean enabled) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
+            return 0;
+        }
+        return powers.handleNightshadeVisionCommand(player, enabled) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static int showNightshadeVisionStatus(SMPCore plugin, Player player) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
+            return 0;
+        }
+        return powers.handleNightshadeVisionStatusCommand(player) ? Command.SINGLE_SUCCESS : 0;
+    }
+
     private static void registerXray(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("xray")
-                .requires(src -> src.getSender() instanceof Player)
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.ORACLE_EYE))
                 .executes(ctx -> {
                     Player player = (Player) ctx.getSource().getSender();
                     SuperpowerManager powers = plugin.getSuperpowerManager();
                     if (powers == null) {
-                        player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
                         return 0;
                     }
                     return powers.handleXrayCommand(player) ? Command.SINGLE_SUCCESS : 0;
@@ -283,12 +365,12 @@ public final class PlayerCommands {
     private static void registerVoidstep(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("voidstep")
-                .requires(src -> src.getSender() instanceof Player)
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.VOIDWALKER))
                 .executes(ctx -> {
                     Player player = (Player) ctx.getSource().getSender();
                     SuperpowerManager powers = plugin.getSuperpowerManager();
                     if (powers == null) {
-                        player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
                         return 0;
                     }
                     return powers.handleVoidstepCommand(player) ? Command.SINGLE_SUCCESS : 0;
@@ -302,12 +384,12 @@ public final class PlayerCommands {
     private static void registerVoidVision(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("voidvision")
-                .requires(src -> src.getSender() instanceof Player)
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.VOIDWALKER))
                 .executes(ctx -> {
                     Player player = (Player) ctx.getSource().getSender();
                     SuperpowerManager powers = plugin.getSuperpowerManager();
                     if (powers == null) {
-                        player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
                         return 0;
                     }
                     return powers.handleVoidwalkerNightVisionCommand(player) ? Command.SINGLE_SUCCESS : 0;
@@ -317,7 +399,7 @@ public final class PlayerCommands {
                         Player player = (Player) ctx.getSource().getSender();
                         SuperpowerManager powers = plugin.getSuperpowerManager();
                         if (powers == null) {
-                            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
                             return 0;
                         }
                         return powers.handleVoidwalkerNightVisionCommand(player) ? Command.SINGLE_SUCCESS : 0;
@@ -331,7 +413,7 @@ public final class PlayerCommands {
     private static void registerStormcaller(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("stormcaller")
-                .requires(src -> src.getSender() instanceof Player)
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.STORMCALLER))
                 .executes(ctx -> setStormcallerLightning(plugin, (Player) ctx.getSource().getSender(), null))
                 .then(Commands.literal("toggle")
                     .executes(ctx -> setStormcallerLightning(plugin, (Player) ctx.getSource().getSender(), null)))
@@ -347,16 +429,27 @@ public final class PlayerCommands {
         );
     }
 
+    private static void registerSmokeBomb(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("smokebomb")
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.VEIL_ASSASSIN))
+                .executes(ctx -> useSmokeBomb(plugin, (Player) ctx.getSource().getSender()))
+                .build(),
+            "Drop a Veil Assassin smoke bomb",
+            List.of("sb")
+        );
+    }
+
     private static void registerTravel(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("travel")
-                .requires(src -> src.getSender() instanceof Player)
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.WAYFARER))
                 .then(Commands.literal("close")
                     .executes(ctx -> {
                         Player player = (Player) ctx.getSource().getSender();
                         SuperpowerManager powers = plugin.getSuperpowerManager();
                         if (powers == null) {
-                            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
                             return 0;
                         }
                         return powers.handleTravelCloseCommand(player) ? Command.SINGLE_SUCCESS : 0;
@@ -365,11 +458,12 @@ public final class PlayerCommands {
                     .then(Commands.argument("y", IntegerArgumentType.integer())
                         .then(Commands.argument("z", IntegerArgumentType.integer())
                             .then(Commands.argument("dimension", StringArgumentType.word())
+                                .suggests((ctx, builder) -> CommandSuggestionUtil.suggestLoadedWorlds(builder))
                                 .executes(ctx -> {
                                     Player player = (Player) ctx.getSource().getSender();
                                     SuperpowerManager powers = plugin.getSuperpowerManager();
                                     if (powers == null) {
-                                        player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
                                         return 0;
                                     }
                                     int x = IntegerArgumentType.getInteger(ctx, "x");
@@ -383,17 +477,212 @@ public final class PlayerCommands {
         );
     }
 
+    private static void registerDomainExpansion(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("domainexpansion")
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.HONORED_ONE))
+                .executes(ctx -> runDomainExpansion(plugin, (Player) ctx.getSource().getSender()))
+                .build(),
+            "Open The Honored One domain",
+            List.of("domain", "domainexp")
+        );
+    }
+
+    private static int runDomainExpansion(SMPCore plugin, Player player) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
+            return 0;
+        }
+        return powers.handleDomainExpansionCommand(player) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static void registerInfinity(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("infinity")
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.HONORED_ONE))
+                .executes(ctx -> setInfinity(plugin, (Player) ctx.getSource().getSender(), null))
+                .then(Commands.literal("toggle")
+                    .executes(ctx -> setInfinity(plugin, (Player) ctx.getSource().getSender(), null)))
+                .then(Commands.literal("on")
+                    .executes(ctx -> setInfinity(plugin, (Player) ctx.getSource().getSender(), true)))
+                .then(Commands.literal("off")
+                    .executes(ctx -> setInfinity(plugin, (Player) ctx.getSource().getSender(), false)))
+                .then(Commands.literal("status")
+                    .executes(ctx -> showInfinityStatus(plugin, (Player) ctx.getSource().getSender())))
+                .build(),
+            "Toggle The Honored One Infinity",
+            List.of("infinite", "honoredinfinity")
+        );
+    }
+
+    private static int setInfinity(SMPCore plugin, Player player, Boolean enabled) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
+            return 0;
+        }
+        return powers.handleInfinityCommand(player, enabled) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static int showInfinityStatus(SMPCore plugin, Player player) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
+            return 0;
+        }
+        return powers.handleInfinityStatusCommand(player) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static void registerUnstoppableForce(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("unstoppableforce")
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.JUGGERNAUT))
+                .executes(ctx -> runUnstoppableForce(plugin, (Player) ctx.getSource().getSender()))
+                .build(),
+            "Charge through breakable walls as Juggernaut",
+            List.of("uf")
+        );
+    }
+
+    private static int runUnstoppableForce(SMPCore plugin, Player player) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
+            return 0;
+        }
+        return powers.handleUnstoppableForceCommand(player) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static void registerDeadeyeArrows(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("deadeyearrows")
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.DEADEYE))
+                .executes(ctx -> setDeadeyeArrows(plugin, (Player) ctx.getSource().getSender(), null))
+                .then(Commands.literal("toggle")
+                    .executes(ctx -> setDeadeyeArrows(plugin, (Player) ctx.getSource().getSender(), null)))
+                .then(Commands.literal("on")
+                    .executes(ctx -> setDeadeyeArrows(plugin, (Player) ctx.getSource().getSender(), true)))
+                .then(Commands.literal("off")
+                    .executes(ctx -> setDeadeyeArrows(plugin, (Player) ctx.getSource().getSender(), false)))
+                .then(Commands.literal("status")
+                    .executes(ctx -> showDeadeyeArrowsStatus(plugin, (Player) ctx.getSource().getSender())))
+                .build(),
+            "Toggle Deadeye arrow preservation",
+            List.of("darrows", "deadeyeinfinity")
+        );
+    }
+
+    private static int setDeadeyeArrows(SMPCore plugin, Player player, Boolean enabled) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
+            return 0;
+        }
+        return powers.handleDeadeyeArrowInfinityCommand(player, enabled) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static int showDeadeyeArrowsStatus(SMPCore plugin, Player player) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
+            return 0;
+        }
+        return powers.handleDeadeyeArrowInfinityStatusCommand(player) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static void registerArcanistBook(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("arcanebook")
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.ARCANIST))
+                .executes(ctx -> runArcanistBook(plugin, (Player) ctx.getSource().getSender()))
+                .build(),
+            "Upgrade a held enchanted book to max level as Arcanist",
+            List.of("maxbook", "bookmax")
+        );
+    }
+
+    private static int runArcanistBook(SMPCore plugin, Player player) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
+            return 0;
+        }
+        return powers.handleArcanistBookUpgradeCommand(player) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static void registerOathSummon(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("oathsummon")
+                .requires(src -> canUseOathSummonCommand(plugin, src.getSender()))
+                .then(Commands.argument("player", StringArgumentType.word())
+                    .suggests(PlayerCommands::suggestOnlinePlayers)
+                    .executes(ctx -> runOathSummon(
+                        plugin,
+                        (Player) ctx.getSource().getSender(),
+                        StringArgumentType.getString(ctx, "player")
+                    )))
+                .build(),
+            "Summon an Oathbound teammate to you"
+        );
+    }
+
+    private static int runOathSummon(SMPCore plugin, Player player, String targetName) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
+            return 0;
+        }
+        return powers.handleOathSummonCommand(player, targetName) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static void registerBloodmenderCommands(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("bloodsacrifice")
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.BLOODMENDER))
+                .executes(ctx -> runBloodSacrifice(plugin, (Player) ctx.getSource().getSender()))
+                .build(),
+            "Sacrifice health to heal nearby teammates as Bloodmender",
+            List.of("bloodheal")
+        );
+        commands.register(
+            Commands.literal("curse")
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.BLOODMENDER))
+                .executes(ctx -> runBloodCurse(plugin, (Player) ctx.getSource().getSender()))
+                .build(),
+            "Curse a nearby enemy armor piece as Bloodmender"
+        );
+    }
+
+    private static int runBloodSacrifice(SMPCore plugin, Player player) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
+            return 0;
+        }
+        return powers.handleBloodSacrificeCommand(player) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static int runBloodCurse(SMPCore plugin, Player player) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
+            return 0;
+        }
+        return powers.handleBloodCurseCommand(player) ? Command.SINGLE_SUCCESS : 0;
+    }
+
     private static void registerMonarchSummon(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("msummon")
-                .requires(src -> src.getSender() instanceof Player)
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.MONARCH))
                 .executes(ctx -> runMonarchSummon(plugin, (Player) ctx.getSource().getSender(), 1))
                 .then(Commands.literal("despawn")
                     .executes(ctx -> {
                         Player player = (Player) ctx.getSource().getSender();
                         SuperpowerManager powers = plugin.getSuperpowerManager();
                         if (powers == null) {
-                            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
                             return 0;
                         }
                         return powers.handleMonarchDespawnCommand(player) ? Command.SINGLE_SUCCESS : 0;
@@ -403,32 +692,33 @@ public final class PlayerCommands {
                         Player player = (Player) ctx.getSource().getSender();
                         SuperpowerManager powers = plugin.getSuperpowerManager();
                         if (powers == null) {
-                            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
                             return 0;
                         }
                         return powers.handleMonarchDespawnCommand(player) ? Command.SINGLE_SUCCESS : 0;
                     }))
                 .then(Commands.argument("amount", IntegerArgumentType.integer(1, 15))
+                    .suggests((ctx, builder) -> CommandSuggestionUtil.suggestNumbers(builder, 1, 2, 3, 5, 10, 15))
                     .executes(ctx -> {
                         Player player = (Player) ctx.getSource().getSender();
                         int amount = IntegerArgumentType.getInteger(ctx, "amount");
                         return runMonarchSummon(plugin, player, amount);
                     }))
                 .build(),
-            "Summon stored Monarch mobs"
+            "Summon stored Shadow Monarch mobs"
         );
     }
 
     private static int runMonarchSummon(SMPCore plugin, Player player, int amount) {
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers == null) {
-            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
             return 0;
         }
         return powers.handleMonarchSummonCommand(player, amount) ? Command.SINGLE_SUCCESS : 0;
     }
 
-    // /back — return to last death or pre-teleport location
+    // /back - return to last death or pre-teleport location
     private static void registerBack(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("back")
@@ -440,8 +730,13 @@ public final class PlayerCommands {
                         player.sendMessage(MessageUtil.error("No previous location saved."));
                         return 0;
                     }
+                    Location safe = LocationUtil.findNearestSafeStandingLocation(back, 5, 8);
+                    if (safe == null) {
+                        player.sendMessage(MessageUtil.error("That saved location is not safe anymore."));
+                        return 0;
+                    }
                     plugin.getPlayerManager().saveBackLocation(player);
-                    player.teleportAsync(back).thenAccept(ok -> {
+                    player.teleportAsync(safe).thenAccept(ok -> {
                         Bukkit.getScheduler().runTask(plugin, () -> {
                             if (!player.isOnline()) return;
                             if (ok) player.sendMessage(MessageUtil.success("Returned to previous location."));
@@ -455,24 +750,45 @@ public final class PlayerCommands {
         );
     }
 
-    // /spawn — teleport to world spawn
+    // /spawn - teleport to exact server spawn
     private static void registerSpawn(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("spawn")
                 .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.spawn"))
                 .executes(ctx -> {
                     Player player = (Player) ctx.getSource().getSender();
+                    if (isInPlayerCombat(plugin, player)) {
+                        return 0;
+                    }
+                    if (!canUseSpawn(plugin, player)) {
+                        return 0;
+                    }
                     World world = Bukkit.getWorld(plugin.getConfigManager().spawnWorld);
                     if (world == null) {
                         player.sendMessage(MessageUtil.error("Spawn world is not loaded."));
                         return 0;
                     }
+                    Location spawn = plugin.getExactSpawnListener() == null
+                        ? plugin.getConfigManager().exactSpawnLocation()
+                        : plugin.getExactSpawnListener().exactSpawnLocation();
+                    if (spawn == null) {
+                        player.sendMessage(MessageUtil.error("Spawn is not ready right now."));
+                        return 0;
+                    }
                     plugin.getPlayerManager().saveBackLocation(player);
-                    player.teleportAsync(world.getSpawnLocation()).thenAccept(ok -> {
+                    startSpawnCooldown(plugin, player);
+                    player.teleportAsync(spawn).thenAccept(ok -> {
                         Bukkit.getScheduler().runTask(plugin, () -> {
                             if (!player.isOnline()) return;
+                            if (isInPlayerCombat(plugin, player)) {
+                                clearSpawnCooldown(player);
+                                return;
+                            }
                             if (ok) player.sendMessage(MessageUtil.success("Teleported to spawn."));
-                            else    player.sendMessage(MessageUtil.error("Teleport failed."));
+                            else {
+                                clearSpawnCooldown(player);
+                                player.sendMessage(MessageUtil.error("Teleport failed."));
+                            }
                         });
                     });
                     return Command.SINGLE_SUCCESS;
@@ -480,6 +796,51 @@ public final class PlayerCommands {
                 .build(),
             "Teleport to the server spawn"
         );
+    }
+
+    private static boolean isInPlayerCombat(SMPCore plugin, Player player) {
+        if (plugin.getCombatLogListener() == null || !plugin.getCombatLogListener().isInPlayerCombat(player)) {
+            return false;
+        }
+        player.sendMessage(MessageUtil.warn("You cannot teleport while in combat."));
+        return true;
+    }
+
+    private static boolean canUseSpawn(SMPCore plugin, Player player) {
+        if (player.hasPermission("smpcore.spawn.cooldown.bypass")) {
+            return true;
+        }
+        int cooldownSeconds = plugin.getConfigManager().spawnCooldownSeconds;
+        if (cooldownSeconds <= 0) {
+            return true;
+        }
+        long now = System.currentTimeMillis();
+        long expiresAt = SPAWN_COOLDOWNS.getOrDefault(player.getUniqueId(), 0L);
+        if (expiresAt <= now) {
+            return true;
+        }
+        long secondsLeft = Math.max(1L, (expiresAt - now + 999L) / 1000L);
+        player.sendMessage(MessageUtil.warn("Wait <white>" + secondsLeft + "s</white> before using /spawn again."));
+        return false;
+    }
+
+    private static void startSpawnCooldown(SMPCore plugin, Player player) {
+        int cooldownSeconds = plugin.getConfigManager().spawnCooldownSeconds;
+        if (cooldownSeconds <= 0 || player.hasPermission("smpcore.spawn.cooldown.bypass")) {
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        long expiresAt = System.currentTimeMillis() + (cooldownSeconds * 1000L);
+        SPAWN_COOLDOWNS.put(playerId, expiresAt);
+        Bukkit.getScheduler().runTaskLater(
+            plugin,
+            () -> SPAWN_COOLDOWNS.remove(playerId, expiresAt),
+            cooldownSeconds * 20L
+        );
+    }
+
+    private static void clearSpawnCooldown(Player player) {
+        SPAWN_COOLDOWNS.remove(player.getUniqueId());
     }
 
     private static void sendPlayerHelp(Player player) {
@@ -495,6 +856,18 @@ public final class PlayerCommands {
         if (player.hasPermission("smpcore.menu")) {
             lines.add("<gray><white>/menu</white> - Open the main plugin menu</gray>");
         }
+        if (player.hasPermission("smpcore.changelog")) {
+            lines.add("<gray><white>/changelog</white> - See the latest player-facing update notes</gray>");
+        }
+        if (player.hasPermission("smpcore.spinbet")) {
+            lines.add("<gray><white>/spinbet</white> - Bet held items with another player</gray>");
+        }
+        if (player.hasPermission("smpcore.blackjack")) {
+            lines.add("<gray><white>/blackjack claim</white> - Recover an interrupted Dealer payout</gray>");
+        }
+        if (player.hasPermission("smpcore.roulette")) {
+            lines.add("<gray><white>/roulette claim</white> - Recover an interrupted roulette payout</gray>");
+        }
         if (player.hasPermission("smpcore.leaderboard")) {
             lines.add("<gray><white>/leaderboards</white> (<white>/lb</white>) - View kills, deaths, boss damage, and fight reports</gray>");
         }
@@ -502,9 +875,11 @@ public final class PlayerCommands {
             lines.add("<gray><white>/lrecipe</white> (<white>/reliquary</white>) - Open the Reliquary</gray>");
             lines.add("<gray><white>/mythics</white> - View Mythic Nexus fusion pairings</gray>");
         }
-        lines.add("<gray><white>/bossrituals</white> - View custom boss summon rituals</gray>");
         if (player.hasPermission("smpcore.bossbrews")) {
             lines.add("<gray><white>/bossbrews</white> - View boss-material potion recipes</gray>");
+        }
+        if (player.hasPermission("smpcore.bossrituals")) {
+            lines.add("<gray><white>/bossrituals</white> - View custom boss summon rituals</gray>");
         }
         if (player.hasPermission("smpcore.wiki")) {
             lines.add("<gray><white>/wiki</white> - Open the SMPCore wiki link</gray>");
@@ -526,7 +901,7 @@ public final class PlayerCommands {
             lines.add("<gray><white>/top</white> - Teleport above the highest block</gray>");
         }
         if (player.hasPermission("smpcore.startsmp")) {
-            lines.add("<gray><white>/startsmp</white> - Expand the world border and start the grace timer</gray>");
+            lines.add("<gray><white>/startsmp</white> - Open the spawn barrier and start the grace timer</gray>");
         }
         if (player.hasPermission("smpcore.startsmp.lock")) {
             lines.add("<gray><white>/startsmp lock</white> - Re-enable the pre-start spawn barrier and lockdown</gray>");
@@ -545,14 +920,17 @@ public final class PlayerCommands {
             lines.add("<gray><white>/tvault</white> - Open your team vault</gray>");
         }
         if (player.hasPermission("smpcore.teamglow")) {
-            lines.add("<gray><white>/teamglow</white> - Privately highlight teammates through walls</gray>");
+            lines.add("<gray><white>/teamglow</white> - Privately outline teammates through walls</gray>");
         }
         if (player.hasPermission("smpcore.waystone.use")) {
             lines.add("<gray>Right-click a known waystone sign to open your teleport menu</gray>");
         }
-        lines.add("<gray>Power commands unlock naturally if your hidden power uses them: <white>/shadow</white>, <white>/xray</white>, <white>/voidstep</white>, <white>/voidvision</white>, <white>/travel</white>, <white>/msummon</white>, <white>/msummon despawn</white>, <white>/stormcaller</white>.</gray>");
+        if (player.hasPermission(POWER_COMMAND_PERMISSION) || player.hasPermission(POWER_COMMAND_BYPASS_PERMISSION)) {
+            lines.add("<gray>Class commands only show when your class can use them.</gray>");
+        }
         if (player.hasPermission("smpcore.backpack.use")) {
             lines.add("<gray>Right-click a <white>Backpack</white> to open portable storage</gray>");
+            lines.add("<gray><white>/backpack label \\<text></white> - Add an organization label</gray>");
         }
         if (player.hasPermission("smpcore.suicide")) {
             lines.add("<gray><white>/suicide</white> - Instantly respawn</gray>");
@@ -566,7 +944,7 @@ public final class PlayerCommands {
     private static int setStormcallerLightning(SMPCore plugin, Player player, Boolean enabled) {
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers == null) {
-            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
             return 0;
         }
         return powers.handleStormcallerLightningCommand(player, enabled) ? Command.SINGLE_SUCCESS : 0;
@@ -575,10 +953,19 @@ public final class PlayerCommands {
     private static int showStormcallerLightningStatus(SMPCore plugin, Player player) {
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers == null) {
-            player.sendMessage(MessageUtil.error("Power system is not ready yet."));
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
             return 0;
         }
         return powers.handleStormcallerLightningStatusCommand(player) ? Command.SINGLE_SUCCESS : 0;
+    }
+
+    private static int useSmokeBomb(SMPCore plugin, Player player) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
+            return 0;
+        }
+        return powers.handleSmokeBombCommand(player) ? Command.SINGLE_SUCCESS : 0;
     }
 
     private static int toggleTeamGlow(SMPCore plugin, Player player) {
@@ -605,7 +992,7 @@ public final class PlayerCommands {
             return 0;
         }
         boolean enabled = plugin.getPlayerVisualListener().isTeamGlowEnabled(player);
-        player.sendMessage(MessageUtil.info("Teammate glow is <white>" + (enabled ? "enabled" : "disabled") + "</white>."));
+        player.sendMessage(MessageUtil.info("Teammate outlines are <white>" + (enabled ? "enabled" : "disabled") + "</white>."));
         return Command.SINGLE_SUCCESS;
     }
 
@@ -758,6 +1145,55 @@ public final class PlayerCommands {
             }
         }
         return builder.buildFuture();
+    }
+
+    private static CompletableFuture<Suggestions> suggestOnlinePlayers(
+        com.mojang.brigadier.context.CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx,
+        SuggestionsBuilder builder
+    ) {
+        String remaining = builder.getRemainingLowerCase();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            String name = player.getName();
+            if (remaining.isBlank() || name.toLowerCase(Locale.ROOT).startsWith(remaining)) {
+                builder.suggest(name);
+            }
+        }
+        return builder.buildFuture();
+    }
+
+    private static boolean canUsePowerCommand(SMPCore plugin, CommandSender sender, SuperpowerType... types) {
+        if (!(sender instanceof Player player) || !hasPowerCommandPermission(player)) {
+            return false;
+        }
+        if (player.hasPermission(POWER_COMMAND_BYPASS_PERMISSION)) {
+            return true;
+        }
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            return false;
+        }
+        for (SuperpowerType type : types) {
+            if (powers.hasPower(player, type)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean canUseOathSummonCommand(SMPCore plugin, CommandSender sender) {
+        if (!(sender instanceof Player player) || !hasPowerCommandPermission(player)) {
+            return false;
+        }
+        if (player.hasPermission(POWER_COMMAND_BYPASS_PERMISSION)) {
+            return true;
+        }
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        return powers != null && powers.hasOathSummonTarget(player);
+    }
+
+    private static boolean hasPowerCommandPermission(Player player) {
+        return player.hasPermission(POWER_COMMAND_PERMISSION)
+            || player.hasPermission(POWER_COMMAND_BYPASS_PERMISSION);
     }
 
     private static String prettyMaterial(Material material) {

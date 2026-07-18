@@ -3,6 +3,7 @@ package me.rique.smpcore.item;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.InventoryRecipeUtil;
+import me.rique.smpcore.util.ItemModelUtil;
 import me.rique.smpcore.util.MessageUtil;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
@@ -123,6 +124,7 @@ public final class AgriculturalPylonListener implements Listener {
         }
 
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.UNCOMMON, "Agricultural Pylon"));
+        ItemModelUtil.apply(meta, ITEM_ID);
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             PYLON_BLOCK_TYPE,
@@ -214,6 +216,13 @@ public final class AgriculturalPylonListener implements Listener {
         }
 
         event.setDropItems(false);
+        Bukkit.getScheduler().runTask(plugin, () -> finishPylonBreak(block));
+    }
+
+    private void finishPylonBreak(Block block) {
+        if (isPylonBlock(block)) {
+            return;
+        }
         uncachePylon(block);
         removeHologram(block);
         block.getWorld().dropItemNaturally(block.getLocation().add(0.5, 0.5, 0.5), createPylonItem());
@@ -420,7 +429,7 @@ public final class AgriculturalPylonListener implements Listener {
         pylons.removeIf(key -> (key.x >> 4) == chunkX && (key.z >> 4) == chunkZ);
     }
 
-    private boolean isPylonBlock(Block block) {
+    public boolean isPylonBlock(Block block) {
         if (block == null || block.getType() != PYLON_BLOCK_TYPE) {
             return false;
         }

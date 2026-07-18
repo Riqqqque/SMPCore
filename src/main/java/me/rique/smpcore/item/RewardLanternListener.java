@@ -2,6 +2,7 @@ package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.ItemModelUtil;
 import me.rique.smpcore.util.MessageUtil;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
@@ -122,6 +123,7 @@ public final class RewardLanternListener implements Listener {
             pdc.set(keyRewardOwnerName, PersistentDataType.STRING, ownerName);
         }
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.MYTHIC, "Reward Soul Lantern"));
+        ItemModelUtil.apply(meta, ITEM_ID);
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.SOUL_LANTERN,
@@ -198,7 +200,22 @@ public final class RewardLanternListener implements Listener {
         }
 
         event.setCancelled(true);
-        Player player = event.getPlayer();
+        useRewardLantern(event.getPlayer(), item);
+    }
+
+    public boolean activateHeldCrossplayAbility(Player player) {
+        if (player == null) {
+            return false;
+        }
+        ItemStack item = player.getInventory().getItemInMainHand();
+        if (!isRewardLantern(item)) {
+            return false;
+        }
+        useRewardLantern(player, item);
+        return true;
+    }
+
+    private void useRewardLantern(Player player, ItemStack item) {
         UUID ownerId = ownerId(item);
         if (ownerId == null) {
             player.sendMessage(MessageUtil.error("This reward lantern is missing its owner binding."));

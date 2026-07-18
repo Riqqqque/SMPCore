@@ -4,19 +4,26 @@ import io.papermc.paper.potion.PotionMix;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.ItemModelUtil;
+import me.rique.smpcore.util.MenuDupeGuardListener;
+import me.rique.smpcore.util.MenuItemUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
+import org.bukkit.block.BrewingStand;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.BrewEvent;
+import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
-import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.event.inventory.InventoryMoveItemEvent;
+import org.bukkit.inventory.BrewerInventory;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemFlag;
@@ -32,6 +39,7 @@ import org.bukkit.potion.PotionType;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 public final class BossPotionListener implements Listener {
 
@@ -47,11 +55,13 @@ public final class BossPotionListener implements Listener {
 
     private final SMPCore plugin;
     private final NamespacedKey keyBossPotionId;
+    private final NamespacedKey keyAuthorizedBrewer;
     private final List<NamespacedKey> registeredMixes = new ArrayList<>();
 
     public BossPotionListener(SMPCore plugin) {
         this.plugin = plugin;
         this.keyBossPotionId = new NamespacedKey(plugin, "boss_potion_id");
+        this.keyAuthorizedBrewer = new NamespacedKey(plugin, "boss_brew_authorized_player");
     }
 
     public void start() {
@@ -73,16 +83,18 @@ public final class BossPotionListener implements Listener {
     }
 
     public void openPotionMenu(Player player) {
+        if (!canBrewBossPotions(player)) {
+            player.sendMessage(me.rique.smpcore.util.MessageUtil.warn("Complete Vespera's Moonlit Thesis before brewing boss potions."));
+            return;
+        }
         Inventory inventory = Bukkit.createInventory(
             new BossPotionMenuHolder(),
             MENU_SIZE,
             BedrockCompat.menuTitle(player, MM.deserialize("<gradient:#38bdf8:#fb7185><bold>Boss Brews</bold></gradient>"), "Boss Brews")
         );
-        ItemStack filler = menuItem(Material.BLACK_STAINED_GLASS_PANE, "<dark_gray> </dark_gray>", List.of());
+        ItemStack filler = menuItem(Material.BLACK_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, MenuItemUtil.INACTIVE_SLOT_LORE);
         for (int slot = 0; slot < inventory.getSize(); slot++) {
-            int row = slot / 9;
-            int col = slot % 9;
-            if (row == 0 || row == 5 || col == 0 || col == 8) {
+            if (isFrameSlot(slot, inventory.getSize())) {
                 inventory.setItem(slot, filler);
             }
         }
@@ -100,28 +112,83 @@ public final class BossPotionListener implements Listener {
         player.openInventory(inventory);
     }
 
+    private static boolean isFrameSlot(int slot, int size) {
+        return slot < 9 || slot >= size - 9 || slot % 9 == 0 || slot % 9 == 8;
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onMenuClick(InventoryClickEvent event) {
-        if (!(event.getView().getTopInventory().getHolder() instanceof BossPotionMenuHolder)) {
+        Inventory top = event.getView().getTopInventory();
+        if (!(top.getHolder(false) instanceof BossPotionMenuHolder)) {
             return;
         }
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
-        if (event.getClickedInventory() == null || event.getClickedInventory().getType() == InventoryType.PLAYER) {
+        int rawSlot = event.getRawSlot();
+        if (rawSlot < 0 || rawSlot >= top.getSize()) {
             return;
         }
-        if (event.getRawSlot() == BACK_SLOT) {
-            player.closeInventory();
-            Bukkit.getScheduler().runTask(plugin, () -> player.performCommand("menu"));
+        if (rawSlot == BACK_SLOT) {
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) {
+                    return;
+                }
+                player.closeInventory();
+                player.performCommand("menu");
+            });
         }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onMenuDrag(InventoryDragEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof BossPotionMenuHolder) {
+        if (event.getView().getTopInventory().getHolder(false) instanceof BossPotionMenuHolder) {
             event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBossIngredientClick(InventoryClickEvent event) {
+        if (!(event.getView().getTopInventory() instanceof BrewerInventory brewer) || !(event.getWhoClicked() instanceof Player player)) return;
+        ItemStack inserted = bossIngredientInsertedBy(event);
+        if (inserted == null) return;
+        if (!canBrewBossPotions(player)) {
+            event.setCancelled(true);
+            player.sendMessage(me.rique.smpcore.util.MessageUtil.warn("Vespera has not taught you how to stabilize boss materials yet."));
+            player.playSound(player.getLocation(), org.bukkit.Sound.BLOCK_BREWING_STAND_BREW, 0.5F, 0.55F);
+            return;
+        }
+        authorizeBrewer(brewer, player);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBossIngredientDrag(InventoryDragEvent event) {
+        if (!(event.getView().getTopInventory() instanceof BrewerInventory brewer) || !(event.getWhoClicked() instanceof Player player)) return;
+        if (!event.getRawSlots().contains(3) || bossMaterialId(event.getOldCursor()) == null) return;
+        if (!canBrewBossPotions(player)) {
+            event.setCancelled(true);
+            player.sendMessage(me.rique.smpcore.util.MessageUtil.warn("Vespera has not taught you how to stabilize boss materials yet."));
+            return;
+        }
+        authorizeBrewer(brewer, player);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onAutomatedBossIngredient(InventoryMoveItemEvent event) {
+        if (event.getDestination() instanceof BrewerInventory && bossMaterialId(event.getItem()) != null) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void onBossBrew(BrewEvent event) {
+        if (bossMaterialId(event.getContents().getIngredient()) == null) return;
+        Player owner = authorizedBrewer(event.getContents());
+        if (owner != null && canBrewBossPotions(owner)) return;
+        event.setCancelled(true);
+        if (owner != null) {
+            owner.sendMessage(me.rique.smpcore.util.MessageUtil.warn("That boss brew was stopped because the Moonlit Thesis is still locked."));
         }
     }
 
@@ -156,6 +223,62 @@ public final class BossPotionListener implements Listener {
         return plugin.getSeasonRelicManager() != null && materialId.equals(plugin.getSeasonRelicManager().relicId(item));
     }
 
+    private boolean canBrewBossPotions(Player player) {
+        return player != null && plugin.getWitchManager() != null && plugin.getWitchManager().hasBossBrewingUnlocked(player);
+    }
+
+    private String bossMaterialId(ItemStack item) {
+        if (item == null || item.getType().isAir() || plugin.getSeasonRelicManager() == null) return null;
+        String relicId = plugin.getSeasonRelicManager().relicId(item);
+        if (relicId == null) return null;
+        for (BossBrew brew : BossBrew.values()) {
+            if (brew.materialIds().contains(relicId)) return relicId;
+        }
+        return null;
+    }
+
+    private ItemStack bossIngredientInsertedBy(InventoryClickEvent event) {
+        Inventory top = event.getView().getTopInventory();
+        if (event.isShiftClick() && event.getClickedInventory() != null && event.getClickedInventory() != top) {
+            return bossMaterialId(event.getCurrentItem()) == null ? null : event.getCurrentItem();
+        }
+        if (event.getRawSlot() != 3) return null;
+        if (event.getClick() == org.bukkit.event.inventory.ClickType.NUMBER_KEY && event.getHotbarButton() >= 0) {
+            ItemStack item = event.getWhoClicked().getInventory().getItem(event.getHotbarButton());
+            return bossMaterialId(item) == null ? null : item;
+        }
+        if (event.getClick() == org.bukkit.event.inventory.ClickType.SWAP_OFFHAND) {
+            ItemStack item = event.getWhoClicked().getInventory().getItemInOffHand();
+            return bossMaterialId(item) == null ? null : item;
+        }
+        if (event.getAction() == InventoryAction.PLACE_ALL
+            || event.getAction() == InventoryAction.PLACE_ONE
+            || event.getAction() == InventoryAction.PLACE_SOME
+            || event.getAction() == InventoryAction.SWAP_WITH_CURSOR) {
+            return bossMaterialId(event.getCursor()) == null ? null : event.getCursor();
+        }
+        return null;
+    }
+
+    private void authorizeBrewer(BrewerInventory inventory, Player player) {
+        BrewingStand stand = inventory == null ? null : inventory.getHolder();
+        if (stand == null) return;
+        stand.getPersistentDataContainer().set(keyAuthorizedBrewer, PersistentDataType.STRING, player.getUniqueId().toString());
+        stand.update(true, false);
+    }
+
+    private Player authorizedBrewer(BrewerInventory inventory) {
+        BrewingStand stand = inventory == null ? null : inventory.getHolder();
+        if (stand == null) return null;
+        String raw = stand.getPersistentDataContainer().get(keyAuthorizedBrewer, PersistentDataType.STRING);
+        if (raw == null) return null;
+        try {
+            return Bukkit.getPlayer(UUID.fromString(raw));
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
     private ItemStack createBossPotion(BossBrew brew, Material potionType) {
         ItemStack item = new ItemStack(potionType);
         ItemMeta rawMeta = item.getItemMeta();
@@ -163,31 +286,36 @@ public final class BossPotionListener implements Listener {
             return item;
         }
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.EPIC, brew.displayName()));
+        ItemModelUtil.apply(meta, "boss_brew_" + brew.id());
         meta.setBasePotionType(PotionType.AWKWARD);
         meta.setColor(brew.color());
         meta.clearCustomEffects();
         for (BrewEffect effect : brew.effects()) {
             meta.addCustomEffect(new PotionEffect(effect.type(), effect.durationTicks(), effect.amplifier(), false, true, true), true);
         }
-        meta.lore(buildLore(brew));
+        meta.lore(buildLore(meta, brew));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         meta.getPersistentDataContainer().set(keyBossPotionId, PersistentDataType.STRING, brew.id());
         item.setItemMeta(meta);
         return item;
     }
 
-    private List<Component> buildLore(BossBrew brew) {
-        List<Component> lore = new ArrayList<>();
-        lore.add(MM.deserialize("<dark_gray>EPIC BREW</dark_gray>"));
-        lore.add(Component.empty());
-        lore.add(MM.deserialize("<gray>Brew with:</gray> <white>Awkward Potion</white>"));
-        lore.add(MM.deserialize("<gray>Ingredient:</gray> <white>" + ingredientNames(brew) + "</white>"));
-        lore.add(Component.empty());
-        lore.add(MM.deserialize("<gold><bold>Effects</bold></gold>"));
+    private List<Component> buildLore(ItemMeta meta, BossBrew brew) {
+        List<String> effects = new ArrayList<>();
         for (BrewEffect effect : brew.effects()) {
-            lore.add(MM.deserialize("<gray>- <white>" + effect.label() + "</white></gray>"));
+            effects.add("<gray>• <white>" + effect.label() + "</white></gray>");
         }
-        return lore;
+        return CustomLoreUtil.buildStyledLore(
+            meta,
+            Material.POTION,
+            "EPIC",
+            "BREW",
+            List.of(
+                "<gray>Base: <white>Awkward Potion</white></gray>",
+                "<gray>Ingredient: <white>" + ingredientNames(brew) + "</white></gray>"
+            ),
+            List.of(CustomLoreUtil.section("Effects", "Brew Effects", effects.toArray(String[]::new)))
+        );
     }
 
     private String ingredientNames(BossBrew brew) {
@@ -208,7 +336,7 @@ public final class BossPotionListener implements Listener {
         List<Component> lore = new ArrayList<>(meta.lore() == null ? List.of() : meta.lore());
         lore.add(Component.empty());
         lore.add(MM.deserialize("<yellow>Brew in a normal brewing stand.</yellow>"));
-        meta.lore(lore);
+        meta.lore(CustomLoreUtil.normalizeLore(lore));
         item.setItemMeta(meta);
         return item;
     }
@@ -219,8 +347,8 @@ public final class BossPotionListener implements Listener {
         if (meta == null) {
             return item;
         }
-        meta.displayName(MM.deserialize(name));
-        meta.lore(lore.stream().map(MM::deserialize).toList());
+        meta.displayName(MM.deserialize(MenuItemUtil.visibleMiniName(name)));
+        meta.lore(MenuItemUtil.visibleMiniLore(name, lore).stream().map(MM::deserialize).toList());
         item.setItemMeta(meta);
         return item;
     }
@@ -247,7 +375,7 @@ public final class BossPotionListener implements Listener {
     private enum BossBrew {
         SUNFORGED_ICHOR(
             "sunforged_ichor",
-            "Sunforged Ichor",
+            "Cinderveil Ichor",
             Color.fromRGB(255, 155, 45),
             List.of("solar_ember"),
             List.of(
@@ -259,7 +387,7 @@ public final class BossPotionListener implements Listener {
         ),
         DOMINION_BLOOD(
             "dominion_blood",
-            "Dominion Blood",
+            "Nocturne Blood",
             Color.fromRGB(190, 30, 55),
             List.of("crimson_rib", "sculk_heart"),
             List.of(
@@ -271,7 +399,7 @@ public final class BossPotionListener implements Listener {
         ),
         RIFT_DRAUGHT(
             "rift_draught",
-            "Rift Draught",
+            "Riftglass Draught",
             Color.fromRGB(170, 90, 255),
             List.of("rift_lens", "void_halo"),
             List.of(
@@ -283,7 +411,7 @@ public final class BossPotionListener implements Listener {
         ),
         ABYSSAL_TONIC(
             "abyssal_tonic",
-            "Abyssal Tonic",
+            "Depthveil Tonic",
             Color.fromRGB(35, 180, 220),
             List.of("abyssal_pearl", "tideheart"),
             List.of(
@@ -295,7 +423,7 @@ public final class BossPotionListener implements Listener {
         ),
         VERDANT_ELIXIR(
             "verdant_elixir",
-            "Verdant Elixir",
+            "Briarheart Elixir",
             Color.fromRGB(70, 190, 90),
             List.of("living_bark", "verdant_heart"),
             List.of(
@@ -306,7 +434,7 @@ public final class BossPotionListener implements Listener {
         ),
         SAINTS_RESOLVE(
             "saints_resolve",
-            "Saint's Resolve",
+            "Confessor's Resolve",
             Color.fromRGB(210, 210, 175),
             List.of("gilded_skull", "oathbound_plate", "titan_gear", "saint_alloy"),
             List.of(
@@ -318,7 +446,7 @@ public final class BossPotionListener implements Listener {
         ),
         WIDOWSTEP_VIAL(
             "widowstep_vial",
-            "Widowstep Vial",
+            "Gloamstep Vial",
             Color.fromRGB(85, 180, 90),
             List.of("widow_silk"),
             List.of(
@@ -367,10 +495,10 @@ public final class BossPotionListener implements Listener {
     private record BrewEffect(PotionEffectType type, int durationTicks, int amplifier, String label) {
     }
 
-    private record BossPotionMenuHolder() implements InventoryHolder {
+    private record BossPotionMenuHolder() implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
-            return Bukkit.createInventory(this, MENU_SIZE, Component.empty());
+            return null;
         }
     }
 }

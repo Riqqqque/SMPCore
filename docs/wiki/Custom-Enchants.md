@@ -1,6 +1,6 @@
 # Custom Enchants
 
-Open the enchant guide with `/enchants` or from `/menu`.
+Open the enchant guide with `/enchants` or from `/menu`. Bedrock players can tap a placed anvil when Geyser cannot display a custom result in the normal interface. Crouch and tap the block to use the vanilla anvil instead.
 
 Custom enchants use normal gameplay surfaces where possible: enchant table rolls, enchanted books, anvils, grindstones, loot chests, and recipes. The lore is intentionally simple so they read close to vanilla enchants.
 
@@ -13,8 +13,9 @@ Custom enchants use normal gameplay surfaces where possible: enchant table rolls
 - Same-type tools and armor can be combined in an anvil to merge their SMPCore custom enchants when the right-hand item adds something new.
 - Grindstones remove custom enchants safely.
 - Double Jump is loot-only from Ancient City chests by default.
-- Boss-crafted books are made with Covenant boss materials and are shown in `/enchants`.
+- Boss-crafted books are made with Veil boss materials and are shown in `/enchants`.
 - Boss-crafted book recipe pages can craft from the player's inventory directly. This keeps the recipe reliable for Bedrock/Geyser players while still allowing Java players to use the shown crafting table layout.
+- Tapping a placed anvil opens the apply, combine, and merge path through a Bedrock-safe chest menu. `/customanvil` only explains this access path.
 
 ## Enchant Table Enchants
 
@@ -47,7 +48,7 @@ Essence Capture exclusions:
 
 ## Boss-Crafted Enchant Books
 
-These books do not appear from the enchant table. They are stronger because they require Covenant boss materials.
+These books do not appear from the enchant table. They are stronger because they require Veil boss materials.
 
 Click the enchant in `/enchants` to view the exact recipe in-game.
 
@@ -58,9 +59,9 @@ Effect: melee weapons deal 18% more damage to tracked custom bosses.
 Recipe:
 
 ```text
-Crimson Rib  | Blaze Rod | Crimson Rib
+Nocturne Rib  | Blaze Rod | Nocturne Rib
 Blaze Rod    | Book      | Blaze Rod
-Sculk Heart  | Nether Star | Sculk Heart
+Veil Heart  | Nether Star | Veil Heart
 ```
 
 ### Soul Siphon I
@@ -70,8 +71,8 @@ Effect: melee hits heal a small capped amount based on damage dealt. The cap kee
 Recipe:
 
 ```text
-Verdant Heart | Ghast Tear   | Verdant Heart
-Crimson Rib   | Book         | Crimson Rib
+Briarheart | Ghast Tear   | Briarheart
+Nocturne Rib   | Book         | Nocturne Rib
 Soul Sand     | Golden Apple | Soul Sand
 ```
 
@@ -82,9 +83,9 @@ Effect: melee hits can mark the target with Glowing, apply Weakness, and lightly
 Recipe:
 
 ```text
-Titan Gear     | Echo Shard | Titan Gear
+Argent Gear     | Echo Shard | Argent Gear
 Amethyst Shard | Echo Shard | Amethyst Shard
-Sculk Heart    | Book       | Sculk Heart
+Veil Heart    | Book       | Veil Heart
 ```
 
 ## Admin Book Commands
@@ -100,8 +101,8 @@ Sculk Heart    | Book       | Sculk Heart
 ## Safety Rules
 
 - Custom enchant books apply through anvils and consume XP levels.
-- Custom-enchanted vanilla tools and armor, including Replenish hoes, keep their SMPCore enchants when upgraded in a smithing table. Actual custom relics are still blocked from vanilla crafting and smithing.
+- Custom-enchanted vanilla tools and armor, including Replenish hoes, keep their SMPCore enchants when upgraded in a smithing table. Actual custom relics are still blocked from vanilla crafting and smithing, except Veil armor can use normal armor trims.
 - Custom enchants can be removed safely in a grindstone.
 - Dash cooldowns are stored on the player, so relogging does not bypass them.
-- Boss-crafted enchant books require real Covenant boss materials.
+- Boss-crafted enchant books require real Veil boss materials.
 - Boss-crafted enchant books are tracked by the item audit system.

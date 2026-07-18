@@ -3,8 +3,9 @@ package me.rique.smpcore.leaderboard;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.database.DatabaseManager;
 import me.rique.smpcore.util.BedrockCompat;
+import me.rique.smpcore.util.MenuDupeGuardListener;
+import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
-import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -19,7 +20,6 @@ import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
-import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
@@ -98,6 +98,29 @@ public final class LeaderboardManager implements Listener {
         increment(killer, LeaderboardType.BOSS_KILLS);
     }
 
+    public void recordDuelWin(Player winner) {
+        if (winner != null) increment(winner, LeaderboardType.DUEL_WINS);
+    }
+
+    public void recordDuelBetWin(Player winner) {
+        recordDuelBetWins(winner, 1);
+    }
+
+    public void recordDuelBetWins(Player winner, int wins) {
+        if (winner != null) recordDuelBetWins(winner.getUniqueId(), winner.getName(), wins);
+    }
+
+    public void recordDuelBetWins(UUID winnerId, String winnerName, int wins) {
+        if (winnerId != null && wins > 0) {
+            plugin.getDatabase().incrementLeaderboardStat(
+                winnerId,
+                winnerName == null || winnerName.isBlank() ? "Unknown" : winnerName,
+                LeaderboardType.DUEL_BET_WINS.column,
+                wins
+            );
+        }
+    }
+
     public void recordBossFightParticipant(UUID playerUuid, String playerName, double damageDone) {
         if (playerUuid == null) {
             return;
@@ -126,6 +149,7 @@ public final class LeaderboardManager implements Listener {
         inventory.setItem(10, label(Material.DIAMOND_SWORD, "<gradient:#fb7185:#f97316><bold>Combat</bold></gradient>", List.of("<dark_gray>PvP and death stats</dark_gray>")));
         inventory.setItem(13, label(Material.CLOCK, "<gradient:#67e8f9:#facc15><bold>Activity</bold></gradient>", List.of("<dark_gray>Time spent online</dark_gray>")));
         inventory.setItem(16, label(Material.WITHER_SKELETON_SKULL, "<gradient:#a855f7:#22d3ee><bold>Bosses</bold></gradient>", List.of("<dark_gray>Boss contribution stats</dark_gray>")));
+        inventory.setItem(29, label(Material.NETHERITE_SWORD, "<gradient:#ef4444:#f59e0b><bold>Duels</bold></gradient>", List.of("<dark_gray>Arena wins and successful bets</dark_gray>")));
 
         inventory.setItem(19, categoryItem(LeaderboardType.PLAYER_KILLS));
         inventory.setItem(20, categoryItem(LeaderboardType.DEATHS));
@@ -134,6 +158,8 @@ public final class LeaderboardManager implements Listener {
         inventory.setItem(23, categoryItem(LeaderboardType.BOSS_KILLS));
         inventory.setItem(24, categoryItem(LeaderboardType.BOSS_DAMAGE));
         inventory.setItem(25, categoryItem(LeaderboardType.BOSS_FIGHTS));
+        inventory.setItem(32, categoryItem(LeaderboardType.DUEL_WINS));
+        inventory.setItem(33, categoryItem(LeaderboardType.DUEL_BET_WINS));
         inventory.setItem(40, item(Material.WRITABLE_BOOK, "<gradient:#fb7185:#facc15><bold>My Boss Reports</bold></gradient>", List.of(
             "<gray>Review your recent boss fights, damage,</gray>",
             "<gray>healing received, outcome, and rank.</gray>",
@@ -159,6 +185,9 @@ public final class LeaderboardManager implements Listener {
                 if (!player.isOnline()) {
                     return;
                 }
+                if (!(player.getOpenInventory().getTopInventory().getHolder(false) instanceof BossReportMenuHolder)) {
+                    return;
+                }
                 if (throwable != null) {
                     player.sendMessage(MessageUtil.error("Could not load your boss reports right now."));
                     openOverviewMenu(player);
@@ -179,7 +208,7 @@ public final class LeaderboardManager implements Listener {
                 int[] slots = {10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34};
                 for (int i = 0; i < slots.length; i++) {
                     if (i >= entries.size()) {
-                        inventory.setItem(slots[i], item(Material.GRAY_STAINED_GLASS_PANE, "<dark_gray>No Report</dark_gray>", List.of("<gray>Finish a boss fight to fill this slot.</gray>")));
+                        inventory.setItem(slots[i], item(Material.PAPER, "<dark_gray>No Report</dark_gray>", List.of("<gray>Finish a boss fight to fill this slot.</gray>")));
                         continue;
                     }
                     inventory.setItem(slots[i], bossReportItem(entries.get(i)));
@@ -221,6 +250,10 @@ public final class LeaderboardManager implements Listener {
                 if (!player.isOnline()) {
                     return;
                 }
+                if (!(player.getOpenInventory().getTopInventory().getHolder(false) instanceof LeaderboardMenuHolder current)
+                    || current.type() != type) {
+                    return;
+                }
                 if (throwable != null) {
                     player.sendMessage(MessageUtil.error("Could not load leaderboards right now."));
                     openOverviewMenu(player);
@@ -241,7 +274,7 @@ public final class LeaderboardManager implements Listener {
                 int[] slots = {13, 21, 23, 28, 29, 30, 31, 32, 33, 34};
                 for (int i = 0; i < slots.length; i++) {
                     if (i >= entries.size()) {
-                        inventory.setItem(slots[i], item(Material.GRAY_STAINED_GLASS_PANE, "<dark_gray>#" + (i + 1) + " Empty</dark_gray>", List.of("<gray>No stat recorded yet.</gray>")));
+                        inventory.setItem(slots[i], item(Material.PAPER, "<dark_gray>#" + (i + 1) + " Empty</dark_gray>", List.of("<gray>No stat recorded yet.</gray>")));
                         continue;
                     }
                     DatabaseManager.LeaderboardEntry entry = entries.get(i);
@@ -295,6 +328,9 @@ public final class LeaderboardManager implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerDeath(PlayerDeathEvent event) {
         Player player = event.getEntity();
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().isDuelParticipant(player)) {
+            return;
+        }
         increment(player, LeaderboardType.DEATHS);
 
         Player killer = player.getKiller();
@@ -318,33 +354,58 @@ public final class LeaderboardManager implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onMenuClick(InventoryClickEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof BossReportMenuHolder) {
+        Inventory top = event.getView().getTopInventory();
+        InventoryHolder rawHolder = top.getHolder(false);
+        if (rawHolder instanceof BossReportMenuHolder) {
             event.setCancelled(true);
-            if (event.getWhoClicked() instanceof Player player
-                && event.getClickedInventory() != null
-                && event.getClickedInventory().getType() != InventoryType.PLAYER
-                && event.getRawSlot() == BACK_SLOT) {
-                openOverviewMenu(player);
+            if (event.getWhoClicked() instanceof Player player) {
+                if (event.getClick() != org.bukkit.event.inventory.ClickType.LEFT
+                    && event.getClick() != org.bukkit.event.inventory.ClickType.RIGHT) {
+                    return;
+                }
+                int rawSlot = event.getRawSlot();
+                if (rawSlot >= 0 && rawSlot < top.getSize() && rawSlot == BACK_SLOT
+                    && MenuItemUtil.isVisibleItem(event.getCurrentItem())) {
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (player.isOnline()) {
+                            openOverviewMenu(player);
+                        }
+                    });
+                }
             }
             return;
         }
-        if (!(event.getView().getTopInventory().getHolder() instanceof LeaderboardMenuHolder holder)) {
+        if (!(rawHolder instanceof LeaderboardMenuHolder holder)) {
             return;
         }
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
-        if (event.getClickedInventory() == null || event.getClickedInventory().getType() == InventoryType.PLAYER) {
+        if (event.getClick() != org.bukkit.event.inventory.ClickType.LEFT
+            && event.getClick() != org.bukkit.event.inventory.ClickType.RIGHT) {
             return;
         }
+        int rawSlot = event.getRawSlot();
+        if (rawSlot < 0 || rawSlot >= top.getSize()) {
+            return;
+        }
+        if (!MenuItemUtil.isVisibleItem(event.getCurrentItem())) {
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> handleLeaderboardMenuClick(player, holder, rawSlot));
+    }
 
-        if (event.getRawSlot() == BACK_SLOT) {
+    private void handleLeaderboardMenuClick(Player player, LeaderboardMenuHolder holder, int rawSlot) {
+        if (!player.isOnline()) {
+            return;
+        }
+        if (rawSlot == BACK_SLOT) {
             if (holder.type() == null) {
                 player.closeInventory();
-                Bukkit.getScheduler().runTask(plugin, () -> player.performCommand("menu"));
+                player.performCommand("menu");
             } else {
                 openOverviewMenu(player);
             }
@@ -355,7 +416,7 @@ public final class LeaderboardManager implements Listener {
             return;
         }
 
-        LeaderboardType type = switch (event.getRawSlot()) {
+        LeaderboardType type = switch (rawSlot) {
             case 19 -> LeaderboardType.PLAYER_KILLS;
             case 20 -> LeaderboardType.DEATHS;
             case 21 -> LeaderboardType.MOB_KILLS;
@@ -363,19 +424,21 @@ public final class LeaderboardManager implements Listener {
             case 23 -> LeaderboardType.BOSS_KILLS;
             case 24 -> LeaderboardType.BOSS_DAMAGE;
             case 25 -> LeaderboardType.BOSS_FIGHTS;
+            case 32 -> LeaderboardType.DUEL_WINS;
+            case 33 -> LeaderboardType.DUEL_BET_WINS;
             default -> null;
         };
         if (type != null) {
             openLeaderboardMenu(player, type);
-        } else if (event.getRawSlot() == 40) {
+        } else if (rawSlot == 40) {
             openMyBossReportsMenu(player);
         }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onMenuDrag(InventoryDragEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof LeaderboardMenuHolder
-            || event.getView().getTopInventory().getHolder() instanceof BossReportMenuHolder) {
+        InventoryHolder holder = event.getView().getTopInventory().getHolder(false);
+        if (holder instanceof LeaderboardMenuHolder || holder instanceof BossReportMenuHolder) {
             event.setCancelled(true);
         }
     }
@@ -469,7 +532,7 @@ public final class LeaderboardManager implements Listener {
             "<gray>Your Damage:</gray> <white>" + trim(entry.damageDone()) + "</white>",
             "<gray>Your Healing Received:</gray> <white>" + trim(entry.healingReceived()) + "</white>",
             "<gray>Total Fight Damage:</gray> <white>" + trim(entry.totalDamage()) + "</white>",
-            entry.doubleDrops() ? "<gold>Double drops were active.</gold>" : "<dark_gray>Normal drop window.</dark_gray>"
+            entry.doubleDrops() ? "<gold>Veil Wisp doubled the loot.</gold>" : "<dark_gray>Normal boss rewards.</dark_gray>"
         ));
     }
 
@@ -482,22 +545,16 @@ public final class LeaderboardManager implements Listener {
     }
 
     private void decorate(Inventory inventory) {
-        ItemStack filler = item(Material.BLACK_STAINED_GLASS_PANE, "<dark_gray> </dark_gray>", List.of());
-        ItemStack blue = item(Material.CYAN_STAINED_GLASS_PANE, "<dark_gray> </dark_gray>", List.of());
-        ItemStack gold = item(Material.ORANGE_STAINED_GLASS_PANE, "<dark_gray> </dark_gray>", List.of());
+        ItemStack filler = item(Material.BLACK_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, MenuItemUtil.INACTIVE_SLOT_LORE);
         for (int slot = 0; slot < inventory.getSize(); slot++) {
-            int row = slot / 9;
-            int col = slot % 9;
-            if (row == 0 || row == 5 || col == 0 || col == 8) {
+            if (isFrameSlot(slot, inventory.getSize())) {
                 inventory.setItem(slot, filler);
             }
         }
-        for (int slot : List.of(1, 7, 9, 17, 36, 44, 46, 52)) {
-            inventory.setItem(slot, blue);
-        }
-        for (int slot : List.of(2, 6, 18, 26, 27, 35, 47, 51)) {
-            inventory.setItem(slot, gold);
-        }
+    }
+
+    private boolean isFrameSlot(int slot, int size) {
+        return slot < 9 || slot >= size - 9 || slot % 9 == 0 || slot % 9 == 8;
     }
 
     private ItemStack item(Material material, String name, List<String> lore) {
@@ -506,8 +563,8 @@ public final class LeaderboardManager implements Listener {
         if (meta == null) {
             return item;
         }
-        meta.displayName(MM.deserialize(name));
-        meta.lore(lore.stream().map(MM::deserialize).toList());
+        meta.displayName(MM.deserialize(MenuItemUtil.visibleMiniName(name)));
+        meta.lore(MenuItemUtil.visibleMiniLore(name, lore).stream().map(MM::deserialize).toList());
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         item.setItemMeta(meta);
         return item;
@@ -604,7 +661,9 @@ public final class LeaderboardManager implements Listener {
         BOSS_DAMAGE("boss_damage", "Boss Damage", Material.NETHERITE_AXE, "<gray>Most total damage dealt to custom bosses.</gray>", "Damage"),
         BOSS_FIGHTS("boss_fights", "Boss Fights", Material.SHIELD, "<gray>Most custom boss fights participated in.</gray>", "Fights"),
         MOB_KILLS("mob_kills", "Mob Kills", Material.ZOMBIE_HEAD, "<gray>Most non-player mobs killed.</gray>", "Mob Kills"),
-        PLAYTIME("playtime_seconds", "Playtime", Material.CLOCK, "<gray>Most time spent online.</gray>", "Time");
+        PLAYTIME("playtime_seconds", "Playtime", Material.CLOCK, "<gray>Most time spent online.</gray>", "Time"),
+        DUEL_WINS("duel_wins", "Duel Wins", Material.NETHERITE_SWORD, "<gray>Most Veilward arena match wins.</gray>", "Wins"),
+        DUEL_BET_WINS("duel_bet_wins", "Duel Bets Won", Material.GOLD_INGOT, "<gray>Most profitable duel bets won.</gray>", "Bets");
 
         private final String column;
         private final String title;
@@ -637,8 +696,14 @@ public final class LeaderboardManager implements Listener {
                 case "bossfights", "fights" -> BOSS_FIGHTS;
                 case "mobs", "mobkills" -> MOB_KILLS;
                 case "playtime", "time", "timeplayed", "time_played" -> PLAYTIME;
+                case "duelwins", "duels", "arena" -> DUEL_WINS;
+                case "duelbetwins", "betwins", "bets" -> DUEL_BET_WINS;
                 default -> null;
             };
+        }
+
+        public String column() {
+            return column;
         }
 
         private String gradientTitle() {
@@ -650,21 +715,23 @@ public final class LeaderboardManager implements Listener {
                 case BOSS_FIGHTS -> "<gradient:#38bdf8:#a78bfa><bold>Boss Fights</bold></gradient>";
                 case MOB_KILLS -> "<gradient:#4ade80:#22c55e><bold>Mob Kills</bold></gradient>";
                 case PLAYTIME -> "<gradient:#67e8f9:#facc15><bold>Playtime</bold></gradient>";
+                case DUEL_WINS -> "<gradient:#ef4444:#f59e0b><bold>Duel Wins</bold></gradient>";
+                case DUEL_BET_WINS -> "<gradient:#facc15:#22c55e><bold>Duel Bets Won</bold></gradient>";
             };
         }
     }
 
-    private record LeaderboardMenuHolder(LeaderboardType type) implements InventoryHolder {
+    private record LeaderboardMenuHolder(LeaderboardType type) implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
-            return Bukkit.createInventory(this, MENU_SIZE, Component.empty());
+            return null;
         }
     }
 
-    private record BossReportMenuHolder() implements InventoryHolder {
+    private record BossReportMenuHolder() implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
-            return Bukkit.createInventory(this, MENU_SIZE, Component.empty());
+            return null;
         }
     }
 }

@@ -25,8 +25,15 @@ public final class SMPCoreCommand {
             Commands.literal("smpcore")
                 .requires(src -> src.getSender().hasPermission("smpcore.reload"))
                 .then(Commands.literal("reload")
+                    .requires(src -> src.getSender().hasPermission("smpcore.reload"))
                     .executes(ctx -> {
                         plugin.getConfigManager().reload();
+                        if (plugin.getLaunchAccessManager() != null) {
+                            plugin.getLaunchAccessManager().reloadConfig();
+                        }
+                        if (plugin.getTabListManager() != null) {
+                            plugin.getTabListManager().reloadConfig();
+                        }
                         if (plugin.getCraftingRulesListener() != null) {
                             plugin.getCraftingRulesListener().reloadConfig();
                         }
@@ -34,6 +41,19 @@ public final class SMPCoreCommand {
                         plugin.getSpawnerManager().refreshAllFromConfig();
                         if (plugin.getWorldRulesListener() != null) {
                             plugin.getWorldRulesListener().applyConfiguredWorldRules();
+                        }
+                        if (plugin.getExactSpawnListener() != null) {
+                            plugin.getExactSpawnListener().applyConfiguredSpawn();
+                        }
+                        if (plugin.getSpawnAmbienceManager() != null) {
+                            plugin.getSpawnAmbienceManager().reloadConfig();
+                        }
+                        if (plugin.getBossMusicManager() != null) {
+                            plugin.getBossMusicManager().reloadConfig();
+                        }
+                        if (plugin.getSpawnProtectionListener() != null) {
+                            plugin.getSpawnProtectionListener().scheduleProtectedSpawnMobCleanup();
+                            plugin.getSpawnProtectionListener().enforceWeatherLock();
                         }
                         if (plugin.getVeinMinerListener() != null) {
                             plugin.getVeinMinerListener().reloadConfig();
@@ -51,7 +71,17 @@ public final class SMPCoreCommand {
                             MessageUtil.success("Configuration reloaded."));
                         return Command.SINGLE_SUCCESS;
                     }))
+                .then(Commands.literal("bedrock")
+                    .executes(ctx -> {
+                        if (plugin.getCrossplayManager() == null) {
+                            ctx.getSource().getSender().sendMessage(MessageUtil.error("Crossplay tools are not ready yet."));
+                            return 0;
+                        }
+                        plugin.getCrossplayManager().sendStatus(ctx.getSource().getSender());
+                        return Command.SINGLE_SUCCESS;
+                    }))
                 .then(Commands.literal("altar")
+                    .requires(src -> src.getSender().hasPermission("smpcore.reload"))
                     .executes(ctx -> {
                         if (plugin.getLegendaryAltarManager() == null) {
                             ctx.getSource().getSender().sendMessage(MessageUtil.error("Legendary altar system is not ready yet."));
@@ -99,6 +129,7 @@ public final class SMPCoreCommand {
                                 true
                             )))))
                 .then(Commands.literal("netheritearmor")
+                    .requires(src -> src.getSender().hasPermission("smpcore.reload"))
                     .executes(ctx -> {
                         boolean blocked = plugin.getConfigManager().blockNetheriteArmorUpgrade;
                         ctx.getSource().getSender().sendMessage(MessageUtil.info(
