@@ -30,6 +30,8 @@ import org.bukkit.block.BlockState;
 import org.bukkit.block.Container;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.attribute.Attribute;
+import org.bukkit.attribute.AttributeInstance;
+import org.bukkit.attribute.AttributeModifier;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.AreaEffectCloud;
@@ -119,7 +121,7 @@ public final class DuelManager implements Listener {
     private static final int BETTING_SECONDS = 15;
     private static final int COUNTDOWN_SECONDS = 5;
     private static final int BETWEEN_ROUNDS_SECONDS = 5;
-    private static final double SPECTATOR_RADIUS = 14.0D;
+    private static final double SPECTATOR_RADIUS = 29.0D;
     private static final double SPECTATOR_MIN_Y_OFFSET = -0.25D;
     private static final double SPECTATOR_MAX_Y_OFFSET = 8.0D;
     private static final long MAX_ESSENCE_BET = 9_999_999_999L;
@@ -150,6 +152,7 @@ public final class DuelManager implements Listener {
     private final ItemEscrowService itemWagerEscrow;
     private final NamespacedKey menuActionKey;
     private final NamespacedKey boardKey;
+    private final NamespacedKey normalizedHealthKey;
     private final Map<QueueKey, ArrayDeque<QueueEntry>> queues = new LinkedHashMap<>();
     private final Map<UUID, QueueEntry> queuedPlayers = new HashMap<>();
     private final Map<UUID, Challenge> challenges = new HashMap<>();
@@ -183,6 +186,7 @@ public final class DuelManager implements Listener {
         this.itemWagerEscrow = new ItemEscrowService(plugin, "duel_wager", "duel-item-wagers.yml");
         this.menuActionKey = new NamespacedKey(plugin, "duel_menu_action");
         this.boardKey = new NamespacedKey(plugin, "duel_leaderboard_id");
+        this.normalizedHealthKey = new NamespacedKey(plugin, "duel_normalized_health");
     }
 
     public void start() {
@@ -242,6 +246,12 @@ public final class DuelManager implements Listener {
 
     public boolean isDuelParticipant(UUID playerId) {
         return playerId != null && activeMatch != null && activeMatch.isFighter(playerId);
+    }
+
+    public boolean blocksExternalTeleport(Player player) {
+        if (player == null || activeMatch == null) return false;
+        UUID playerId = player.getUniqueId();
+        return activeMatch.isFighter(playerId) || activeMatch.spectators.contains(playerId);
     }
 
     public boolean areOpponents(UUID first, UUID second) {
@@ -1048,6 +1058,7 @@ public final class DuelManager implements Listener {
             if (fighter == null) continue;
             fighter.sendMessage(MessageUtil.info("Betting is open for 15 seconds. You may only back your own team."));
             fighter.sendMessage(MessageUtil.info("First to <white>" + roundsToWin + "</white> in <white>" + mode.display + "</white>. Each round lasts 2m 30s."));
+            fighter.sendMessage(MessageUtil.info("Every round starts at <white>20 health</white> with normal hunger and saturation."));
         }
     }
 
@@ -1071,8 +1082,12 @@ public final class DuelManager implements Listener {
 
     private void prepareFighter(Player player, PlayerSnapshot snapshot, Location spawn) {
         player.closeInventory();
+        removeDuelHealthNormalization(player);
         snapshot.applyCombatReset(player);
+        normalizeDuelHealth(player, true);
+        resetDuelHunger(player);
         player.setGameMode(GameMode.SURVIVAL);
+        player.setInvulnerable(false);
         player.setAllowFlight(false);
         player.setFlying(false);
         player.setGliding(false);
@@ -1100,6 +1115,8 @@ public final class DuelManager implements Listener {
                 endMatch(match.opponent(fighterId), EndReason.FORFEIT);
                 return;
             }
+            normalizeDuelHealth(fighter, false);
+            if (fighter.isInvulnerable()) fighter.setInvulnerable(false);
         }
         long remainingMillis = match.phaseEndsAt - System.currentTimeMillis();
         if (remainingMillis > 0L) {
@@ -1231,6 +1248,7 @@ public final class DuelManager implements Listener {
     private void restoreFighter(UUID playerId, PlayerSnapshot snapshot) {
         Player player = Bukkit.getPlayer(playerId);
         if (player == null || !player.isOnline()) return;
+        removeDuelHealthNormalization(player);
         snapshot.apply(player, false, true);
         teleportInternal(player, snapshot.location);
         recoveries.remove(playerId);
@@ -1651,6 +1669,7 @@ public final class DuelManager implements Listener {
             event.setCancelled(true);
             return;
         }
+        normalizeDuelHealth(victim, false);
         if (attacker != null && (!match.isFighter(attacker.getUniqueId()) || attacker.equals(victim)
             || Objects.equals(match.sideOf(attacker.getUniqueId()), match.sideOf(victim.getUniqueId())))) {
             event.setCancelled(true);
@@ -1695,10 +1714,59 @@ public final class DuelManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onRegain(EntityRegainHealthEvent event) {
-        if (activeMatch != null && activeMatch.mode == DuelMode.NO_HEAL && activeMatch.phase == MatchPhase.FIGHTING
-            && event.getEntity() instanceof Player player && activeMatch.isFighter(player.getUniqueId())) {
+        if (activeMatch == null || !(event.getEntity() instanceof Player player) || !activeMatch.isFighter(player.getUniqueId())) {
+            return;
+        }
+        normalizeDuelHealth(player, false);
+        if (activeMatch.mode == DuelMode.NO_HEAL && activeMatch.phase == MatchPhase.FIGHTING) {
             event.setCancelled(true);
         }
+    }
+
+    private void normalizeDuelHealth(Player player, boolean refill) {
+        if (player == null) {
+            return;
+        }
+        AttributeInstance maximumHealth = player.getAttribute(Attribute.MAX_HEALTH);
+        if (maximumHealth == null) {
+            return;
+        }
+
+        double preservedHealth = Math.max(0.5D, Math.min(player.getHealth(), DuelRules.NORMALIZED_MAX_HEALTH));
+        maximumHealth.removeModifier(normalizedHealthKey);
+        double modifier = DuelRules.healthNormalizationModifier(maximumHealth.getValue());
+        if (Math.abs(modifier) > 0.000001D) {
+            maximumHealth.addTransientModifier(new AttributeModifier(
+                normalizedHealthKey,
+                modifier,
+                AttributeModifier.Operation.MULTIPLY_SCALAR_1
+            ));
+        }
+
+        double normalizedMaximum = Math.max(1.0D, maximumHealth.getValue());
+        player.setHealth(refill ? normalizedMaximum : Math.min(preservedHealth, normalizedMaximum));
+        if (refill) {
+            player.setAbsorptionAmount(0.0D);
+        }
+    }
+
+    private void removeDuelHealthNormalization(Player player) {
+        if (player == null) {
+            return;
+        }
+        AttributeInstance maximumHealth = player.getAttribute(Attribute.MAX_HEALTH);
+        if (maximumHealth != null) {
+            maximumHealth.removeModifier(normalizedHealthKey);
+        }
+    }
+
+    private static void resetDuelHunger(Player player) {
+        if (player == null) {
+            return;
+        }
+        player.setFoodLevel(DuelRules.ROUND_START_FOOD_LEVEL);
+        player.setSaturation(DuelRules.ROUND_START_SATURATION);
+        player.setExhaustion(DuelRules.ROUND_START_EXHAUSTION);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -2404,6 +2472,7 @@ public final class DuelManager implements Listener {
             if (!player.isOnline() || activeMatch != null && (activeMatch.isFighter(player.getUniqueId()) || activeMatch.spectators.contains(player.getUniqueId()))) return;
             PlayerSnapshot snapshot = recoveries.get(player.getUniqueId());
             if (snapshot == null) return;
+            removeDuelHealthNormalization(player);
             snapshot.apply(player, true, true);
             recoveries.remove(player.getUniqueId());
             saveRecoveries();
@@ -2758,7 +2827,11 @@ public final class DuelManager implements Listener {
         ItemStack item = new ItemStack(material);
         ItemMeta meta = item.getItemMeta();
         meta.displayName(MM.deserialize(MenuItemUtil.visibleMiniName(name)));
-        if (lore != null) meta.lore(lore.stream().map(line -> MM.deserialize("<reset><!italic>" + line)).toList());
+        if (lore != null) {
+            meta.lore(MenuItemUtil.visibleMiniLore(name, lore).stream()
+                .map(line -> MM.deserialize("<reset><!italic>" + line))
+                .toList());
+        }
         meta.getPersistentDataContainer().set(menuActionKey, PersistentDataType.STRING, action);
         item.setItemMeta(meta);
         return item;
@@ -3158,6 +3231,7 @@ public final class DuelManager implements Listener {
         private final Location location;
         private final GameMode gameMode;
         private final double health;
+        private final double absorption;
         private final int food;
         private final float saturation;
         private final float exhaustion;
@@ -3168,10 +3242,12 @@ public final class DuelManager implements Listener {
         private final Collection<PotionEffect> effects;
         private final boolean allowFlight;
         private final boolean flying;
+        private final boolean invulnerable;
 
         private PlayerSnapshot(String storage, String armor, String extra, int heldSlot, Location location, GameMode gameMode,
-                               double health, int food, float saturation, float exhaustion, int level, float exp, int totalExperience,
-                               int fireTicks, Collection<PotionEffect> effects, boolean allowFlight, boolean flying) {
+                               double health, double absorption, int food, float saturation, float exhaustion, int level, float exp, int totalExperience,
+                               int fireTicks, Collection<PotionEffect> effects, boolean allowFlight, boolean flying,
+                               boolean invulnerable) {
             this.storage = storage;
             this.armor = armor;
             this.extra = extra;
@@ -3179,6 +3255,7 @@ public final class DuelManager implements Listener {
             this.location = location;
             this.gameMode = gameMode;
             this.health = health;
+            this.absorption = absorption;
             this.food = food;
             this.saturation = saturation;
             this.exhaustion = exhaustion;
@@ -3189,6 +3266,7 @@ public final class DuelManager implements Listener {
             this.effects = List.copyOf(effects);
             this.allowFlight = allowFlight;
             this.flying = flying;
+            this.invulnerable = invulnerable;
         }
 
         private static PlayerSnapshot capture(Player player) {
@@ -3200,6 +3278,7 @@ public final class DuelManager implements Listener {
                 player.getLocation().clone(),
                 player.getGameMode(),
                 player.getHealth(),
+                player.getAbsorptionAmount(),
                 player.getFoodLevel(),
                 player.getSaturation(),
                 player.getExhaustion(),
@@ -3209,7 +3288,8 @@ public final class DuelManager implements Listener {
                 player.getFireTicks(),
                 new ArrayList<>(player.getActivePotionEffects()),
                 player.getAllowFlight(),
-                player.isFlying()
+                player.isFlying(),
+                player.isInvulnerable()
             );
         }
 
@@ -3224,6 +3304,7 @@ public final class DuelManager implements Listener {
             for (PotionEffect effect : new ArrayList<>(player.getActivePotionEffects())) player.removePotionEffect(effect.getType());
             for (PotionEffect effect : effects) player.addPotionEffect(effect);
             player.setHealth(Math.max(0.5D, Math.min(health, maxHealth(player))));
+            player.setAbsorptionAmount(Math.max(0.0D, absorption));
             player.setFoodLevel(Math.max(0, Math.min(20, food)));
             player.setSaturation(Math.max(0.0F, Math.min(saturation, player.getFoodLevel())));
             player.setExhaustion(Math.max(0.0F, exhaustion));
@@ -3234,6 +3315,7 @@ public final class DuelManager implements Listener {
             player.setFallDistance(0.0F);
             if (restoreGameMode) {
                 player.setGameMode(gameMode);
+                player.setInvulnerable(invulnerable);
                 player.setAllowFlight(allowFlight || gameMode == GameMode.CREATIVE || gameMode == GameMode.SPECTATOR);
                 player.setFlying(flying && player.getAllowFlight());
             }
@@ -3249,6 +3331,7 @@ public final class DuelManager implements Listener {
             writeLocation(yaml, path + ".location", location);
             yaml.set(path + ".game-mode", gameMode.name());
             yaml.set(path + ".health", health);
+            yaml.set(path + ".absorption", absorption);
             yaml.set(path + ".food", food);
             yaml.set(path + ".saturation", saturation);
             yaml.set(path + ".exhaustion", exhaustion);
@@ -3259,6 +3342,7 @@ public final class DuelManager implements Listener {
             yaml.set(path + ".effects", new ArrayList<>(effects));
             yaml.set(path + ".allow-flight", allowFlight);
             yaml.set(path + ".flying", flying);
+            yaml.set(path + ".invulnerable", invulnerable);
         }
 
         private static PlayerSnapshot read(YamlConfiguration yaml, String path) {
@@ -3273,10 +3357,11 @@ public final class DuelManager implements Listener {
             try { gameMode = GameMode.valueOf(yaml.getString(path + ".game-mode", "SURVIVAL")); }
             catch (IllegalArgumentException ex) { gameMode = GameMode.SURVIVAL; }
             return new PlayerSnapshot(storage, armor, extra, yaml.getInt(path + ".held-slot"), location, gameMode,
-                yaml.getDouble(path + ".health", 20.0D), yaml.getInt(path + ".food", 20), (float) yaml.getDouble(path + ".saturation", 5.0D),
+                yaml.getDouble(path + ".health", 20.0D), yaml.getDouble(path + ".absorption"), yaml.getInt(path + ".food", 20), (float) yaml.getDouble(path + ".saturation", 5.0D),
                 (float) yaml.getDouble(path + ".exhaustion"), yaml.getInt(path + ".level"), (float) yaml.getDouble(path + ".exp"),
                 yaml.getInt(path + ".total-experience"), yaml.getInt(path + ".fire-ticks"), effects,
-                yaml.getBoolean(path + ".allow-flight"), yaml.getBoolean(path + ".flying"));
+                yaml.getBoolean(path + ".allow-flight"), yaml.getBoolean(path + ".flying"),
+                yaml.getBoolean(path + ".invulnerable"));
         }
 
         private static String encode(ItemStack[] items) { return Base64.getEncoder().encodeToString(ItemStack.serializeItemsAsBytes(items)); }

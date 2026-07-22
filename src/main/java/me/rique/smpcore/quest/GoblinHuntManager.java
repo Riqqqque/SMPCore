@@ -1,13 +1,19 @@
 package me.rique.smpcore.quest;
 
+import com.destroystokyo.paper.profile.PlayerProfile;
+import com.destroystokyo.paper.profile.ProfileProperty;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.compat.BedrockSkullManager;
+import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.util.BedrockCompat;
+import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
+import org.bukkit.Color;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -15,10 +21,17 @@ import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
+import org.bukkit.block.Skull;
+import org.bukkit.block.TileState;
+import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Item;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Display;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -34,11 +47,14 @@ import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.scheduler.BukkitTask;
@@ -50,7 +66,9 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.BitSet;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -69,6 +87,10 @@ public final class GoblinHuntManager implements Listener {
     private static final int FINDINGS_PER_TURN_IN = 5;
     private static final double MAX_MINING_LUCK = 0.20D;
     private static final double HUNT_DAMAGE_BONUS = 0.02D;
+    private static final double ADMIN_MARKER_VIEW_RANGE_BLOCKS = 256.0D;
+    private static final List<BlockFace> CLAIM_FACES = List.of(
+        BlockFace.UP, BlockFace.DOWN, BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST
+    );
     private static final Set<Material> ORES = Set.of(
         Material.COAL_ORE, Material.DEEPSLATE_COAL_ORE,
         Material.IRON_ORE, Material.DEEPSLATE_IRON_ORE,
@@ -94,6 +116,8 @@ public final class GoblinHuntManager implements Listener {
     private final Set<BlockKey> fortuneEligiblePlacedOres = new HashSet<>();
     private final Map<BlockKey, NaturalOreBreak> naturalOreBreaks = new ConcurrentHashMap<>();
     private final Map<UUID, BukkitTask> conversations = new ConcurrentHashMap<>();
+    private final Set<UUID> adminVisionEnabled = new HashSet<>();
+    private final Map<UUID, Map<BlockKey, AdminMarker>> adminVisionMarkers = new HashMap<>();
     private final NamespacedKey headMarkerKey;
     private final NamespacedKey headIdKey;
     private final NamespacedKey foundKey;
@@ -104,7 +128,11 @@ public final class GoblinHuntManager implements Listener {
     private int nextId = 1;
     private BukkitTask cleanupTask;
     private BukkitTask headRegistrationTask;
+    private BukkitTask auditTask;
     private BukkitTask saveTask;
+    private BukkitTask adminVisionTask;
+    private boolean auditInProgress;
+    private String expectedGoblinTextureValue;
 
     public GoblinHuntManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -122,21 +150,178 @@ public final class GoblinHuntManager implements Listener {
         load();
         cleanupTask = Bukkit.getScheduler().runTaskTimer(plugin, this::cleanupOreBreaks, 100L, 100L);
         headRegistrationTask = Bukkit.getScheduler().runTaskLater(plugin, () -> createGoblinHead(0), 100L);
+        auditTask = Bukkit.getScheduler().runTaskLater(plugin,
+            () -> auditPlacements(Bukkit.getConsoleSender(), true), 200L);
     }
 
     public void shutdown() {
         if (cleanupTask != null) cleanupTask.cancel();
         if (headRegistrationTask != null) headRegistrationTask.cancel();
+        if (auditTask != null) auditTask.cancel();
         if (saveTask != null) saveTask.cancel();
+        if (adminVisionTask != null) adminVisionTask.cancel();
         saveTask = null;
+        adminVisionTask = null;
         for (BukkitTask task : conversations.values()) task.cancel();
         conversations.clear();
         naturalOreBreaks.clear();
+        for (UUID playerId : new ArrayList<>(adminVisionMarkers.keySet())) removeAdminVisionMarkers(playerId);
+        adminVisionEnabled.clear();
         saveNow();
     }
 
     public int activeGoblinCount() {
         return placements.size();
+    }
+
+    public boolean isAdminVisionEnabled(Player player) {
+        return player != null && adminVisionEnabled.contains(player.getUniqueId());
+    }
+
+    public int setAdminVision(Player player, boolean enabled) {
+        if (player == null) return 0;
+        UUID playerId = player.getUniqueId();
+        if (!enabled) {
+            adminVisionEnabled.remove(playerId);
+            removeAdminVisionMarkers(playerId);
+            stopAdminVisionTaskIfUnused();
+            return 0;
+        }
+        adminVisionEnabled.add(playerId);
+        ensureAdminVisionTask();
+        syncAdminVision(player);
+        return adminVisionMarkers.getOrDefault(playerId, Map.of()).size();
+    }
+
+    public int refreshAdminVision(Player player) {
+        if (player == null) return 0;
+        adminVisionEnabled.add(player.getUniqueId());
+        removeAdminVisionMarkers(player.getUniqueId());
+        ensureAdminVisionTask();
+        syncAdminVision(player);
+        return adminVisionMarkers.getOrDefault(player.getUniqueId(), Map.of()).size();
+    }
+
+    private void ensureAdminVisionTask() {
+        if (adminVisionTask != null) return;
+        adminVisionTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncAdminVisionViewers, 10L, 10L);
+    }
+
+    private void stopAdminVisionTaskIfUnused() {
+        if (!adminVisionEnabled.isEmpty() || adminVisionTask == null) return;
+        adminVisionTask.cancel();
+        adminVisionTask = null;
+    }
+
+    private void syncAdminVisionViewers() {
+        for (UUID playerId : new ArrayList<>(adminVisionEnabled)) {
+            Player player = Bukkit.getPlayer(playerId);
+            if (player == null || !player.isOnline() || !player.hasPermission("smpcore.goblins.admin")) {
+                adminVisionEnabled.remove(playerId);
+                removeAdminVisionMarkers(playerId);
+                continue;
+            }
+            syncAdminVision(player);
+        }
+        stopAdminVisionTaskIfUnused();
+    }
+
+    private void syncAdminVision(Player player) {
+        UUID playerId = player.getUniqueId();
+        Map<BlockKey, AdminMarker> markers = adminVisionMarkers.computeIfAbsent(playerId, ignored -> new HashMap<>());
+        for (Map.Entry<BlockKey, AdminMarker> entry : new ArrayList<>(markers.entrySet())) {
+            BlockKey key = entry.getKey();
+            AdminMarker marker = entry.getValue();
+            Integer currentId = placements.get(key);
+            World world = Bukkit.getWorld(key.worldId());
+            Entity entity = Bukkit.getEntity(marker.entityId());
+            boolean sameWorld = world != null && world.equals(player.getWorld());
+            boolean chunkLoaded = sameWorld && world.isChunkLoaded(key.x() >> 4, key.z() >> 4);
+            boolean matchingHead = chunkLoaded && currentId != null
+                && currentId == marker.goblinId()
+                && isMatchingGoblinHead(world.getBlockAt(key.x(), key.y(), key.z()), currentId);
+            if (entity instanceof TextDisplay display && display.isValid()
+                && canDisplayAdminMarker(sameWorld, chunkLoaded, matchingHead)) {
+                player.showEntity(plugin, display);
+                continue;
+            }
+            removeAdminMarker(marker);
+            markers.remove(key);
+        }
+
+        for (Map.Entry<BlockKey, Integer> placement : placements.entrySet().stream()
+            .sorted(Map.Entry.comparingByValue())
+            .toList()) {
+            BlockKey key = placement.getKey();
+            if (markers.containsKey(key)) continue;
+            World world = Bukkit.getWorld(key.worldId());
+            boolean sameWorld = world != null && world.equals(player.getWorld());
+            boolean chunkLoaded = sameWorld && world.isChunkLoaded(key.x() >> 4, key.z() >> 4);
+            boolean matchingHead = chunkLoaded
+                && isMatchingGoblinHead(world.getBlockAt(key.x(), key.y(), key.z()), placement.getValue());
+            if (!canDisplayAdminMarker(sameWorld, chunkLoaded, matchingHead)) continue;
+            markers.put(key, spawnAdminMarker(player, world, key, placement.getValue()));
+        }
+    }
+
+    private AdminMarker spawnAdminMarker(Player viewer, World world, BlockKey key, int goblinId) {
+        Location location = new Location(world, key.x() + 0.5D, key.y() + 1.35D, key.z() + 0.5D);
+        TextDisplay display = world.spawn(location, TextDisplay.class, entity -> {
+            entity.text(MM.deserialize("<green><bold>GOBLIN #" + goblinId + "</bold></green>"));
+            entity.setBillboard(Display.Billboard.CENTER);
+            entity.setAlignment(TextDisplay.TextAlignment.CENTER);
+            entity.setBrightness(new Display.Brightness(15, 15));
+            entity.setViewRange(VisualRangeUtil.blocksToDisplayViewRange(ADMIN_MARKER_VIEW_RANGE_BLOCKS));
+            entity.setLineWidth(160);
+            entity.setShadowed(true);
+            entity.setSeeThrough(true);
+            entity.setDefaultBackground(false);
+            entity.setBackgroundColor(Color.fromARGB(110, 0, 0, 0));
+            entity.setTextOpacity((byte) 0xFF);
+            entity.setGlowColorOverride(Color.LIME);
+            entity.setGlowing(true);
+            entity.setGravity(false);
+            entity.setSilent(true);
+            entity.setInvulnerable(true);
+            entity.setPersistent(false);
+            entity.setVisibleByDefault(false);
+        });
+        viewer.showEntity(plugin, display);
+        return new AdminMarker(goblinId, display.getUniqueId());
+    }
+
+    private void removeAdminVisionMarkers(UUID playerId) {
+        Map<BlockKey, AdminMarker> markers = adminVisionMarkers.remove(playerId);
+        if (markers == null) return;
+        for (AdminMarker marker : markers.values()) removeAdminMarker(marker);
+    }
+
+    private static void removeAdminMarker(AdminMarker marker) {
+        if (marker == null) return;
+        Entity entity = Bukkit.getEntity(marker.entityId());
+        if (entity != null) entity.remove();
+    }
+
+    static boolean canDisplayAdminMarker(boolean sameWorld, boolean chunkLoaded, boolean matchingHead) {
+        return sameWorld && chunkLoaded && matchingHead;
+    }
+
+    public boolean auditPlacements(CommandSender sender, boolean pruneInvalid) {
+        if (auditInProgress) {
+            if (sender != null) sender.sendMessage(MessageUtil.warn("A goblin audit is already running."));
+            return false;
+        }
+        auditInProgress = true;
+        Deque<PlacementSnapshot> pending = new ArrayDeque<>(placements.entrySet().stream()
+            .sorted(Map.Entry.comparingByValue())
+            .map(entry -> new PlacementSnapshot(entry.getKey(), entry.getValue()))
+            .toList());
+        AuditProgress progress = new AuditProgress(pending.size(), pruneInvalid);
+        if (sender != null) {
+            sender.sendMessage(MessageUtil.info("Checking <white>" + pending.size() + "</white> hidden goblins against the live world..."));
+        }
+        auditNext(sender, pending, progress);
+        return true;
     }
 
     public void openFromHunter(Player player) {
@@ -180,7 +365,7 @@ public final class GoblinHuntManager implements Listener {
         int total = activeGoblinCount();
         BitSet found = findings(player);
         int foundTotal = found.cardinality();
-        int foundActive = activeFoundCount(found);
+        int foundActive = activeMapProgress(foundTotal, total);
         int turnedIn = turnedIn(player);
         int available = Math.max(0, foundTotal - turnedIn);
         double luck = miningLuck(player);
@@ -190,9 +375,10 @@ public final class GoblinHuntManager implements Listener {
         ItemStack filler = item(Material.BLACK_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, List.of(), null);
         for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, filler);
         inventory.setItem(10, item(goblinMenuHead(), "<green><bold>GOBLINS FOUND</bold></green>", List.of(
-            "<gray>Active map progress: <white>" + foundActive + "/" + total + "</white></gray>",
+            "<gray>Map progress: <white>" + foundActive + "/" + total + "</white></gray>",
             "<gray>Lifetime findings: <white>" + foundTotal + "</white></gray>",
-            "<gray>Each new goblin gives <light_purple>5 Essence</light_purple>.</gray>"
+            "<gray>Each new goblin gives <light_purple>5 Essence</light_purple>.</gray>",
+            "<dark_gray>Map changes never remove earned progress.</dark_gray>"
         ), null));
         inventory.setItem(13, item(Material.RAW_IRON, "<gold><bold>MINING LUCK</bold></gold>", List.of(
             "<gray>Current double chance: <green>" + percent(luck) + "</green></gray>",
@@ -262,6 +448,11 @@ public final class GoblinHuntManager implements Listener {
         BlockKey key = BlockKey.of(block);
         placements.put(key, id);
         activeIds.add(id);
+        if (block.getState(false) instanceof TileState tileState) {
+            tileState.getPersistentDataContainer().set(headMarkerKey, PersistentDataType.BYTE, (byte) 1);
+            tileState.getPersistentDataContainer().set(headIdKey, PersistentDataType.INTEGER, id);
+            tileState.update(true, false);
+        }
         saveNow();
         event.getPlayer().sendMessage(MessageUtil.success("Goblin <white>#" + id + "</white> placed. Active goblins: <white>" + placements.size() + "</white>."));
     }
@@ -303,6 +494,13 @@ public final class GoblinHuntManager implements Listener {
         Integer id = placements.get(BlockKey.of(event.getClickedBlock()));
         if (id == null) return;
         event.setCancelled(true);
+        if (!isMatchingGoblinHead(event.getClickedBlock(), id)) {
+            placements.remove(BlockKey.of(event.getClickedBlock()), id);
+            activeIds.remove(id);
+            saveNow();
+            event.getPlayer().sendActionBar(MM.deserialize("<gray>That goblin is no longer active.</gray>"));
+            return;
+        }
         Player player = event.getPlayer();
         BitSet found = findings(player);
         if (found.get(id)) {
@@ -310,6 +508,7 @@ public final class GoblinHuntManager implements Listener {
             player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.35f, 0.8f);
             return;
         }
+        boolean alreadyCompletedMap = completedActiveHunt(found, activeIds);
         found.set(id);
         saveFindings(player, found);
         if (plugin.getEssenceManager() != null) plugin.getEssenceManager().credit(player, ESSENCE_PER_GOBLIN, "goblin_collectible");
@@ -323,7 +522,7 @@ public final class GoblinHuntManager implements Listener {
         if (plugin.getStoryService() != null) {
             plugin.getStoryService().onQuestStage(player, "goblin", "discovery", found.cardinality());
         }
-        if (completedActiveHunt(found, activeIds)) {
+        if (!alreadyCompletedMap && completedActiveHunt(found, activeIds)) {
             player.sendMessage(MessageUtil.success("You found every active goblin. <white>Goblin Slayer</white> now grants <red>+2% player and mob damage</red>."));
             player.playSound(player.getLocation(), Sound.ENTITY_ENDER_DRAGON_GROWL, 0.65f, 1.35f);
             player.getWorld().spawnParticle(Particle.TOTEM_OF_UNDYING, player.getLocation().add(0.0, 1.0, 0.0), 28, 0.45, 0.55, 0.45, 0.04);
@@ -357,9 +556,9 @@ public final class GoblinHuntManager implements Listener {
         naturalOreBreaks.put(key, new NaturalOreBreak(event.getPlayer().getUniqueId(), System.currentTimeMillis() + 5_000L));
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
     public void onOreDrops(BlockDropItemEvent event) {
-        NaturalOreBreak tracked = naturalOreBreaks.remove(BlockKey.of(event.getBlockState().getLocation()));
+        NaturalOreBreak tracked = naturalOreBreaks.get(BlockKey.of(event.getBlockState().getLocation()));
         if (tracked == null || !tracked.playerId.equals(event.getPlayer().getUniqueId())) return;
         markNaturalSilkOreDrops(event);
         double luck = miningLuck(event.getPlayer());
@@ -369,34 +568,68 @@ public final class GoblinHuntManager implements Listener {
             : plugin.getMinerManager().rollOreBonuses(event.getPlayer());
         int bonusCopies = (luckProc ? 1 : 0) + minerBonus.bonusCopies();
         if (bonusCopies <= 0) return;
-        int rewarded = 0;
-        List<Item> originalItems = new ArrayList<>(event.getItems());
-        for (Item item : originalItems) {
-            ItemStack stack = item.getItemStack();
-            if (!RAW_ORE_DROPS.contains(stack.getType())) continue;
-            int original = stack.getAmount();
-            int remaining = original * (1 + bonusCopies);
-            stack.setAmount(Math.min(stack.getMaxStackSize(), remaining));
-            item.setItemStack(stack);
-            remaining -= stack.getAmount();
-            while (remaining > 0) {
-                ItemStack overflow = stack.clone();
-                overflow.setAmount(Math.min(overflow.getMaxStackSize(), remaining));
-                Item extra = event.getBlock().getWorld().dropItem(event.getBlock().getLocation().add(0.5, 0.5, 0.5), overflow);
-                extra.setPickupDelay(0);
-                event.getItems().add(extra);
-                remaining -= overflow.getAmount();
-            }
-            rewarded += original * bonusCopies;
-        }
+        List<ItemStack> originalDrops = event.getItems().stream().map(Item::getItemStack).toList();
+        List<ItemStack> bonusDrops = createAdditiveOreBonusStacks(originalDrops, bonusCopies);
+        int rewarded = bonusDrops.stream().mapToInt(ItemStack::getAmount).sum();
         if (rewarded > 0) {
+            Player player = event.getPlayer();
+            ItemStack tool = player.getInventory().getItemInMainHand();
+            CustomEnchantListener enchants = plugin.getCustomEnchantListener();
+            if (enchants != null && enchants.hasSmeltingTouchEnchant(tool)) {
+                bonusDrops = bonusDrops.stream().flatMap(stack -> enchants.smeltMiningDrops(stack).stream()).toList();
+            }
+            Location dropLocation = event.getBlock().getLocation().add(0.5, 0.5, 0.5);
+            if (enchants != null && enchants.hasTelekinesisEnchant(tool)) {
+                enchants.deliverTelekinesisDrops(player, bonusDrops, dropLocation);
+            } else {
+                for (ItemStack bonusDrop : bonusDrops) {
+                    Item dropped = event.getBlock().getWorld().dropItemNaturally(dropLocation, bonusDrop);
+                    dropped.setPickupDelay(0);
+                }
+            }
             List<String> procs = new ArrayList<>();
             if (luckProc) procs.add("Mining Luck");
             if (minerBonus.petProc()) procs.add("Miner Familiar");
             if (minerBonus.feverProc()) procs.add("Mining Fever");
-            event.getPlayer().sendActionBar(MM.deserialize("<gold>" + String.join(" + ", procs) + "!</gold> <yellow>+" + rewarded + " ore</yellow>"));
-            event.getPlayer().playSound(event.getPlayer().getLocation(), Sound.BLOCK_AMETHYST_BLOCK_CHIME, 0.45f, 1.7f);
+            player.sendActionBar(MM.deserialize("<gold>" + String.join(" + ", procs) + "!</gold> <yellow>+" + rewarded + " ore</yellow>"));
+            player.playSound(player.getLocation(), Sound.BLOCK_AMETHYST_BLOCK_CHIME, 0.45f, 1.7f);
         }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onOreDropsComplete(BlockDropItemEvent event) {
+        BlockKey key = BlockKey.of(event.getBlockState().getLocation());
+        NaturalOreBreak tracked = naturalOreBreaks.get(key);
+        if (tracked != null && tracked.playerId.equals(event.getPlayer().getUniqueId())) {
+            naturalOreBreaks.remove(key, tracked);
+        }
+    }
+
+    static List<ItemStack> createAdditiveOreBonusStacks(List<ItemStack> drops, int bonusCopies) {
+        if (drops == null || drops.isEmpty() || bonusCopies <= 0) return List.of();
+        List<ItemStack> bonuses = new ArrayList<>();
+        for (ItemStack source : drops) {
+            if (source == null || source.getAmount() <= 0 || !RAW_ORE_DROPS.contains(source.getType())) continue;
+            int maxStack = Math.max(1, source.getMaxStackSize());
+            for (int amount : splitBonusAmounts(source.getAmount(), bonusCopies, maxStack)) {
+                ItemStack split = source.clone();
+                split.setAmount(amount);
+                bonuses.add(split);
+            }
+        }
+        return bonuses;
+    }
+
+    static List<Integer> splitBonusAmounts(int sourceAmount, int bonusCopies, int maxStackSize) {
+        if (sourceAmount <= 0 || bonusCopies <= 0 || maxStackSize <= 0) return List.of();
+        List<Integer> amounts = new ArrayList<>();
+        long remaining = (long) sourceAmount * bonusCopies;
+        while (remaining > 0L) {
+            int amount = (int) Math.min(remaining, maxStackSize);
+            amounts.add(amount);
+            remaining -= amount;
+        }
+        return amounts;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -417,6 +650,24 @@ public final class GoblinHuntManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onMenuDrag(InventoryDragEvent event) {
         if (event.getView().getTopInventory().getHolder(false) instanceof GoblinMenuHolder) event.setCancelled(true);
+    }
+
+    @EventHandler
+    public void onAdminVisionQuit(PlayerQuitEvent event) {
+        UUID playerId = event.getPlayer().getUniqueId();
+        if (!adminVisionEnabled.remove(playerId)) return;
+        removeAdminVisionMarkers(playerId);
+        stopAdminVisionTaskIfUnused();
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onAdminVisionWorldChange(PlayerChangedWorldEvent event) {
+        Player player = event.getPlayer();
+        if (!adminVisionEnabled.contains(player.getUniqueId())) return;
+        removeAdminVisionMarkers(player.getUniqueId());
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (player.isOnline() && adminVisionEnabled.contains(player.getUniqueId())) syncAdminVision(player);
+        });
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -479,7 +730,7 @@ public final class GoblinHuntManager implements Listener {
         lore.add(MM.deserialize("<gray>Place this around the map for players to find.</gray>"));
         lore.add(MM.deserialize("<gray>Each player may discover it once for <light_purple>5 Essence</light_purple>.</gray>"));
         lore.add(MM.deserialize(id > 0 ? "<dark_gray>Collectible #" + id + " · HeadDB 89260</dark_gray>" : "<dark_gray>A unique ID is assigned when placed.</dark_gray>"));
-        meta.lore(lore);
+        meta.lore(CustomLoreUtil.wrapLoreLines(lore));
         meta.getPersistentDataContainer().set(headMarkerKey, PersistentDataType.BYTE, (byte) 1);
         if (id > 0) meta.getPersistentDataContainer().set(headIdKey, PersistentDataType.INTEGER, id);
         item.setItemMeta(meta);
@@ -555,16 +806,13 @@ public final class GoblinHuntManager implements Listener {
         return Math.max(0, player.getPersistentDataContainer().getOrDefault(turnedInKey, PersistentDataType.INTEGER, 0));
     }
 
-    private int activeFoundCount(BitSet found) {
-        int count = 0;
-        for (int id : activeIds) if (found.get(id)) count++;
-        return count;
+    static int activeMapProgress(int lifetimeFindings, int activeCount) {
+        return Math.min(Math.max(0, lifetimeFindings), Math.max(0, activeCount));
     }
 
     static boolean completedActiveHunt(BitSet found, Set<Integer> activeIds) {
         if (found == null || activeIds == null || activeIds.isEmpty()) return false;
-        for (int id : activeIds) if (!found.get(id)) return false;
-        return true;
+        return activeMapProgress(found.cardinality(), activeIds.size()) == activeIds.size();
     }
 
     private String percent(double value) {
@@ -597,12 +845,144 @@ public final class GoblinHuntManager implements Listener {
             BlockKey key = entry.getKey();
             World world = Bukkit.getWorld(key.worldId);
             if (world == null || !world.isChunkLoaded(key.x >> 4, key.z >> 4)) continue;
-            if (isHeadBlock(world.getBlockAt(key.x, key.y, key.z).getType())) continue;
+            if (isMatchingGoblinHead(world.getBlockAt(key.x, key.y, key.z), entry.getValue())) continue;
             placements.remove(key);
             activeIds.remove(entry.getValue());
             changed = true;
         }
         if (changed) saveNow();
+    }
+
+    private void auditNext(CommandSender sender, Deque<PlacementSnapshot> pending, AuditProgress progress) {
+        PlacementSnapshot placement = pending.pollFirst();
+        if (placement == null) {
+            finishAudit(sender, progress);
+            return;
+        }
+        BlockKey key = placement.key();
+        World world = Bukkit.getWorld(key.worldId());
+        if (world == null) {
+            progress.unavailable++;
+            progress.remember("#" + placement.id() + " (world unavailable)");
+            auditNext(sender, pending, progress);
+            return;
+        }
+        world.getChunkAtAsync(key.x() >> 4, key.z() >> 4, false).whenComplete((chunk, error) ->
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (error != null || chunk == null) {
+                    progress.unavailable++;
+                    progress.remember("#" + placement.id() + " at " + coordinates(key) + " (chunk unavailable)");
+                    auditNext(sender, pending, progress);
+                    return;
+                }
+                Integer currentId = placements.get(key);
+                if (!Integer.valueOf(placement.id()).equals(currentId)) {
+                    progress.changedDuringAudit++;
+                    auditNext(sender, pending, progress);
+                    return;
+                }
+                Block block = world.getBlockAt(key.x(), key.y(), key.z());
+                if (!isMatchingGoblinHead(block, placement.id())) {
+                    progress.missing++;
+                    progress.remember("#" + placement.id() + " at " + coordinates(key) + " was missing or replaced");
+                    if (progress.pruneInvalid && removeAuditedPlacement(key, placement.id(), null)) progress.removed++;
+                } else if (!hasClaimableFace(block)) {
+                    progress.blocked++;
+                    progress.remember("#" + placement.id() + " at " + coordinates(key) + " was fully enclosed");
+                    if (progress.pruneInvalid && removeAuditedPlacement(key, placement.id(), block)) progress.removed++;
+                } else {
+                    progress.claimable++;
+                }
+                auditNext(sender, pending, progress);
+            })
+        );
+    }
+
+    private boolean removeAuditedPlacement(BlockKey key, int id, Block block) {
+        if (!placements.remove(key, id)) return false;
+        activeIds.remove(id);
+        if (block != null && isHeadBlock(block.getType())) block.setType(Material.AIR, false);
+        return true;
+    }
+
+    private void finishAudit(CommandSender sender, AuditProgress progress) {
+        auditInProgress = false;
+        int removed = progress.removed;
+        if (removed > 0) saveNow();
+        if (sender != null) {
+            for (String detail : progress.details) sender.sendMessage(MessageUtil.warn(detail));
+            if (progress.omittedDetails > 0) {
+                sender.sendMessage(MessageUtil.info("And <white>" + progress.omittedDetails + "</white> more issue(s)."));
+            }
+            String action = progress.pruneInvalid
+                ? " Removed <white>" + removed + "</white>; active count is now <white>" + placements.size() + "</white>."
+                : progress.missing + progress.blocked > 0 ? " Run <white>/goblins audit prune</white> to remove them." : "";
+            sender.sendMessage(MessageUtil.info(
+                "Goblin audit checked <white>" + progress.total + "</white>: <green>" + progress.claimable + " claimable</green>, <red>" + progress.missing
+                    + " overwritten</red>, <red>" + progress.blocked + " enclosed</red>, <yellow>" + progress.unavailable
+                    + " unavailable</yellow>" + (progress.changedDuringAudit > 0 ? ", <yellow>" + progress.changedDuringAudit + " moved while scanning</yellow>" : "") + "." + action
+            ));
+        }
+        plugin.getLogger().info("Goblin audit finished: " + progress.claimable + " claimable, " + progress.missing
+            + " overwritten, " + progress.blocked + " enclosed, " + progress.unavailable + " unavailable, " + removed + " removed.");
+    }
+
+    private static boolean hasClaimableFace(Block block) {
+        boolean[] passable = new boolean[CLAIM_FACES.size()];
+        for (int index = 0; index < CLAIM_FACES.size(); index++) {
+            passable[index] = block.getRelative(CLAIM_FACES.get(index)).isPassable();
+        }
+        return hasClaimableFace(passable);
+    }
+
+    static boolean hasClaimableFace(boolean... adjacentPassable) {
+        if (adjacentPassable == null) return false;
+        for (boolean passable : adjacentPassable) if (passable) return true;
+        return false;
+    }
+
+    private boolean isMatchingGoblinHead(Block block, int id) {
+        if (block == null || !isHeadBlock(block.getType())) return false;
+        if (block.getState(false) instanceof TileState tileState) {
+            PersistentDataContainer data = tileState.getPersistentDataContainer();
+            if (data.has(headMarkerKey, PersistentDataType.BYTE)) {
+                return data.getOrDefault(headIdKey, PersistentDataType.INTEGER, -1) == id;
+            }
+        }
+        String expectedTexture = expectedGoblinTextureValue();
+        if (expectedTexture == null) return true;
+        if (!(block.getState(false) instanceof Skull skull)) return false;
+        return sameTexture(expectedTexture, textureValue(skull.getProfile().properties()));
+    }
+
+    private String expectedGoblinTextureValue() {
+        if (expectedGoblinTextureValue != null) return expectedGoblinTextureValue;
+        ItemStack head = headDatabaseItem();
+        ItemMeta meta = head == null ? null : head.getItemMeta();
+        if (!(meta instanceof SkullMeta skullMeta)) return null;
+        expectedGoblinTextureValue = textureValue(skullMeta.getPlayerProfile());
+        return expectedGoblinTextureValue;
+    }
+
+    private static String textureValue(PlayerProfile profile) {
+        return profile == null ? null : textureValue(profile.getProperties());
+    }
+
+    private static String textureValue(java.util.Collection<ProfileProperty> properties) {
+        if (properties == null) return null;
+        return properties.stream()
+            .filter(property -> "textures".equalsIgnoreCase(property.getName()))
+            .map(ProfileProperty::getValue)
+            .findFirst()
+            .orElse(null);
+    }
+
+    static boolean sameTexture(String expected, String actual) {
+        return expected != null && actual != null && expected.equalsIgnoreCase(actual);
+    }
+
+    private static String coordinates(BlockKey key) {
+        return key.x() + ", " + key.y() + ", " + key.z();
     }
 
     private void movePlacedOres(List<Block> blocks, org.bukkit.block.BlockFace direction) {
@@ -694,6 +1074,34 @@ public final class GoblinHuntManager implements Listener {
     }
 
     private record NaturalOreBreak(UUID playerId, long expiresAt) {}
+
+    private record PlacementSnapshot(BlockKey key, int id) {}
+
+    private record AdminMarker(int goblinId, UUID entityId) {}
+
+    private static final class AuditProgress {
+        private static final int MAX_DETAILS = 12;
+        private final int total;
+        private final boolean pruneInvalid;
+        private final List<String> details = new ArrayList<>();
+        private int claimable;
+        private int missing;
+        private int blocked;
+        private int unavailable;
+        private int changedDuringAudit;
+        private int removed;
+        private int omittedDetails;
+
+        private AuditProgress(int total, boolean pruneInvalid) {
+            this.total = total;
+            this.pruneInvalid = pruneInvalid;
+        }
+
+        private void remember(String detail) {
+            if (details.size() < MAX_DETAILS) details.add(detail);
+            else omittedDetails++;
+        }
+    }
 
     private record BlockKey(UUID worldId, int x, int y, int z) {
         private static BlockKey of(Block block) {

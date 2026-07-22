@@ -66,6 +66,7 @@ public final class RouletteManager implements Listener {
     private final Map<UUID, WagerSelection> selections = new ConcurrentHashMap<>();
     private final Map<UUID, RouletteGame> games = new ConcurrentHashMap<>();
     private final Set<UUID> pendingStarts = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> pendingMenuActions = ConcurrentHashMap.newKeySet();
     private boolean shuttingDown;
 
     public RouletteManager(SMPCore plugin) {
@@ -85,6 +86,7 @@ public final class RouletteManager implements Listener {
         games.clear();
         selections.clear();
         pendingStarts.clear();
+        pendingMenuActions.clear();
         escrow.shutdown();
     }
 
@@ -125,7 +127,16 @@ public final class RouletteManager implements Listener {
         if (event.getClick() != ClickType.LEFT && event.getClick() != ClickType.RIGHT) return;
         if (!MenuItemUtil.isVisibleItem(event.getCurrentItem())) return;
 
-        Bukkit.getScheduler().runTask(plugin, () -> handleClick(player, holder, slot));
+        UUID playerId = player.getUniqueId();
+        if (!canQueueMenuAction(pendingMenuActions.contains(playerId))) return;
+        pendingMenuActions.add(playerId);
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            try {
+                handleClick(player, holder, slot);
+            } finally {
+                pendingMenuActions.remove(playerId);
+            }
+        });
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -149,6 +160,11 @@ public final class RouletteManager implements Listener {
     public void onQuit(PlayerQuitEvent event) {
         selections.remove(event.getPlayer().getUniqueId());
         pendingStarts.remove(event.getPlayer().getUniqueId());
+        pendingMenuActions.remove(event.getPlayer().getUniqueId());
+    }
+
+    static boolean canQueueMenuAction(boolean actionPending) {
+        return !actionPending;
     }
 
     private void handleClick(Player player, InventoryHolder holder, int slot) {
@@ -560,18 +576,19 @@ public final class RouletteManager implements Listener {
         if (online) {
             if (game.won) {
                 String payout = game.totalPayout + " " + currencyName(game.selection.currency(), Math.toIntExact(game.totalPayout));
-                player.sendMessage(claimNeeded
+                BedrockCompat.sendGameMessage(player, claimNeeded
                     ? MessageUtil.success("Roulette hit " + game.result + ". Use <white>/roulette claim</white> for the payout.")
                     : MessageUtil.success("Roulette hit " + game.result + ". You received <white>" + payout + "</white>."));
                 playWinEffects(player, game.bet.payoutMultiplier());
                 announceWin(game);
             } else {
-                player.sendMessage(MessageUtil.warn("Roulette hit " + game.result + ". Your " + game.bet.display() + " bet lost."));
+                BedrockCompat.sendGameMessage(player, MessageUtil.warn("Roulette hit " + game.result + ". Your " + game.bet.display() + " bet lost."));
                 playLoseEffects(player);
             }
         } else if (game.won) {
             announceWin(game);
         }
+        if (online) BedrockCompat.syncGameInventory(player);
     }
 
     private void announceWin(RouletteGame game) {
@@ -583,7 +600,10 @@ public final class RouletteManager implements Listener {
             "<white>" + game.playerName + "</white> won <white>" + payout + "</white> on " + game.bet.display() + " in roulette."
         );
         for (Player nearby : world.getNearbyPlayers(location, ANNOUNCEMENT_RADIUS)) {
-            if (!nearby.getUniqueId().equals(game.playerId)) nearby.sendMessage(message);
+            if (!nearby.getUniqueId().equals(game.playerId)) {
+                BedrockCompat.sendGameMessage(nearby, message);
+                nearby.playSound(location, Sound.ENTITY_FIREWORK_ROCKET_TWINKLE, 0.55F, 1.25F);
+            }
         }
     }
 

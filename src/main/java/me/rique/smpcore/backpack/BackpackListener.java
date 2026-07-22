@@ -27,8 +27,11 @@ import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.InventoryMoveItemEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareItemCraftEvent;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
@@ -45,6 +48,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -54,8 +58,12 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumMap;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -69,7 +77,8 @@ public final class BackpackListener implements Listener {
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final int BACKPACK_SIZE = 27;
     private static final int UPGRADED_BACKPACK_SIZE = 54;
-    private static final int MAX_SERIALIZED_ITEM_BYTES = 2 * 1024 * 1024;
+    private static final int MAX_SERIALIZED_ITEM_BYTES = 1536 * 1024;
+    private static final int MAX_SERIALIZED_BACKPACK_BYTES = 1536 * 1024;
     private static final int MAX_SUFFIX_LENGTH = 24;
     private static final Map<Material, Integer> BACKPACK_INGREDIENTS = Map.of(
         Material.LEATHER, 4,
@@ -94,6 +103,7 @@ public final class BackpackListener implements Listener {
     private final BackpackRecoveryJournal recoveryJournal;
     private final Map<UUID, OpenBackpackSession> openBackpacks = new ConcurrentHashMap<>();
     private final Map<String, UUID> openBackpackOwners = new ConcurrentHashMap<>();
+    private final Map<UUID, BukkitTask> pendingAutosaves = new ConcurrentHashMap<>();
     private final Map<UUID, Long> warnCooldown = new ConcurrentHashMap<>();
 
     public BackpackListener(SMPCore plugin) {
@@ -109,10 +119,13 @@ public final class BackpackListener implements Listener {
         this.menuPreviewKey = new NamespacedKey(plugin, "menu_preview_item");
         this.recoveryJournal = new BackpackRecoveryJournal(plugin);
         Bukkit.removeRecipe(backpackRecipeKey);
-        Bukkit.getScheduler().runTask(plugin, () -> Bukkit.getOnlinePlayers().forEach(player -> {
-            recoverInterruptedBackpack(player);
-            migratePlayerBackpacks(player);
-        }));
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Bukkit.getOnlinePlayers().forEach(player -> {
+                recoverInterruptedBackpack(player);
+                migratePlayerBackpacks(player);
+            });
+            repairAllOnlineBackpackIdentities(null);
+        });
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -165,7 +178,6 @@ public final class BackpackListener implements Listener {
         }
 
         int slot = hand == EquipmentSlot.HAND ? player.getInventory().getHeldItemSlot() : 40;
-        migrateBackpackSlot(player, player.getInventory(), slot);
         openBackpack(player, slot);
     }
 
@@ -182,7 +194,6 @@ public final class BackpackListener implements Listener {
             return true;
         }
         int slot = player.getInventory().getHeldItemSlot();
-        migrateBackpackSlot(player, player.getInventory(), slot);
         openBackpack(player, slot);
         return true;
     }
@@ -209,6 +220,74 @@ public final class BackpackListener implements Listener {
     public void onJoin(PlayerJoinEvent event) {
         recoverInterruptedBackpack(event.getPlayer());
         migratePlayerBackpacks(event.getPlayer());
+        repairAllOnlineBackpackIdentities(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onVisibleStorageOpen(InventoryOpenEvent event) {
+        if (!(event.getPlayer() instanceof Player player)
+            || event.getInventory().getHolder() instanceof BackpackHolder) {
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!player.isOnline()) {
+                return;
+            }
+            BackpackMigrationResult migration = new BackpackMigrationResult();
+            if (isPersistentBackpackStorage(event.getInventory())) {
+                migrateInventoryBackpacks(player, event.getInventory(), migration);
+            }
+            notifyBackpackMigration(player, migration);
+            repairVisibleBackpackIdentities(player, event.getInventory());
+        });
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBackpackInventoryTransfer(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player) || !clickMovesBackpack(event)) {
+            return;
+        }
+        Inventory top = event.getView().getTopInventory();
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (player.isOnline()) {
+                repairVisibleBackpackIdentities(player, top);
+            }
+        });
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBackpackInventoryDrag(InventoryDragEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player) || !isBackpack(event.getOldCursor())) {
+            return;
+        }
+        Inventory top = event.getView().getTopInventory();
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (player.isOnline()) {
+                repairVisibleBackpackIdentities(player, top);
+            }
+        });
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBackpackPickup(EntityPickupItemEvent event) {
+        if (!(event.getEntity() instanceof Player player) || !isBackpack(event.getItem().getItemStack())) {
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (player.isOnline()) {
+                repairVisibleBackpackIdentities(player);
+            }
+        });
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBackpackInventoryMove(InventoryMoveItemEvent event) {
+        if (!isBackpack(event.getItem())) {
+            return;
+        }
+        Inventory source = event.getSource();
+        Inventory destination = event.getDestination();
+        Bukkit.getScheduler().runTask(plugin, () -> repairVisibleBackpackIdentities(null, source, destination));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -233,26 +312,34 @@ public final class BackpackListener implements Listener {
             && isBackpack(current)
             && event.isRightClick()) {
             event.setCancelled(true);
-            migrateBackpackSlot(player, player.getInventory(), event.getSlot());
             openBackpack(player, event.getSlot());
         }
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onDeath(PlayerDeathEvent event) {
-        OpenBackpackSession session = removeOpenBackpack(event.getPlayer().getUniqueId());
+        Player player = event.getPlayer();
+        OpenBackpackSession session = removeOpenBackpack(player.getUniqueId());
         if (session == null) {
             return;
         }
 
-        if (event.getKeepInventory()) {
-            finalizeBackpack(event.getPlayer(), session, session.inventory());
+        boolean duelKeepsInventory = plugin.getDuelManager() != null
+            && plugin.getDuelManager().isDuelParticipant(player);
+        boolean dungeonKeepsInventory = plugin.getBossDungeonManager() != null
+            && plugin.getBossDungeonManager().isDungeonWorld(player.getWorld());
+        if (keepsBackpackInInventory(event.getKeepInventory(), duelKeepsInventory, dungeonKeepsInventory)) {
+            finalizeBackpack(player, session, session.inventory());
             return;
         }
 
-        if (!syncOpenBackpackToDeathDrops(event.getPlayer(), event.getDrops(), session)) {
-            plugin.getLogger().warning("Backpack session could not be safely reconciled on death for " + event.getPlayer().getName() + ".");
+        if (!syncOpenBackpackToDeathDrops(player, event.getDrops(), session)) {
+            plugin.getLogger().warning("Backpack session could not be safely reconciled on death for " + player.getName() + ".");
         }
+    }
+
+    static boolean keepsBackpackInInventory(boolean eventKeepInventory, boolean duelParticipant, boolean dungeonWorld) {
+        return eventKeepInventory || duelParticipant || dungeonWorld;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -331,7 +418,11 @@ public final class BackpackListener implements Listener {
 
     private void scheduleBackpackAutosave(Player player, OpenBackpackSession session) {
         UUID playerId = player.getUniqueId();
-        Bukkit.getScheduler().runTask(plugin, () -> {
+        if (pendingAutosaves.containsKey(playerId)) {
+            return;
+        }
+        BukkitTask task = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            pendingAutosaves.remove(playerId);
             if (!player.isOnline()) {
                 return;
             }
@@ -341,13 +432,15 @@ public final class BackpackListener implements Listener {
             }
             ItemStack cursor = player.getItemOnCursor();
             if (cursor != null && !cursor.getType().isAir() && cursor.getAmount() > 0) {
+                scheduleBackpackAutosave(player, current);
                 return;
             }
             if (!journalBackpack(player, current, current.inventory().getContents())) {
                 plugin.getLogger().severe("Backpack autosave journal failed for " + player.getName() + ".");
                 player.sendMessage(MessageUtil.error("Backpack safety save failed. Close it now so the server can recover the contents."));
             }
-        });
+        }, 5L);
+        pendingAutosaves.put(playerId, task);
     }
 
     public void shutdown() {
@@ -359,6 +452,8 @@ public final class BackpackListener implements Listener {
             if (session == null) continue;
             finalizeBackpack(player, session, session.inventory());
         }
+        pendingAutosaves.values().forEach(BukkitTask::cancel);
+        pendingAutosaves.clear();
         warnCooldown.clear();
     }
 
@@ -439,12 +534,16 @@ public final class BackpackListener implements Listener {
         ItemStack source = migrateBackpackSlot(player, player.getInventory(), sourceSlot);
         if (!isBackpack(source)) return;
 
+        repairAllOnlineBackpackIdentities(player);
+        source = player.getInventory().getItem(sourceSlot);
+        if (!isBackpack(source)) return;
+
         ItemMeta sourceMeta = source.getItemMeta();
         if (sourceMeta == null) return;
 
         String backpackId = sourceMeta.getPersistentDataContainer().get(backpackIdKey, PersistentDataType.STRING);
         if (backpackId == null || backpackId.isBlank()) {
-            backpackId = UUID.randomUUID().toString();
+            backpackId = freshBackpackId(null);
             sourceMeta.getPersistentDataContainer().set(backpackIdKey, PersistentDataType.STRING, backpackId);
             source.setItemMeta(sourceMeta);
         }
@@ -498,6 +597,10 @@ public final class BackpackListener implements Listener {
     }
 
     private OpenBackpackSession removeOpenBackpack(UUID playerId) {
+        BukkitTask autosave = pendingAutosaves.remove(playerId);
+        if (autosave != null) {
+            autosave.cancel();
+        }
         OpenBackpackSession session = openBackpacks.remove(playerId);
         if (session != null) {
             openBackpackOwners.remove(session.backpackId(), playerId);
@@ -520,6 +623,215 @@ public final class BackpackListener implements Listener {
             }
         }
         return false;
+    }
+
+    private boolean clickMovesBackpack(InventoryClickEvent event) {
+        if (isBackpack(event.getCurrentItem()) || isBackpack(event.getCursor())) {
+            return true;
+        }
+        int hotbarButton = event.getHotbarButton();
+        return hotbarButton >= 0
+            && event.getWhoClicked() instanceof Player player
+            && isBackpack(player.getInventory().getItem(hotbarButton));
+    }
+
+    private void repairVisibleBackpackIdentities(Player focus, Inventory... additionalInventories) {
+        repairBackpackIdentities(false, focus, additionalInventories);
+    }
+
+    private void repairAllOnlineBackpackIdentities(Player focus, Inventory... additionalInventories) {
+        repairBackpackIdentities(true, focus, additionalInventories);
+    }
+
+    private void repairBackpackIdentities(boolean includeAllOnline, Player focus, Inventory... additionalInventories) {
+        List<VisibleInventory> visible = new ArrayList<>();
+        Set<Inventory> addedInventories = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        if (focus != null) {
+            addVisibleInventory(visible, addedInventories, focus.getInventory(), focus);
+            addVisibleInventory(visible, addedInventories, focus.getEnderChest(), focus);
+        }
+        if (includeAllOnline) {
+            for (Player online : Bukkit.getOnlinePlayers()) {
+                addVisibleInventory(visible, addedInventories, online.getInventory(), online);
+                addVisibleInventory(visible, addedInventories, online.getEnderChest(), online);
+            }
+        }
+        if (additionalInventories != null) {
+            for (Inventory inventory : additionalInventories) {
+                if (isPersistentBackpackStorage(inventory)) {
+                    addVisibleInventory(visible, addedInventories, inventory, focus);
+                }
+            }
+        }
+
+        Set<String> activeIds = new HashSet<>(openBackpackOwners.keySet());
+        Set<String> seenIds = new HashSet<>(activeIds);
+        Map<UUID, Integer> repairsByPlayer = new LinkedHashMap<>();
+        Set<Inventory> changedInventories = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+
+        for (VisibleInventory entry : visible) {
+            Inventory inventory = entry.inventory();
+            Player owner = entry.owner();
+            ItemStack[] contents = inventory.getContents();
+            for (int slot = 0; slot < contents.length; slot++) {
+                ItemStack item = contents[slot];
+                String backpackId = backpackId(item);
+                if (backpackId == null) {
+                    continue;
+                }
+                boolean activeCopy = activeIds.contains(backpackId);
+                if (activeCopy && isCanonicalOpenBackpack(inventory, slot, item, backpackId)) {
+                    continue;
+                }
+                if (!activeCopy && !needsBackpackRekey(seenIds, backpackId)) {
+                    continue;
+                }
+
+                String replacementId = freshBackpackId(seenIds);
+                if (!rekeyBackpack(item, replacementId)) {
+                    plugin.getLogger().severe("Could not separate duplicate backpack ID " + backpackId + " in " + inventory.getType() + ".");
+                    continue;
+                }
+                inventory.setItem(slot, item);
+                changedInventories.add(inventory);
+                if (owner != null) {
+                    repairsByPlayer.merge(owner.getUniqueId(), 1, Integer::sum);
+                } else if (focus != null) {
+                    repairsByPlayer.merge(focus.getUniqueId(), 1, Integer::sum);
+                }
+                plugin.getLogger().warning(
+                    "Separated duplicate backpack ID " + backpackId + " into " + replacementId
+                        + " in " + inventory.getType() + "; the copied storage payload was cleared to prevent item duplication."
+                );
+            }
+        }
+
+        if (plugin.getTeamManager() != null) {
+            for (Inventory inventory : changedInventories) {
+                plugin.getTeamManager().requestTeamVaultSave(inventory, "backpack_identity_repair");
+            }
+        }
+        for (Map.Entry<UUID, Integer> repair : repairsByPlayer.entrySet()) {
+            Player player = Bukkit.getPlayer(repair.getKey());
+            if (player != null && player.isOnline()) {
+                int count = repair.getValue();
+                player.sendMessage(MessageUtil.warn(
+                    "Separated " + count + " copied backpack" + (count == 1 ? "" : "s")
+                        + ". Each copy is now an empty, independent backpack."
+                ));
+            }
+        }
+    }
+
+    private void addVisibleInventory(
+        List<VisibleInventory> visible,
+        Set<Inventory> addedInventories,
+        Inventory inventory,
+        Player owner
+    ) {
+        if (inventory == null) {
+            return;
+        }
+        UUID ownerId = owner == null ? null : owner.getUniqueId();
+        for (VisibleInventory existing : visible) {
+            UUID existingOwnerId = existing.owner() == null ? null : existing.owner().getUniqueId();
+            if (existing.inventory() == inventory
+                || existing.inventory().equals(inventory)
+                || sameLogicalPlayerInventory(
+                    existingOwnerId,
+                    existing.inventory().getType().name(),
+                    ownerId,
+                    inventory.getType().name()
+                )) {
+                return;
+            }
+        }
+        if (addedInventories.add(inventory)) {
+            visible.add(new VisibleInventory(inventory, owner));
+        }
+    }
+
+    static boolean sameLogicalPlayerInventory(
+        UUID firstOwner,
+        String firstType,
+        UUID secondOwner,
+        String secondType
+    ) {
+        if (firstOwner == null || secondOwner == null || !firstOwner.equals(secondOwner) || firstType != secondType) {
+            return false;
+        }
+        return "PLAYER".equals(firstType) || "ENDER_CHEST".equals(firstType);
+    }
+
+    private boolean isCanonicalOpenBackpack(Inventory inventory, int slot, ItemStack item, String backpackId) {
+        UUID ownerId = openBackpackOwners.get(backpackId);
+        OpenBackpackSession session = ownerId == null ? null : openBackpacks.get(ownerId);
+        Player owner = ownerId == null ? null : Bukkit.getPlayer(ownerId);
+        return session != null
+            && owner != null
+            && inventory.equals(owner.getInventory())
+            && slot == session.sourceSlot()
+            && isSealedSessionSource(item, session);
+    }
+
+    private String backpackId(ItemStack item) {
+        if (!isBackpack(item)) {
+            return null;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return null;
+        }
+        String id = meta.getPersistentDataContainer().get(backpackIdKey, PersistentDataType.STRING);
+        return id == null || id.isBlank() ? null : id;
+    }
+
+    private boolean isPersistentBackpackStorage(Inventory inventory) {
+        if (inventory == null || inventory.getHolder() instanceof BackpackHolder) {
+            return false;
+        }
+        return switch (inventory.getType()) {
+            case PLAYER, CHEST, DISPENSER, DROPPER, FURNACE, BREWING, ENDER_CHEST,
+                HOPPER, SHULKER_BOX, BARREL, BLAST_FURNACE, SMOKER,
+                CHISELED_BOOKSHELF, SHELF, DECORATED_POT, CRAFTER -> true;
+            default -> false;
+        };
+    }
+
+    private boolean rekeyBackpack(ItemStack item, String replacementId) {
+        if (!isBackpack(item) || replacementId == null || replacementId.isBlank()) {
+            return false;
+        }
+        int size = backpackSize(item);
+        if (!writeBackpackData(item, replacementId, emptyContentsForCopiedBackpack(size))) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) return false;
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        pdc.remove(backpackSessionKey);
+        item.setItemMeta(meta);
+        if (plugin.getItemAuditManager() != null) {
+            plugin.getItemAuditManager().clearTrackedIdentity(item, "custom:backpack");
+        }
+        item.setAmount(1);
+        return true;
+    }
+
+    static ItemStack[] emptyContentsForCopiedBackpack(int size) {
+        return new ItemStack[Math.max(0, size)];
+    }
+
+    static boolean needsBackpackRekey(Set<String> seenIds, String backpackId) {
+        return backpackId != null && !backpackId.isBlank() && !seenIds.add(backpackId);
+    }
+
+    static String freshBackpackId(Set<String> reservedIds) {
+        String id;
+        do {
+            id = UUID.randomUUID().toString();
+        } while (reservedIds != null && !reservedIds.add(id));
+        return id;
     }
 
     private boolean finalizeBackpack(Player player, OpenBackpackSession session, Inventory inventory) {
@@ -758,7 +1070,7 @@ public final class BackpackListener implements Listener {
                     continue;
                 }
                 ItemStack shell = createNormalizedBackpack(
-                    UUID.randomUUID().toString(),
+                    freshBackpackId(null),
                     new byte[0],
                     backpackSize(item),
                     normalizedStoredSuffix(item.getItemMeta())
@@ -912,7 +1224,7 @@ public final class BackpackListener implements Listener {
                 "Traded materials for a Backpack."
             );
         }
-        player.getInventory().addItem(backpack);
+        InventoryRecipeUtil.giveOrDrop(player, backpack);
         player.sendMessage(MessageUtil.success("Traded materials for a <white>Backpack</white>."));
         return true;
     }
@@ -976,6 +1288,164 @@ public final class BackpackListener implements Listener {
         return createBackpackItem(UPGRADED_BACKPACK_SIZE);
     }
 
+    public List<BackpackSnapshotInfo> listRecoverySnapshots(UUID playerId) {
+        if (playerId == null) {
+            return List.of();
+        }
+        return recoveryJournal.listSnapshots(playerId).stream()
+            .map(this::snapshotInfo)
+            .toList();
+    }
+
+    public BackpackSnapshotLookup findRecoverySnapshot(UUID playerId, String selector) {
+        BackpackRecoveryJournal.SnapshotLookup lookup = recoveryJournal.findSnapshot(playerId, selector);
+        if (lookup.snapshot() == null) {
+            return new BackpackSnapshotLookup(null, lookup.error());
+        }
+        return new BackpackSnapshotLookup(snapshotInfo(lookup.snapshot()), null);
+    }
+
+    public BackpackRestoreResult restoreRecoverySnapshot(Player player, String selector) {
+        if (player == null || !player.isOnline()) {
+            return new BackpackRestoreResult(false, "The player must be online.", null);
+        }
+        if (openBackpacks.containsKey(player.getUniqueId())) {
+            return new BackpackRestoreResult(false, "The player must close their backpack first.", null);
+        }
+        ItemStack cursor = player.getItemOnCursor();
+        if (cursor != null && !cursor.getType().isAir() && cursor.getAmount() > 0) {
+            return new BackpackRestoreResult(false, "The player must clear their cursor item first.", null);
+        }
+
+        BackpackRecoveryJournal.SnapshotLookup lookup = recoveryJournal.findSnapshot(player.getUniqueId(), selector);
+        BackpackRecoveryJournal.Snapshot snapshot = lookup.snapshot();
+        if (snapshot == null) {
+            return new BackpackRestoreResult(false, lookup.error(), null);
+        }
+        BackpackRecoveryJournal.Recovery recovery = snapshot.recovery();
+        ItemStack recovered = recovery.backpack() == null ? null : recovery.backpack().clone();
+        if (!isBackpack(recovered)
+            || !hasBackpackId(recovered, recovery.backpackId())
+            || !clearBackpackSessionToken(recovered)) {
+            return new BackpackRestoreResult(false, "That recovery snapshot failed validation. Nothing was changed.", null);
+        }
+        UUID activeOwner = openBackpackOwners.get(recovery.backpackId());
+        if (activeOwner != null) {
+            Player activePlayer = Bukkit.getPlayer(activeOwner);
+            String ownerName = activePlayer == null ? "another player" : activePlayer.getName();
+            return new BackpackRestoreResult(
+                false,
+                "That backpack is currently open by " + ownerName + ". Close it before restoring.",
+                null
+            );
+        }
+
+        List<BackpackLocation> locations = findVisibleBackpacksById(player, recovery.backpackId());
+        if (locations.isEmpty()) {
+            return new BackpackRestoreResult(
+                false,
+                "The matching physical backpack must be in the player's inventory or ender chest. Nothing was created.",
+                null
+            );
+        }
+        if (locations.size() != 1) {
+            return new BackpackRestoreResult(false, "Multiple matching backpack shells are visible. Resolve them before restoring.", null);
+        }
+
+        BackpackLocation location = locations.getFirst();
+        ItemStack current = location.inventory().getItem(location.slot());
+        if (!isBackpack(current) || !recoveryJournal.archiveStandalone(player.getUniqueId(), recovery.backpackId(), current.clone())) {
+            return new BackpackRestoreResult(false, "The current backpack could not be backed up. Nothing was changed.", null);
+        }
+
+        player.closeInventory();
+        location.inventory().setItem(location.slot(), recovered);
+        try {
+            player.saveData();
+        } catch (RuntimeException ex) {
+            location.inventory().setItem(location.slot(), current);
+            try {
+                player.saveData();
+            } catch (RuntimeException ignored) {
+                plugin.getLogger().severe("Could not roll back a failed backpack restore for " + player.getName() + ".");
+            }
+            plugin.getLogger().severe("Could not save restored backpack data for " + player.getName() + ": " + ex.getMessage());
+            return new BackpackRestoreResult(false, "The player save failed, so the original backpack was restored.", null);
+        }
+
+        if (!recoveryJournal.consumeSnapshot(snapshot)) {
+            plugin.getLogger().severe(
+                "Backpack snapshot " + snapshot.id() + " was restored for " + player.getName()
+                    + " but could not be marked consumed. Do not restore that snapshot again."
+            );
+        }
+        player.updateInventory();
+        BackpackSnapshotInfo info = snapshotInfo(snapshot);
+        plugin.getLogger().warning(
+            "Restored backpack snapshot " + snapshot.id() + " for " + player.getName()
+                + "; the immediately previous state was archived first."
+        );
+        return new BackpackRestoreResult(true, "Backpack contents restored. The previous state was backed up first.", info);
+    }
+
+    private List<BackpackLocation> findVisibleBackpacksById(Player player, String backpackId) {
+        List<BackpackLocation> locations = new ArrayList<>();
+        for (Inventory inventory : List.of(player.getInventory(), player.getEnderChest())) {
+            ItemStack[] contents = inventory.getContents();
+            for (int slot = 0; slot < contents.length; slot++) {
+                if (hasBackpackId(contents[slot], backpackId)) {
+                    locations.add(new BackpackLocation(inventory, slot));
+                }
+            }
+        }
+        return locations;
+    }
+
+    private BackpackSnapshotInfo snapshotInfo(BackpackRecoveryJournal.Snapshot snapshot) {
+        BackpackRecoveryJournal.Recovery recovery = snapshot.recovery();
+        List<ItemStack> contents = auditContents(null, recovery.backpack());
+        Map<String, Integer> grouped = new LinkedHashMap<>();
+        int occupiedSlots = 0;
+        int totalItems = 0;
+        for (ItemStack item : contents) {
+            if (item == null || item.getType().isAir() || item.getAmount() <= 0) {
+                continue;
+            }
+            occupiedSlots++;
+            totalItems += item.getAmount();
+            grouped.merge(snapshotItemName(item), item.getAmount(), Integer::sum);
+        }
+        List<String> itemLines = grouped.entrySet().stream()
+            .map(entry -> entry.getValue() + "x " + entry.getKey())
+            .toList();
+        return new BackpackSnapshotInfo(
+            snapshot.id(),
+            recovery.backpackId(),
+            recovery.savedAt(),
+            occupiedSlots,
+            totalItems,
+            itemLines
+        );
+    }
+
+    private String snapshotItemName(ItemStack item) {
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null && meta.hasDisplayName() && meta.displayName() != null) {
+            String name = PLAIN.serialize(meta.displayName()).trim();
+            if (!name.isBlank()) {
+                return name;
+            }
+        }
+        String[] words = item.getType().name().toLowerCase(java.util.Locale.ROOT).split("_");
+        StringBuilder name = new StringBuilder();
+        for (String word : words) {
+            if (word.isBlank()) continue;
+            if (!name.isEmpty()) name.append(' ');
+            name.append(Character.toUpperCase(word.charAt(0))).append(word.substring(1));
+        }
+        return name.toString();
+    }
+
     public List<ItemStack> auditContents(Player owner, ItemStack backpack) {
         if (!isBackpack(backpack)) {
             return List.of();
@@ -1025,7 +1495,7 @@ public final class BackpackListener implements Listener {
 
         String backpackId = meta.getPersistentDataContainer().get(backpackIdKey, PersistentDataType.STRING);
         if (backpackId == null || backpackId.isBlank()) {
-            backpackId = UUID.randomUUID().toString();
+            backpackId = freshBackpackId(null);
         }
         ItemStack[] safeContents = contents == null ? new ItemStack[0] : cloneContents(contents);
         OpenBackpackSession openSession = owner == null ? null : openBackpacks.get(owner.getUniqueId());
@@ -1073,7 +1543,7 @@ public final class BackpackListener implements Listener {
             throw new IllegalStateException("Could not initialize backpack storage data");
         }
         pdc.set(backpackFlagKey, PersistentDataType.BYTE, (byte) 1);
-        pdc.set(backpackIdKey, PersistentDataType.STRING, UUID.randomUUID().toString());
+        pdc.set(backpackIdKey, PersistentDataType.STRING, freshBackpackId(null));
         pdc.set(backpackDataKey, PersistentDataType.BYTE_ARRAY, emptyData);
         pdc.set(backpackSizeKey, PersistentDataType.INTEGER, normalizedSize);
         pdc.set(backpackTierKey, PersistentDataType.STRING, backpackTierName(normalizedSize));
@@ -1094,7 +1564,7 @@ public final class BackpackListener implements Listener {
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
         String backpackId = pdc.get(backpackIdKey, PersistentDataType.STRING);
         if (backpackId == null || backpackId.isBlank()) {
-            backpackId = UUID.randomUUID().toString();
+            backpackId = freshBackpackId(null);
         }
         byte[] data = pdc.get(backpackDataKey, PersistentDataType.BYTE_ARRAY);
         String suffix = normalizedStoredSuffix(meta);
@@ -1193,7 +1663,7 @@ public final class BackpackListener implements Listener {
                     continue;
                 }
                 ItemStack shell = createNormalizedBackpack(
-                    UUID.randomUUID().toString(),
+                    freshBackpackId(null),
                     new byte[0],
                     backpackSize(drop),
                     normalizedStoredSuffix(drop.getItemMeta())
@@ -1229,6 +1699,10 @@ public final class BackpackListener implements Listener {
     }
 
     private byte[] serialize(ItemStack[] contents) {
+        if (contents == null || contents.length > UPGRADED_BACKPACK_SIZE) {
+            plugin.getLogger().severe("Failed to serialize backpack data: slot count was outside the safe range.");
+            return null;
+        }
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
              DataOutputStream out = new DataOutputStream(baos)) {
             out.writeInt(contents.length);
@@ -1238,6 +1712,13 @@ public final class BackpackListener implements Listener {
                     continue;
                 }
                 byte[] raw = item.serializeAsBytes();
+                if (!isSafeSerializedItemLength(raw.length)) {
+                    throw new IOException("A backpack item exceeded the safe serialized size.");
+                }
+                long projectedSize = (long) baos.size() + Integer.BYTES + raw.length;
+                if (!isSafeSerializedBackpackLength(projectedSize)) {
+                    throw new IOException("Backpack contents exceeded the safe serialized size.");
+                }
                 out.writeInt(raw.length);
                 out.write(raw);
             }
@@ -1252,6 +1733,10 @@ public final class BackpackListener implements Listener {
     private ItemStack[] deserialize(byte[] data, int size) {
         ItemStack[] out = new ItemStack[size];
         if (data == null || data.length == 0) return out;
+        if (!isSafeSerializedBackpackLength(data.length)) {
+            plugin.getLogger().severe("Backpack data was invalid and was retained without modification: stored data exceeded the safe size.");
+            return null;
+        }
 
         try (ByteArrayInputStream bais = new ByteArrayInputStream(data);
             DataInputStream in = new DataInputStream(bais)) {
@@ -1275,6 +1760,9 @@ public final class BackpackListener implements Listener {
                     out[i] = ItemStack.deserializeBytes(raw);
                 }
             }
+            if (bais.available() != 0) {
+                throw new IOException("Trailing bytes were found after the backpack contents.");
+            }
         } catch (Exception ex) {
             plugin.getLogger().severe("Backpack data was invalid and was retained without modification: " + ex.getMessage());
             return null;
@@ -1284,6 +1772,10 @@ public final class BackpackListener implements Listener {
 
     static boolean isSafeSerializedItemLength(int length) {
         return length >= 0 && length <= MAX_SERIALIZED_ITEM_BYTES;
+    }
+
+    static boolean isSafeSerializedBackpackLength(long length) {
+        return length >= 0L && length <= MAX_SERIALIZED_BACKPACK_BYTES;
     }
 
     private static boolean matchesBackpackIngredients(ItemStack[] matrix) {
@@ -1418,7 +1910,7 @@ public final class BackpackListener implements Listener {
     private void giveCraftedBackpack(Player player, InventoryClickEvent event, ItemStack backpack) {
         ClickType click = event.getClick();
         if (click == ClickType.SHIFT_LEFT || click == ClickType.SHIFT_RIGHT) {
-            player.getInventory().addItem(backpack);
+            InventoryRecipeUtil.giveOrDrop(player, backpack);
             return;
         }
 
@@ -1673,7 +2165,7 @@ public final class BackpackListener implements Listener {
     }
 
     private int serializedBackpackSlotCount(byte[] data) {
-        if (data == null || data.length < Integer.BYTES) {
+        if (data == null || data.length < Integer.BYTES || !isSafeSerializedBackpackLength(data.length)) {
             return 0;
         }
 
@@ -1748,7 +2240,7 @@ public final class BackpackListener implements Listener {
             ItemMeta meta = item.getItemMeta();
             byte[] data = meta == null ? null : meta.getPersistentDataContainer().get(backpackDataKey, PersistentDataType.BYTE_ARRAY);
             ItemStack rekeyed = createNormalizedBackpack(
-                UUID.randomUUID().toString(),
+                freshBackpackId(null),
                 data == null ? new byte[0] : data,
                 backpackSize(item),
                 meta == null ? "" : normalizedStoredSuffix(meta)
@@ -1799,24 +2291,58 @@ public final class BackpackListener implements Listener {
 
         String backpackId = sourcePdc.get(backpackIdKey, PersistentDataType.STRING);
         if (backpackId == null || backpackId.isBlank()) {
-            backpackId = UUID.randomUUID().toString();
+            backpackId = freshBackpackId(null);
         }
 
         String suffix = normalizedStoredSuffix(sourceMeta);
         List<ItemStack> normalized = new ArrayList<>(amount);
-        ItemStack primary = createNormalizedBackpack(backpackId, primaryData, sourceSize, suffix);
+        ItemStack primary = canNormalizeBackpackInPlace(taggedBackpack, amount, item.getType())
+            ? normalizeExistingBackpack(item, backpackId, primaryData, sourceSize, suffix)
+            : createNormalizedBackpack(backpackId, primaryData, sourceSize, suffix);
         if (primary == null) {
             return List.of(item);
         }
         normalized.add(primary);
         for (int i = 1; i < amount; i++) {
             byte[] extraData = stackedStoredBackpacks ? new byte[0] : primaryData;
-            ItemStack extra = createNormalizedBackpack(UUID.randomUUID().toString(), extraData, sourceSize, suffix);
+            ItemStack extra = createNormalizedBackpack(freshBackpackId(null), extraData, sourceSize, suffix);
             if (extra == null) {
                 return List.of(item);
             }
             normalized.add(extra);
         }
+        return normalized;
+    }
+
+    static boolean canNormalizeBackpackInPlace(boolean taggedBackpack, int amount, Material material) {
+        return taggedBackpack && amount == 1 && material == Material.FLOWER_POT;
+    }
+
+    private ItemStack normalizeExistingBackpack(ItemStack source, String backpackId, byte[] data, int size, String suffix) {
+        ItemStack normalized = source.clone();
+        ItemMeta meta = normalized.getItemMeta();
+        if (meta == null) {
+            return null;
+        }
+        int normalizedSize = Math.max(normalizeBackpackSize(size), inferBackpackSizeFromData(data));
+        byte[] normalizedData = normalizedBackpackData(data, normalizedSize);
+        if (normalizedData == null) {
+            return null;
+        }
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        pdc.set(backpackFlagKey, PersistentDataType.BYTE, (byte) 1);
+        pdc.set(backpackIdKey, PersistentDataType.STRING, backpackId);
+        pdc.set(backpackDataKey, PersistentDataType.BYTE_ARRAY, normalizedData);
+        pdc.set(backpackSizeKey, PersistentDataType.INTEGER, normalizedSize);
+        pdc.set(backpackTierKey, PersistentDataType.STRING, backpackTierName(normalizedSize));
+        if (suffix == null || suffix.isEmpty()) {
+            pdc.remove(backpackSuffixKey);
+        } else {
+            pdc.set(backpackSuffixKey, PersistentDataType.STRING, suffix);
+        }
+        applyBackpackPresentation(meta, normalizedSize);
+        normalized.setItemMeta(meta);
+        normalized.setAmount(1);
         return normalized;
     }
 
@@ -1920,9 +2446,24 @@ public final class BackpackListener implements Listener {
         ItemStack sourceTemplate
     ) {}
 
+    private record VisibleInventory(Inventory inventory, Player owner) {}
+
     private record BackpackLocation(Inventory inventory, int slot) {}
 
     private record BackpackUpgradeCraft(ItemStack backpack) {}
+
+    public record BackpackSnapshotInfo(
+        String id,
+        String backpackId,
+        long savedAt,
+        int occupiedSlots,
+        int totalItems,
+        List<String> itemLines
+    ) {}
+
+    public record BackpackSnapshotLookup(BackpackSnapshotInfo snapshot, String error) {}
+
+    public record BackpackRestoreResult(boolean restored, String message, BackpackSnapshotInfo snapshot) {}
 
     private record BackpackHolder() implements InventoryHolder, MenuDupeGuardListener.MutableMenuHolder {
         @Override

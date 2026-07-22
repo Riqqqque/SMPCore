@@ -735,13 +735,14 @@ public final class BossManager implements Listener {
             if (killer == null) {
                 killer = topOnlineParticipant(state);
             }
+            BossLootScale groupLoot = bossLootScale(state, killer);
             WispBossLootBonus wispBonus = rollWispBossLootBonus(state, killer);
             boolean doubleDrops = wispBonus.success();
             if (type != null) {
                 String fallback = BossDialogue.profile(type.id()).defeatLine();
                 sendBossLine(event.getEntity(), type, plugin.getStoryService() == null ? fallback : plugin.getStoryService().bossDefeat(type.id(), fallback));
             }
-            announceBossKill(type, killer, event.getEntity().getLocation(), wispBonus);
+            announceBossKill(type, killer, event.getEntity().getLocation(), wispBonus, groupLoot);
             if (killer != null && plugin.getLeaderboardManager() != null) {
                 plugin.getLeaderboardManager().recordBossKill(killer, record.bossId());
             }
@@ -783,7 +784,7 @@ public final class BossManager implements Listener {
                 );
             }
             if (type != null && plugin.getSeasonRelicManager() != null) {
-                for (ItemStack drop : plugin.getSeasonRelicManager().createBossDrops(type.id())) {
+                for (ItemStack drop : plugin.getSeasonRelicManager().createBossDrops(type.id(), groupLoot.qualifiedPlayers())) {
                     if (drop == null || drop.getType().isAir()) {
                         continue;
                     }
@@ -888,7 +889,7 @@ public final class BossManager implements Listener {
         player.sendActionBar(MM.deserialize("<red>Wind charges are disabled during boss fights.</red>"));
     }
 
-    private void announceBossKill(BossType type, Player killer, Location location, WispBossLootBonus wispBonus) {
+    private void announceBossKill(BossType type, Player killer, Location location, WispBossLootBonus wispBonus, BossLootScale groupLoot) {
         if (type == null) {
             return;
         }
@@ -896,6 +897,10 @@ public final class BossManager implements Listener {
         List<String> bonuses = new ArrayList<>();
         if (wispBonus != null && wispBonus.success()) {
             bonuses.add("Veil Wisp doubled the loot.");
+        }
+        if (groupLoot != null && groupLoot.qualifiedPlayers() > 1) {
+            int bonusPercent = (int) Math.round((groupLoot.multiplier() - 1.0) * 100.0);
+            bonuses.add(groupLoot.qualifiedPlayers() + " fighters added " + bonusPercent + "% core materials.");
         }
         String bonus = bonuses.isEmpty() ? "" : " <gold><bold>" + String.join(" ", bonuses) + "</bold></gold>";
         Bukkit.broadcast(MessageUtil.prefixedRaw(
@@ -908,6 +913,31 @@ public final class BossManager implements Listener {
             world.spawnParticle(Particle.TOTEM_OF_UNDYING, location.clone().add(0.0, 1.2, 0.0), 55, 0.75, 0.9, 0.75, 0.03);
             world.spawnParticle(Particle.DUST, location.clone().add(0.0, 1.2, 0.0), 34, 0.8, 0.9, 0.8, 0.0, new Particle.DustOptions(type.ritual().color(), 1.4f));
         }
+    }
+
+    private BossLootScale bossLootScale(BossFightState state, Player killer) {
+        if (state == null) {
+            return BossLootScale.solo();
+        }
+        List<BossFightParticipant> participants = state.sortedParticipants();
+        double totalDamage = participants.stream().mapToDouble(BossFightParticipant::damageDone).sum();
+        Set<UUID> qualified = new LinkedHashSet<>();
+        for (BossFightParticipant participant : participants) {
+            if (BossBalance.qualifiesForGroupLoot(participant.damageDone(), totalDamage)) {
+                qualified.add(participant.playerUuid());
+            }
+        }
+        if (killer != null) {
+            qualified.add(killer.getUniqueId());
+        }
+        int qualifiedPlayers = Math.max(1, qualified.size());
+        double multiplier = BossBalance.multiplayerLootScale(qualifiedPlayers);
+        plugin.getLogger().info(
+            "Boss loot scale: qualified_players=" + qualifiedPlayers
+                + " tracked_players=" + participants.size()
+                + " material_multiplier=" + trimNumber(multiplier)
+        );
+        return new BossLootScale(qualifiedPlayers, multiplier);
     }
 
     private WispBossLootBonus rollWispBossLootBonus(BossFightState state, Player killer) {
@@ -2903,12 +2933,12 @@ public final class BossManager implements Listener {
                     ? "<light_purple><bold>" + soulImprintName(player) + "</bold></light_purple>"
                     : "<dark_gray><bold>Unknown Drop</bold></dark_gray>";
                 meta.displayName(MM.deserialize(hiddenName));
-                meta.lore(List.of(
+                meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
                     MM.deserialize("<gold><bold>Boss Drop</bold></gold>"),
                     MM.deserialize("<gray>Chance:</gray> <white>" + formatPercent(preview.chance()) + "</white>"),
                     MM.deserialize("<gray>Hold it once to reveal its name.</gray>"),
                     MM.deserialize("<dark_gray>Preview only.</dark_gray>")
-                ));
+                )));
                 meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
                 hidden.setItemMeta(meta);
             }
@@ -2933,7 +2963,7 @@ public final class BossManager implements Listener {
             lore.add(MM.deserialize("<gold><bold>Boss Drop</bold></gold>"));
             lore.add(MM.deserialize("<gray>" + preview.note() + "</gray>"));
             lore.add(MM.deserialize("<dark_gray>Preview only.</dark_gray>"));
-            meta.lore(lore);
+            meta.lore(CustomLoreUtil.wrapLoreLines(lore));
             meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
             item.setItemMeta(meta);
         }
@@ -3899,7 +3929,7 @@ public final class BossManager implements Listener {
 
     private MechanicNotice mechanicNotice(BossMechanicKind kind) {
         return switch (kind) {
-            case MARSHAL_STACK -> new MechanicNotice("HOLD THE LINE", "Stack on the blue-marked player.", "Stack on blue");
+            case MARSHAL_STACK -> new MechanicNotice("BLUE ISOLATION", "Leave the blue-marked player alone inside the circle.", "Stay away from blue");
             case ASHEN_CROSSFIRE -> new MechanicNotice("ASHEN CROSSFIRE", "Spread red markers away from the group.", "Spread apart");
             case ASHEN_DEADEYE -> new MechanicNotice("DEADEYE", "Watch the aim line, then leave it when it locks.", "Bait, then dodge the line");
             case WIDOWS_TRAIL -> new MechanicNotice("WIDOW'S CLAIM", "The hunted player keeps moving; everyone avoids the trail.", "Keep moving; avoid the trail");
@@ -3922,7 +3952,7 @@ public final class BossManager implements Listener {
         int failurePercent = (int) Math.round(BossBalance.mechanicFailureHealthRatio(tier) * 100.0);
         int hazardPercent = (int) Math.round(BossBalance.mechanicHazardHealthRatio(tier) * 100.0);
         return switch (kind) {
-            case MARSHAL_STACK -> "The hit is divided between nearby players.";
+            case MARSHAL_STACK -> "Anyone except the marked player inside the blue circle takes damage.";
             case WIDOWS_TRAIL, PETALSTORM -> "Contact removes " + hazardPercent + "% max health per hit.";
             case IRON_COUNTERSTANCE -> "Attacking reflects " + hazardPercent + "% and marks you for a " + failurePercent + "% failure hit.";
             default -> "Failure removes " + failurePercent + "% of max health.";
@@ -4315,6 +4345,10 @@ public final class BossManager implements Listener {
         return Math.abs(-Math.sin(angle) * dx + Math.cos(angle) * dz);
     }
 
+    static Color marshalStackFlashColor() {
+        return Color.fromRGB(120, 190, 255);
+    }
+
     private boolean tickMarshalStack(LivingEntity boss, ActiveBossMechanic mechanic, long now) {
         Player marked = primaryMechanicTarget(boss, BossType.YULE_THE_MINION, mechanic);
         if (marked == null) {
@@ -4325,33 +4359,47 @@ public final class BossManager implements Listener {
         drawMechanicCircle(boss.getWorld(), marked.getLocation(), radius, Color.fromRGB(65, 155, 255));
         marked.getWorld().spawnParticle(Particle.END_ROD, marked.getLocation().clone().add(0.0, 1.5, 0.0), 3, 0.18, 0.35, 0.18, 0.01);
         if (now < mechanic.warningEndsAt) {
-            marked.sendActionBar(MM.deserialize("<aqua><bold>HOLD THE LINE - GROUP ON YOU</bold></aqua>"));
+            marked.sendActionBar(MM.deserialize("<aqua><bold>BLUE MARK - KEEP EVERYONE OUT</bold></aqua>"));
             return false;
         }
 
-        List<Player> stack = eligibleMechanicPlayers(boss, BossType.YULE_THE_MINION, mechanic).stream()
-            .filter(player -> horizontalDistanceSquared(player.getLocation(), marked.getLocation()) <= radius * radius)
+        UUID markedId = marked.getUniqueId();
+        List<Player> intruders = eligibleMechanicPlayers(boss, BossType.YULE_THE_MINION, mechanic).stream()
+            .filter(player -> BossMechanics.isOtherPlayerInsideMarker(
+                markedId,
+                player.getUniqueId(),
+                horizontalDistanceSquared(player.getLocation(), marked.getLocation()),
+                radius
+            ))
             .toList();
-        if (stack.isEmpty()) {
-            stack = List.of(marked);
-        }
-        double total = scaledBossAbilityDamage(boss, mechanic.phase >= 2 ? 28.0 : 22.0);
-        double damage = BossMechanics.splitDamage(total, stack.size(), mechanic.phase >= 2 ? 17.0 : 14.0);
-        for (Player player : stack) {
+        double damage = scaledBossAbilityDamage(boss, mechanic.phase >= 2 ? 17.0 : 14.0);
+        for (Player player : intruders) {
             damagePlayerWithBossMechanic(player, damage, boss);
         }
-        boss.getWorld().spawnParticle(Particle.FLASH, marked.getLocation().clone().add(0.0, 1.0, 0.0), 1);
-        boss.getWorld().playSound(marked.getLocation(), Sound.ITEM_SHIELD_BLOCK, 1.2f, stack.size() > 1 ? 1.25f : 0.72f);
+        boss.getWorld().spawnParticle(
+            Particle.FLASH,
+            marked.getLocation().clone().add(0.0, 1.0, 0.0),
+            1,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            marshalStackFlashColor()
+        );
+        if (intruders.isEmpty()) {
+            marked.sendActionBar(MM.deserialize("<green><bold>BLUE ISOLATION CLEARED</bold></green>"));
+        }
+        boss.getWorld().playSound(marked.getLocation(), Sound.ITEM_SHIELD_BLOCK, 1.2f, intruders.isEmpty() ? 1.35f : 0.72f);
         return true;
     }
 
     private boolean tickAshenCrossfire(LivingEntity boss, ActiveBossMechanic mechanic, long now) {
-        List<Location> centers = new ArrayList<>();
+        Map<UUID, Location> centers = new LinkedHashMap<>();
         for (UUID targetId : mechanic.targets) {
             Player target = Bukkit.getPlayer(targetId);
             if (isEligibleMechanicTarget(boss, BossType.KAEL_THE_ASHEN, target)) {
                 Location center = target.getLocation().clone();
-                centers.add(center);
+                centers.put(targetId, center);
                 drawMechanicCircle(boss.getWorld(), center, 3.0, Color.fromRGB(235, 70, 45));
                 target.getWorld().spawnParticle(Particle.SOUL_FIRE_FLAME, center.clone().add(0.0, 1.4, 0.0), 3, 0.15, 0.25, 0.15, 0.01);
             }
@@ -4363,10 +4411,16 @@ public final class BossManager implements Listener {
             return false;
         }
 
-        for (Location center : centers) {
+        for (Map.Entry<UUID, Location> marker : centers.entrySet()) {
+            Location center = marker.getValue();
             boss.getWorld().spawnParticle(Particle.EXPLOSION, center.clone().add(0.0, 0.5, 0.0), 3, 0.45, 0.2, 0.45, 0.02);
             for (Player player : eligibleMechanicPlayers(boss, BossType.KAEL_THE_ASHEN, mechanic)) {
-                if (horizontalDistanceSquared(player.getLocation(), center) > 9.0) {
+                if (!BossMechanics.isOtherPlayerInsideMarker(
+                    marker.getKey(),
+                    player.getUniqueId(),
+                    horizontalDistanceSquared(player.getLocation(), center),
+                    3.0
+                )) {
                     continue;
                 }
                 punishMechanicFailure(player, boss, BossType.KAEL_THE_ASHEN);
@@ -4444,9 +4498,11 @@ public final class BossManager implements Listener {
         if (hunted == null) {
             return true;
         }
+        boolean placedTrailPoint = false;
         if (now >= mechanic.warningEndsAt && now >= mechanic.nextStepAt) {
             mechanic.points.add(hunted.getLocation().clone());
             mechanic.nextStepAt = now + 1_000L;
+            placedTrailPoint = true;
         }
 
         for (Location puddle : mechanic.points) {
@@ -4456,8 +4512,10 @@ public final class BossManager implements Listener {
         if (now < mechanic.warningEndsAt) {
             hunted.sendActionBar(MM.deserialize("<red><bold>WIDOW'S CLAIM - KEEP MOVING</bold></red>"));
         } else {
+            int settledPoints = BossMechanics.settledTrailPointCount(mechanic.points.size(), placedTrailPoint);
+            List<Location> hazards = mechanic.points.subList(0, settledPoints);
             for (Player player : eligibleMechanicPlayers(boss, BossType.VESPER_THE_WIDOW_QUEEN, mechanic)) {
-                boolean insidePuddle = mechanic.points.stream().anyMatch(point -> point.getWorld() == player.getWorld()
+                boolean insidePuddle = hazards.stream().anyMatch(point -> point.getWorld() == player.getWorld()
                     && horizontalDistanceSquared(player.getLocation(), point) <= 2.15 * 2.15);
                 long nextHit = mechanic.hitCooldowns.getOrDefault(player.getUniqueId(), 0L);
                 if (!insidePuddle || now < nextHit) {
@@ -5774,7 +5832,7 @@ public final class BossManager implements Listener {
             mechanic,
             keyBossSecondaryCooldown,
             phase >= 2 ? 10_500L : 13_000L,
-            "<aqua><bold>HOLD THE LINE - STACK ON BLUE</bold></aqua>",
+            "<aqua><bold>BLUE ISOLATION - STAY AWAY FROM BLUE</bold></aqua>",
             Sound.BLOCK_BELL_RESONATE,
             0.8f
         );
@@ -7432,6 +7490,12 @@ public final class BossManager implements Listener {
         }
     }
 
+    private record BossLootScale(int qualifiedPlayers, double multiplier) {
+        private static BossLootScale solo() {
+            return new BossLootScale(1, 1.0);
+        }
+    }
+
     private record DropPreview(Material icon, String name, String note, String relicId, int amount, double chance) {
     }
 
@@ -7621,10 +7685,10 @@ public final class BossManager implements Listener {
             2,
             false,
             List.of(
-                "<gray>The opening Veil fight teaches the shared stack marker.</gray>",
-                "<gray>Phase One:</gray> <white>stack on blue to split Hold the Line</white>",
+                "<gray>The opening Veil fight teaches blue-marker isolation.</gray>",
+                "<gray>Phase One:</gray> <white>leave the blue-marked player alone</white>",
                 "<gray>Phase Two:</gray> <white>adds, Strength, and heavier knockback</white>",
-                "<gray>Leaving the marked player alone makes the hit much harsher.</gray>"
+                "<gray>The marked player is safe; nearby allies take the hit.</gray>"
             ),
             new BossRitual(
                 "Veilbound Muster",

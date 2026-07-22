@@ -49,7 +49,7 @@ Win, loss, tie, and cancelled-round screens include **Play Again**, which rejoin
 
 Each player gets three throws in a timing GUI. Click Throw when the moving aim marker reaches the center. A bullseye is worth 50 points, then 25, 15, 8, or 2 farther from center.
 
-A perfect 150-point round awards 5 Essence.
+A perfect 150-point round awards 10 Essence.
 
 The final score screen includes **Play Again** for another three throws without reopening the dartboard.
 
@@ -76,9 +76,9 @@ Material payouts are journaled before the wheel animation. Closing the menu or d
 The Rumor Board has two systems:
 
 - **Daily Work** resets each real UTC day: defeat 12 hostile mobs for 40 Essence, mine 24 ores for 45 Essence, and catch 6 fish for 35 Essence. Completed work is claimed from the board.
-- **Player Bounties** let players choose an online target and escrow 25, 100, 500, or 1,000 Essence, or the complete item stack held in their main hand. The creator confirms before anything is taken.
+- **Player Bounties** let players choose an online target and escrow 25, 100, 500, or 1,000 Essence. The payment page also has clear choices for held stacks of iron ingots, gold ingots, diamonds, netherite ingots, any custom orb, or Soul Imprints. Other held item stacks remain supported. The complete held stack becomes the reward, and the creator confirms before anything is taken.
 
-Active bounties survive restarts. A legitimate non-allied player kill awards every bounty on that target. The creator cannot claim their own posting, and the same killer/victim pair has a 30-minute anti-farming cooldown. Creators can review their postings and use a second confirmation screen to cancel one; the entire escrow is returned. Item rewards that cannot fit remain in durable recovery storage for delivery after inventory space is available.
+Active bounties survive restarts. Use `/bounties` for a read-only, paginated list with each target's player head. A legitimate non-allied player kill awards every bounty on that target. The creator cannot claim their own posting, and the same killer/victim pair has a 30-minute anti-farming cooldown. Creators can review their postings at the Rumor Board and use a second confirmation screen to cancel one; the entire escrow is returned. Item rewards that cannot fit remain in durable recovery storage for delivery after inventory space is available.
 
 ## Rook the Retired Adventurer
 
@@ -96,6 +96,7 @@ Look directly at a block within eight blocks and use:
 - `/tavernadmin list`
 - `/tavernadmin leaderboard spawn <slots|cards|darts>` - spawns that game's top-10 wins-and-playtime board 2.25 blocks above you and replaces only that game's older board.
 - `/tavernadmin leaderboard remove` - removes the nearest tavern leaderboard within six blocks.
+- `/tavernadmin sober <player>` - forcibly clears tavern intoxication and nausea if sleep cleanup ever needs staff help.
 
 Each game has one independent champions board showing wins and time played together. Rankings refresh every minute. Game playtime includes time spent waiting in a card lobby and ends safely when a player leaves or disconnects.
 

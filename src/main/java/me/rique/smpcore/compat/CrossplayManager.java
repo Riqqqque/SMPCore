@@ -12,6 +12,7 @@ import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.command.CommandSender;
@@ -36,6 +37,8 @@ import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.inventory.MenuType;
+import org.bukkit.inventory.view.AnvilView;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
@@ -59,7 +62,10 @@ public final class CrossplayManager implements Listener {
     private static final int CONFIRM_SLOT = 22;
     private static final int BACK_SLOT = 27;
     private static final int CLOSE_SLOT = 31;
+    private static final int NORMAL_ANVIL_SLOT = 33;
     private static final long BEDROCK_GESTURE_DEBOUNCE_MS = 350L;
+    private static final long BEDROCK_ANVIL_OPEN_DEBOUNCE_MS = 500L;
+    private static final long BEDROCK_ANVIL_ACTION_DEBOUNCE_MS = 250L;
 
     private static final String ACTION_PRIMARY = "primary";
     private static final String ACTION_ALTERNATE = "alternate";
@@ -70,6 +76,8 @@ public final class CrossplayManager implements Listener {
     private final SMPCore plugin;
     private final NamespacedKey actionKey;
     private final Map<UUID, Long> nextBedrockGestureAt = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> nextBedrockAnvilOpenAt = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> nextBedrockAnvilActionAt = new ConcurrentHashMap<>();
 
     public CrossplayManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -173,13 +181,17 @@ public final class CrossplayManager implements Listener {
         player.openInventory(inventory);
     }
 
-    private void openCustomAnvil(Player player) {
+    private void openCustomAnvil(Player player, Location anvilLocation) {
         if (!player.hasPermission("smpcore.customanvil")) {
             player.sendMessage(MessageUtil.error("You do not have permission to use the custom anvil."));
             return;
         }
+        if (!canOpenAnvil(player) || !isReachableAnvil(player, anvilLocation)) {
+            player.sendMessage(MessageUtil.warn("Stay near the placed anvil to use it."));
+            return;
+        }
         Inventory inventory = Bukkit.createInventory(
-            new CrossplayAnvilHolder(player.getUniqueId()),
+            new CrossplayAnvilHolder(player.getUniqueId(), anvilLocation.clone()),
             ANVIL_SIZE,
             BedrockCompat.menuTitle(
                 player,
@@ -193,7 +205,7 @@ public final class CrossplayManager implements Listener {
 
     public void sendAnvilAccessHint(Player player) {
         player.sendMessage(MessageUtil.info(
-            "Use a placed <white>anvil</white> to open SMPCore crafting. Crouch-use it for the normal vanilla anvil."
+            "Tap a placed <white>anvil</white> for SMPCore crafting. Crouch-tap it, or use the Normal Anvil button, for books, repairs, and renaming."
         ));
     }
 
@@ -316,7 +328,7 @@ public final class CrossplayManager implements Listener {
         activateHeldAbility(player, true);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onBedrockAnvilUse(PlayerInteractEvent event) {
         if (event.getHand() != EquipmentSlot.HAND
             || event.getAction() != Action.RIGHT_CLICK_BLOCK
@@ -328,14 +340,19 @@ public final class CrossplayManager implements Listener {
         if (!BedrockCompat.isBedrockPlayer(player) || !player.hasPermission("smpcore.customanvil")) {
             return;
         }
-        if (player.isSneaking()) {
-            player.sendActionBar(MM.deserialize("<gray>Opening the normal anvil.</gray>"));
-            return;
-        }
         event.setCancelled(true);
         event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
         event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
-        Bukkit.getScheduler().runTask(plugin, () -> openCustomAnvil(player));
+        if (!canOpenAnvil(player) || !markBedrockAnvilOpen(player)) {
+            return;
+        }
+        Location anvilLocation = event.getClickedBlock().getLocation();
+        if (player.isSneaking()) {
+            player.sendActionBar(MM.deserialize("<gray>Opening the normal anvil.</gray>"));
+            scheduleNativeAnvil(player, null, anvilLocation);
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> openCustomAnvil(player, anvilLocation));
     }
 
     static boolean isAnvilBlock(Material material) {
@@ -351,6 +368,8 @@ public final class CrossplayManager implements Listener {
     public void onCrossplayQuit(PlayerQuitEvent event) {
         returnOpenCrossplayAnvilInputs(event.getPlayer());
         nextBedrockGestureAt.remove(event.getPlayer().getUniqueId());
+        nextBedrockAnvilOpenAt.remove(event.getPlayer().getUniqueId());
+        nextBedrockAnvilActionAt.remove(event.getPlayer().getUniqueId());
     }
 
     private void returnOpenCrossplayAnvilInputs(Player player) {
@@ -387,6 +406,8 @@ public final class CrossplayManager implements Listener {
 
     public void shutdown() {
         nextBedrockGestureAt.clear();
+        nextBedrockAnvilOpenAt.clear();
+        nextBedrockAnvilActionAt.clear();
         for (Player player : Bukkit.getOnlinePlayers()) {
             Inventory top = player.getOpenInventory().getTopInventory();
             if (top.getHolder(false) instanceof CrossplayAnvilHolder) {
@@ -423,7 +444,7 @@ public final class CrossplayManager implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onAnvilClick(InventoryClickEvent event) {
         Inventory top = event.getView().getTopInventory();
         if (!(top.getHolder(false) instanceof CrossplayAnvilHolder holder)) {
@@ -440,7 +461,7 @@ public final class CrossplayManager implements Listener {
         int rawSlot = event.getRawSlot();
         boolean clickedTop = rawSlot >= 0 && rawSlot < top.getSize();
         if (clickedTop) {
-            handleAnvilTopClick(event, player, top, rawSlot);
+            handleAnvilTopClick(event, player, top, holder, rawSlot);
             return;
         }
         if (event.getClickedInventory() == null) {
@@ -524,11 +545,26 @@ public final class CrossplayManager implements Listener {
         }
     }
 
-    private void handleAnvilTopClick(InventoryClickEvent event, Player player, Inventory top, int rawSlot) {
-        if (rawSlot == CONFIRM_SLOT) {
+    private void handleAnvilTopClick(
+        InventoryClickEvent event,
+        Player player,
+        Inventory top,
+        CrossplayAnvilHolder holder,
+        int rawSlot
+    ) {
+        if (isAnvilResultActionSlot(rawSlot)) {
             event.setCancelled(true);
-            if (isNormalClick(event.getClick()) && MenuItemUtil.isVisibleItem(event.getCurrentItem())) {
-                executeAnvil(player, top);
+            if (isNormalClick(event.getClick())
+                && MenuItemUtil.isVisibleItem(event.getCurrentItem())
+                && markBedrockAnvilAction(player)) {
+                handleAnvilResultAction(player, top, holder);
+            }
+            return;
+        }
+        if (rawSlot == NORMAL_ANVIL_SLOT) {
+            event.setCancelled(true);
+            if (isNormalClick(event.getClick()) && markBedrockAnvilAction(player)) {
+                scheduleNativeAnvil(player, top, holder.anvilLocation());
             }
             return;
         }
@@ -546,13 +582,62 @@ public final class CrossplayManager implements Listener {
             event.setCancelled(true);
             return;
         }
-        if (event.isShiftClick() || isBlockedClick(event.getClick())) {
-            event.setCancelled(true);
-        }
-        Bukkit.getScheduler().runTask(plugin, () -> refreshAnvil(top));
+        event.setCancelled(true);
+        handleAnvilInputClick(player, top, rawSlot, event.getClick(), event.getCursor());
     }
 
-    private void executeAnvil(Player player, Inventory inventory) {
+    private void handleAnvilResultAction(Player player, Inventory top, CrossplayAnvilHolder holder) {
+        AnvilRecipe recipe = previewRecipe(top.getItem(LEFT_INPUT_SLOT), top.getItem(RIGHT_INPUT_SLOT));
+        if (recipe != null) {
+            executeAnvil(player, top, holder);
+            return;
+        }
+        if (hasManagedCustomBookData(top.getItem(LEFT_INPUT_SLOT), top.getItem(RIGHT_INPUT_SLOT))) {
+            player.sendMessage(MessageUtil.warn(
+                "That custom book does not match these inputs. Put the base item on the left and its book on the right."
+            ));
+            refreshAnvil(top);
+            return;
+        }
+        if (shouldOfferNativeAnvil(
+            !isEmpty(top.getItem(LEFT_INPUT_SLOT)),
+            !isEmpty(top.getItem(RIGHT_INPUT_SLOT)),
+            false,
+            false
+        )) {
+            scheduleNativeAnvil(player, top, holder.anvilLocation());
+            return;
+        }
+        player.sendActionBar(MM.deserialize("<gray>Add an item or a supported custom recipe.</gray>"));
+    }
+
+    private void handleAnvilInputClick(Player player, Inventory top, int slot, ClickType click, ItemStack cursorItem) {
+        ItemStack slotItem = cloneOrNull(top.getItem(slot));
+        ItemStack cursor = cloneOrNull(cursorItem);
+
+        if (click == ClickType.SHIFT_LEFT || click == ClickType.SHIFT_RIGHT) {
+            moveInputToPlayer(player, top, slot, slotItem);
+            refreshAnvil(top);
+            player.updateInventory();
+            return;
+        }
+        if (click != ClickType.LEFT && click != ClickType.RIGHT) {
+            refreshAnvil(top);
+            return;
+        }
+
+        InputClickResult result = applyInputClick(slotItem, cursor, click == ClickType.RIGHT);
+        top.setItem(slot, result.slotItem());
+        player.setItemOnCursor(result.cursorItem());
+        refreshAnvil(top);
+        player.updateInventory();
+    }
+
+    private void executeAnvil(Player player, Inventory inventory, CrossplayAnvilHolder holder) {
+        if (!canOpenAnvil(player) || !isReachableAnvil(player, holder.anvilLocation())) {
+            player.sendMessage(MessageUtil.warn("Stay near the placed anvil to combine those items."));
+            return;
+        }
         AnvilRecipe recipe = previewRecipe(inventory.getItem(LEFT_INPUT_SLOT), inventory.getItem(RIGHT_INPUT_SLOT));
         if (recipe == null) {
             player.sendMessage(MessageUtil.warn("Those items do not make a supported custom-anvil result."));
@@ -565,20 +650,32 @@ public final class CrossplayManager implements Listener {
         }
 
         ItemStack result = recipe.result().clone();
+        ItemStack left = cloneOrNull(inventory.getItem(LEFT_INPUT_SLOT));
+        ItemStack right = cloneOrNull(inventory.getItem(RIGHT_INPUT_SLOT));
         consumeOne(inventory, LEFT_INPUT_SLOT);
         consumeOne(inventory, RIGHT_INPUT_SLOT);
         if (player.getGameMode() != GameMode.CREATIVE) {
             player.setLevel(Math.max(0, player.getLevel() - recipe.levelCost()));
         }
-        InventoryRecipeUtil.giveOrDrop(player, result);
-        if (recipe.recordAcquisition() && plugin.getItemAuditManager() != null) {
-            plugin.getItemAuditManager().recordKnownAcquisition(
-                player,
-                result,
-                "crossplay_anvil",
-                recipe.auditDescription()
-            );
+        if (plugin.getItemAuditManager() != null) {
+            if (plugin.getCustomEnchantListener() != null) {
+                if (plugin.getCustomEnchantListener().isCustomEnchantBook(left)) {
+                    plugin.getItemAuditManager().recordConsumption(player, left, "crossplay_anvil", recipe.auditDescription());
+                }
+                if (plugin.getCustomEnchantListener().isCustomEnchantBook(right)) {
+                    plugin.getItemAuditManager().recordConsumption(player, right, "crossplay_anvil", recipe.auditDescription());
+                }
+            }
+            if (recipe.recordAcquisition()) {
+                plugin.getItemAuditManager().recordKnownAcquisition(
+                    player,
+                    result,
+                    "crossplay_anvil",
+                    recipe.auditDescription()
+                );
+            }
         }
+        InventoryRecipeUtil.giveOrDrop(player, result);
         player.sendMessage(MessageUtil.success(recipe.successMessage()));
         refreshAnvil(inventory);
         player.updateInventory();
@@ -597,6 +694,9 @@ public final class CrossplayManager implements Listener {
         if (recipe == null && plugin.getLegendaryListener() != null) {
             recipe = plugin.getLegendaryListener().crossplayAnvilRecipe(left, right);
         }
+        if (recipe == null && plugin.getSeasonRelicManager() != null) {
+            recipe = plugin.getSeasonRelicManager().crossplayAnvilRecipe(left, right);
+        }
         return recipe;
     }
 
@@ -611,8 +711,8 @@ public final class CrossplayManager implements Listener {
         inventory.setItem(RIGHT_INPUT_SLOT, right);
 
         AnvilRecipe recipe = previewRecipe(left, right);
-        inventory.setItem(RESULT_PREVIEW_SLOT, recipe == null ? waitingResultItem() : resultPreviewItem(recipe));
-        inventory.setItem(CONFIRM_SLOT, confirmItem(recipe));
+        inventory.setItem(RESULT_PREVIEW_SLOT, recipe == null ? waitingResultItem(left, right) : resultPreviewItem(recipe));
+        inventory.setItem(CONFIRM_SLOT, confirmItem(recipe, left, right));
     }
 
     private void decorateAnvil(Inventory inventory) {
@@ -634,6 +734,14 @@ public final class CrossplayManager implements Listener {
         inventory.setItem(16, menuItem(Material.GLOW_ITEM_FRAME, "<yellow>Ingredient</yellow>", List.of("<gray>Place the book, item, or repair core to the left.</gray>")));
         inventory.setItem(BACK_SLOT, menuItem(Material.ARROW, "<yellow>Exit</yellow>", List.of("<gray>Close the anvil and return your inputs.</gray>")));
         inventory.setItem(CLOSE_SLOT, menuItem(Material.BARRIER, "<red>Close</red>", List.of("<gray>Your input items will be returned.</gray>")));
+        inventory.setItem(NORMAL_ANVIL_SLOT, menuItem(
+            Material.IRON_INGOT,
+            "<aqua><bold>Open Normal Anvil</bold></aqua>",
+            List.of(
+                "<gray>Vanilla books, repairs, combining, and renaming.</gray>",
+                "<yellow>Your input slots transfer safely.</yellow>"
+            )
+        ));
         inventory.setItem(35, menuItem(
             Material.BOOK,
             "<aqua>Supported Results</aqua>",
@@ -641,16 +749,37 @@ public final class CrossplayManager implements Listener {
                 "<gray>Custom enchant books and item merges</gray>",
                 "<gray>Replenish books</gray>",
                 "<gray>Veil Dominion repairs</gray>",
-                "<dark_gray>Crouch-use the block for a vanilla anvil.</dark_gray>"
+                "<gray>Veil weapon enchant books</gray>",
+                "<dark_gray>Tap the result or Combine button.</dark_gray>"
             )
         ));
     }
 
-    private ItemStack waitingResultItem() {
+    private ItemStack waitingResultItem(ItemStack left, ItemStack right) {
+        if (hasManagedCustomBookData(left, right)) {
+            return menuItem(
+                Material.RED_STAINED_GLASS_PANE,
+                "<red>Invalid Custom Combination</red>",
+                List.of(
+                    "<gray>Put the base item on the left and its book on the right.</gray>",
+                    "<dark_gray>Mixed or incompatible custom books are rejected safely.</dark_gray>"
+                )
+            );
+        }
+        if (shouldOfferNativeAnvil(!isEmpty(left), !isEmpty(right), false, false)) {
+            return menuItem(
+                Material.YELLOW_STAINED_GLASS_PANE,
+                "<yellow>Normal Anvil Recipe</yellow>",
+                List.of(
+                    "<gray>This is not an SMPCore custom recipe.</gray>",
+                    "<yellow>Tap here to continue in the normal anvil.</yellow>"
+                )
+            );
+        }
         return menuItem(
             Material.GRAY_STAINED_GLASS_PANE,
             "<gray>Result Preview</gray>",
-            List.of("<dark_gray>Add a supported base item and ingredient.</dark_gray>")
+            List.of("<dark_gray>Add items, or open the normal anvil below.</dark_gray>")
         );
     }
 
@@ -661,13 +790,30 @@ public final class CrossplayManager implements Listener {
             List.of(
                 "<gray>Type: <white>" + prettyMaterial(recipe.result().getType()) + "</white></gray>",
                 "<yellow>Cost: <white>" + recipe.levelCost() + " XP levels</white></yellow>",
-                "<dark_gray>Preview only. Use the Combine button below.</dark_gray>"
+                "<green>Tap here or use Combine below.</green>"
             )
         );
     }
 
-    private ItemStack confirmItem(AnvilRecipe recipe) {
+    private ItemStack confirmItem(AnvilRecipe recipe, ItemStack left, ItemStack right) {
         if (recipe == null) {
+            if (hasManagedCustomBookData(left, right)) {
+                return menuItem(
+                    Material.RED_CONCRETE,
+                    "<red><bold>Cannot Combine</bold></red>",
+                    List.of("<gray>Check the item order and custom-book compatibility.</gray>")
+                );
+            }
+            if (shouldOfferNativeAnvil(!isEmpty(left), !isEmpty(right), false, false)) {
+                return menuItem(
+                    Material.CYAN_CONCRETE,
+                    "<aqua><bold>Continue in Normal Anvil</bold></aqua>",
+                    List.of(
+                        "<gray>Use vanilla books, repairs, combining, or renaming.</gray>",
+                        "<yellow>Tap to transfer your inputs safely.</yellow>"
+                    )
+                );
+            }
             return menuItem(
                 Material.GRAY_CONCRETE,
                 "<gray><bold>Waiting for Items</bold></gray>",
@@ -700,6 +846,194 @@ public final class CrossplayManager implements Listener {
         event.setCurrentItem(null);
         refreshAnvil(top);
         player.updateInventory();
+    }
+
+    private static InputClickResult applyInputClick(ItemStack slotItem, ItemStack cursorItem, boolean rightClick) {
+        ItemStack slot = cloneOrNull(slotItem);
+        ItemStack cursor = cloneOrNull(cursorItem);
+        if (!rightClick) {
+            if (slot == null) {
+                return new InputClickResult(cursor, null);
+            }
+            if (cursor == null) {
+                return new InputClickResult(null, slot);
+            }
+            if (slot.isSimilar(cursor) && slot.getAmount() < slot.getMaxStackSize()) {
+                int moved = Math.min(cursor.getAmount(), slot.getMaxStackSize() - slot.getAmount());
+                slot.setAmount(slot.getAmount() + moved);
+                cursor.setAmount(cursor.getAmount() - moved);
+                return new InputClickResult(slot, cursor.getAmount() <= 0 ? null : cursor);
+            }
+            return new InputClickResult(cursor, slot);
+        }
+
+        if (slot == null) {
+            if (cursor == null) {
+                return new InputClickResult(null, null);
+            }
+            ItemStack placed = cursor.clone();
+            placed.setAmount(1);
+            cursor.setAmount(cursor.getAmount() - 1);
+            return new InputClickResult(placed, cursor.getAmount() <= 0 ? null : cursor);
+        }
+        if (cursor == null) {
+            int takenAmount = (slot.getAmount() + 1) / 2;
+            ItemStack taken = slot.clone();
+            taken.setAmount(takenAmount);
+            slot.setAmount(slot.getAmount() - takenAmount);
+            return new InputClickResult(slot.getAmount() <= 0 ? null : slot, taken);
+        }
+        if (slot.isSimilar(cursor) && slot.getAmount() < slot.getMaxStackSize()) {
+            slot.setAmount(slot.getAmount() + 1);
+            cursor.setAmount(cursor.getAmount() - 1);
+            return new InputClickResult(slot, cursor.getAmount() <= 0 ? null : cursor);
+        }
+        return new InputClickResult(cursor, slot);
+    }
+
+    private void moveInputToPlayer(Player player, Inventory top, int slot, ItemStack item) {
+        if (isEmpty(item)) {
+            return;
+        }
+        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(item.clone());
+        int remaining = leftovers.values().stream().mapToInt(ItemStack::getAmount).sum();
+        if (remaining <= 0) {
+            top.setItem(slot, null);
+            return;
+        }
+        ItemStack remainder = item.clone();
+        remainder.setAmount(remaining);
+        top.setItem(slot, remainder);
+    }
+
+    private void scheduleNativeAnvil(Player player, Inventory sourceInventory, Location anvilLocation) {
+        Location anchor = anvilLocation == null ? null : anvilLocation.clone();
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!player.isOnline() || !canOpenAnvil(player)) {
+                return;
+            }
+            if (!isReachableAnvil(player, anchor)) {
+                player.sendMessage(MessageUtil.warn("Stay near the placed anvil to use it."));
+                return;
+            }
+            if (sourceInventory != null) {
+                Inventory openTop = player.getOpenInventory().getTopInventory();
+                if (openTop != sourceInventory
+                    || !(openTop.getHolder(false) instanceof CrossplayAnvilHolder holder)
+                    || !holder.playerId().equals(player.getUniqueId())) {
+                    return;
+                }
+            }
+
+            ItemStack left = sourceInventory == null ? null : cloneOrNull(sourceInventory.getItem(LEFT_INPUT_SLOT));
+            ItemStack right = sourceInventory == null ? null : cloneOrNull(sourceInventory.getItem(RIGHT_INPUT_SLOT));
+            if (sourceInventory != null) {
+                sourceInventory.setItem(LEFT_INPUT_SLOT, null);
+                sourceInventory.setItem(RIGHT_INPUT_SLOT, null);
+            }
+
+            AnvilView anvilView = null;
+            try {
+                anvilView = MenuType.ANVIL.builder()
+                    .location(anchor)
+                    .checkReachable(true)
+                    .title(MM.deserialize("<dark_gray>Anvil</dark_gray>"))
+                    .build(player);
+                anvilView.getTopInventory().setFirstItem(left);
+                anvilView.getTopInventory().setSecondItem(right);
+                player.openInventory(anvilView);
+                player.updateInventory();
+                player.sendActionBar(MM.deserialize("<green>Normal anvil ready.</green>"));
+            } catch (RuntimeException ex) {
+                ItemStack placedLeft = anvilView == null ? null : cloneOrNull(anvilView.getTopInventory().getFirstItem());
+                ItemStack placedRight = anvilView == null ? null : cloneOrNull(anvilView.getTopInventory().getSecondItem());
+                if (anvilView != null) {
+                    anvilView.getTopInventory().setFirstItem(null);
+                    anvilView.getTopInventory().setSecondItem(null);
+                }
+                returnTransferredInputs(player, placedLeft == null ? left : placedLeft, placedRight == null ? right : placedRight);
+                player.closeInventory();
+                player.sendMessage(MessageUtil.error("The normal anvil failed safely. Your items were returned."));
+                plugin.getLogger().warning("Could not transfer inputs into the Bedrock normal anvil: " + ex.getMessage());
+            }
+        });
+    }
+
+    private void returnTransferredInputs(Player player, ItemStack left, ItemStack right) {
+        if (!isEmpty(left)) {
+            InventoryRecipeUtil.giveOrDrop(player, left);
+        }
+        if (!isEmpty(right)) {
+            InventoryRecipeUtil.giveOrDrop(player, right);
+        }
+        player.updateInventory();
+    }
+
+    private boolean canOpenAnvil(Player player) {
+        if (player == null || !player.isOnline() || player.isDead()) {
+            return false;
+        }
+        if ((plugin.getDuelManager() != null && plugin.getDuelManager().blocksExternalTeleport(player))
+            || (plugin.getBossDungeonManager() != null && plugin.getBossDungeonManager().blocksExternalTeleport(player))) {
+            player.sendMessage(MessageUtil.warn("Anvils are unavailable during an active fight."));
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean isReachableAnvil(Player player, Location location) {
+        return player != null
+            && location != null
+            && location.getWorld() != null
+            && player.getWorld().equals(location.getWorld())
+            && player.getLocation().distanceSquared(location) <= 64.0D
+            && isAnvilBlock(location.getBlock().getType());
+    }
+
+    private boolean markBedrockAnvilAction(Player player) {
+        long now = System.currentTimeMillis();
+        UUID playerId = player.getUniqueId();
+        long next = nextBedrockAnvilActionAt.getOrDefault(playerId, 0L);
+        if (next > now) {
+            return false;
+        }
+        nextBedrockAnvilActionAt.put(playerId, now + BEDROCK_ANVIL_ACTION_DEBOUNCE_MS);
+        return true;
+    }
+
+    private boolean markBedrockAnvilOpen(Player player) {
+        long now = System.currentTimeMillis();
+        UUID playerId = player.getUniqueId();
+        long next = nextBedrockAnvilOpenAt.getOrDefault(playerId, 0L);
+        if (next > now) {
+            return false;
+        }
+        nextBedrockAnvilOpenAt.put(playerId, now + BEDROCK_ANVIL_OPEN_DEBOUNCE_MS);
+        return true;
+    }
+
+    static boolean isAnvilResultActionSlot(int rawSlot) {
+        return rawSlot == RESULT_PREVIEW_SLOT || rawSlot == CONFIRM_SLOT;
+    }
+
+    static boolean shouldOfferNativeAnvil(
+        boolean hasLeftInput,
+        boolean hasRightInput,
+        boolean hasCustomRecipe,
+        boolean hasRejectedCustomBook
+    ) {
+        return !hasCustomRecipe && !hasRejectedCustomBook && (hasLeftInput || hasRightInput);
+    }
+
+    private boolean hasManagedCustomBookData(ItemStack left, ItemStack right) {
+        if (plugin.getCustomEnchantListener() != null
+            && (plugin.getCustomEnchantListener().hasCustomEnchantBookData(left)
+                || plugin.getCustomEnchantListener().hasCustomEnchantBookData(right))) {
+            return true;
+        }
+        return plugin.getReplenishListener() != null
+            && (plugin.getReplenishListener().hasReplenishBookData(left)
+                || plugin.getReplenishListener().hasReplenishBookData(right));
     }
 
     private void returnInputSlots(Player player, Inventory inventory) {
@@ -856,6 +1190,9 @@ public final class CrossplayManager implements Listener {
         }
     }
 
+    private record InputClickResult(ItemStack slotItem, ItemStack cursorItem) {
+    }
+
     private record ControlsHolder() implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
@@ -863,7 +1200,18 @@ public final class CrossplayManager implements Listener {
         }
     }
 
-    private record CrossplayAnvilHolder(UUID playerId) implements InventoryHolder, MenuDupeGuardListener.MutableMenuHolder {
+    private record CrossplayAnvilHolder(UUID playerId, Location anvilLocation) implements InventoryHolder, MenuDupeGuardListener.RecoveryTrackedMenuHolder {
+        @Override public String recoverySurface() { return "Bedrock Anvil"; }
+        @Override public int[] recoverySlots() { return new int[] { LEFT_INPUT_SLOT, RIGHT_INPUT_SLOT }; }
+        private CrossplayAnvilHolder {
+            anvilLocation = anvilLocation.clone();
+        }
+
+        @Override
+        public Location anvilLocation() {
+            return anvilLocation.clone();
+        }
+
         @Override
         public Inventory getInventory() {
             return null;

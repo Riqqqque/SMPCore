@@ -25,7 +25,7 @@ public enum SuperpowerType {
     SKYBOUND("Skybound", 0.025, Material.FEATHER, null),
     TIDEBORN("Tideborn", 0.02, Material.HEART_OF_THE_SEA, null),
     ASHEN_SOUL("Ashen Soul", 0.02, Material.BLAZE_POWDER, null),
-    VOIDWALKER("Voidwalker", 0.035, Material.ENDER_EYE, "Use /voidstep and /voidvision"),
+    VOIDWALKER("Voidwalker", 0.035, Material.ENDER_EYE, "Sneak-right-click with an empty hand to Voidstep; use /voidvision for night vision"),
     SENTINEL("Sentinel", 0.05, Material.IRON_CHESTPLATE, null),
     FROSTBORN("Frostborn", 0.05, Material.BLUE_ICE, null),
     DEADEYE("Deadeye", 0.05, Material.CROSSBOW, "Use /deadeyearrows"),

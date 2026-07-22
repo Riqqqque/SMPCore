@@ -35,6 +35,7 @@ import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeModifier;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.AbstractArrow;
+import org.bukkit.entity.Boss;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Item;
@@ -80,6 +81,7 @@ import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.player.PlayerAnimationEvent;
 import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
+import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerExpChangeEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
@@ -134,6 +136,15 @@ public final class SuperpowerManager implements Listener {
     public static final String THE_WORLD_CLOCK_ITEM_ID = "the_world_clock";
     public static final String DRUID_GRIMOIRE_ITEM_ID = "druid_grimoire";
     private static final String POWER_COMMAND_BYPASS_PERMISSION = "smpcore.superpower.command.all";
+    private static final Set<String> CLASS_ABILITY_COMMANDS = Set.of(
+        "shadow", "nightshadevision", "nvision", "nightshadenv",
+        "xray", "voidstep", "vstep", "voidvision", "vvision", "voidnv",
+        "stormcaller", "sclightning", "stormpower", "smokebomb", "sb",
+        "travel", "domainexpansion", "domain", "domainexp", "infinity", "infinite", "honoredinfinity",
+        "unstoppableforce", "uf", "deadeyearrows", "darrows", "deadeyeinfinity",
+        "arcanebook", "maxbook", "bookmax", "oathsummon",
+        "bloodsacrifice", "bloodheal", "curse", "msummon"
+    );
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final Component POWERS_MENU_TITLE =
@@ -168,7 +179,6 @@ public final class SuperpowerManager implements Listener {
     private static final double MONARCH_MIN_ARMOR = 10.0;
     private static final double MONARCH_MIN_ARMOR_TOUGHNESS = 4.0;
     private static final double MONARCH_KNOCKBACK_RESISTANCE = 0.35;
-    private static final double MONARCH_BOSS_DAMAGE_MULTIPLIER = 0.30;
     private static final int FLORIST_HEAL_DURATION_SECONDS = 10;
     private static final int FLORIST_VINE_DAMAGE = 2;
     private static final int FLORIST_VINE_RANGE = 18;
@@ -251,16 +261,12 @@ public final class SuperpowerManager implements Listener {
     private static final double WATERMAN_SUBMERGED_MINING_BONUS = 0.8;
     private static final int FROSTBORN_CHILL_SECONDS = 5;
     private static final double FROSTBORN_FROZEN_TARGET_DAMAGE_MULTIPLIER = 1.25;
-    private static final double FROSTBORN_BOSS_DAMAGE_MULTIPLIER = 1.10;
     private static final double DEADEYE_PROJECTILE_DAMAGE_MULTIPLIER = 1.25;
     private static final double DEADEYE_MARKED_SHOT_DAMAGE_MULTIPLIER = 1.45;
-    private static final double DEADEYE_BOSS_PROJECTILE_DAMAGE_MULTIPLIER = 1.15;
-    private static final double DEADEYE_BOSS_MARKED_SHOT_DAMAGE_MULTIPLIER = 1.25;
     private static final double DEADEYE_MARKED_SHOT_VELOCITY_MULTIPLIER = 1.25;
     private static final int DEADEYE_GLOW_SECONDS = 5;
     private static final int DEADEYE_MARKED_SHOT_SLOW_SECONDS = 3;
     private static final double RIFTWARDEN_BOSS_RADIUS = 18.0;
-    private static final double RIFTWARDEN_BOSS_DAMAGE_MULTIPLIER = 1.15;
     private static final double RIFTWARDEN_MOB_DAMAGE_MULTIPLIER = 1.12;
     private static final double RIFTWARDEN_BOSS_DAMAGE_REDUCTION = 0.15;
     private static final double RIFTWARDEN_MOB_DAMAGE_REDUCTION = 0.18;
@@ -291,10 +297,11 @@ public final class SuperpowerManager implements Listener {
     private static final double VEIL_ASSASSIN_MAX_HEALTH = 16.0;
     private static final double VEIL_ASSASSIN_SMOKE_RADIUS = 5.0;
     private static final int VEIL_ASSASSIN_SMOKE_DARKNESS_SECONDS = 15;
+    private static final int VEIL_ASSASSIN_SMOKE_SLOW_SECONDS = 8;
+    private static final int VEIL_ASSASSIN_SMOKE_SLOWNESS_AMPLIFIER = 5;
     private static final int VEIL_ASSASSIN_SMOKE_BUFF_SECONDS = 5;
     private static final int VEIL_ASSASSIN_SMOKE_COOLDOWN_SECONDS = 60;
     private static final double VEIL_ASSASSIN_BACKSTAB_RATIO = 0.90;
-    private static final double VEIL_ASSASSIN_BOSS_BACKSTAB_MULTIPLIER = 1.20;
     private static final double VEIL_ASSASSIN_SNEAKING_SPEED_BONUS = 0.70;
     private static final int PASSIVE_NIGHT_VISION_TICKS = 600;
     private static final long PORTAL_RECENT_TRAVEL_MS = 2500L;
@@ -449,10 +456,10 @@ public final class SuperpowerManager implements Listener {
     private final Set<UUID> honoredDomainParalyzedPlayers = ConcurrentHashMap.newKeySet();
     private final Set<UUID> honoredDomainDamageGuards = ConcurrentHashMap.newKeySet();
     private final Set<UUID> veilAssassinsInVeil = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> enchanterLapisMutations = ConcurrentHashMap.newKeySet();
     private BukkitTask passiveTask;
     private BukkitTask portalTask;
-    private BukkitTask timeStopTask;
-    private BukkitTask honoredTask;
+    private BukkitTask fastEffectsTask;
     private long honoredAuraPulse;
 
     public SuperpowerManager(SMPCore plugin) {
@@ -515,8 +522,7 @@ public final class SuperpowerManager implements Listener {
     public void start() {
         passiveTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickPlayers, 20L, 20L);
         portalTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickPortals, 5L, 5L);
-        timeStopTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickTimeStops, 1L, 1L);
-        honoredTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickHonoredPowers, 1L, 1L);
+        fastEffectsTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickFastEffects, 1L, 1L);
         Bukkit.getScheduler().runTask(plugin, () -> Bukkit.getOnlinePlayers().forEach(this::initializePlayerState));
     }
 
@@ -541,13 +547,9 @@ public final class SuperpowerManager implements Listener {
             portalTask.cancel();
             portalTask = null;
         }
-        if (timeStopTask != null) {
-            timeStopTask.cancel();
-            timeStopTask = null;
-        }
-        if (honoredTask != null) {
-            honoredTask.cancel();
-            honoredTask = null;
+        if (fastEffectsTask != null) {
+            fastEffectsTask.cancel();
+            fastEffectsTask = null;
         }
         for (UUID ownerId : new HashSet<>(activeTravelerPortals.keySet())) {
             closeTravelerPortal(ownerId, false);
@@ -577,6 +579,7 @@ public final class SuperpowerManager implements Listener {
         veilAssassinArmorWarnCooldowns.clear();
         veilAssassinsInVeil.clear();
         bedrockPowerItemActivationDebounces.clear();
+        enchanterLapisMutations.clear();
     }
 
     public ItemStack createAncientScrollItem() {
@@ -719,7 +722,53 @@ public final class SuperpowerManager implements Listener {
 
     private boolean hasCommandPower(Player player, SuperpowerType type) {
         return player != null
+            && !isActiveBossFight(player)
             && (hasPower(player, type) || player.hasPermission(POWER_COMMAND_BYPASS_PERMISSION));
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onClassAbilityCommandDuringBoss(PlayerCommandPreprocessEvent event) {
+        if (!isActiveBossFight(event.getPlayer()) || !isClassAbilityCommand(event.getMessage())) {
+            return;
+        }
+        event.setCancelled(true);
+        event.getPlayer().sendMessage(MessageUtil.warn("Class command abilities are sealed during boss fights."));
+    }
+
+    static boolean isClassAbilityCommand(String commandLine) {
+        return CLASS_ABILITY_COMMANDS.contains(classAbilityCommandRoot(commandLine));
+    }
+
+    static boolean isVoidstepGesture(boolean sneaking, boolean mainHand, boolean rightClick, boolean emptyMainHand) {
+        return sneaking
+            && mainHand
+            && rightClick
+            && emptyMainHand;
+    }
+
+    private static String classAbilityCommandRoot(String commandLine) {
+        if (commandLine == null) {
+            return "";
+        }
+        String trimmed = commandLine.strip();
+        if (!trimmed.startsWith("/") || trimmed.length() == 1) {
+            return "";
+        }
+        int end = 1;
+        while (end < trimmed.length() && !Character.isWhitespace(trimmed.charAt(end))) {
+            end++;
+        }
+        String root = trimmed.substring(1, end).toLowerCase(Locale.ROOT);
+        int namespace = root.lastIndexOf(':');
+        return namespace >= 0 ? root.substring(namespace + 1) : root;
+    }
+
+    static boolean classEffectsCanModifyTarget(boolean bossEncounterEntity) {
+        return !bossEncounterEntity;
+    }
+
+    static boolean shouldIgnorePassiveMobTarget(boolean passiveMatches, boolean bossTargeter) {
+        return passiveMatches && !bossTargeter;
     }
 
     public boolean hasOathSummonTarget(Player requester) {
@@ -855,7 +904,15 @@ public final class SuperpowerManager implements Listener {
             if (!(entity instanceof Player target) || target.equals(player) || target.isDead() || target.getGameMode() == GameMode.SPECTATOR) {
                 continue;
             }
+            applyPotion(target, PotionEffectType.BLINDNESS, VEIL_ASSASSIN_SMOKE_DARKNESS_SECONDS * 20, 0);
             applyPotion(target, PotionEffectType.DARKNESS, VEIL_ASSASSIN_SMOKE_DARKNESS_SECONDS * 20, 0);
+            applyPotion(target, PotionEffectType.SLOWNESS, VEIL_ASSASSIN_SMOKE_SLOW_SECONDS * 20, VEIL_ASSASSIN_SMOKE_SLOWNESS_AMPLIFIER);
+            Vector velocity = target.getVelocity();
+            velocity.setX(velocity.getX() * 0.15D);
+            velocity.setZ(velocity.getZ() * 0.15D);
+            target.setVelocity(velocity);
+            target.setSprinting(false);
+            target.sendActionBar(MM.deserialize("<dark_purple><bold>SMOKE BOMB</bold></dark_purple> <gray>Blinded and heavily slowed</gray>"));
             blinded++;
         }
 
@@ -984,6 +1041,12 @@ public final class SuperpowerManager implements Listener {
         }
         if (book.getAmount() != 1) {
             player.sendMessage(MessageUtil.warn("Hold only one enchanted book at a time."));
+            return false;
+        }
+        CustomEnchantListener customEnchants = plugin.getCustomEnchantListener();
+        if ((customEnchants != null && customEnchants.hasCustomEnchantBookData(book))
+            || (plugin.getReplenishListener() != null && plugin.getReplenishListener().hasReplenishBookData(book))) {
+            player.sendMessage(MessageUtil.warn("That ability only works on ordinary vanilla enchanted books."));
             return false;
         }
         if (!meta.hasStoredEnchants()) {
@@ -1866,11 +1929,13 @@ public final class SuperpowerManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPrepareItemEnchant(PrepareItemEnchantEvent event) {
-        if (!hasPower(event.getEnchanter(), SuperpowerType.ARCANIST)) {
+        Player player = event.getEnchanter();
+        if (enchanterLapisMutations.contains(player.getUniqueId())
+            || !hasPower(player, SuperpowerType.ARCANIST)) {
             return;
         }
         if (event.getView().getTopInventory() instanceof EnchantingInventory enchanting) {
-            refreshEnchanterLapis(event.getEnchanter(), enchanting);
+            refreshEnchanterLapis(player, enchanting);
         }
     }
 
@@ -1902,7 +1967,7 @@ public final class SuperpowerManager implements Listener {
         }
 
         if (!hasPower(player, SuperpowerType.ARCANIST)) {
-            clearVirtualEnchanterLapis(enchanting);
+            clearVirtualEnchanterLapis(player, enchanting);
             return;
         }
 
@@ -1947,7 +2012,7 @@ public final class SuperpowerManager implements Listener {
         }
 
         if (!hasPower(player, SuperpowerType.ARCANIST)) {
-            clearVirtualEnchanterLapis(enchanting);
+            clearVirtualEnchanterLapis(player, enchanting);
             return;
         }
 
@@ -1960,8 +2025,9 @@ public final class SuperpowerManager implements Listener {
 
     @EventHandler
     public void onEnchanterInventoryClose(InventoryCloseEvent event) {
-        if (event.getInventory() instanceof EnchantingInventory enchanting) {
-            clearVirtualEnchanterLapis(enchanting);
+        if (event.getPlayer() instanceof Player player
+            && event.getInventory() instanceof EnchantingInventory enchanting) {
+            clearVirtualEnchanterLapis(player, enchanting);
         }
     }
 
@@ -2031,6 +2097,11 @@ public final class SuperpowerManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPowerCombat(EntityDamageByEntityEvent event) {
+        Player attackingPlayer = resolvePlayerDamager(event.getDamager());
+        if (attackingPlayer != null && isPowerFrozenPlayer(attackingPlayer.getUniqueId())) {
+            event.setCancelled(true);
+            return;
+        }
         boolean honoredDomainSplash = event.getEntity() instanceof Player splashTarget
             && honoredDomainDamageGuards.remove(splashTarget.getUniqueId());
         if (event.getEntity() instanceof Player projectileTarget
@@ -2047,15 +2118,20 @@ public final class SuperpowerManager implements Listener {
             return;
         }
         Player attacker = source instanceof Player player ? player : null;
-        boolean customBossVictim = isCustomBoss(victim);
-        if (customBossVictim && monarchOwnerOf(source) != null) {
-            event.setDamage(event.getDamage() * MONARCH_BOSS_DAMAGE_MULTIPLIER);
+        boolean bossEncounterVictim = isBossEncounterEntity(victim);
+        if (bossEncounterVictim && monarchOwnerOf(source) != null) {
+            event.setCancelled(true);
+            return;
         }
         if (blocksUnsafeSpawnCombat(attacker, victim)) {
             event.setCancelled(true);
             return;
         }
-        boolean honoredDomainPulse = attacker != null && event.getDamage() > 0.0 && triggerHonoredDomainPulse(attacker);
+        boolean classEffectsAllowed = classEffectsCanModifyTarget(bossEncounterVictim);
+        boolean honoredDomainPulse = classEffectsAllowed
+            && attacker != null
+            && event.getDamage() > 0.0
+            && triggerHonoredDomainPulse(attacker);
         boolean friendlyTarget = attacker != null && isFriendlyTo(attacker, victim);
         if (!honoredDomainSplash
             && attacker != null
@@ -2065,7 +2141,7 @@ public final class SuperpowerManager implements Listener {
             return;
         }
 
-        if (attacker != null && event.getDamage() > 0.0 && !friendlyTarget) {
+        if (attacker != null && event.getDamage() > 0.0 && !friendlyTarget && classEffectsAllowed) {
             if (hasPower(attacker, SuperpowerType.TIDEBORN) && isWatermanEmpowered(attacker)) {
                 event.setDamage(event.getDamage() * WATERMAN_DAMAGE_MULTIPLIER);
                 victim.getWorld().spawnParticle(Particle.SPLASH, victim.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.45, 0.35, 0.45, 0.05);
@@ -2082,10 +2158,8 @@ public final class SuperpowerManager implements Listener {
 
             if (hasPower(attacker, SuperpowerType.VOIDWALKER) && voidstepVeilUntil(attacker) > System.currentTimeMillis()) {
                 event.setDamage(event.getDamage() + VOIDSTEP_AMBUSH_DAMAGE);
-                if (!customBossVictim) {
-                    applyPotion(victim, PotionEffectType.BLINDNESS, 60, 0);
-                    applyPotion(victim, PotionEffectType.WEAKNESS, 60, 0);
-                }
+                applyPotion(victim, PotionEffectType.BLINDNESS, 60, 0);
+                applyPotion(victim, PotionEffectType.WEAKNESS, 60, 0);
                 setVoidstepVeilUntil(attacker, 0L);
                 removeLikelyPowerPotion(attacker, PotionEffectType.INVISIBILITY, 0, VOIDSTEP_INVISIBILITY_SECONDS * 20 + 20);
                 removeLikelyPowerPotion(attacker, PotionEffectType.SLOW_FALLING, 0, VOIDSTEP_SLOW_FALLING_SECONDS * 20 + 20);
@@ -2094,15 +2168,11 @@ public final class SuperpowerManager implements Listener {
             }
 
             if (hasPower(attacker, SuperpowerType.FROSTBORN)) {
-                if (customBossVictim) {
-                    event.setDamage(event.getDamage() * FROSTBORN_BOSS_DAMAGE_MULTIPLIER);
-                } else if (victim.getPotionEffect(PotionEffectType.SLOWNESS) != null) {
+                if (victim.getPotionEffect(PotionEffectType.SLOWNESS) != null) {
                     event.setDamage(event.getDamage() * FROSTBORN_FROZEN_TARGET_DAMAGE_MULTIPLIER);
                 }
-                if (!customBossVictim) {
-                    applyPotion(victim, PotionEffectType.SLOWNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
-                    applyPotion(victim, PotionEffectType.WEAKNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
-                }
+                applyPotion(victim, PotionEffectType.SLOWNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
+                applyPotion(victim, PotionEffectType.WEAKNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
                 victim.getWorld().spawnParticle(Particle.CLOUD, victim.getLocation().clone().add(0.0, 1.0, 0.0), 12, 0.35, 0.35, 0.35, 0.02);
             }
 
@@ -2112,7 +2182,8 @@ public final class SuperpowerManager implements Listener {
             }
 
             if (hasPower(attacker, SuperpowerType.VEIL_ASSASSIN)
-                && isInVeilAssassinVeil(attacker)
+                && event.getDamager().getUniqueId().equals(attacker.getUniqueId())
+                && isVeilAssassinBackstabReady(attacker)
                 && isBehindTarget(attacker, victim)) {
                 applyVeilAssassinBackstab(event, attacker, victim);
             }
@@ -2120,22 +2191,17 @@ public final class SuperpowerManager implements Listener {
             if (event.getDamager() instanceof Projectile projectile
                 && hasPower(attacker, SuperpowerType.DEADEYE)) {
                 boolean markedShot = projectile.getPersistentDataContainer().has(keyDeadeyeMarkedShot, PersistentDataType.BYTE);
-                double multiplier = customBossVictim
-                    ? (markedShot ? DEADEYE_BOSS_MARKED_SHOT_DAMAGE_MULTIPLIER : DEADEYE_BOSS_PROJECTILE_DAMAGE_MULTIPLIER)
-                    : (markedShot ? DEADEYE_MARKED_SHOT_DAMAGE_MULTIPLIER : DEADEYE_PROJECTILE_DAMAGE_MULTIPLIER);
+                double multiplier = markedShot ? DEADEYE_MARKED_SHOT_DAMAGE_MULTIPLIER : DEADEYE_PROJECTILE_DAMAGE_MULTIPLIER;
                 event.setDamage(event.getDamage() * multiplier);
                 applyPotion(victim, PotionEffectType.GLOWING, DEADEYE_GLOW_SECONDS * 20, 0);
-                if (markedShot && !customBossVictim) {
+                if (markedShot) {
                     applyPotion(victim, PotionEffectType.SLOWNESS, DEADEYE_MARKED_SHOT_SLOW_SECONDS * 20, 1);
                 }
                 victim.getWorld().spawnParticle(Particle.CRIT, victim.getLocation().clone().add(0.0, 1.0, 0.0), markedShot ? 28 : 18, 0.35, 0.35, 0.35, 0.05);
             }
 
             if (hasPower(attacker, SuperpowerType.RIFTWARDEN)) {
-                if (customBossVictim) {
-                    event.setDamage(event.getDamage() * RIFTWARDEN_BOSS_DAMAGE_MULTIPLIER);
-                    victim.getWorld().spawnParticle(Particle.REVERSE_PORTAL, victim.getLocation().clone().add(0.0, 1.0, 0.0), 22, 0.5, 0.45, 0.5, 0.08);
-                } else if (isHostileMob(victim)) {
+                if (isHostileMob(victim)) {
                     event.setDamage(event.getDamage() * RIFTWARDEN_MOB_DAMAGE_MULTIPLIER);
                 }
             }
@@ -2159,7 +2225,7 @@ public final class SuperpowerManager implements Listener {
             }
         }
 
-        if (!honoredDomainSplash && !honoredDomainPulse && attacker != null && event.getDamage() > 0.0) {
+        if (classEffectsAllowed && !honoredDomainSplash && !honoredDomainPulse && attacker != null && event.getDamage() > 0.0) {
             applyHonoredDomainDamage(event, attacker, victim);
         }
 
@@ -2167,7 +2233,9 @@ public final class SuperpowerManager implements Listener {
             return;
         }
 
-        if (hasPower(defender, SuperpowerType.ASHEN_SOUL) && event.getDamage() > 0.0) {
+        if (hasPower(defender, SuperpowerType.ASHEN_SOUL)
+            && event.getDamage() > 0.0
+            && classEffectsCanModifyTarget(isBossEncounterEntity(source))) {
             source.setFireTicks(Math.max(source.getFireTicks(), 60));
             applyPotion(defender, PotionEffectType.ABSORPTION, 80, 0);
             source.getWorld().spawnParticle(Particle.FLAME, source.getLocation().clone().add(0.0, 1.0, 0.0), 10, 0.35, 0.35, 0.35, 0.02);
@@ -2175,12 +2243,12 @@ public final class SuperpowerManager implements Listener {
 
         if (hasPower(defender, SuperpowerType.SENTINEL) && defender.isSneaking() && event.getDamage() > 0.0) {
             event.setDamage(event.getDamage() * (1.0 - SENTINEL_BRACE_DAMAGE_REDUCTION));
-            if (!isCustomBoss(source)) {
+            if (!isBossEncounterEntity(source)) {
                 applyPotion(source, PotionEffectType.WEAKNESS, 80, 0);
             }
             Vector push = source.getLocation().toVector().subtract(defender.getLocation().toVector());
             push.setY(0.0);
-            if (!isCustomBoss(source) && push.lengthSquared() > 0.001) {
+            if (!isBossEncounterEntity(source) && push.lengthSquared() > 0.001) {
                 source.setVelocity(source.getVelocity().add(push.normalize().multiply(0.45).setY(0.18)));
             }
             defender.getWorld().spawnParticle(Particle.CRIT, defender.getLocation().clone().add(0.0, 1.0, 0.0), 16, 0.55, 0.45, 0.55, 0.02);
@@ -2189,7 +2257,7 @@ public final class SuperpowerManager implements Listener {
 
         if (hasPower(defender, SuperpowerType.TIDEBORN) && isWatermanEmpowered(defender) && event.getDamage() > 0.0) {
             event.setDamage(event.getDamage() * (1.0 - WATERMAN_DAMAGE_REDUCTION));
-            if (!isCustomBoss(source)) {
+            if (!isBossEncounterEntity(source)) {
                 applyPotion(source, PotionEffectType.SLOWNESS, 60, 0);
             }
             defender.getWorld().spawnParticle(Particle.BUBBLE_POP, defender.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.65, 0.4, 0.65, 0.03);
@@ -2197,7 +2265,7 @@ public final class SuperpowerManager implements Listener {
         }
 
         if (hasPower(defender, SuperpowerType.FROSTBORN) && event.getDamage() > 0.0) {
-            if (!isCustomBoss(source)) {
+            if (!isBossEncounterEntity(source)) {
                 applyPotion(source, PotionEffectType.SLOWNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
             }
             source.getWorld().spawnParticle(Particle.CLOUD, source.getLocation().clone().add(0.0, 1.0, 0.0), 10, 0.35, 0.35, 0.35, 0.02);
@@ -2211,7 +2279,7 @@ public final class SuperpowerManager implements Listener {
 
         if (hasPower(defender, SuperpowerType.GRAVEBORN) && event.getDamage() > 0.0 && isUndeadPassiveType(source.getType())) {
             event.setDamage(event.getDamage() * (1.0 - GRAVEBORN_UNDEAD_DAMAGE_REDUCTION));
-            if (!isCustomBoss(source)) {
+            if (!isBossEncounterEntity(source)) {
                 applyPotion(source, PotionEffectType.WEAKNESS, 60, 0);
             }
         }
@@ -2220,26 +2288,32 @@ public final class SuperpowerManager implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onEntityDamageByEntity(EntityDamageByEntityEvent event) {
         Player attackingPlayer = resolvePlayerDamager(event.getDamager());
-        if (attackingPlayer != null && isPowerFrozenPlayer(attackingPlayer.getUniqueId())) {
-            event.setCancelled(true);
-            return;
+        if (attackingPlayer != null && shouldBreakVeilAssassinConcealment(
+            hasPower(attackingPlayer, SuperpowerType.VEIL_ASSASSIN),
+            isVeilAssassinBackstabReady(attackingPlayer)
+        )) {
+            clearVeilAssassinState(attackingPlayer, true);
         }
 
         if (event.getDamager() instanceof Player attacker) {
-            if (hasPower(attacker, SuperpowerType.MONARCH) && event.getEntity() instanceof LivingEntity victim) {
+            if (hasPower(attacker, SuperpowerType.MONARCH)
+                && event.getEntity() instanceof LivingEntity victim
+                && !isBossEncounterEntity(victim)) {
                 directMonarchSummons(attacker, victim);
             }
             return;
         }
 
         Player summonOwner = monarchOwnerOf(event.getDamager());
-        if (summonOwner != null && event.getEntity() instanceof LivingEntity victim) {
+        if (summonOwner != null
+            && event.getEntity() instanceof LivingEntity victim
+            && !isBossEncounterEntity(victim)) {
             directMonarchSummons(summonOwner, victim);
         }
 
         if (event.getEntity() instanceof Player victim && hasPower(victim, SuperpowerType.MONARCH)) {
             LivingEntity attacker = actualLivingDamager(event.getDamager());
-            if (attacker != null) {
+            if (attacker != null && !isBossEncounterEntity(attacker)) {
                 directMonarchSummons(victim, attacker);
             }
         }
@@ -2310,8 +2384,16 @@ public final class SuperpowerManager implements Listener {
             return;
         }
         if (event.getTarget() instanceof Player target
-            && hasPower(target, SuperpowerType.VOIDWALKER)
-            && mob.getType() == EntityType.ENDERMAN) {
+            && shouldIgnoreVeiledPlayerTarget(isInVeilAssassinVeil(target), isBossTargeter(mob))) {
+            event.setCancelled(true);
+            mob.setTarget(null);
+            return;
+        }
+        if (event.getTarget() instanceof Player target
+            && shouldIgnorePassiveMobTarget(
+                hasPower(target, SuperpowerType.VOIDWALKER) && mob.getType() == EntityType.ENDERMAN,
+                isBossTargeter(mob)
+            )) {
             event.setCancelled(true);
             mob.setTarget(null);
             return;
@@ -2319,15 +2401,19 @@ public final class SuperpowerManager implements Listener {
         UUID ownerId = monarchOwnerByMob.get(mob.getUniqueId());
         if (ownerId == null) {
             if (event.getTarget() instanceof Player target
-                && hasPower(target, SuperpowerType.MONARCH)
-                && isUndeadPassiveType(mob.getType())) {
+                && shouldIgnorePassiveMobTarget(
+                    hasPower(target, SuperpowerType.MONARCH) && isUndeadPassiveType(mob.getType()),
+                    isBossTargeter(mob)
+                )) {
                 event.setCancelled(true);
                 mob.setTarget(null);
                 return;
             }
             if (event.getTarget() instanceof Player target
-                && hasPower(target, SuperpowerType.GRAVEBORN)
-                && isUndeadPassiveType(mob.getType())) {
+                && shouldIgnorePassiveMobTarget(
+                    hasPower(target, SuperpowerType.GRAVEBORN) && isUndeadPassiveType(mob.getType()),
+                    isBossTargeter(mob)
+                )) {
                 event.setCancelled(true);
                 mob.setTarget(null);
             }
@@ -2575,9 +2661,10 @@ public final class SuperpowerManager implements Listener {
             || !(event.getHitEntity() instanceof LivingEntity target)) {
             return;
         }
-        if (!isCustomBoss(target)) {
-            applyPotion(target, PotionEffectType.WEAKNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
+        if (isBossEncounterEntity(target)) {
+            return;
         }
+        applyPotion(target, PotionEffectType.WEAKNESS, FROSTBORN_CHILL_SECONDS * 20, 0);
         target.getWorld().spawnParticle(Particle.SNOWFLAKE, target.getLocation().clone().add(0.0, 1.0, 0.0), 16, 0.35, 0.35, 0.35, 0.03);
         target.getWorld().playSound(target.getLocation(), Sound.BLOCK_SNOW_BREAK, 0.75f, 1.15f);
     }
@@ -2699,6 +2786,21 @@ public final class SuperpowerManager implements Listener {
         }
 
         Player player = event.getPlayer();
+        if (isVoidstepGesture(
+            player.isSneaking(),
+            hand == EquipmentSlot.HAND,
+            action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK,
+            player.getInventory().getItemInMainHand().getType().isAir()
+        ) && hasPower(player, SuperpowerType.VOIDWALKER)) {
+            event.setCancelled(true);
+            event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
+            event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
+            if (!isPowerFrozenPlayer(player.getUniqueId())) {
+                handleVoidstepCommand(player);
+            }
+            return;
+        }
+
         ItemStack item = event.getItem();
         if (item == null || item.getType().isAir()) {
             item = itemInHand(player, hand);
@@ -3139,11 +3241,61 @@ public final class SuperpowerManager implements Listener {
             if (supermanFlightActiveUntil(player) > 0L && supermanFlightActiveUntil(player) <= now) {
                 stopSupermanFlight(player, true);
             }
+            suppressActiveCommandEffectsForBoss(player, now);
             applyPassiveEffects(player);
             applyBypassedCommandEffects(player, now);
         }
         cleanupRecentPortalTravel(now);
         tickMonarchSummons();
+    }
+
+    private void suppressActiveCommandEffectsForBoss(Player player, long now) {
+        if (!isActiveBossFight(player)) {
+            return;
+        }
+
+        boolean sealed = false;
+        if (isShadowActive(player)) {
+            setShadowActiveUntil(player, 0L);
+            setShadowCooldownUntil(player, Math.max(shadowCooldownUntil(player), now + (SHADOW_COOLDOWN_SECONDS * 1000L)));
+            removeLikelyPowerPotion(player, PotionEffectType.INVISIBILITY, 0);
+            removeLikelyPowerPotion(player, PotionEffectType.SPEED, 2);
+            restoreShadowAppearance(player);
+            sealed = true;
+        }
+        if (xrayActiveUntil(player) > now) {
+            setXrayActiveUntil(player, 0L);
+            sealed = true;
+        }
+        if (juggernautUnstoppableActiveUntil(player) > now) {
+            setJuggernautUnstoppableActiveUntil(player, 0L);
+            removeLikelyPowerPotion(player, PotionEffectType.RESISTANCE, 1, JUGGERNAUT_UNSTOPPABLE_DURATION_SECONDS * 20 + 20);
+            removeLikelyPowerPotion(player, PotionEffectType.SPEED, 0, JUGGERNAUT_UNSTOPPABLE_DURATION_SECONDS * 20 + 20);
+            sealed = true;
+        }
+        if (voidstepVeilUntil(player) > now) {
+            setVoidstepVeilUntil(player, 0L);
+            removeLikelyPowerPotion(player, PotionEffectType.INVISIBILITY, 0, VOIDSTEP_INVISIBILITY_SECONDS * 20 + 20);
+            removeLikelyPowerPotion(player, PotionEffectType.SLOW_FALLING, 0, VOIDSTEP_SLOW_FALLING_SECONDS * 20 + 20);
+            sealed = true;
+        }
+        if (veilAssassinSmokeInvisibilityUntil.remove(player.getUniqueId()) != null) {
+            removeLikelyPowerPotion(player, PotionEffectType.SPEED, 2, VEIL_ASSASSIN_SMOKE_BUFF_SECONDS * 20 + 40);
+            removeLikelyPowerPotion(player, PotionEffectType.DOLPHINS_GRACE, 0, VEIL_ASSASSIN_SMOKE_BUFF_SECONDS * 20 + 40);
+            if (!isInVeilAssassinVeil(player)) {
+                removeLikelyPowerPotion(player, PotionEffectType.INVISIBILITY, 0, VEIL_ASSASSIN_SMOKE_BUFF_SECONDS * 20 + 40);
+                refreshVeilAssassinConcealment(player);
+                restoreShadowAppearance(player);
+            }
+            sealed = true;
+        }
+        if (activeTravelerPortals.containsKey(player.getUniqueId())) {
+            closeTravelerPortal(player.getUniqueId(), false);
+            sealed = true;
+        }
+        if (sealed) {
+            player.sendMessage(MessageUtil.warn("Active class command effects were sealed by the boss arena."));
+        }
     }
 
     private void applyBypassedCommandEffects(Player player, long now) {
@@ -3483,6 +3635,7 @@ public final class SuperpowerManager implements Listener {
         );
         hideShadowEquipment(player);
         if (justEntered) {
+            clearNonBossTargets(player);
             player.sendMessage(MessageUtil.success("You enter the veil."));
             refreshVeilAssassinConcealment(player);
             player.playSound(player.getLocation(), Sound.BLOCK_SCULK_SENSOR_CLICKING, 0.6f, 0.65f);
@@ -3575,6 +3728,32 @@ public final class SuperpowerManager implements Listener {
             && veilAssassinsInVeil.contains(player.getUniqueId());
     }
 
+    private boolean isVeilAssassinBackstabReady(Player player) {
+        return player != null
+            && (veilAssassinsInVeil.contains(player.getUniqueId()) || hasActiveSmokeInvisibility(player));
+    }
+
+    static boolean shouldBreakVeilAssassinConcealment(boolean veilAssassin, boolean concealed) {
+        return veilAssassin && concealed;
+    }
+
+    static boolean shouldIgnoreVeiledPlayerTarget(boolean inVeil, boolean bossTargeter) {
+        return inVeil && !bossTargeter;
+    }
+
+    private boolean isBossTargeter(Entity entity) {
+        return entity instanceof Boss || isBossEncounterEntity(entity);
+    }
+
+    private void clearNonBossTargets(Player player) {
+        for (Entity entity : player.getNearbyEntities(64.0D, 64.0D, 64.0D)) {
+            if (!(entity instanceof Mob mob) || mob.getTarget() != player || isBossTargeter(mob)) {
+                continue;
+            }
+            mob.setTarget(null);
+        }
+    }
+
     private void refreshVeilAssassinConcealment(Player player) {
         if (player == null || plugin.getPlayerVisualListener() == null) {
             return;
@@ -3639,16 +3818,17 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void applyVeilAssassinBackstab(EntityDamageByEntityEvent event, Player attacker, LivingEntity victim) {
-        if (isCustomBoss(victim)) {
-            event.setDamage(event.getDamage() * VEIL_ASSASSIN_BOSS_BACKSTAB_MULTIPLIER);
-        } else {
-            double targetFinalDamage = Math.max(1.0, victim.getHealth() * VEIL_ASSASSIN_BACKSTAB_RATIO);
-            setFinalDamageAtLeast(event, targetFinalDamage);
-        }
+        double targetFinalDamage = veilAssassinBackstabDamage(victim.getHealth());
+        setFinalDamageAtLeast(event, targetFinalDamage);
         victim.getWorld().spawnParticle(Particle.SWEEP_ATTACK, victim.getLocation().clone().add(0.0, 1.0, 0.0), 1, 0.0, 0.0, 0.0, 0.0);
         victim.getWorld().spawnParticle(Particle.SMOKE, victim.getLocation().clone().add(0.0, 1.0, 0.0), 18, 0.35, 0.45, 0.35, 0.04);
         victim.getWorld().playSound(victim.getLocation(), Sound.ENTITY_PLAYER_ATTACK_CRIT, 0.9f, 0.75f);
         attacker.getWorld().playSound(attacker.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 0.35f, 1.6f);
+        attacker.sendActionBar(MM.deserialize("<dark_purple><bold>BACKSTAB</bold></dark_purple>"));
+    }
+
+    static double veilAssassinBackstabDamage(double currentHealth) {
+        return Math.max(1.0D, Math.max(0.0D, currentHealth) * VEIL_ASSASSIN_BACKSTAB_RATIO);
     }
 
     private void setFinalDamageAtLeast(EntityDamageByEntityEvent event, double targetFinalDamage) {
@@ -3667,8 +3847,13 @@ public final class SuperpowerManager implements Listener {
     }
 
     private boolean isBehindTarget(Player attacker, LivingEntity victim) {
-        Vector targetFacing = victim.getLocation().getDirection();
         Vector targetToAttacker = attacker.getLocation().toVector().subtract(victim.getLocation().toVector());
+        return isBehindTarget(victim.getLocation().getDirection(), targetToAttacker);
+    }
+
+    static boolean isBehindTarget(Vector targetFacing, Vector targetToAttacker) {
+        targetFacing = targetFacing.clone();
+        targetToAttacker = targetToAttacker.clone();
         targetFacing.setY(0.0);
         targetToAttacker.setY(0.0);
         if (targetFacing.lengthSquared() < 0.001 || targetToAttacker.lengthSquared() < 0.001) {
@@ -4011,7 +4196,9 @@ public final class SuperpowerManager implements Listener {
         world.playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 0.65f, 1.35f);
 
         for (Entity nearby : world.getNearbyEntities(player.getLocation(), PHOENIX_BURST_RADIUS, PHOENIX_BURST_RADIUS, PHOENIX_BURST_RADIUS)) {
-            if (!(nearby instanceof LivingEntity living) || isFriendlyTo(player, nearby)) {
+            if (!(nearby instanceof LivingEntity living)
+                || isFriendlyTo(player, nearby)
+                || isBossEncounterEntity(living)) {
                 continue;
             }
             living.setFireTicks(Math.max(living.getFireTicks(), 80));
@@ -4543,7 +4730,7 @@ public final class SuperpowerManager implements Listener {
         lore.add(Component.empty());
         lore.add(MM.deserialize("<gray>Duration: <white>" + blessing.durationText() + "</white></gray>"));
         lore.add(MM.deserialize("<gray>Cooldown: <white>" + DRUID_BUFF_COOLDOWN_SECONDS + "s</white></gray>"));
-        meta.lore(lore);
+        meta.lore(CustomLoreUtil.wrapLoreLines(lore));
         item.setItemMeta(meta);
         return item;
     }
@@ -4793,7 +4980,11 @@ public final class SuperpowerManager implements Listener {
 
     private void damageJuggernautImpact(Player player, Location impact) {
         for (Entity nearby : player.getWorld().getNearbyEntities(impact, 2.4, 1.8, 2.4)) {
-            if (!(nearby instanceof LivingEntity living) || living.equals(player) || living.isDead() || isFriendlyTo(player, living)) {
+            if (!(nearby instanceof LivingEntity living)
+                || living.equals(player)
+                || living.isDead()
+                || isFriendlyTo(player, living)
+                || isBossEncounterEntity(living)) {
                 continue;
             }
             AbilityDamageContext.damage(player, living, JUGGERNAUT_UNSTOPPABLE_IMPACT_DAMAGE);
@@ -4860,7 +5051,11 @@ public final class SuperpowerManager implements Listener {
         player.getWorld().spawnParticle(Particle.CLOUD, center.clone().add(0.0, 0.15, 0.0), 54, radius * 0.35, 0.1, radius * 0.35, 0.1);
         player.getWorld().spawnParticle(Particle.SWEEP_ATTACK, center.clone().add(0.0, 0.55, 0.0), 18, radius * 0.28, 0.15, radius * 0.28, 0.0);
         for (Entity nearby : player.getWorld().getNearbyEntities(center, radius, 2.5, radius)) {
-            if (!(nearby instanceof LivingEntity living) || living.equals(player) || living.isDead() || isFriendlyTo(player, living)) {
+            if (!(nearby instanceof LivingEntity living)
+                || living.equals(player)
+                || living.isDead()
+                || isFriendlyTo(player, living)
+                || isBossEncounterEntity(living)) {
                 continue;
             }
             double damage = living instanceof Player ? playerDamage : playerDamage * 2.0;
@@ -4903,7 +5098,7 @@ public final class SuperpowerManager implements Listener {
             if (!(nearby instanceof Mob mob) || mob.isDead() || !mob.isValid() || !isUndeadPassiveType(mob.getType())) {
                 continue;
             }
-            if (isTaggedMonarchSummon(mob) || isCustomBoss(mob)) {
+            if (isTaggedMonarchSummon(mob) || isBossEncounterEntity(mob)) {
                 continue;
             }
             double distance = mob.getLocation().distanceSquared(player.getLocation());
@@ -5277,7 +5472,7 @@ public final class SuperpowerManager implements Listener {
         }
         floristRightClickCooldowns.put(player.getUniqueId(), now + FLORIST_STICK_RIGHT_CLICK_COOLDOWN_MS);
 
-        LivingEntity target = targetedLivingEntity(player, 10.0, living -> true);
+        LivingEntity target = targetedLivingEntity(player, 10.0, living -> !isBossEncounterEntity(living));
         if (target == null) {
             target = player;
         }
@@ -5303,6 +5498,7 @@ public final class SuperpowerManager implements Listener {
             0.45,
             entity -> entity instanceof LivingEntity
                 && !entity.equals(player)
+                && !isBossEncounterEntity(entity)
                 && !sameTeamOrSelf(player.getUniqueId(), entity.getUniqueId())
         );
 
@@ -5693,7 +5889,7 @@ public final class SuperpowerManager implements Listener {
             return false;
         }
         EntityType type = mob.getType();
-        if (isCustomBoss(entity)) {
+        if (isBossEncounterEntity(entity)) {
             return false;
         }
         return isMonarchStorableType(type);
@@ -5949,6 +6145,9 @@ public final class SuperpowerManager implements Listener {
         if (target == null || target.isDead() || !target.isValid()) {
             return false;
         }
+        if (isBossEncounterEntity(target)) {
+            return false;
+        }
         if (target instanceof Player player) {
             return player.getGameMode() != GameMode.SPECTATOR
                 && !sameTeamOrSelf(ownerId, player.getUniqueId());
@@ -5985,7 +6184,9 @@ public final class SuperpowerManager implements Listener {
 
     private void pacifyNearbyUndead(Player player) {
         for (Entity entity : player.getWorld().getNearbyEntities(player.getLocation(), 18.0, 12.0, 18.0)) {
-            if (!(entity instanceof Mob mob) || !isUndeadPassiveType(mob.getType())) {
+            if (!(entity instanceof Mob mob)
+                || !isUndeadPassiveType(mob.getType())
+                || isBossTargeter(mob)) {
                 continue;
             }
             if (mob.getTarget() != null && mob.getTarget().getUniqueId().equals(player.getUniqueId())) {
@@ -6448,6 +6649,11 @@ public final class SuperpowerManager implements Listener {
 
     private void tickTimeStops() {
         reconcileTimeStopState(true);
+    }
+
+    private void tickFastEffects() {
+        tickTimeStops();
+        tickHonoredPowers();
     }
 
     private void reconcileTimeStopState(boolean render) {
@@ -7663,7 +7869,7 @@ public final class SuperpowerManager implements Listener {
                 player.sendMessage(MessageUtil.warn("You need at least one empty inventory slot."));
                 return false;
             }
-            player.getInventory().addItem(result);
+            InventoryRecipeUtil.giveOrDrop(player, result);
             return true;
         }
         ItemStack cursor = event.getCursor();
@@ -7929,11 +8135,11 @@ public final class SuperpowerManager implements Listener {
         }
         String powerName = currentPower == null ? "Unknown" : currentPower.displayName();
         meta.displayName(MM.deserialize("<aqua><bold>Your Class</bold></aqua>"));
-        meta.lore(List.of(
+        meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
             MM.deserialize("<gray>Current Class: <white>" + powerName + "</white></gray>"),
             Component.empty(),
             MM.deserialize("<gray>The menu below shows every possible class and its effects.</gray>")
-        ));
+        )));
         item.setItemMeta(meta);
         return item;
     }
@@ -7960,8 +8166,11 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Crouch for <white>5s</white> to enter the veil.</gray>"));
                 lore.add(MM.deserialize("<gray>In the veil, crouching moves at full speed with Speed IV.</gray>"));
                 lore.add(MM.deserialize("<gray>Your body, gear, name, and ally marker are fully hidden.</gray>"));
-                lore.add(MM.deserialize("<gray>Backstabs: <white>90% current HP</white>; bosses: <white>+20%</white>.</gray>"));
-                lore.add(MM.deserialize("<gray><white>/smokebomb</white> blinds nearby players and fully hides you for <white>5s</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Backstabs deal <white>90% current HP</white> to non-boss targets.</gray>"));
+                lore.add(MM.deserialize("<gray>Any successful attack breaks concealment.</gray>"));
+                lore.add(MM.deserialize("<gray><white>/smokebomb</white>: Blindness and Darkness for <white>15s</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Also Slowness VI for <white>8s</white>; hides you for <white>5s</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Smoke concealment enables backstabs.</gray>"));
                 lore.add(MM.deserialize("<gray>Smoke Bomb cooldown: <white>60s</white>.</gray>"));
             }
             case ARCANIST -> {
@@ -8017,15 +8226,15 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Summons have <white>40 HP</white>, armor, resistance, and strong damage.</gray>"));
                 lore.add(MM.deserialize("<gray>They persist during normal gameplay and guard against enemies of your team.</gray>"));
                 lore.add(MM.deserialize("<gray>They auto-prioritize enemy players, then hostile mobs.</gray>"));
-                lore.add(MM.deserialize("<gray>Bosses resist <white>70%</white> of their damage.</gray>"));
-                lore.add(MM.deserialize("<gray>Undead mobs refuse to target the Shadow Monarch.</gray>"));
+                lore.add(MM.deserialize("<gray>Summons cannot target or damage boss encounter enemies.</gray>"));
+                lore.add(MM.deserialize("<gray>Undead mobs ignore you; custom bosses still target you.</gray>"));
                 lore.add(MM.deserialize("<gray>Storage limit: <white>" + MONARCH_STORAGE_LIMIT + "</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Command: <white>/msummon [amount]</white> or <white>/msummon despawn</white></gray>"));
             }
             case NIGHTSHADE -> {
                 lore.add(MM.deserialize("<gray>Toggle invisibility for <white>15 minutes</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Night vision can be toggled with <white>/nightshadevision</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Hits poison enemies briefly.</gray>"));
+                lore.add(MM.deserialize("<gray>Hits poison non-boss enemies briefly.</gray>"));
                 lore.add(MM.deserialize("<gray>While hidden, gain <white>Speed III</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Hit cooldown: <white>7 minutes</white>. Normal cooldown: <white>5 minutes</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Command: <white>/shadow toggle</white></gray>"));
@@ -8078,7 +8287,8 @@ public final class SuperpowerManager implements Listener {
             }
             case VOIDWALKER -> {
                 lore.add(MM.deserialize("<gray>Toggleable <white>Night Vision</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Command: <white>/voidstep</white></gray>"));
+                lore.add(MM.deserialize("<gray>Sneak + right-click with an empty main hand to Voidstep.</gray>"));
+                lore.add(MM.deserialize("<gray>Fallback command: <white>/voidstep</white></gray>"));
                 lore.add(MM.deserialize("<gray>Night vision can be toggled with <white>/voidvision</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Blink up to <white>" + (int) VOIDSTEP_RANGE + " blocks</white> through a clear safe path.</gray>"));
                 lore.add(MM.deserialize("<gray>Voidstep grants <white>" + VOIDSTEP_INVISIBILITY_SECONDS + "s</white> of Invisibility.</gray>"));
@@ -8102,7 +8312,7 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Cold and snowy biomes also grant <white>Strength I</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Damaging enemies chills them with <white>Slowness I</white> and <white>Weakness I</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Snowballs inflict <white>Weakness I</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Chilled targets take <white>+25%</white>; bosses resist it and take <white>+10%</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Chilled targets take <white>+25%</white>; bosses ignore class chill.</gray>"));
                 lore.add(MM.deserialize("<gray>Enemies that damage you are chilled too.</gray>"));
                 lore.add(MM.deserialize("<gray>Chill duration: <white>" + FROSTBORN_CHILL_SECONDS + "s</white>.</gray>"));
             }
@@ -8112,12 +8322,12 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Toggle arrow preservation with <white>/deadeyearrows</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Projectile hits deal <white>25%</white> more damage.</gray>"));
                 lore.add(MM.deserialize("<gray>Sneak while shooting arrows/tridents to fire a faster marked shot.</gray>"));
-                lore.add(MM.deserialize("<gray>Marked shots: <white>+45%</white> and slow. Boss shots: <white>+15/25%</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Marked shots: <white>+45%</white> and slow. Bosses ignore class shot bonuses.</gray>"));
                 lore.add(MM.deserialize("<gray>Targets hit by projectiles glow for <white>" + DEADEYE_GLOW_SECONDS + "s</white>.</gray>"));
             }
             case RIFTWARDEN -> {
                 lore.add(MM.deserialize("<gray>Built for boss fights and dangerous mobs.</gray>"));
-                lore.add(MM.deserialize("<gray>Deals <white>15%</white> more damage to custom bosses.</gray>"));
+                lore.add(MM.deserialize("<gray>Custom bosses ignore its offensive class bonus.</gray>"));
                 lore.add(MM.deserialize("<gray>Deals <white>12%</white> more damage to hostile mobs.</gray>"));
                 lore.add(MM.deserialize("<gray>Reduces boss damage by <white>15%</white> and mob damage by <white>18%</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Gains Slow Falling only near custom bosses.</gray>"));
@@ -8139,7 +8349,7 @@ public final class SuperpowerManager implements Listener {
             }
             case GRAVEBORN -> {
                 lore.add(MM.deserialize("<gray>Immune to poison and wither damage.</gray>"));
-                lore.add(MM.deserialize("<gray>Undead mobs refuse to target the Graveborn.</gray>"));
+                lore.add(MM.deserialize("<gray>Undead mobs ignore you; custom bosses still target you.</gray>"));
                 lore.add(MM.deserialize("<gray>Deals extra damage to undead and takes less from them.</gray>"));
                 lore.add(MM.deserialize("<gray>Nearby undead can save a lethal hit, except failed boss mechanics.</gray>"));
                 lore.add(MM.deserialize("<gray>Nearby player deaths grant temporary combat buffs and absorption.</gray>"));
@@ -8166,7 +8376,7 @@ public final class SuperpowerManager implements Listener {
         }
         lore.add(Component.empty());
         lore.add(MM.deserialize("<dark_gray><italic>Numbers shown here are live season values.</italic></dark_gray>"));
-        return lore;
+        return CustomLoreUtil.wrapLoreLines(lore);
     }
 
     private String powerTitleTag(SuperpowerType type) {
@@ -8452,8 +8662,12 @@ public final class SuperpowerManager implements Listener {
         if (player == null || enchanting == null) {
             return;
         }
+        UUID playerId = player.getUniqueId();
+        if (enchanterLapisMutations.contains(playerId)) {
+            return;
+        }
         if (!player.isOnline() || !hasPower(player, SuperpowerType.ARCANIST)) {
-            clearVirtualEnchanterLapis(enchanting);
+            clearVirtualEnchanterLapis(player, enchanting);
             return;
         }
 
@@ -8464,11 +8678,20 @@ public final class SuperpowerManager implements Listener {
 
         ItemStack item = enchanting.getItem();
         if (item == null || item.getType() == Material.AIR) {
-            clearVirtualEnchanterLapis(enchanting);
+            clearVirtualEnchanterLapis(player, enchanting);
             return;
         }
 
-        enchanting.setSecondary(createVirtualEnchanterLapis());
+        if (!needsVirtualLapisRefill(true, secondary == null || secondary.getType() == Material.AIR,
+            isVirtualEnchanterLapis(secondary), secondary == null ? 0 : secondary.getAmount())) {
+            return;
+        }
+
+        mutateEnchanterLapis(player, enchanting, createVirtualEnchanterLapis());
+    }
+
+    static boolean needsVirtualLapisRefill(boolean hasItem, boolean slotEmpty, boolean virtualLapis, int amount) {
+        return hasItem && (slotEmpty || (virtualLapis && amount != ENCHANTER_VIRTUAL_LAPIS_AMOUNT));
     }
 
     private void clearVirtualEnchanterLapis(Player player) {
@@ -8477,13 +8700,28 @@ public final class SuperpowerManager implements Listener {
         }
         Inventory top = player.getOpenInventory().getTopInventory();
         if (top instanceof EnchantingInventory enchanting) {
-            clearVirtualEnchanterLapis(enchanting);
+            clearVirtualEnchanterLapis(player, enchanting);
         }
     }
 
-    private void clearVirtualEnchanterLapis(EnchantingInventory enchanting) {
+    private void clearVirtualEnchanterLapis(Player player, EnchantingInventory enchanting) {
         if (enchanting != null && isVirtualEnchanterLapis(enchanting.getSecondary())) {
-            enchanting.setSecondary(null);
+            mutateEnchanterLapis(player, enchanting, null);
+        }
+    }
+
+    private void mutateEnchanterLapis(Player player, EnchantingInventory enchanting, ItemStack replacement) {
+        if (player == null || enchanting == null) {
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        if (!enchanterLapisMutations.add(playerId)) {
+            return;
+        }
+        try {
+            enchanting.setSecondary(replacement);
+        } finally {
+            enchanterLapisMutations.remove(playerId);
         }
     }
 

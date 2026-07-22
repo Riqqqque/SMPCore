@@ -14,6 +14,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RouletteManagerTest {
 
     @Test
+    void duplicateJavaOrBedrockMenuTapsQueueOnlyOneActionPerTick() {
+        assertTrue(RouletteManager.canQueueMenuAction(false));
+        assertFalse(RouletteManager.canQueueMenuAction(true));
+    }
+
+    @Test
     void europeanWheelContainsEveryPocketExactlyOnce() {
         List<Integer> wheel = RouletteManager.wheelOrder();
 

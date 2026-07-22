@@ -102,6 +102,7 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -585,7 +586,12 @@ public final class BossDungeonManager implements Listener {
             default -> null;
         };
         if (destination == null) return false;
-        managedTeleport(admin, destination);
+        String destinationName = point.toLowerCase(java.util.Locale.ROOT);
+        managedTeleport(admin, destination, "admin " + destinationName, success -> {
+            if (success && admin.isOnline()) {
+                admin.sendMessage(MessageUtil.success("Teleported to the Boss Dungeon <white>" + destinationName + "</white> point."));
+            }
+        });
         return true;
     }
 
@@ -932,18 +938,10 @@ public final class BossDungeonManager implements Listener {
             makeSpectator(player);
             return;
         }
-        UUID playerId = player.getUniqueId();
-        managedTeleports.add(playerId);
-        player.teleportAsync(destination).whenComplete((success, error) -> {
-            managedTeleports.remove(playerId);
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                if (!player.isOnline()) return;
-                if (error == null && Boolean.TRUE.equals(success)) {
-                    player.playSound(player.getLocation(), Sound.BLOCK_PORTAL_TRAVEL, 0.7f, 1.2f);
-                } else {
-                    player.sendMessage(MessageUtil.error("The dungeon teleport failed. Try again."));
-                }
-            });
+        managedTeleport(player, destination, "dungeon entry", success -> {
+            if (success && player.isOnline()) {
+                player.playSound(player.getLocation(), Sound.BLOCK_PORTAL_TRAVEL, 0.7f, 1.2f);
+            }
         });
     }
 
@@ -1489,17 +1487,36 @@ public final class BossDungeonManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onTeleport(PlayerTeleportEvent event) {
         Player player = event.getPlayer();
-        if (managedTeleports.remove(player.getUniqueId())) return;
+        if (managedTeleports.contains(player.getUniqueId())) return;
         boolean fromDungeon = event.getFrom().getWorld() != null && isDungeonWorld(event.getFrom().getWorld());
         boolean toDungeon = event.getTo().getWorld() != null && isDungeonWorld(event.getTo().getWorld());
-        if (fromDungeon && !toDungeon && encounter != null && encounter.participants.contains(player.getUniqueId())) {
+        boolean activeParticipant = encounter != null && encounter.participants.contains(player.getUniqueId());
+        if (fromDungeon && !toDungeon && activeParticipant) {
             event.setCancelled(true);
             player.sendMessage(MessageUtil.warn("You cannot leave an active boss fight."));
             return;
         }
+        if (shouldRestoreDungeonExitState(fromDungeon, toDungeon, activeParticipant)) {
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline() || isDungeonWorld(player.getWorld())) return;
+                clearDungeonCombatState(player);
+                restoreGameMode(player);
+            });
+        }
         if (toDungeon && encounter != null) Bukkit.getScheduler().runTask(plugin, () -> {
             if (!encounter.participants.contains(player.getUniqueId()) || encounter.eliminated.contains(player.getUniqueId())) makeSpectator(player);
         });
+    }
+
+    static boolean shouldRestoreDungeonExitState(boolean fromDungeon, boolean toDungeon, boolean activeParticipant) {
+        return fromDungeon && !toDungeon && !activeParticipant;
+    }
+
+    public boolean blocksExternalTeleport(Player player) {
+        return player != null
+            && isDungeonWorld(player.getWorld())
+            && encounter != null
+            && encounter.participants.contains(player.getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -1529,10 +1546,75 @@ public final class BossDungeonManager implements Listener {
     }
 
     private void managedTeleport(Player player, Location destination) {
-        if (player == null || destination == null) return;
+        managedTeleport(player, destination, "dungeon movement", null);
+    }
+
+    private void managedTeleport(Player player, Location destination, String context, Consumer<Boolean> completion) {
+        if (player == null || destination == null || destination.getWorld() == null) {
+            if (completion != null) completion.accept(false);
+            return;
+        }
         UUID playerId = player.getUniqueId();
         managedTeleports.add(playerId);
-        player.teleportAsync(destination).whenComplete((success, error) -> managedTeleports.remove(playerId));
+        attemptManagedTeleport(player, destination.clone(), context, true, completion);
+    }
+
+    private void attemptManagedTeleport(
+        Player player,
+        Location destination,
+        String context,
+        boolean retryAvailable,
+        Consumer<Boolean> completion
+    ) {
+        UUID playerId = player.getUniqueId();
+        if (!player.isOnline()) {
+            managedTeleports.remove(playerId);
+            if (completion != null) completion.accept(false);
+            return;
+        }
+
+        if (player.isInsideVehicle()) {
+            player.leaveVehicle();
+        }
+        if (!player.getPassengers().isEmpty()) {
+            player.eject();
+        }
+
+        player.teleportAsync(destination, PlayerTeleportEvent.TeleportCause.PLUGIN)
+            .whenComplete((success, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) {
+                    managedTeleports.remove(playerId);
+                    if (completion != null) completion.accept(false);
+                    return;
+                }
+                if (error == null && Boolean.TRUE.equals(success)) {
+                    managedTeleports.remove(playerId);
+                    if (completion != null) completion.accept(true);
+                    return;
+                }
+                if (retryAvailable) {
+                    Bukkit.getScheduler().runTaskLater(
+                        plugin,
+                        () -> attemptManagedTeleport(player, destination, context, false, completion),
+                        1L
+                    );
+                    return;
+                }
+
+                managedTeleports.remove(playerId);
+                player.sendMessage(MessageUtil.error("Dungeon teleport failed. Leave any seat or mount and try again."));
+                String errorName = error == null ? "none" : error.getClass().getSimpleName();
+                plugin.getLogger().warning(
+                    "Dungeon teleport rejected for " + player.getName()
+                        + " context=" + context
+                        + " from=" + player.getWorld().getName()
+                        + " to=" + destination.getWorld().getName()
+                        + " vehicle=" + player.isInsideVehicle()
+                        + " passengers=" + player.getPassengers().size()
+                        + " error=" + errorName
+                );
+                if (completion != null) completion.accept(false);
+            }));
     }
 
     private void restoreGameMode(Player player) {

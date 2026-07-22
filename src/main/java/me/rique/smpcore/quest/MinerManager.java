@@ -20,9 +20,11 @@ import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.entity.Player;
 import org.bukkit.command.CommandSender;
+import org.bukkit.event.Event;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -203,26 +205,58 @@ public final class MinerManager implements Listener {
         if (holder instanceof MinerMenuHolder || holder instanceof MinerPetMenuHolder) event.setCancelled(true);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onPickUse(PlayerInteractEvent event) {
-        if (event.getHand() != EquipmentSlot.HAND || !event.getPlayer().isSneaking()) return;
-        if (!event.getAction().isRightClick() || !isVeinwakePick(event.getItem())) return;
-        event.setCancelled(true);
+        if (event.getHand() != EquipmentSlot.HAND) return;
         Player player = event.getPlayer();
+        ItemStack held = player.getInventory().getItemInMainHand();
+        if (!isVeinwakePick(held)) return;
+        if (makeVeinwakePickBreakable(held)) {
+            player.getInventory().setItemInMainHand(held);
+        }
+        if (!shouldActivateMiningFever(event.getAction(), player.isSneaking())) return;
+        event.setUseInteractedBlock(Event.Result.DENY);
+        event.setUseItemInHand(Event.Result.DENY);
         long now = System.currentTimeMillis();
+        long activeUntil = pdcLong(player, feverUntilKey);
         long cooldown = pdcLong(player, feverCooldownKey);
         if (cooldown > now) {
-            player.sendMessage(MessageUtil.warn("Mining Fever is ready in <white>" + formatTime(cooldown - now) + "</white>."));
+            String status = miningFeverCooldownStatus(now, activeUntil, cooldown);
+            player.sendActionBar(MessageUtil.parse(status));
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.35F, 0.75F);
             return;
         }
         player.getPersistentDataContainer().set(feverUntilKey, PersistentDataType.LONG, now + FEVER_DURATION_MS);
         player.getPersistentDataContainer().set(feverCooldownKey, PersistentDataType.LONG, now + FEVER_COOLDOWN_MS);
         player.sendMessage(MessageUtil.success("<gold>Mining Fever</gold> is active for <white>45 seconds</white>."));
+        if (plugin.getVeinMinerListener() != null && !plugin.getVeinMinerListener().isEnabledFor(player)) {
+            player.sendMessage(MessageUtil.info("Vein Miner is off. Use <white>/veinminer on</white> to chain nearby ores."));
+        }
         player.playSound(player.getLocation(), Sound.BLOCK_BEACON_ACTIVATE, 0.8f, 1.4f);
         player.spawnParticle(Particle.WAX_ON, player.getLocation().add(0, 1, 0), 24, 0.4, 0.6, 0.4, 0.08);
     }
 
-    @EventHandler public void onJoin(PlayerJoinEvent event) { if (hasActiveMinerPet(event.getPlayer())) follower.spawn(event.getPlayer()); }
+    static boolean shouldActivateMiningFever(Action action, boolean sneaking) {
+        return sneaking && action != null && action.isRightClick();
+    }
+
+    static String miningFeverCooldownStatus(long now, long activeUntil, long cooldownUntil) {
+        long cooldownRemaining = Math.max(0L, cooldownUntil - now);
+        long activeRemaining = Math.max(0L, activeUntil - now);
+        if (activeRemaining > 0L) {
+            return "<gold><bold>Mining Fever</bold></gold> <green>ACTIVE " + formatTime(activeRemaining)
+                + "</green> <dark_gray>|</dark_gray> <yellow>Ready in " + formatTime(cooldownRemaining) + "</yellow>";
+        }
+        return "<gold><bold>Mining Fever</bold></gold> <yellow>Ready in " + formatTime(cooldownRemaining) + "</yellow>";
+    }
+
+    @EventHandler
+    public void onJoin(PlayerJoinEvent event) {
+        Player player = event.getPlayer();
+        migrateVeinwakePicks(player.getInventory());
+        migrateVeinwakePicks(player.getEnderChest());
+        if (hasActiveMinerPet(player)) follower.spawn(player);
+    }
     @EventHandler public void onQuit(PlayerQuitEvent event) {
         pendingMenuActions.remove(event.getPlayer().getUniqueId());
         follower.remove(event.getPlayer());
@@ -384,7 +418,7 @@ public final class MinerManager implements Listener {
         openQuestMenu(player);
     }
 
-    private ItemStack createVeinwakePick() {
+    public ItemStack createVeinwakePick() {
         ItemStack pick = new ItemStack(Material.DIAMOND_PICKAXE);
         ItemMeta meta = pick.getItemMeta();
         meta.displayName(MM.deserialize("<gradient:#f59e0b:#fde68a><bold>Veinwake Pick</bold></gradient>"));
@@ -395,19 +429,38 @@ public final class MinerManager implements Listener {
             "PICKAXE",
             List.of("<gray>A sturdy diamond pick made by Torren.</gray>"),
             List.of(CustomLoreUtil.section("Ability", "Mining Fever",
-                "<gray><white>Sneak + Right-click</white> to activate for 45s.</gray>",
+                "<gray><white>Sneak + Right-click</white> anywhere: 45s.</gray>",
                 "<gray>Natural ores have a <white>50%</white> chance to triple.</gray>",
                 "<gray>Cooldown: <white>6 minutes</white>.</gray>",
+                "<gray>Sneak-mine ore, stone, or deepslate to chain it.</gray>",
                 "<dark_gray>Ore bonuses stack additively.</dark_gray>"))
         ));
-        meta.setUnbreakable(true);
-        meta.addItemFlags(ItemFlag.HIDE_UNBREAKABLE);
         meta.getPersistentDataContainer().set(pickKey, PersistentDataType.BYTE, (byte) 1);
         pick.setItemMeta(meta);
         return pick;
     }
 
-    private boolean isVeinwakePick(ItemStack item) { return item != null && item.hasItemMeta() && item.getItemMeta().getPersistentDataContainer().has(pickKey, PersistentDataType.BYTE); }
+    public boolean isVeinwakePick(ItemStack item) { return item != null && item.hasItemMeta() && item.getItemMeta().getPersistentDataContainer().has(pickKey, PersistentDataType.BYTE); }
+    public boolean makeVeinwakePickBreakable(ItemStack item) {
+        if (!isVeinwakePick(item)) return false;
+        ItemMeta meta = item.getItemMeta();
+        boolean changed = meta.isUnbreakable() || meta.hasItemFlag(ItemFlag.HIDE_UNBREAKABLE);
+        if (!changed) return false;
+        meta.setUnbreakable(false);
+        meta.removeItemFlags(ItemFlag.HIDE_UNBREAKABLE);
+        item.setItemMeta(meta);
+        return true;
+    }
+
+    private void migrateVeinwakePicks(Inventory inventory) {
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            ItemStack item = inventory.getItem(slot);
+            if (makeVeinwakePickBreakable(item)) {
+                inventory.setItem(slot, item);
+            }
+        }
+    }
+
     private boolean hasVeinwakePick(Player player) { Byte value = player.getPersistentDataContainer().get(pickKey, PersistentDataType.BYTE); return value != null && value == 1; }
     private boolean isPetHidden(Player player) {
         Byte value = player.getPersistentDataContainer().get(petHiddenKey, PersistentDataType.BYTE);
@@ -473,7 +526,7 @@ public final class MinerManager implements Listener {
     private int countPlain(Player player, Material material) { return InventoryRecipeUtil.countIngredient(player, InventoryRecipeUtil.plainMaterial(plugin, material, Integer.MAX_VALUE)); }
     private long pdcLong(Player player, NamespacedKey key) { Long value = player.getPersistentDataContainer().get(key, PersistentDataType.LONG); return value == null ? 0L : value; }
     private String pretty(Material material) { String value = material.name().toLowerCase().replace('_', ' '); return Character.toUpperCase(value.charAt(0)) + value.substring(1); }
-    private String formatTime(long millis) { long seconds = Math.max(1, (millis + 999) / 1000); return seconds >= 60 ? (seconds / 60) + "m " + (seconds % 60) + "s" : seconds + "s"; }
+    private static String formatTime(long millis) { long seconds = Math.max(1, (millis + 999) / 1000); return seconds >= 60 ? (seconds / 60) + "m " + (seconds % 60) + "s" : seconds + "s"; }
 
 
     public record OreBonusResult(int bonusCopies, boolean petProc, boolean feverProc) { }

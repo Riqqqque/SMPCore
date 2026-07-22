@@ -1010,6 +1010,9 @@ public final class LegendaryAltarManager implements Listener {
             block.setType(Material.DEEPSLATE_TILE_STAIRS, false);
         }
         if (block.getBlockData() instanceof Stairs stairs) {
+            if (stairs.getFacing() == facing) {
+                return;
+            }
             stairs.setFacing(facing);
             block.setBlockData(stairs, false);
         }
@@ -1198,14 +1201,14 @@ public final class LegendaryAltarManager implements Listener {
 
             for (double y = 0.5; y <= 12.5; y += 1.5) {
                 Location point = center.clone().add(0.5, y, 0.5);
-                world.spawnParticle(active ? Particle.END_ROD : Particle.ENCHANT, point, 2, 0.05, 0.25, 0.05, 0.0);
+                player.spawnParticle(active ? Particle.END_ROD : Particle.ENCHANT, point, 2, 0.05, 0.25, 0.05, 0.0);
             }
 
             if (active) {
-                world.spawnParticle(Particle.SOUL_FIRE_FLAME, center.clone().add(0.5, 1.2, 0.5), 12, 0.45, 0.15, 0.45, 0.01);
-                world.spawnParticle(Particle.PORTAL, center.clone().add(0.5, 1.0, 0.5), 10, 0.40, 0.20, 0.40, 0.02);
+                player.spawnParticle(Particle.SOUL_FIRE_FLAME, center.clone().add(0.5, 1.2, 0.5), 12, 0.45, 0.15, 0.45, 0.01);
+                player.spawnParticle(Particle.PORTAL, center.clone().add(0.5, 1.0, 0.5), 10, 0.40, 0.20, 0.40, 0.02);
             } else {
-                world.spawnParticle(Particle.WITCH, center.clone().add(0.5, 1.0, 0.5), 8, 0.40, 0.20, 0.40, 0.01);
+                player.spawnParticle(Particle.WITCH, center.clone().add(0.5, 1.0, 0.5), 8, 0.40, 0.20, 0.40, 0.01);
             }
         }
     }

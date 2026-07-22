@@ -1241,7 +1241,9 @@ public final class ReforgeManager implements Listener {
         }
     }
 
-    private record ReforgeMenuHolder(UUID playerId) implements InventoryHolder, MenuDupeGuardListener.MutableMenuHolder {
+    private record ReforgeMenuHolder(UUID playerId) implements InventoryHolder, MenuDupeGuardListener.RecoveryTrackedMenuHolder {
+        @Override public String recoverySurface() { return "Reforge Station"; }
+        @Override public int[] recoverySlots() { return new int[] { ITEM_SLOT, STONE_SLOT }; }
         @Override
         public Inventory getInventory() {
             return null;

@@ -43,10 +43,8 @@ public final class DamageNumberListener implements Listener {
     }
 
     public void start() {
-        if (animationTask != null) {
-            return;
-        }
-        animationTask = plugin.getServer().getScheduler().runTaskTimer(plugin, this::tickDamageNumbers, 1L, 1L);
+        // The animation loop starts lazily with the first damage number. Most
+        // server ticks have no active numbers, so an always-on task is wasteful.
     }
 
     public void shutdown() {
@@ -135,6 +133,7 @@ public final class DamageNumberListener implements Listener {
         );
         activeNumbers.put(display.getUniqueId(), new DamageNumberState(spawn, drift, 0));
         trimOldNumbers();
+        ensureAnimationTask();
     }
 
     private Location displayLocation(LivingEntity target) {
@@ -169,6 +168,16 @@ public final class DamageNumberListener implements Listener {
             int opacity = Math.max(0, 255 - (state.age() * 11));
             display.setTextOpacity((byte) opacity);
             entry.setValue(state);
+        }
+        if (activeNumbers.isEmpty() && animationTask != null) {
+            animationTask.cancel();
+            animationTask = null;
+        }
+    }
+
+    private void ensureAnimationTask() {
+        if (animationTask == null) {
+            animationTask = plugin.getServer().getScheduler().runTaskTimer(plugin, this::tickDamageNumbers, 1L, 1L);
         }
     }
 

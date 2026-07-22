@@ -88,6 +88,10 @@ public final class ConfigManager {
     public int smpPostStartGraceMinutes;
     public int smpNetherUnlockDay;
     public int smpEndUnlockDay;
+    public long smpNetherUnlockAt;
+    public long smpEndUnlockAt;
+    public boolean smpNetherUnlockedEarly;
+    public boolean smpEndUnlockedEarly;
     public boolean smpLockPluginCommandsBeforeStart;
     public boolean smpLockBlockEditsBeforeStart;
     public String smpStartBroadcast;
@@ -98,6 +102,14 @@ public final class ConfigManager {
 
     public int homeDefaultMax;
     public int homeMultipleMax;
+
+    public boolean wildEnabled;
+    public String wildWorld;
+    public int wildCooldownSeconds;
+    public int wildBorderPadding;
+    public int wildMinimumSpawnDistance;
+    public int wildSearchAttempts;
+    public int wildMaxConcurrentSearches;
 
     public String spawnWorld;
     public int spawnCooldownSeconds;
@@ -134,7 +146,6 @@ public final class ConfigManager {
     public boolean backOnTeleport;
 
     public boolean deathChestEnabled;
-    public boolean deathChestDisableInPlayerCombat;
     public int deathChestLifetimeMinutes;
     public int deathChestSearchRadius;
     public int deathChestVerticalSearchRadius;
@@ -392,6 +403,22 @@ public final class ConfigManager {
             c.set("smp-start.end-unlock-day", 5);
             smpStartConfigAdded = true;
         }
+        if (!c.isSet("smp-start.nether-unlock-at")) {
+            c.set("smp-start.nether-unlock-at", 0L);
+            smpStartConfigAdded = true;
+        }
+        if (!c.isSet("smp-start.end-unlock-at")) {
+            c.set("smp-start.end-unlock-at", 0L);
+            smpStartConfigAdded = true;
+        }
+        if (!c.isSet("smp-start.nether-unlocked-early")) {
+            c.set("smp-start.nether-unlocked-early", false);
+            smpStartConfigAdded = true;
+        }
+        if (!c.isSet("smp-start.end-unlocked-early")) {
+            c.set("smp-start.end-unlocked-early", false);
+            smpStartConfigAdded = true;
+        }
         if (!c.isSet("smp-start.lock-plugin-commands-before-start")) {
             c.set("smp-start.lock-plugin-commands-before-start", true);
             smpStartConfigAdded = true;
@@ -433,6 +460,10 @@ public final class ConfigManager {
         smpPostStartGraceMinutes = clamp(c.getInt("smp-start.post-start-grace-minutes", 60), 0, 7 * 24 * 60);
         smpNetherUnlockDay = clamp(c.getInt("smp-start.nether-unlock-day", 3), 1, 365);
         smpEndUnlockDay = clamp(c.getInt("smp-start.end-unlock-day", 5), smpNetherUnlockDay, 365);
+        smpNetherUnlockAt = Math.max(0L, c.getLong("smp-start.nether-unlock-at", 0L));
+        smpEndUnlockAt = Math.max(0L, c.getLong("smp-start.end-unlock-at", 0L));
+        smpNetherUnlockedEarly = c.getBoolean("smp-start.nether-unlocked-early", false);
+        smpEndUnlockedEarly = c.getBoolean("smp-start.end-unlocked-early", false);
         smpLockPluginCommandsBeforeStart = c.getBoolean("smp-start.lock-plugin-commands-before-start", true);
         smpLockBlockEditsBeforeStart = c.getBoolean("smp-start.lock-block-edits-before-start", true);
         smpStartBroadcast = c.getString(
@@ -457,6 +488,13 @@ public final class ConfigManager {
         if (spawnWorld == null || spawnWorld.isBlank()) {
             spawnWorld = "world";
         }
+        wildEnabled = c.getBoolean("wild.enabled", true);
+        wildWorld = nonBlank(c.getString("wild.world", spawnWorld), spawnWorld);
+        wildCooldownSeconds = clamp(c.getInt("wild.cooldown-seconds", 300), 0, 86_400);
+        wildBorderPadding = clamp(c.getInt("wild.border-padding", 32), 0, 512);
+        wildMinimumSpawnDistance = clamp(c.getInt("wild.minimum-spawn-distance", 600), 0, 50_000);
+        wildSearchAttempts = clamp(c.getInt("wild.search-attempts", 24), 1, 64);
+        wildMaxConcurrentSearches = clamp(c.getInt("wild.max-concurrent-searches", 2), 1, 8);
         World configuredSpawnWorld = Bukkit.getWorld(spawnWorld);
         Location worldSpawn = configuredSpawnWorld == null ? null : configuredSpawnWorld.getSpawnLocation();
         boolean spawnProtectionConfigChanged = false;
@@ -707,7 +745,6 @@ public final class ConfigManager {
         backOnTeleport = c.getBoolean("back.on-teleport", true);
 
         deathChestEnabled = c.getBoolean("death-chest.enabled", true);
-        deathChestDisableInPlayerCombat = c.getBoolean("death-chest.disable-in-player-combat", false);
         deathChestLifetimeMinutes = clamp(c.getInt("death-chest.lifetime-minutes", 90), 1, 24 * 60);
         deathChestSearchRadius = clamp(c.getInt("death-chest.search-radius", 4), 0, 16);
         deathChestVerticalSearchRadius = clamp(c.getInt("death-chest.vertical-search-radius", 4), 0, 16);
@@ -763,7 +800,13 @@ public final class ConfigManager {
 
         dragonEggSpeedAmplifier = Math.max(0, c.getInt("dragon-egg.speed-amplifier", 1));
         dragonEggCheckInterval = Math.max(1, c.getInt("dragon-egg.check-interval", 10));
-        goldenAppleSurroundMaterial = material(c.getString("crafting.golden-apple-surround-material"), Material.GOLD_INGOT);
+        String goldenAppleMaterial = c.getString("crafting.golden-apple-surround-material");
+        goldenAppleSurroundMaterial = craftingIngredient(goldenAppleMaterial, Material.GOLD_INGOT);
+        if (goldenAppleMaterial != null && !goldenAppleMaterial.isBlank()
+            && !goldenAppleSurroundMaterial.name().equalsIgnoreCase(goldenAppleMaterial.trim())) {
+            plugin.getLogger().warning("Invalid Golden Apple surround material '"
+                + safeAuditValue(goldenAppleMaterial) + "'; using " + goldenAppleSurroundMaterial.name() + ".");
+        }
         blockNetheriteArmorUpgrade = c.getBoolean("crafting.block-netherite-armor-upgrade", true);
 
         boolean legendaryConfigChanged = false;
@@ -881,7 +924,7 @@ public final class ConfigManager {
         doubleJumpAncientCityChestChance = clamp(c.getDouble("custom-enchants.double-jump.ancient-city-chest-chance", 0.23), 0.0, 1.0);
         doubleJumpVerticalBoost = clamp(c.getDouble("custom-enchants.double-jump.vertical-boost", 0.82), 0.1, 3.0);
         doubleJumpForwardBoost = clamp(c.getDouble("custom-enchants.double-jump.forward-boost", 0.75), 0.0, 3.0);
-        doubleJumpHungerCost = clamp(c.getInt("custom-enchants.double-jump.hunger-cost", 4), 0, 20);
+        doubleJumpHungerCost = clamp(c.getInt("custom-enchants.double-jump.hunger-cost", 2), 0, 20);
         dashEnchantCooldownSeconds = clamp(c.getInt("custom-enchants.dash.cooldown-seconds", 15), 0, 3600);
         dashEnchantHorizontalBoost = clamp(c.getDouble("custom-enchants.dash.horizontal-boost", 1.85), 0.1, 6.0);
         dashEnchantVerticalBoost = clamp(c.getDouble("custom-enchants.dash.vertical-boost", 0.42), 0.0, 3.0);
@@ -1361,6 +1404,21 @@ public final class ConfigManager {
             return Material.valueOf(raw.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException ignored) {
             return fallback;
+        }
+    }
+
+    static Material craftingIngredient(String raw, Material fallback) {
+        Material safeFallback = fallback == Material.GOLD_NUGGET ? Material.GOLD_NUGGET : Material.GOLD_INGOT;
+        if (raw == null || raw.isBlank()) {
+            return safeFallback;
+        }
+        try {
+            Material resolved = Material.valueOf(raw.trim().toUpperCase(Locale.ROOT));
+            return resolved == Material.GOLD_INGOT || resolved == Material.GOLD_NUGGET
+                ? resolved
+                : safeFallback;
+        } catch (IllegalArgumentException ignored) {
+            return safeFallback;
         }
     }
 

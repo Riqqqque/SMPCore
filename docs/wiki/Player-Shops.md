@@ -26,12 +26,14 @@ Inside a rented market stall, signs can only be attached directly to a chest or 
 
 ## Sign Lines
 
-- Line 1: `[shop]`
+- Line 1: `[shop]` (the `[shops]` alias also works)
 - Line 2: `chest` for the first item in the chest, or a vanilla item id.
 - Line 3: amount sold per purchase, from 1 to 64 by default.
 - Line 4: price followed by the currency.
 
 Use `chest` for custom, renamed, enchanted, or damaged items. It records the exact sample item. Legendary items cannot be sold through player shops.
+
+Enchanted-book shops show the book's enchantment and level on line 2. Books with several stored enchants show the first enchant plus the number of additional enchants. Existing generic `Enchanted Book` signs refresh the next time someone right-clicks them.
 
 ## Currencies
 
@@ -64,7 +66,7 @@ Right-click the shop sign. The purchase only completes if the shop has stock, th
 
 Right-click an available stall's sale sign twice to purchase it with Essence. One player may own one stall at a time; both direct purchases and accepted transfers enforce this limit immediately before ownership changes.
 
-Inside an owned stall, players may:
+Inside an owned stall, its owner and trusted managers may:
 
 - Place chests and trapped chests in empty spaces.
 - Attach ordinary wall signs directly to those chests.
@@ -73,13 +75,17 @@ Inside an owned stall, players may:
 
 Players cannot modify cherry, pale, spruce, shelf, or trapdoor blocks. They cannot place signs anywhere except directly on shop chests. The rest of the premade stall stays protected from breaking, fire, explosions, flowing liquids, pistons, mobs, and hoppers.
 
-Only the stall owner or a shop admin can edit ordinary signs in an owned stall. Active shop signs and the stall's built-in sale sign are server-managed and cannot be rewritten, dyed, made glowing, or waxed; break and recreate an active player shop to change it.
+Only the stall owner, a trusted manager, or a shop admin can edit ordinary signs in an owned stall. Active shop signs and the stall's built-in sale sign are server-managed and cannot be rewritten, dyed, made glowing, or waxed; break and recreate an active player shop to change it.
+
+Owners may toggle up to five trusted managers with `/stall manager <player>`. Managers can stock and open storage, place or remove approved fixtures, and create or rebuild chest shops. Shops they create still belong to and pay the stall owner. Managers cannot sell, transfer, restore, or change access, and they remain normal paying customers when using shop signs. Manager access is cleared automatically if ownership changes.
 
 Premade removable decor does not drop an item when broken, so restoring a stall cannot duplicate its furnishings. Premade containers must be empty before removal. Chests and signs placed by the owner still drop normally.
 
 Useful commands:
 
 - `/stall` - show your stall and setup reminder.
+- `/stall manager <player>` - grant or revoke that player's manager access.
+- `/stall manager` or `/stall managers` - list trusted managers.
 - `/stall transfer <player>` - offer the stall and its active shops to another player.
 - `/stall sell` - sell it back for 75% of its listed price after removing player fixtures.
 - `/shops` - show the chest-shop sign format.
@@ -104,8 +110,8 @@ Admins with `smpcore.shop.admin` can create infinite server shops by using `[adm
 ## Editing Or Removing A Shop
 
 - Break the sign and recreate it to change the item, amount, price, or currency.
-- The owner, OPs, and players with `smpcore.shop.admin` can break a shop.
-- Non-owners cannot open its stock chest.
+- The owner, trusted stall managers, OPs, and players with `smpcore.shop.admin` can break a shop.
+- Other players cannot open its stock chest.
 - A single chest cannot be expanded after the shop is created. Break the sign, make the double chest, and recreate the shop.
 
 ## Common Problems

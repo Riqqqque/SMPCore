@@ -79,4 +79,20 @@ final class DuelRulesTest {
         assertEquals(3, DuelRules.normalizeTeamSize(3));
         assertEquals(-1, DuelRules.normalizeTeamSize(4));
     }
+
+    @Test
+    void duelHealthModifierNormalizesEveryFighterToTwentyHealth() {
+        assertEquals(0.0D, DuelRules.healthNormalizationModifier(20.0D), 0.000001D);
+        assertEquals(-0.5D, DuelRules.healthNormalizationModifier(40.0D), 0.000001D);
+        assertEquals(1.0D, DuelRules.healthNormalizationModifier(10.0D), 0.000001D);
+        assertEquals(20.0D, 40.0D * (1.0D + DuelRules.healthNormalizationModifier(40.0D)), 0.000001D);
+        assertEquals(20.0D, 10.0D * (1.0D + DuelRules.healthNormalizationModifier(10.0D)), 0.000001D);
+    }
+
+    @Test
+    void everyRoundStartsFromTheVanillaHungerBaseline() {
+        assertEquals(20, DuelRules.ROUND_START_FOOD_LEVEL);
+        assertEquals(5.0F, DuelRules.ROUND_START_SATURATION, 0.0001F);
+        assertEquals(0.0F, DuelRules.ROUND_START_EXHAUSTION, 0.0001F);
+    }
 }

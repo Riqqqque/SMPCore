@@ -121,7 +121,7 @@ public final class XpLecternListener implements Listener {
             }
             syncLoadedLecterns();
         });
-        maintenanceTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncLoadedLecterns, 100L, 200L);
+        maintenanceTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncLoadedLecterns, 100L, 20L * 60L * 5L);
     }
 
     public void shutdown() {
@@ -405,7 +405,7 @@ public final class XpLecternListener implements Listener {
         syncChunkLecterns(event.getChunk());
     }
 
-    @EventHandler
+    @EventHandler(ignoreCancelled = true)
     public void onChunkUnload(ChunkUnloadEvent event) {
         removeChunkHolograms(event.getChunk());
     }

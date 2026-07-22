@@ -20,7 +20,8 @@ class GeyserResourcePackTest {
     private static final Set<String> EXPECTED_MODELS = Set.of(
         "smpcore:backpack",
         "smpcore:expanded_backpack",
-        "smpcore:team_leader_crown"
+        "smpcore:team_leader_crown",
+        "smpcore:first_dragon_sigil"
     );
 
     @Test

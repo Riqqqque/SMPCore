@@ -590,7 +590,7 @@ public final class GuideNpcManager implements Listener {
 
     private void renderUtilityHelp(Inventory inventory) {
         inventory.setItem(4, helpTitle(Material.CHEST, "Utility Stations", "Recovery and storage tools for gear progression."));
-        inventory.setItem(10, help(Material.CHEST, "Salvaging Depot", "Place ordinary gear inside to recover about 66%", "of base materials; damaged gear returns less."));
+        inventory.setItem(10, help(Material.CHEST, "Salvaging Depot", "Place ordinary gear inside to recover about 66%", "of its materials. Join two depots for 54 slots."));
         inventory.setItem(12, help(Material.CLOCK, "Salvage Timing", "There is a 10-second cancel window, then", "6 seconds of locked processing."));
         inventory.setItem(14, help(Material.BARRIER, "Salvage Protection", "Relics, legendaries, backpacks, stations,", "and class items are rejected."));
         inventory.setItem(20, help(Material.LECTERN, "XP Lectern", "Stores exact XP safely and preserves it when moved.", "Deposit or withdraw 1, 5, 10, or all levels."));

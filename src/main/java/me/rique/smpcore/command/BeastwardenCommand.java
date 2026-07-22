@@ -27,6 +27,7 @@ public final class BeastwardenCommand {
                 .then(Commands.literal("summon").executes(context -> summon(plugin, context.getSource().getSender())))
                 .then(Commands.literal("recall").executes(context -> recall(plugin, context.getSource().getSender())))
                 .then(Commands.literal("status").executes(context -> status(plugin, context.getSource().getSender())))
+                .then(Commands.literal("quest").executes(context -> questProgress(plugin, context.getSource().getSender())))
                 .build(),
             "Summon or recall your Wildbound steed",
             List.of("mountcall", "wildsteed")
@@ -59,6 +60,13 @@ public final class BeastwardenCommand {
                             context.getSource().getSender(),
                             firstTarget(context.getArgument("target", PlayerSelectorArgumentResolver.class), context.getSource()),
                             AdminAction.ARMOR
+                        ))))
+                .then(Commands.literal("progress")
+                    .then(Commands.argument("target", ArgumentTypes.player())
+                        .executes(context -> progress(
+                            plugin,
+                            context.getSource().getSender(),
+                            firstTarget(context.getArgument("target", PlayerSelectorArgumentResolver.class), context.getSource())
                         ))))
                 .then(Commands.literal("preview")
                     .executes(context -> preview(plugin, context.getSource().getSender(), BeastwardenManager.AdminPreviewView.MAIN, null))
@@ -115,6 +123,24 @@ public final class BeastwardenCommand {
         return Command.SINGLE_SUCCESS;
     }
 
+    private static int questProgress(SMPCore plugin, CommandSender sender) {
+        Player player = player(sender);
+        BeastwardenManager manager = manager(plugin, sender);
+        if (player == null || manager == null) return 0;
+        manager.sendQuestProgress(player, sender);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int progress(SMPCore plugin, CommandSender sender, Player target) {
+        BeastwardenManager manager = manager(plugin, sender);
+        if (manager == null || target == null) {
+            if (target == null) sender.sendMessage(MessageUtil.error("Player not found."));
+            return 0;
+        }
+        manager.sendQuestProgress(target, sender);
+        return Command.SINGLE_SUCCESS;
+    }
+
     private static int modify(SMPCore plugin, CommandSender sender, Player target, AdminAction action) {
         BeastwardenManager manager = manager(plugin, sender);
         if (manager == null || target == null) {
@@ -150,6 +176,7 @@ public final class BeastwardenCommand {
         sender.sendMessage(MessageUtil.info("<white>/beastwardenadmin complete <player></white>"));
         sender.sendMessage(MessageUtil.info("<white>/beastwardenadmin reset <player></white>"));
         sender.sendMessage(MessageUtil.info("<white>/beastwardenadmin armor <player></white>"));
+        sender.sendMessage(MessageUtil.info("<white>/beastwardenadmin progress <player></white>"));
         sender.sendMessage(MessageUtil.info("<white>/beastwardenadmin preview [main|familiars|tree|evolution]</white>"));
         return Command.SINGLE_SUCCESS;
     }

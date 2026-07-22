@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "me.rique"
-version = "1.0.335"
+version = "1.0.400"
 description = "SMPCore - Core plugin for Paper 26.2"
 
 java {
@@ -67,6 +67,7 @@ tasks {
     val buildBedrockResourcePack by registering(Zip::class) {
         group = "build"
         description = "Builds the Geyser-compatible Bedrock resource pack."
+        inputs.property("projectVersion", project.version.toString())
         archiveFileName.set(bedrockResourcePackFileName)
         destinationDirectory.set(resourcePackOutputDirectory)
         from("src/main/bedrock-resourcepack") {
@@ -80,7 +81,7 @@ tasks {
             }
         }
         from("src/main/resourcepack/assets/smpcore/textures/item") {
-            include("backpack.png", "expanded_backpack.png", "team_leader_crown.png")
+            include("backpack.png", "expanded_backpack.png", "team_leader_crown.png", "first_dragon_sigil.png")
             into("textures/items")
         }
         from("src/main/resourcepack/assets/smpcore/textures/entity/equipment/humanoid") {

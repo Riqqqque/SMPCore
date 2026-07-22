@@ -45,6 +45,8 @@ import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerKickEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.world.ChunkLoadEvent;
+import org.bukkit.event.world.ChunkUnloadEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
@@ -128,9 +130,10 @@ public final class MythicForgeListener implements Listener {
                 player.discoverRecipe(mythicForgeRecipeKey);
                 player.discoverRecipe(ascendantCoreRecipeKey);
             }
+            syncForgeHolograms();
         });
         if (hologramTask == null) {
-            hologramTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncForgeHolograms, 1L, HOLOGRAM_SYNC_TICKS);
+            hologramTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickTrackedForgeHolograms, HOLOGRAM_SYNC_TICKS, HOLOGRAM_SYNC_TICKS);
         }
     }
 
@@ -397,6 +400,54 @@ public final class MythicForgeListener implements Listener {
             }
         }
         removeDuplicateOrphanForgeHolograms(liveForges);
+    }
+
+    private void tickTrackedForgeHolograms() {
+        for (UUID forgeId : new ArrayList<>(forgeHolograms.keySet())) {
+            Entity entity = Bukkit.getEntity(forgeId);
+            if (entity == null) {
+                // An unloaded persistent forge is not globally addressable. Its chunk-load
+                // handler will rebuild the non-persistent hologram when it returns.
+                continue;
+            }
+            if (entity instanceof EnderCrystal crystal && crystal.isValid() && isMythicForgeEntity(crystal)) {
+                updateForgeHologram(crystal);
+            } else {
+                destroyForgeHologram(forgeId);
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onForgeChunkLoad(ChunkLoadEvent event) {
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!event.getChunk().isLoaded()) return;
+            Set<UUID> loadedForges = new HashSet<>();
+            for (Entity entity : event.getChunk().getEntities()) {
+                if (entity instanceof EnderCrystal crystal && crystal.isValid() && isMythicForgeEntity(crystal)) {
+                    loadedForges.add(crystal.getUniqueId());
+                    updateForgeHologram(crystal);
+                }
+            }
+            for (Entity entity : event.getChunk().getEntities()) {
+                if (!(entity instanceof TextDisplay display) || !isMythicForgeHologram(display)) continue;
+                UUID ownerId = mythicForgeHologramOwner(display);
+                UUID trackedId = ownerId == null ? null : forgeHolograms.get(ownerId);
+                if (ownerId == null || !loadedForges.contains(ownerId)
+                    || trackedId == null || !trackedId.equals(display.getUniqueId())) {
+                    display.remove();
+                }
+            }
+        });
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onForgeChunkUnload(ChunkUnloadEvent event) {
+        for (Entity entity : event.getChunk().getEntities()) {
+            if (entity instanceof EnderCrystal crystal && isMythicForgeEntity(crystal)) {
+                forgeHolograms.remove(crystal.getUniqueId());
+            }
+        }
     }
 
     private void ensureForgeHologram(EnderCrystal crystal) {
@@ -1180,7 +1231,9 @@ public final class MythicForgeListener implements Listener {
         return item;
     }
 
-    private record MythicForgeMenuHolder(UUID forgeId) implements InventoryHolder, MenuDupeGuardListener.MutableMenuHolder {
+    private record MythicForgeMenuHolder(UUID forgeId) implements InventoryHolder, MenuDupeGuardListener.RecoveryTrackedMenuHolder {
+        @Override public String recoverySurface() { return "Mythic Forge"; }
+        @Override public int[] recoverySlots() { return new int[] { LEFT_SLOT, CATALYST_SLOT, RIGHT_SLOT }; }
         @Override
         public Inventory getInventory() {
             return null;

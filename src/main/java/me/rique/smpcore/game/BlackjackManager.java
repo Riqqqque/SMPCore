@@ -72,6 +72,9 @@ public final class BlackjackManager implements Listener {
     private final ItemEscrowService escrow;
     private final Map<UUID, BlackjackGame> games = new ConcurrentHashMap<>();
     private final Set<UUID> pendingDealerStarts = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> pendingGameActions = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, BukkitTask> pendingInventoryRefreshes = new ConcurrentHashMap<>();
+    private final Map<UUID, BukkitTask> pendingInventoryReopens = new ConcurrentHashMap<>();
     private BukkitTask cleanupTask;
     private boolean shuttingDown;
 
@@ -94,6 +97,12 @@ public final class BlackjackManager implements Listener {
         for (BlackjackGame game : new ArrayList<>(games.values())) {
             cancelGame(game, "Plugin shut down.", false);
         }
+        pendingInventoryRefreshes.values().forEach(BukkitTask::cancel);
+        pendingInventoryRefreshes.clear();
+        pendingInventoryReopens.values().forEach(BukkitTask::cancel);
+        pendingInventoryReopens.clear();
+        pendingDealerStarts.clear();
+        pendingGameActions.clear();
         escrow.shutdown();
     }
 
@@ -312,6 +321,7 @@ public final class BlackjackManager implements Listener {
         game.revealDealerHole = true;
         stopTask(game);
         games.remove(game.playerId(), game);
+        clearPlayerTasks(game.playerId());
 
         Player player = Bukkit.getPlayer(game.playerId());
         boolean canNotify = player != null && player.isOnline();
@@ -352,21 +362,21 @@ public final class BlackjackManager implements Listener {
 
         switch (result) {
             case WIN -> {
-                player.sendMessage(claimNeeded
+                BedrockCompat.sendGameMessage(player, claimNeeded
                     ? MessageUtil.success("You won blackjack. Use <white>/blackjack claim</white> for the payout.")
                     : MessageUtil.success("You won blackjack: " + payout + " " + currencyName(material, payout) + "."));
                 playWinEffects(player);
                 announceTeamResult(player, material, result, payout);
             }
             case PUSH -> {
-                player.sendMessage(claimNeeded
+                BedrockCompat.sendGameMessage(player, claimNeeded
                     ? MessageUtil.info("Push. Use <white>/blackjack claim</white> for your bet.")
                     : MessageUtil.info("Push. Your bet was returned."));
                 announceTeamResult(player, material, result, betAmount);
                 player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 0.65f, 1.0f);
             }
             case LOSE -> {
-                player.sendMessage(MessageUtil.warn("Dealer wins. " + reason));
+                BedrockCompat.sendGameMessage(player, MessageUtil.warn("Dealer wins. " + reason));
                 announceTeamResult(player, material, result, betAmount);
                 playLoseEffects(player);
             }
@@ -619,7 +629,7 @@ public final class BlackjackManager implements Listener {
             case PUSH -> MessageUtil.info(playerName + " pushed in blackjack and got " + value + " back.");
             case LOSE -> MessageUtil.warn(playerName + " lost " + value + " in blackjack.");
         };
-        plugin.getTeamManager().notifyPlayerTeam(player.getUniqueId(), message);
+        plugin.getTeamManager().notifyPlayerTeamGameResult(player.getUniqueId(), message);
     }
 
     private boolean isReady(Player player) {
@@ -742,6 +752,7 @@ public final class BlackjackManager implements Listener {
         game.revealDealerHole = true;
         stopTask(game);
         games.remove(game.playerId(), game);
+        clearPlayerTasks(game.playerId());
         consumeHouseWager(game.wager(), "recording forfeit for " + game.playerName());
 
         Player player = Bukkit.getPlayer(game.playerId());
@@ -762,6 +773,7 @@ public final class BlackjackManager implements Listener {
         game.settled = true;
         stopTask(game);
         games.remove(game.playerId(), game);
+        clearPlayerTasks(game.playerId());
         boolean returned = returnEscrowToOwner(game.wager(), false);
         if (notify) {
             Player player = Bukkit.getPlayer(game.playerId());
@@ -947,22 +959,28 @@ public final class BlackjackManager implements Listener {
         }
         BlackjackGame game = games.get(player.getUniqueId());
         if (game == null || !game.gameId().equals(blackjackHolder.gameId())) {
-            Bukkit.getScheduler().runTask(plugin, player::updateInventory);
+            scheduleInventoryRefresh(player);
             return;
         }
         if (event.getRawSlot() < 0
             || event.getRawSlot() >= top.getSize()
             || (event.getClick() != ClickType.LEFT && event.getClick() != ClickType.RIGHT)
             || !MenuItemUtil.isVisibleItem(event.getCurrentItem())) {
-            Bukkit.getScheduler().runTask(plugin, player::updateInventory);
+            scheduleInventoryRefresh(player);
             return;
         }
-        if (event.getRawSlot() == HIT_SLOT) {
-            hit(game, player);
-        } else if (event.getRawSlot() == STAND_SLOT) {
-            stand(game, player);
+        if ((event.getRawSlot() == HIT_SLOT || event.getRawSlot() == STAND_SLOT)
+            && acceptsGameAction(game.phase() == Phase.PLAYER_TURN, pendingGameActions.contains(player.getUniqueId()))) {
+            UUID playerId = player.getUniqueId();
+            pendingGameActions.add(playerId);
+            if (event.getRawSlot() == HIT_SLOT) {
+                hit(game, player);
+            } else {
+                stand(game, player);
+            }
+            Bukkit.getScheduler().runTask(plugin, () -> pendingGameActions.remove(playerId));
         }
-        Bukkit.getScheduler().runTask(plugin, player::updateInventory);
+        scheduleInventoryRefresh(player);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -973,7 +991,7 @@ public final class BlackjackManager implements Listener {
         }
         event.setCancelled(true);
         if (event.getWhoClicked() instanceof Player player) {
-            Bukkit.getScheduler().runTask(plugin, player::updateInventory);
+            scheduleInventoryRefresh(player);
         }
     }
 
@@ -990,11 +1008,43 @@ public final class BlackjackManager implements Listener {
         if (game == null || game.settled || !game.gameId().equals(blackjackHolder.gameId())) {
             return;
         }
-        Bukkit.getScheduler().runTask(plugin, () -> {
+        scheduleInventoryReopen(player, game);
+    }
+
+    private void scheduleInventoryRefresh(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (pendingInventoryRefreshes.containsKey(playerId)) {
+            return;
+        }
+        BukkitTask task = Bukkit.getScheduler().runTask(plugin, () -> {
+            pendingInventoryRefreshes.remove(playerId);
+            if (player.isOnline()) {
+                player.updateInventory();
+            }
+        });
+        pendingInventoryRefreshes.put(playerId, task);
+    }
+
+    private void scheduleInventoryReopen(Player player, BlackjackGame game) {
+        UUID playerId = player.getUniqueId();
+        if (pendingInventoryReopens.containsKey(playerId)) {
+            return;
+        }
+        BukkitTask task = Bukkit.getScheduler().runTask(plugin, () -> {
+            pendingInventoryReopens.remove(playerId);
             if (player.isOnline() && !game.settled) {
                 player.openInventory(game.inventory());
             }
         });
+        pendingInventoryReopens.put(playerId, task);
+    }
+
+    private void clearPlayerTasks(UUID playerId) {
+        pendingGameActions.remove(playerId);
+        BukkitTask refresh = pendingInventoryRefreshes.remove(playerId);
+        if (refresh != null) refresh.cancel();
+        BukkitTask reopen = pendingInventoryReopens.remove(playerId);
+        if (reopen != null) reopen.cancel();
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -1048,10 +1098,16 @@ public final class BlackjackManager implements Listener {
     }
 
     private void handleLeave(Player player, String reason) {
+        pendingDealerStarts.remove(player.getUniqueId());
+        clearPlayerTasks(player.getUniqueId());
         BlackjackGame game = games.get(player.getUniqueId());
         if (game != null) {
             forfeitGame(game, reason, true);
         }
+    }
+
+    static boolean acceptsGameAction(boolean playerTurn, boolean actionPending) {
+        return playerTurn && !actionPending;
     }
 
     private record BetSlot(int slot, ItemStack item) {}

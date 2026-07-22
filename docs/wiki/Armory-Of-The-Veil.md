@@ -57,6 +57,8 @@ Morvessa the Runebloom Witch also has a 5% chance to drop one. This averages one
 - `Hollowsong Bow` - arrows weaken, slow, and punish already-weakened targets.
 - `Starfall Mace` - heavy mace with a cooldown impact burst.
 
+Veil boss weapons keep their enchants permanently. Use enchanted books at an anvil as normal; melee boss weapons also accept combat books such as Sharpness, Smite, Fire Aspect, Knockback, and Looting even when the base item would normally reject them. Grindstones cannot remove these enchants. Bedrock players can use the placed-anvil custom menu for the same results.
+
 ## Weapon and Tool Recipes
 
 - `Veilbrand Verdict` - Netherite Sword, 5 Cinderveil Ember, 1 Veiled Skull, 8 Blaze Rods, 24 Diamonds.

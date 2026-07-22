@@ -148,6 +148,39 @@ public final class ItemEscrowService {
         return escrowed != null && removeEscrowRecord(escrowed.escrowId());
     }
 
+    public boolean consumeAll(Collection<EscrowedItem> escrows) {
+        if (escrows == null || escrows.isEmpty()) {
+            return false;
+        }
+        Map<UUID, EscrowedItem> unique = new java.util.LinkedHashMap<>();
+        for (EscrowedItem escrowed : escrows) {
+            if (escrowed == null || escrowed.escrowId() == null) {
+                return false;
+            }
+            unique.put(escrowed.escrowId(), escrowed);
+        }
+        if (unique.size() != escrows.size()) {
+            return false;
+        }
+
+        synchronized (lock) {
+            for (UUID escrowId : unique.keySet()) {
+                if (!knownEscrowIds.contains(escrowId) || !escrowConfig.contains("escrows." + escrowId)) {
+                    return false;
+                }
+            }
+            unique.keySet().forEach(escrowId -> escrowConfig.set("escrows." + escrowId, null));
+            if (!saveEscrowFile()) {
+                escrowConfig = YamlConfiguration.loadConfiguration(escrowFile);
+                rebuildKnownEscrowIds();
+                return false;
+            }
+            unique.keySet().forEach(knownEscrowIds::remove);
+            unique.keySet().forEach(retainedEscrows::remove);
+            return true;
+        }
+    }
+
     public List<EscrowedItem> replaceWithRecoveries(
         EscrowedItem consumed,
         UUID ownerId,

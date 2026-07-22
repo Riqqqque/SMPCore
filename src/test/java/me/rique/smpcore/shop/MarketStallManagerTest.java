@@ -4,6 +4,7 @@ import org.bukkit.Material;
 import org.junit.jupiter.api.Test;
 
 import java.util.UUID;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -84,6 +85,7 @@ class MarketStallManagerTest {
     void ownersCanRemoveChestSignsButNeverTheStallPurchaseSign() {
         assertTrue(MarketStallManager.canOwnerBreakStallBlock(false, false, false, true));
         assertTrue(MarketStallManager.canOwnerBreakStallBlock(false, true, false, false));
+        assertTrue(MarketStallManager.canOwnerBreakStallBlock(false, false, true, false));
         assertFalse(MarketStallManager.canOwnerBreakStallBlock(true, true, true, true));
         assertFalse(MarketStallManager.canOwnerBreakStallBlock(false, false, false, false));
     }
@@ -101,6 +103,18 @@ class MarketStallManagerTest {
         assertTrue(MarketStallManager.canEditStallSign(true, true, false));
         assertFalse(MarketStallManager.canEditStallSign(false, false, false));
         assertFalse(MarketStallManager.canEditStallSign(false, true, true));
+    }
+
+    @Test
+    void ownersAndTrustedManagersCanManageButStrangersCannot() {
+        UUID owner = UUID.randomUUID();
+        UUID manager = UUID.randomUUID();
+        UUID stranger = UUID.randomUUID();
+
+        assertTrue(MarketStallManager.canManageStall(owner, Set.of(manager), owner));
+        assertTrue(MarketStallManager.canManageStall(owner, Set.of(manager), manager));
+        assertFalse(MarketStallManager.canManageStall(owner, Set.of(manager), stranger));
+        assertFalse(MarketStallManager.canManageStall(null, Set.of(manager), manager));
     }
 
     @Test

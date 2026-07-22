@@ -3,7 +3,6 @@ package me.rique.smpcore.item;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.Multimap;
 import me.rique.smpcore.SMPCore;
-import me.rique.smpcore.power.SuperpowerType;
 import me.rique.smpcore.util.AtomicYamlFile;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
@@ -103,7 +102,6 @@ public final class VeilOrbManager implements Listener {
     private static final int RUNIC_REQUIRED_ENCHANTS = 4;
     private static final int RUNIC_EXTRA_MAX_LEVELS = 2;
     private static final int AGGRO_ORB_BONUS = 5;
-    private static final int TANK_CLASS_AGGRO = 5;
     private static final double SOLO_CHECK_RADIUS = 34.0D;
     private static final double SOLO_TEAM_RADIUS = 32.0D;
     private static final long MOMENTUM_KILL_WINDOW_MS = 30_000L;
@@ -220,7 +218,7 @@ public final class VeilOrbManager implements Listener {
         if (player == null || !player.isOnline()) {
             return 0;
         }
-        int total = tankClassAggro(player);
+        int total = 0;
         PlayerInventory inventory = player.getInventory();
         for (ItemStack armor : inventory.getArmorContents()) {
             total += itemAggroBonus(armor);
@@ -545,9 +543,9 @@ public final class VeilOrbManager implements Listener {
         );
         fill(inventory);
         inventory.setItem(INFO_SLOT, item(Material.ENCHANTING_TABLE, "<gradient:#7dd3fc:#c084fc><bold>Runic Loom</bold></gradient>", List.of(
-            "<gray>Adds <white>+1</white> or <white>+2</white> to one enchant.</gray>",
+            "<gray>Adds <gold>+1</gold> or <gold>+2</gold> to one enchant.</gray>",
             "<gray>Needs gear with at least <white>4 enchants</white>.</gray>",
-            "<gray>Vanilla enchants cap at normal max <white>+2</white>.</gray>",
+            "<gray>Vanilla enchants cap at normal max <gold>+2</gold>.</gray>",
             "<gray>Consumes one <white>Runebloom Orb</white>.</gray>",
             "<dark_gray>Corrupted items are locked.</dark_gray>"
         )));
@@ -669,7 +667,7 @@ public final class VeilOrbManager implements Listener {
         player.playSound(player.getLocation(), Sound.BLOCK_ENCHANTMENT_TABLE_USE, 0.8f, 1.45f);
         player.spawnParticle(Particle.ENCHANT, player.getLocation().add(0.0, 1.1, 0.0), 45, 0.6, 0.45, 0.6, 0.08);
         String capNote = appliedIncrease < increase ? " <dark_gray>(cap reached)</dark_gray>" : "";
-        player.sendMessage(MessageUtil.success("Raised <white>" + selected.display() + "</white> by <white>+" + appliedIncrease + "</white>." + capNote));
+        player.sendMessage(MessageUtil.success("Raised <white>" + selected.display() + "</white> by <gold>+" + appliedIncrease + "</gold>." + capNote));
         refreshRunicLoom(top);
     }
 
@@ -730,13 +728,13 @@ public final class VeilOrbManager implements Listener {
             inventory.setItem(RUNIC_STATUS_SLOT, item(Material.BARRIER, "<red><bold>No Enchants Found</bold></red>", List.of("<gray>This item has no upgradeable enchants.</gray>")));
             return;
         }
-        inventory.setItem(RUNIC_STATUS_SLOT, item(Material.LIME_DYE, "<green><bold>Choose An Enchant</bold></green>", List.of("<gray>Click one enchant below.</gray>", "<gray>Rolls <white>+1</white> or <white>+2</white>, capped safely.</gray>")));
+        inventory.setItem(RUNIC_STATUS_SLOT, item(Material.LIME_DYE, "<green><bold>Choose An Enchant</bold></green>", List.of("<gray>Click one enchant below.</gray>", "<gray>Rolls <gold>+1</gold> or <gold>+2</gold>, capped safely.</gray>")));
         options.sort(Comparator.comparing(EnchantOption::display, String.CASE_INSENSITIVE_ORDER));
         for (int i = 0; i < options.size() && i < ENCHANT_OPTION_SLOTS.length; i++) {
             EnchantOption option = options.get(i);
             ItemStack icon = item(Material.ENCHANTED_BOOK, "<aqua><bold>" + miniEscape(option.display()) + "</bold></aqua>", List.of(
                 "<gray>Current:</gray> <white>" + option.level() + "</white><dark_gray>/</dark_gray><white>" + option.maxLevel() + "</white>",
-                "<gray>Result:</gray> <white>" + runicResultPreview(option) + "</white>",
+                "<gray>Result:</gray> <gold>" + runicResultPreview(option) + "</gold>",
                 "<yellow>Click to upgrade.</yellow>"
             ));
             tagMenu(icon, "upgrade_enchant", option.encoded());
@@ -879,17 +877,6 @@ public final class VeilOrbManager implements Listener {
         return false;
     }
 
-    private int tankClassAggro(Player player) {
-        if (plugin.getSuperpowerManager() == null) {
-            return 0;
-        }
-        SuperpowerType type = plugin.getSuperpowerManager().powerOf(player);
-        return switch (type) {
-            case JUGGERNAUT, TITAN, SENTINEL, OATHBOUND -> TANK_CLASS_AGGRO;
-            default -> 0;
-        };
-    }
-
     private int itemAggroBonus(ItemStack item) {
         if (isEmpty(item)) {
             return 0;
@@ -1019,6 +1006,9 @@ public final class VeilOrbManager implements Listener {
         if (isCorruptionLocked(item)) {
             return "Corrupted items are locked.";
         }
+        if (CustomLoreUtil.hasAnyEnchantConflict(item)) {
+            return "Resolve conflicting enchants before using the Loom.";
+        }
         if (runicEnchantCount(item) < RUNIC_REQUIRED_ENCHANTS) {
             return "This item needs at least 4 enchants.";
         }
@@ -1069,9 +1059,13 @@ public final class VeilOrbManager implements Listener {
 
     private int applyEnchantIncrease(ItemStack item, EnchantOption option, int increase) {
         if ("custom".equals(option.type())) {
-            return plugin.getCustomEnchantListener() == null
+            int applied = plugin.getCustomEnchantListener() == null
                 ? 0
                 : plugin.getCustomEnchantListener().upgradeManagedEnchant(item, option.key(), increase);
+            if (applied > 0) {
+                CustomLoreUtil.refreshEnchantLore(item);
+            }
+            return applied;
         }
         ItemMeta meta = item.getItemMeta();
         if (meta == null) {
@@ -1094,6 +1088,7 @@ public final class VeilOrbManager implements Listener {
         }
         meta.addEnchant(enchantment, next, true);
         item.setItemMeta(meta);
+        CustomLoreUtil.refreshEnchantLore(item);
         return next - current;
     }
 
@@ -1603,14 +1598,18 @@ public final class VeilOrbManager implements Listener {
         }
     }
 
-    private record RunicLoomHolder(UUID playerId, BlockKey station) implements InventoryHolder, MenuDupeGuardListener.MutableMenuHolder {
+    private record RunicLoomHolder(UUID playerId, BlockKey station) implements InventoryHolder, MenuDupeGuardListener.RecoveryTrackedMenuHolder {
+        @Override public String recoverySurface() { return "Runic Loom"; }
+        @Override public int[] recoverySlots() { return new int[] { RUNIC_ITEM_SLOT, RUNIC_ORB_SLOT }; }
         @Override
         public Inventory getInventory() {
             return null;
         }
     }
 
-    private record FateCrucibleHolder(UUID playerId, BlockKey station) implements InventoryHolder, MenuDupeGuardListener.MutableMenuHolder {
+    private record FateCrucibleHolder(UUID playerId, BlockKey station) implements InventoryHolder, MenuDupeGuardListener.RecoveryTrackedMenuHolder {
+        @Override public String recoverySurface() { return "Fate Crucible"; }
+        @Override public int[] recoverySlots() { return new int[] { FATE_ITEM_SLOT }; }
         @Override
         public Inventory getInventory() {
             return null;

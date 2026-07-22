@@ -6,6 +6,10 @@ import java.util.Map;
 
 public final class BossBalance {
     public static final double RUNEBLOOM_WITCH_ORB_DROP_CHANCE = 0.05;
+    private static final double GROUP_LOOT_DAMAGE_SHARE = 0.025;
+    private static final double GROUP_LOOT_MINIMUM_DAMAGE = 10.0;
+    private static final double GROUP_LOOT_PER_EXTRA_PLAYER = 0.25;
+    private static final int GROUP_LOOT_PLAYER_CAP = 5;
 
     private static final List<Profile> PROGRESSION = List.of(
         new Profile("yule_the_minion", 1, 570.0, 9.25, "enchanted diamond gear"),
@@ -71,6 +75,35 @@ public final class BossBalance {
         int extraPlayers = Math.min(6, Math.max(0, playerCount - 1));
         double perExtraPlayer = tier <= 1 ? 0.09 : Math.min(0.13, 0.075 + Math.max(1, tier) * 0.005);
         return 1.0 + extraPlayers * perExtraPlayer;
+    }
+
+    public static boolean qualifiesForGroupLoot(double damageDone, double totalDamage) {
+        if (!Double.isFinite(damageDone)
+            || !Double.isFinite(totalDamage)
+            || damageDone <= 0.0
+            || totalDamage <= 0.0) {
+            return false;
+        }
+        double requiredDamage = Math.max(GROUP_LOOT_MINIMUM_DAMAGE, totalDamage * GROUP_LOOT_DAMAGE_SHARE);
+        return damageDone >= requiredDamage;
+    }
+
+    public static double multiplayerLootScale(int qualifiedPlayers) {
+        int extraPlayers = Math.min(GROUP_LOOT_PLAYER_CAP - 1, Math.max(0, qualifiedPlayers - 1));
+        return 1.0 + extraPlayers * GROUP_LOOT_PER_EXTRA_PLAYER;
+    }
+
+    public static int scaledBossMaterialAmount(int baseAmount, int qualifiedPlayers, double roundingRoll) {
+        if (baseAmount <= 0) {
+            return 0;
+        }
+        double scaledAmount = baseAmount * multiplayerLootScale(qualifiedPlayers);
+        int amount = (int) Math.floor(scaledAmount);
+        double fractionalAmount = scaledAmount - amount;
+        double normalizedRoll = Double.isFinite(roundingRoll)
+            ? Math.max(0.0, Math.min(1.0, roundingRoll))
+            : 1.0;
+        return amount + (normalizedRoll < fractionalAmount ? 1 : 0);
     }
 
     public static double routineAbilityDamageScale(int tier) {

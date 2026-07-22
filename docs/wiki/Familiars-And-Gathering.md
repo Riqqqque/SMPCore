@@ -44,7 +44,8 @@ Mining Luck, the Miner Familiar, and Mining Fever roll separately and add bonus 
 
 - **Mining Luck:** up to 20% chance for one extra copy of eligible raw ore.
 - **Miner Familiar:** base 10% chance for two extra copies.
-- **Mining Fever:** sneak-right-click the Veinwake Pick for 45 seconds of a 50% chance for two extra copies. Cooldown: 6 minutes.
+- **Mining Fever:** sneak-right-click the Veinwake Pick anywhere, including while looking into the air, for 45 seconds of a 50% chance for two extra copies. Cooldown: 6 minutes. Using it before it is ready shows the active and cooldown timers.
+- **Vein Miner:** use `/veinminer on`, then sneak while mining. The Veinwake Pick works with chained ores, including Fortune, Silk Touch, Smelting Touch, Telekinesis, and the natural/placed-ore safeguards.
 
 If more than one bonus triggers, each adds its own copies. The action bar names every proc.
 

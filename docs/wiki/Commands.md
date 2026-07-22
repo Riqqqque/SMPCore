@@ -28,6 +28,8 @@ Common aliases include `/smpmenu`, `/prefs`, `/lrecipes`, `/familiars`, `/lb`, `
 - `/shops balance` - view payments waiting outside stock chests.
 - `/shops collect` - collect waiting payments when inventory space is available.
 - `/stall` - current rented-stall status.
+- `/stall manager <player>` - toggle a trusted stall manager; they can maintain shops but still purchase normally.
+- `/stall manager` or `/stall managers` - list your trusted managers.
 - `/stall sell` - sell your stall back for 75% after removing player fixtures.
 - `/stall transfer <player>` - offer ownership and its shops to an online player.
 - `/stall accept` or `/stall deny` - answer a transfer offer.
@@ -39,6 +41,7 @@ Common aliases include `/smpmenu`, `/prefs`, `/lrecipes`, `/familiars`, `/lb`, `
 - `/spinbet claim` - recover an interrupted item-bet payout.
 - `/blackjack claim` - recover an interrupted Blackjack payout; new games start only through Silas.
 - `/roulette claim` - recover an interrupted material payout; new spins start only through Renn.
+- `/bounties` (`/bountylist`, `/wanted`) - open a read-only, paginated list of every active player bounty.
 
 ### Bosses and story
 
@@ -63,7 +66,7 @@ Common aliases include `/smpmenu`, `/prefs`, `/lrecipes`, `/familiars`, `/lb`, `
 - `/team ally add|accept|deny|remove <team>` - alliance management.
 - `/teams [search]` - searchable team browser.
 - `/teamvault` - team storage.
-- `/teamglow` - privately outline only your teammates through walls; no extra name label is added.
+- `/teamglow` - privately outline only your teammates through walls; the setting survives relogs and no extra name label is added.
 
 ### Duels
 
@@ -82,16 +85,20 @@ Read [Duels and Betting](Duels-And-Betting) before placing a wager.
 
 ### Travel and survival
 
-- `/spawn` - exact spawn, with a short cooldown.
-- `/sethome`, `/home`, `/homes`, `/delhome` - personal homes with safe landing checks.
+- `/spawn` - exact spawn from any normal dimension, with safe cross-world loading and a short cooldown. Active boss fighters cannot use it to escape an encounter.
+- `/wild` (`/rtp`, `/randomtp`) - find safe Overworld ground inside the live world border. It stays away from protected spawn, loads candidate chunks asynchronously, and has a five-minute cooldown after a successful teleport.
+- `/warp list` - show every public server warp.
+- `/warp <name>` or `/<name>` - travel to a public warp, such as `/tavern`.
+- `/sethome`, `/home`, `/homes`, `/delhome` - personal homes with safe cross-world travel. `/home` automatically leaves seats or mounts; combat, duel and boss arenas, world borders, and scheduled dimension locks still apply.
 - `/veinminer on|off|status` - toggle or inspect Vein Miner.
 - `/veinminer blocks` - personal vein list.
 - `/veinminer addblock [block]` and `/veinminer removeblock [block]` - edit that list.
 - `/steed summon`, `/steed recall`, `/steed status` - Wildbound Regalia mount controls.
+- `/steed quest` - show your current Beastwarden lesson and exact progress.
 
 ## Class Commands
 
-Only the matching class can normally use these. Read [Classes](Superpowers) for costs, cooldowns, and boss restrictions.
+Only the matching class can normally use these. Every class command and alias is sealed for active boss fighters. Read [Classes](Superpowers) for costs, cooldowns, and boss restrictions.
 
 - Veil Assassin: `/smokebomb`
 - Juggernaut: `/unstoppableforce`
@@ -102,7 +109,7 @@ Only the matching class can normally use these. Read [Classes](Superpowers) for 
 - Oathbound: `/oathsummon <player>`
 - Bloodmender: `/bloodsacrifice`, `/curse`
 - Shadow Monarch: `/msummon [amount]`, `/msummon despawn`
-- Voidwalker: `/voidstep`, `/voidvision`
+- Voidwalker: sneak-right-click with an empty main hand to Voidstep; `/voidstep` is a Bedrock/accessibility fallback and `/voidvision` toggles night vision
 - Oracle Eye: `/xray`
 - Wayfarer: `/travel <x> <y> <z> <dimension>`, `/travel close`
 - The Honored One: `/infinity on|off|toggle|status`, `/domainexpansion`
@@ -114,6 +121,7 @@ Only the matching class can normally use these. Read [Classes](Superpowers) for 
 - `/launchaccess status|open|lock|allowme` - owner-only launch gate. Opening access does not start the season.
 - `/startsmp [graceMinutes]` - begin the season, remove staging lockdown, and start PvP grace.
 - `/startsmp status|barrier|lock|reset|preview` - inspect or repair start state.
+- `/startsmp unlock nether|end` - open a scheduled dimension early and announce it server-wide. Staff only.
 - `/setspawn` - save exact spawn and facing.
 - `/spawnprotect` - protection summary.
 - `/spawnprotect pos1|pos2` - mark the permanent spawn cuboid.
@@ -125,6 +133,10 @@ Only the matching class can normally use these. Read [Classes](Superpowers) for 
 - `/spawnprotect public clear confirm` - clear exact public-use marks.
 - `/spawnprotect clean` - remove loaded stray mobs from spawn.
 - `/spawnprotect radius <blocks>` or `/spawnprotect clearregion` - fallback-radius controls.
+- `/warp create <name>` - create a public warp at your exact position and facing.
+- `/warp move <name>` - move an existing public warp to your position and facing.
+- `/warp info <name>` and `/warp list` - inspect saved public warps.
+- `/warp delete <name>` - permanently remove a public warp and its short command.
 
 ### Guide NPCs
 
@@ -156,6 +168,7 @@ Run the root without a subcommand for its usage. See [NPC Directory](NPC-Directo
 - `/tavernadmin remove <type>` and `/tavernadmin list` - station maintenance.
 - `/tavernadmin leaderboard spawn <slots|cards|darts>` - place one game's physical board.
 - `/tavernadmin leaderboard remove` - remove the nearest tavern board.
+- `/tavernadmin sober <player>` - clear tavern intoxication and nausea without granting a morning drink buff.
 
 ### Market stalls and shops
 
@@ -171,6 +184,9 @@ Run the root without a subcommand for its usage. See [NPC Directory](NPC-Directo
 ### Items, Essence, and recovery
 
 - `/customitem give <item> [player]` - custom utility, boss trophy, and Veil items.
+- `/customitem give veinwake_pick <player>` - give an audited Veinwake Pick to an online player.
+- `/backpackadmin list|view|restore ...` and `/backpackadmin confirm|cancel` - inspect and safely restore bounded backpack snapshots.
+- `/itemrecovery list|view|restore ...` and `/itemrecovery confirm|cancel` - inspect and restore one verified item from a risky custom-inventory record.
 - `/legendary give <item> [player]` - legendary test item.
 - `/reforger spawn|remove|list|refresh` and `/reforger stone [player]` - Brannik and test stones.
 - `/priest spawn|remove|list|refresh` - Father Aldren.
@@ -184,12 +200,14 @@ Run the root without a subcommand for its usage. See [NPC Directory](NPC-Directo
 - `/deathinventory restore <player> [snapshot]`, then `/deathinventory confirm` - guarded restore.
 - `/deathinventory cancel` - abandon the pending restore.
 - `/familiaradmin list|give|take ...` - test any current familiar.
-- `/beastwardenadmin complete|reset|armor|preview ...` - Beastwarden testing.
+- `/beastwardenadmin complete|reset|armor|progress|preview ...` - Beastwarden testing and progress diagnostics.
 
 ### World systems and diagnostics
 
 - `/spawner info|reset` - targeted custom spawner inspection.
 - `/goblins give [amount]` and `/goblins count` - hidden collectibles.
+- `/goblins see [on|off|refresh]` - privately mark every loaded goblin head through walls for the executing admin.
+- `/goblins audit` - check every registered goblin against the live world; add `prune` to remove overwritten or fully enclosed heads and update the active total.
 - `/spawnlife spawn|remove|list <type>` and `/spawnlife refresh` - ambient characters.
 - `/bedrockskulls register|scan [radius]|status` - Geyser custom-head mappings.
 - `/smpcore bedrock` - Floodgate, Geyser, ViaVersion, and online Bedrock status.

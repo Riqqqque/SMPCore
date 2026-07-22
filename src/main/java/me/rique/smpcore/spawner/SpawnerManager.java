@@ -54,6 +54,7 @@ public final class SpawnerManager {
     private final Map<String, UUID> holograms = new ConcurrentHashMap<>();
     private final Map<String, Set<String>> chunkIndex = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<Void>> pendingPersistence = new ConcurrentHashMap<>();
+    private final Set<String> pendingHologramUpdates = ConcurrentHashMap.newKeySet();
 
     public SpawnerManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -103,6 +104,7 @@ public final class SpawnerManager {
     }
 
     public void shutdown() {
+        pendingHologramUpdates.clear();
         destroyAllHolograms();
         List<CompletableFuture<Void>> saves = new ArrayList<>();
         cache.values().stream()
@@ -143,6 +145,11 @@ public final class SpawnerManager {
         return cache.get(key(loc));
     }
 
+    public SpawnerData getData(World world, int x, int y, int z) {
+        if (world == null) return null;
+        return cache.get(key(world.getName(), x, y, z));
+    }
+
     public boolean isTracked(Location loc) {
         return cache.containsKey(key(loc));
     }
@@ -166,7 +173,7 @@ public final class SpawnerManager {
         index(blockKey, data.world(), data.x(), data.z());
         queueSave(blockKey, data);
         applySpeedToBlock(loc, data);
-        Bukkit.getScheduler().runTask(plugin, () -> spawnHologram(data));
+        scheduleHologramUpdate(blockKey);
     }
 
     public void unregister(Location loc) {
@@ -176,6 +183,7 @@ public final class SpawnerManager {
             unindex(blockKey, removed.world(), removed.x(), removed.z());
         }
         destroyHologram(blockKey);
+        pendingHologramUpdates.remove(blockKey);
         queueDelete(blockKey, loc.getWorld().getName(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ());
     }
 
@@ -283,6 +291,16 @@ public final class SpawnerManager {
         cs.update(true, false);
     }
 
+    public double effectiveSpeedMultiplier(SpawnerData data) {
+        return data.effectiveSpeedMultiplier(
+            BASE_MIN_DELAY,
+            BASE_MAX_DELAY,
+            plugin.getConfigManager().spawnerMaxSugar,
+            plugin.getConfigManager().spawnerMaxMultiplier,
+            plugin.getConfigManager().spawnerMinDelayFloor
+        );
+    }
+
     public void spawnHologram(SpawnerData data) {
         World world = Bukkit.getWorld(data.world());
         if (world == null) return;
@@ -380,8 +398,7 @@ public final class SpawnerManager {
 
     private Component buildHologramText(World world, SpawnerData data) {
         int maxSugar = plugin.getConfigManager().spawnerMaxSugar;
-        double maxMult = plugin.getConfigManager().spawnerMaxMultiplier;
-        double mult = data.speedMultiplier(maxSugar, maxMult);
+        double mult = effectiveSpeedMultiplier(data);
 
         String mobName = formatMobName(data.entityType());
         String stackSuffix = data.stackCount() > 1 ? " <white>x" + data.stackCount() + "</white>" : "";
@@ -442,11 +459,21 @@ public final class SpawnerManager {
     }
 
     private void persistAndUpdateHologram(Location loc, SpawnerData data) {
-        queueSave(key(loc), data);
-        if (!plugin.isEnabled()) return;
+        String blockKey = key(loc);
+        queueSave(blockKey, data);
+        scheduleHologramUpdate(blockKey);
+    }
+
+    private void scheduleHologramUpdate(String blockKey) {
+        if (!plugin.isEnabled() || !pendingHologramUpdates.add(blockKey)) return;
         Bukkit.getScheduler().runTask(plugin, () -> {
+            pendingHologramUpdates.remove(blockKey);
             if (!plugin.isEnabled()) return;
-            updateHologram(loc);
+            SpawnerData current = cache.get(blockKey);
+            if (current == null) return;
+            World world = Bukkit.getWorld(current.world());
+            if (world == null || !world.isChunkLoaded(current.x() >> 4, current.z() >> 4)) return;
+            updateHologram(new Location(world, current.x(), current.y(), current.z()));
         });
     }
 

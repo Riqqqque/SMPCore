@@ -35,6 +35,9 @@ permissions:
   smpcore.home.multiple:
     description: Set more than one home (count controlled by config)
     default: false
+  smpcore.home.bypass-border:
+    description: Use homes outside the current world border
+    default: op
 
   # Utility (player)
   smpcore.top:
@@ -52,6 +55,12 @@ permissions:
   smpcore.spawn.cooldown.bypass:
     description: Bypass the /spawn cooldown
     default: op
+  smpcore.wild:
+    description: Use /wild, /rtp, and /randomtp
+    default: true
+  smpcore.wild.cooldown.bypass:
+    description: Bypass the /wild cooldown
+    default: op
   smpcore.help:
     description: Use /help
     default: true
@@ -66,6 +75,9 @@ permissions:
     default: true
   smpcore.roulette:
     description: Play European roulette through Renn and recover interrupted payouts
+    default: true
+  smpcore.bounties:
+    description: View active player bounties with /bounties
     default: true
   smpcore.bossmastery.use:
     description: Use Mogrik's boss mastery ledger
@@ -139,6 +151,12 @@ permissions:
   smpcore.backpack.use:
     description: Use backpacks
     default: true
+  smpcore.backpack.admin:
+    description: Inspect and restore bounded backpack recovery snapshots
+    default: op
+  smpcore.inventoryrecovery.admin:
+    description: Inspect and restore single-use snapshots from risky custom inventories
+    default: op
   smpcore.goblins.admin:
     description: Give and move hidden goblin collectibles
     default: op
@@ -257,6 +275,9 @@ permissions:
     default: op
   smpcore.startsmp.lock:
     description: Re-enable the pre-start SMP spawn barrier and lockdown
+    default: op
+  smpcore.startsmp.unlock-dimensions:
+    description: Open the Nether or End before its scheduled day
     default: op
   smpcore.launchaccess.admin:
     description: Lock launch access to approved owners or open the server to everyone
@@ -377,4 +398,10 @@ permissions:
     default: op
   smpcore.stall.admin:
     description: Create and manage protected market stalls
+    default: op
+  smpcore.warp.use:
+    description: Use public server warps
+    default: true
+  smpcore.warp.admin:
+    description: Create, move, and remove public server warps
     default: op

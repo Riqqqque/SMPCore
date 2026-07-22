@@ -5,12 +5,16 @@ import me.rique.smpcore.boss.BossBalance;
 import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.command.MainMenuCommand;
 import me.rique.smpcore.combat.AbilityDamageContext;
+import me.rique.smpcore.compat.CrossplayManager.AnvilRecipe;
+import me.rique.smpcore.item.CustomEnchantListener;
+import me.rique.smpcore.item.ReplenishListener;
 import me.rique.smpcore.item.VeilOrbManager;
 import me.rique.smpcore.legendary.MythicForgeListener;
 import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.ItemModelUtil;
+import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MenuItemUtil;
@@ -55,6 +59,8 @@ import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.event.inventory.PrepareAnvilEvent;
+import org.bukkit.event.inventory.PrepareGrindstoneEvent;
 import org.bukkit.event.player.PlayerAnimationEvent;
 import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.event.player.PlayerInteractEvent;
@@ -65,12 +71,14 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.EquipmentSlotGroup;
+import org.bukkit.inventory.GrindstoneInventory;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.Damageable;
+import org.bukkit.inventory.meta.EnchantmentStorageMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
@@ -643,28 +651,32 @@ public final class SeasonRelicManager implements Listener {
     }
 
     public List<ItemStack> createBossDrops(String bossId) {
+        return createBossDrops(bossId, 1);
+    }
+
+    public List<ItemStack> createBossDrops(String bossId, int qualifiedPlayers) {
         String normalized = bossId == null ? "" : bossId.toLowerCase(Locale.ROOT);
         List<ItemStack> drops = new ArrayList<>();
         ThreadLocalRandom random = ThreadLocalRandom.current();
         switch (normalized) {
             case "yule_the_minion" -> {
-                drops.add(stacked("gilded_skull", 2));
-                drops.add(stacked("oathbound_plate", 1));
+                drops.add(scaledBossMaterial("gilded_skull", 2, qualifiedPlayers, random));
+                drops.add(scaledBossMaterial("oathbound_plate", 1, qualifiedPlayers, random));
             }
             case "kael_the_ashen" -> {
-                drops.add(stacked("solar_ember", 4));
+                drops.add(scaledBossMaterial("solar_ember", 4, qualifiedPlayers, random));
                 if (random.nextDouble() < 0.30) drops.add(stacked("titan_gear", 1));
             }
             case "vesper_the_widow_queen" -> {
-                drops.add(stacked("widow_silk", 4));
+                drops.add(scaledBossMaterial("widow_silk", 4, qualifiedPlayers, random));
                 if (random.nextDouble() < 0.35) drops.add(stacked("verdant_heart", 1));
             }
             case "voralith_the_crimson_warden" -> {
-                drops.add(stacked("crimson_rib", 4));
-                drops.add(stacked("sculk_heart", 1));
+                drops.add(scaledBossMaterial("crimson_rib", 4, qualifiedPlayers, random));
+                drops.add(scaledBossMaterial("sculk_heart", 1, qualifiedPlayers, random));
             }
             case "aurelion_the_rift_seraph" -> {
-                drops.add(stacked("rift_lens", 4));
+                drops.add(scaledBossMaterial("rift_lens", 4, qualifiedPlayers, random));
                 if (random.nextDouble() < 0.35) drops.add(stacked("void_halo", 1));
                 if (plugin.getConfigManager().awakeningTableEnabled
                     && random.nextDouble() < plugin.getConfigManager().awakeningTableRiftSeraphShardDropChance) {
@@ -672,32 +684,37 @@ public final class SeasonRelicManager implements Listener {
                 }
             }
             case "morvessa_the_runebloom_witch" -> {
-                drops.add(stacked("rift_lens", 2));
+                drops.add(scaledBossMaterial("rift_lens", 2, qualifiedPlayers, random));
                 if (random.nextDouble() < BossBalance.RUNEBLOOM_WITCH_ORB_DROP_CHANCE) {
                     drops.add(stacked(VeilOrbManager.ENCHANT_ORB_ID, 1));
                 }
             }
             case "nereida_the_abyss_mother" -> {
-                drops.add(stacked("abyssal_pearl", 4));
+                drops.add(scaledBossMaterial("abyssal_pearl", 4, qualifiedPlayers, random));
                 if (random.nextDouble() < 0.40) drops.add(stacked("tideheart", 1));
             }
             case "iron_saint" -> {
-                drops.add(stacked("titan_gear", 4));
+                drops.add(scaledBossMaterial("titan_gear", 4, qualifiedPlayers, random));
                 if (random.nextDouble() < 0.40) drops.add(stacked("saint_alloy", 1));
             }
             case "mirewood_the_root_tyrant" -> {
-                drops.add(stacked("living_bark", 4));
+                drops.add(scaledBossMaterial("living_bark", 4, qualifiedPlayers, random));
                 if (random.nextDouble() < 0.40) drops.add(stacked("verdant_heart", 1));
             }
             case "corrupted_oathkeeper" -> {
                 int essenceAmount = 2 + (random.nextDouble() < 0.25 ? 1 : 0);
-                drops.add(stacked("corrupted_essence", essenceAmount));
+                drops.add(scaledBossMaterial("corrupted_essence", essenceAmount, qualifiedPlayers, random));
                 if (random.nextDouble() < 0.005) drops.add(stacked(SOUL_IMPRINT_ID, 1));
             }
             default -> {
             }
         }
         return drops;
+    }
+
+    private ItemStack scaledBossMaterial(String relicId, int baseAmount, int qualifiedPlayers, ThreadLocalRandom random) {
+        int amount = BossBalance.scaledBossMaterialAmount(baseAmount, qualifiedPlayers, random.nextDouble());
+        return stacked(relicId, amount);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -920,6 +937,9 @@ public final class SeasonRelicManager implements Listener {
             int currentUnbreaking = meta.getEnchantLevel(Enchantment.UNBREAKING);
             if (currentUnbreaking < 4) meta.addEnchant(Enchantment.UNBREAKING, 4, true);
         }
+        if (definition.kind() == RelicKind.WEAPON) {
+            meta.removeItemFlags(ItemFlag.HIDE_ENCHANTS);
+        }
         List<Component> refreshedLore = new ArrayList<>(CustomLoreUtil.buildStyledLore(
             meta,
             definition.material(),
@@ -933,6 +953,191 @@ public final class SeasonRelicManager implements Listener {
         CustomLoreUtil.applyStyledItemFlags(meta);
         item.setItemMeta(meta);
         return true;
+    }
+
+    public AnvilRecipe crossplayAnvilRecipe(ItemStack left, ItemStack right) {
+        SeasonWeaponEnchantResult result = seasonWeaponEnchantResult(left, right, null, false);
+        if (result == null) {
+            return null;
+        }
+        return new AnvilRecipe(
+            result.result(),
+            result.levelCost(),
+            "Applied permanent enchants to <white>" + escapeMiniMessage(readableItemName(result.result())) + "</white>.",
+            "Enchanted a Veil season weapon through the crossplay custom anvil.",
+            false
+        );
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onPrepareSeasonWeaponAnvil(PrepareAnvilEvent event) {
+        ItemStack left = event.getInventory().getFirstItem();
+        ItemStack right = event.getInventory().getSecondItem();
+        SeasonWeaponEnchantResult result = seasonWeaponEnchantResult(left, right, event.getResult(), true);
+        if (result == null) {
+            ItemStack vanillaResult = event.getResult();
+            if (isSeasonBossWeapon(left) && vanillaResult != null && !vanillaResult.getType().isAir()) {
+                ItemStack refreshed = vanillaResult.clone();
+                refreshSeasonRelicStats(refreshed);
+                event.setResult(refreshed);
+            }
+            return;
+        }
+        if (event.getView() instanceof org.bukkit.inventory.view.AnvilView anvilView) {
+            anvilView.setRepairCost(result.levelCost());
+            anvilView.setRepairItemCountCost(1);
+            anvilView.setMaximumRepairCost(Math.max(40, result.levelCost() + 1));
+        }
+        event.setResult(result.result());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onPrepareSeasonWeaponGrindstone(PrepareGrindstoneEvent event) {
+        ItemStack upper = event.getInventory().getUpperItem();
+        ItemStack lower = event.getInventory().getLowerItem();
+        if (isSeasonBossWeapon(upper) || isSeasonBossWeapon(lower)) {
+            event.setResult(null);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onSeasonWeaponGrindstoneClick(InventoryClickEvent event) {
+        if (event.getView().getTopInventory().getType() != InventoryType.GRINDSTONE || event.getRawSlot() != 2) {
+            return;
+        }
+        if (!(event.getView().getTopInventory() instanceof GrindstoneInventory grindstone)) {
+            return;
+        }
+        if (!isSeasonBossWeapon(grindstone.getUpperItem()) && !isSeasonBossWeapon(grindstone.getLowerItem())) {
+            return;
+        }
+        event.setCancelled(true);
+        grindstone.setResult(null);
+        if (event.getWhoClicked() instanceof Player player) {
+            player.sendMessage(MessageUtil.warn("Veil weapon enchants are permanent."));
+        }
+    }
+
+    private SeasonWeaponEnchantResult seasonWeaponEnchantResult(
+        ItemStack left,
+        ItemStack right,
+        ItemStack vanillaResult,
+        boolean requireExtraCombatEnchant
+    ) {
+        if (!isSeasonBossWeapon(left)
+            || right == null
+            || right.getType() != Material.ENCHANTED_BOOK
+            || right.getAmount() != 1
+            || isPluginCustomEnchantBook(right)) {
+            return null;
+        }
+        if (!(right.getItemMeta() instanceof EnchantmentStorageMeta bookMeta) || bookMeta.getStoredEnchants().isEmpty()) {
+            return null;
+        }
+
+        ItemStack result = vanillaResult == null || vanillaResult.getType().isAir()
+            ? left.clone()
+            : vanillaResult.clone();
+        result.setAmount(1);
+        ItemMeta resultMeta = result.getItemMeta();
+        if (resultMeta == null) {
+            return null;
+        }
+
+        boolean changed = false;
+        boolean addedExtraCombatEnchant = false;
+        int levelCost = 0;
+        for (Map.Entry<Enchantment, Integer> entry : bookMeta.getStoredEnchants().entrySet()) {
+            Enchantment enchantment = entry.getKey();
+            String enchantmentId = enchantment.getKey().getKey();
+            boolean vanillaCompatible = enchantment.canEnchantItem(left);
+            boolean extraCombatEnchant = allowsExtraCombatEnchant(left.getType(), enchantmentId);
+            if (!vanillaCompatible && !extraCombatEnchant) {
+                continue;
+            }
+
+            int currentLevel = left.getEnchantmentLevel(enchantment);
+            int targetLevel = combinedEnchantLevel(currentLevel, entry.getValue(), enchantment.getMaxLevel());
+            if (targetLevel <= currentLevel || conflictsWithExistingEnchant(resultMeta, enchantment)) {
+                continue;
+            }
+            resultMeta.addEnchant(enchantment, targetLevel, true);
+            changed = true;
+            addedExtraCombatEnchant |= extraCombatEnchant && !vanillaCompatible;
+            levelCost += Math.max(1, targetLevel - currentLevel) * 2;
+        }
+        if (!changed || (requireExtraCombatEnchant && !addedExtraCombatEnchant)) {
+            return null;
+        }
+
+        result.setItemMeta(resultMeta);
+        refreshSeasonRelicStats(result);
+        return new SeasonWeaponEnchantResult(result, Math.max(1, Math.min(39, levelCost)));
+    }
+
+    private boolean isPluginCustomEnchantBook(ItemStack item) {
+        CustomEnchantListener custom = plugin.getCustomEnchantListener();
+        if (custom != null && custom.hasCustomEnchantBookData(item)) {
+            return true;
+        }
+        ReplenishListener replenish = plugin.getReplenishListener();
+        return replenish != null && replenish.hasReplenishBookData(item);
+    }
+
+    private boolean conflictsWithExistingEnchant(ItemMeta meta, Enchantment candidate) {
+        for (Enchantment existing : meta.getEnchants().keySet()) {
+            if (!existing.equals(candidate) && existing.conflictsWith(candidate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isSeasonBossWeapon(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return false;
+        }
+        RelicDefinition definition = relics.get(relicId(item));
+        return definition != null && definition.kind() == RelicKind.WEAPON;
+    }
+
+    static boolean allowsExtraCombatEnchant(Material material, String enchantmentId) {
+        if (material == null || enchantmentId == null || material == Material.BOW || material == Material.CROSSBOW) {
+            return false;
+        }
+        if (!isMeleeWeaponMaterial(material)) {
+            return false;
+        }
+        return Set.of(
+            "sharpness",
+            "smite",
+            "bane_of_arthropods",
+            "fire_aspect",
+            "knockback",
+            "looting",
+            "sweeping_edge"
+        ).contains(enchantmentId.toLowerCase(Locale.ROOT));
+    }
+
+    private static boolean isMeleeWeaponMaterial(Material material) {
+        String name = material.name();
+        return name.endsWith("_SWORD")
+            || name.endsWith("_AXE")
+            || name.endsWith("_PICKAXE")
+            || name.endsWith("_SHOVEL")
+            || name.endsWith("_HOE")
+            || material == Material.TRIDENT
+            || material == Material.MACE;
+    }
+
+    static int combinedEnchantLevel(int currentLevel, int offeredLevel, int maximumLevel) {
+        int safeCurrent = Math.max(0, currentLevel);
+        int safeOffered = Math.max(0, offeredLevel);
+        if (safeOffered == 0) {
+            return Math.min(Math.max(0, maximumLevel), safeCurrent);
+        }
+        int combined = safeCurrent == safeOffered ? safeCurrent + 1 : Math.max(safeCurrent, safeOffered);
+        return Math.min(Math.max(0, maximumLevel), combined);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -2129,8 +2334,7 @@ public final class SeasonRelicManager implements Listener {
         if (plugin.getItemAuditManager() != null) {
             plugin.getItemAuditManager().recordKnownAcquisition(player, reward, "season_craft", "Crafted from the Armory of the Veil.");
         }
-        player.getInventory().addItem(reward);
-        player.updateInventory();
+        InventoryRecipeUtil.giveOrDrop(player, reward);
         player.sendMessage(MessageUtil.success("Crafted <white>" + definition.name() + "</white>."));
         if (definition.rarity() == CustomLoreUtil.Rarity.MYTHIC) {
             Bukkit.broadcast(MessageUtil.prefixedRaw(
@@ -2474,7 +2678,9 @@ public final class SeasonRelicManager implements Listener {
         }
         if (definition.rarity().ordinal() >= CustomLoreUtil.Rarity.EPIC.ordinal()) {
             meta.addEnchant(Enchantment.UNBREAKING, definition.armorSetId() == null ? 1 : 4, true);
-            meta.addItemFlags(ItemFlag.HIDE_ENCHANTS);
+            if (definition.kind() != RelicKind.WEAPON) {
+                meta.addItemFlags(ItemFlag.HIDE_ENCHANTS);
+            }
         }
         if (preview) {
             List<Component> lore = meta.lore() == null ? new ArrayList<>() : new ArrayList<>(meta.lore());
@@ -3399,6 +3605,12 @@ public final class SeasonRelicManager implements Listener {
             sections.add(CustomLoreUtil.section("Stats", String.join(" • ", forgedStats)));
         }
         sections.add(CustomLoreUtil.section("Combat", "+" + bossBonus + "% Boss • -" + pvpPenalty + "% PvP"));
+        sections.add(CustomLoreUtil.section(
+            "Enchants",
+            "Permanent",
+            "Melee weapons accept combat books.",
+            "Grindstones cannot remove enchants."
+        ));
         sections.add(CustomLoreUtil.section("Echo", effect.label(), effect.description()));
         return new RelicDefinition(
             id, material, name, rarity, RelicKind.WEAPON, RelicCategory.WEAPONS,
@@ -3897,6 +4109,9 @@ public final class SeasonRelicManager implements Listener {
         private String description() {
             return description;
         }
+    }
+
+    private record SeasonWeaponEnchantResult(ItemStack result, int levelCost) {
     }
 
     private record SeasonMenuHolder(MenuView view, RelicCategory category, String relicId) implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {

@@ -14,7 +14,7 @@ Essence is SMPCore's main progression currency. Use `/essence` to see your balan
 | Overseer daily | 25 Essence plus 4 XP Bottles |
 | Overseer weekly | 150 Essence, 16 XP Bottles, a Reforge Stone, and +1 Authority |
 | Tavern daily work | 35-45 Essence depending on the task |
-| Perfect darts round | 5 Essence |
+| Perfect darts round | 10 Essence |
 
 Quests, Boss Mastery ranks, boss progression, bounties, shops, duels, and tavern games provide additional rewards or transfers.
 

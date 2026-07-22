@@ -17,6 +17,8 @@ Kael has eight lessons:
 
 The last lesson awards all four pieces of the **Wildbound Regalia** and unlocks familiar training.
 
+Mounted travel is measured separately for each player every few ticks. Switching mounts, changing worlds, or teleporting never adds fake distance. The action bar reports progress while riding, `/steed quest` shows your exact current lesson, and staff can inspect a player with `/beastwardenadmin progress <player>`.
+
 ## Wildbound Regalia
 
 The full four-piece set:

@@ -94,4 +94,22 @@ public final class SpawnerData {
     public int adjustedDelay(int baseDelay, int maxSugar, double maxMultiplier) {
         return (int) Math.max(1, Math.round(baseDelay / speedMultiplier(maxSugar, maxMultiplier)));
     }
+
+    /**
+     * Effective cycle-rate multiplier after the configured minimum-delay floor is applied.
+     */
+    public double effectiveSpeedMultiplier(
+        int baseMinDelay,
+        int baseMaxDelay,
+        int maxSugar,
+        double maxMultiplier,
+        int minDelayFloor
+    ) {
+        int safeBaseMin = Math.max(1, baseMinDelay);
+        int safeBaseMax = Math.max(safeBaseMin, baseMaxDelay);
+        int safeFloor = Math.max(1, minDelayFloor);
+        int effectiveMin = Math.max(safeFloor, adjustedDelay(safeBaseMin, maxSugar, maxMultiplier));
+        int effectiveMax = Math.max(effectiveMin, adjustedDelay(safeBaseMax, maxSugar, maxMultiplier));
+        return (safeBaseMin + safeBaseMax) / (double) (effectiveMin + effectiveMax);
+    }
 }

@@ -126,8 +126,13 @@ public final class PlayerManager {
     // ── /back ─────────────────────────────────────────────────────────────────
 
     public void saveBackLocation(Player player) {
+        if (player == null) return;
+        saveBackLocation(player.getUniqueId(), player.getLocation());
+    }
+
+    public void saveBackLocation(UUID playerId, Location location) {
         if (plugin.getConfigManager().backOnTeleport) {
-            rememberSafeBackLocation(player.getUniqueId(), player.getLocation(), 2, 4);
+            rememberSafeBackLocation(playerId, location, 2, 4);
         }
     }
 

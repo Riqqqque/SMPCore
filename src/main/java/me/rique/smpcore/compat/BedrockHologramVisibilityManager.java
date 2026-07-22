@@ -12,7 +12,10 @@ import org.bukkit.entity.Player;
 import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.RayTraceResult;
 import org.bukkit.util.Vector;
@@ -29,13 +32,14 @@ public final class BedrockHologramVisibilityManager implements Listener {
     private static final double SCAN_RANGE_BLOCKS = 32.0D;
     private static final double SPAWN_VIEW_RANGE_BLOCKS = 24.0D;
     private static final double PRIVATE_VIEW_RANGE_BLOCKS = 12.0D;
-    private static final double HIDDEN_RETENTION_RANGE_SQUARED = (SCAN_RANGE_BLOCKS + 8.0D) * (SCAN_RANGE_BLOCKS + 8.0D);
+    private static final double FAMILIAR_VIEW_RANGE_BLOCKS = 32.0D;
     private static final long VISIBILITY_INTERVAL_TICKS = 10L;
     private static final Set<String> OCCLUSION_SENSITIVE_KEYS = Set.of(
         "agricultural_pylon_hologram",
         "awakening_table_hologram",
         "boss_loot_hologram",
         "corruption_hologram",
+        "familiar_name_hologram",
         "mythic_forge_hologram",
         "rare_drop_hologram",
         "reward_lantern_hologram",
@@ -47,12 +51,14 @@ public final class BedrockHologramVisibilityManager implements Listener {
 
     private final SMPCore plugin;
     private final String namespace;
+    private final NamespacedKey familiarNameKey;
     private final Map<UUID, Set<UUID>> hiddenByPlayer = new ConcurrentHashMap<>();
     private BukkitTask visibilityTask;
 
     public BedrockHologramVisibilityManager(SMPCore plugin) {
         this.plugin = plugin;
         this.namespace = plugin.getName().toLowerCase(Locale.ROOT);
+        this.familiarNameKey = new NamespacedKey(plugin, "familiar_name_hologram");
     }
 
     public void start() {
@@ -83,6 +89,16 @@ public final class BedrockHologramVisibilityManager implements Listener {
         hiddenByPlayer.remove(event.getPlayer().getUniqueId());
     }
 
+    @EventHandler
+    public void onJoin(PlayerJoinEvent event) {
+        scheduleViewerSync(event.getPlayer());
+    }
+
+    @EventHandler
+    public void onWorldChange(PlayerChangedWorldEvent event) {
+        scheduleViewerSync(event.getPlayer());
+    }
+
     private void updateVisibility() {
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (!BedrockCompat.isBedrockPlayer(player)) {
@@ -95,7 +111,7 @@ public final class BedrockHologramVisibilityManager implements Listener {
 
     private void updateVisibility(Player player) {
         Set<UUID> hidden = hiddenByPlayer.computeIfAbsent(player.getUniqueId(), ignored -> ConcurrentHashMap.newKeySet());
-        releaseDistantHiddenHolograms(player, hidden);
+        cleanHiddenHolograms(player, hidden);
 
         for (Entity entity : player.getNearbyEntities(SCAN_RANGE_BLOCKS, SCAN_RANGE_BLOCKS, SCAN_RANGE_BLOCKS)) {
             if (!(entity instanceof TextDisplay display) || !isOcclusionSensitive(display)) {
@@ -103,7 +119,7 @@ public final class BedrockHologramVisibilityManager implements Listener {
             }
             boolean inSpawn = plugin.getSpawnProtectionListener() != null
                 && plugin.getSpawnProtectionListener().isProtected(display.getLocation().clone().subtract(0.0D, 1.0D, 0.0D));
-            double maxDistance = viewDistance(inSpawn);
+            double maxDistance = viewDistance(inSpawn, isFamiliarName(display));
             boolean visible = player.getWorld().equals(display.getWorld())
                 && player.getLocation().distanceSquared(display.getLocation()) <= maxDistance * maxDistance
                 && hasClearSight(player, display);
@@ -121,21 +137,35 @@ public final class BedrockHologramVisibilityManager implements Listener {
         }
     }
 
-    private void releaseDistantHiddenHolograms(Player player, Set<UUID> hidden) {
-        Location playerLocation = player.getLocation();
+    private void cleanHiddenHolograms(Player player, Set<UUID> hidden) {
         for (UUID entityId : new ArrayList<>(hidden)) {
             Entity entity = Bukkit.getEntity(entityId);
             if (entity == null) {
                 hidden.remove(entityId);
                 continue;
             }
-            if (entity.getWorld() == player.getWorld()
-                && entity.getLocation().distanceSquared(playerLocation) <= HIDDEN_RETENTION_RANGE_SQUARED) {
+            if (entity instanceof TextDisplay display && isOcclusionSensitive(display)) {
                 continue;
             }
             player.showEntity(plugin, entity);
             hidden.remove(entityId);
         }
+    }
+
+    private void scheduleViewerSync(Player player) {
+        UUID playerId = player.getUniqueId();
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Player online = Bukkit.getPlayer(playerId);
+            if (online == null || !online.isOnline()) {
+                hiddenByPlayer.remove(playerId);
+                return;
+            }
+            if (BedrockCompat.isBedrockPlayer(online)) {
+                updateVisibility(online);
+            } else {
+                restoreHiddenHolograms(online);
+            }
+        });
     }
 
     private boolean hasClearSight(Player player, TextDisplay display) {
@@ -169,6 +199,10 @@ public final class BedrockHologramVisibilityManager implements Listener {
         return false;
     }
 
+    private boolean isFamiliarName(TextDisplay display) {
+        return display.getPersistentDataContainer().has(familiarNameKey, PersistentDataType.BYTE);
+    }
+
     private void restoreHiddenHolograms(Player player) {
         Set<UUID> hidden = hiddenByPlayer.remove(player.getUniqueId());
         if (hidden == null) {
@@ -187,6 +221,11 @@ public final class BedrockHologramVisibilityManager implements Listener {
     }
 
     static double viewDistance(boolean protectedSpawn) {
+        return viewDistance(protectedSpawn, false);
+    }
+
+    static double viewDistance(boolean protectedSpawn, boolean familiarName) {
+        if (familiarName) return FAMILIAR_VIEW_RANGE_BLOCKS;
         return protectedSpawn ? SPAWN_VIEW_RANGE_BLOCKS : PRIVATE_VIEW_RANGE_BLOCKS;
     }
 }

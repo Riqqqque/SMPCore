@@ -33,7 +33,7 @@ import java.util.Locale;
 
 /**
  * Global crafting rules:
- * - Golden apple uses gold ingots around an apple.
+ * - Golden apple uses the configured surround material around an apple.
  * - 9 Rotten Flesh can be crafted into Leather.
  * - Iron, copper, and gold can be crafted into Bells.
  * - Optional block for netherite armor smithing upgrades.

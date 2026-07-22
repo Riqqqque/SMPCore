@@ -116,8 +116,10 @@ Both source legendaries and the core are consumed. The sources are permanently r
 ### Salvaging Depot
 
 - Accepts ordinary salvageable armor, weapons, and tools.
+- Place two Salvaging Depots directly beside each other to form one 54-slot Large Salvaging Depot. Both halves share processing, protection, and one centered hologram.
+- A third depot or a normal chest cannot connect. Breaking either half safely returns that depot and only that half's stored items; the remaining half becomes a normal 27-slot depot.
 - Gives a 10-second cancel window, then locks for 6 seconds of processing.
-- Returns about 66% of base materials, reduced by damage.
+- Accepts gear at any durability, including fully worn items. Damage lowers the return, but valid gear still gives at least its primary scrap.
 - Rejects relics, legendaries, class items, backpacks, and stations.
 - Holograms use a short range and do not reveal private bases through floors.
 

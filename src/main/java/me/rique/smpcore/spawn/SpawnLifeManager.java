@@ -3,6 +3,7 @@ package me.rique.smpcore.spawn;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.npc.GuideNpcManager;
 import me.rique.smpcore.npc.GuideNpcManager.GuideNpcType;
+import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
@@ -139,6 +140,9 @@ public final class SpawnLifeManager implements Listener {
         illusionerDialogues.clear();
         for (FetchSession session : new ArrayList<>(fetchByDog.values())) {
             restoreAndClose(session);
+        }
+        for (PendingFetchDrop pending : new ArrayList<>(pendingDrops.values())) {
+            removePendingFetchItems(pending);
         }
         pendingDrops.clear();
         fetchByDog.clear();
@@ -339,11 +343,21 @@ public final class SpawnLifeManager implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onFetchStickDropCommit(PlayerDropItemEvent event) {
-        PendingFetchDrop pending = pendingDrops.remove(event.getItemDrop().getUniqueId());
-        if (pending == null || event.isCancelled()) {
+        UUID itemId = event.getItemDrop().getUniqueId();
+        PendingFetchDrop pending = pendingDrops.get(itemId);
+        if (pending == null) {
             return;
         }
-        Bukkit.getScheduler().runTask(plugin, () -> commitFetchDrop(pending));
+        if (event.isCancelled()) {
+            pendingDrops.remove(itemId, pending);
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            PendingFetchDrop committed = pendingDrops.remove(itemId);
+            if (committed != null) {
+                commitFetchDrop(committed);
+            }
+        });
     }
 
     private void commitFetchDrop(PendingFetchDrop pending) {
@@ -709,10 +723,10 @@ public final class SpawnLifeManager implements Listener {
         ItemStack item = new ItemStack(Material.STICK);
         ItemMeta meta = item.getItemMeta();
         meta.displayName(MM.deserialize("<gold><bold>Biscuit's Fetch Stick</bold></gold>").decoration(TextDecoration.ITALIC, false));
-        meta.lore(List.of(
+        meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
             MM.deserialize("<gray>Drop near Biscuit to play fetch.</gray>").decoration(TextDecoration.ITALIC, false),
             MM.deserialize("<dark_gray>One use. Fades away from Biscuit.</dark_gray>").decoration(TextDecoration.ITALIC, false)
-        ));
+        )));
         meta.setMaxStackSize(1);
         meta.getPersistentDataContainer().set(keyFetchStick, PersistentDataType.BYTE, (byte) 1);
         meta.getPersistentDataContainer().set(keyFetchOwner, PersistentDataType.STRING, owner.toString());

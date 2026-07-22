@@ -730,7 +730,7 @@ public final class AwakeningTableListener implements Listener {
                 lore.add(MM.deserialize("<gray>Items under <white>" + formatPercent(plugin.getConfigManager().awakeningTableDestroyThreshold) + "</white> remaining durability are destroyed on failure.</gray>"));
             }
         }
-        meta.lore(lore);
+        meta.lore(CustomLoreUtil.wrapLoreLines(lore));
         info.setItemMeta(meta);
         return info;
     }
@@ -2062,7 +2062,9 @@ public final class AwakeningTableListener implements Listener {
         return String.format(Locale.US, "%.2f", amount);
     }
 
-    private record AwakeningMenuHolder(Location tableLocation) implements InventoryHolder, MenuDupeGuardListener.MutableMenuHolder {
+    private record AwakeningMenuHolder(Location tableLocation) implements InventoryHolder, MenuDupeGuardListener.RecoveryTrackedMenuHolder {
+        @Override public String recoverySurface() { return "Awakening Table"; }
+        @Override public int[] recoverySlots() { return new int[] { ITEM_SLOT, CATALYST_SLOT }; }
         @Override
         public Inventory getInventory() {
             return null;

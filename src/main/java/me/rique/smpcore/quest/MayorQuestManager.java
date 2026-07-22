@@ -109,6 +109,7 @@ public final class MayorQuestManager implements Listener {
     private final NamespacedKey keyMenuQuest;
     private final NamespacedKey keyMenuAction;
     private final NamespacedKey keyPetOwner;
+    private final NamespacedKey keyFamiliarNameHologram;
     private final Map<UUID, UUID> activePets = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> activePetBedrockBodies = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> activePetHitboxes = new ConcurrentHashMap<>();
@@ -131,6 +132,7 @@ public final class MayorQuestManager implements Listener {
         this.keyMenuQuest = new NamespacedKey(plugin, "mayor_menu_quest");
         this.keyMenuAction = new NamespacedKey(plugin, "mayor_menu_action");
         this.keyPetOwner = new NamespacedKey(plugin, "mayor_pet_owner");
+        this.keyFamiliarNameHologram = new NamespacedKey(plugin, "familiar_name_hologram");
         this.pendingCreditsFile = new File(plugin.getDataFolder(), "mayor-pending-boss-credits.yml");
         this.veilWispHead = createVeilWispHead();
         this.quests = buildQuests();
@@ -736,7 +738,6 @@ public final class MayorQuestManager implements Listener {
         ArmorStand body = FamiliarBedrockBody.spawn(
             visualLocation,
             petHead(),
-            Component.text(owner.getName() + "'s Veil Wisp", NamedTextColor.LIGHT_PURPLE),
             entity -> entity.getPersistentDataContainer().set(
                 keyPetOwner,
                 PersistentDataType.STRING,
@@ -866,8 +867,8 @@ public final class MayorQuestManager implements Listener {
             display.setTextOpacity(opacity);
             display.setAlignment(TextDisplay.TextAlignment.CENTER);
             display.getPersistentDataContainer().set(keyPetOwner, PersistentDataType.STRING, owner.getUniqueId().toString());
+            display.getPersistentDataContainer().set(keyFamiliarNameHologram, PersistentDataType.BYTE, (byte) 1);
         });
-        registerJavaVisual(label);
         return label;
     }
 
@@ -936,15 +937,9 @@ public final class MayorQuestManager implements Listener {
     }
 
     private boolean isBossFightNearby(Player player) {
-        if (player == null || plugin.getBossManager() == null) {
-            return false;
-        }
-        for (Entity nearby : player.getWorld().getNearbyEntities(player.getLocation(), 30.0D, 18.0D, 30.0D)) {
-            if (plugin.getBossManager().isCustomBoss(nearby)) {
-                return true;
-            }
-        }
-        return false;
+        return player != null
+            && plugin.getBossManager() != null
+            && plugin.getBossManager().isActiveBossFight(player);
     }
 
     private void unlockPet(Player player) {

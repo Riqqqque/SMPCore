@@ -42,6 +42,7 @@ import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.inventory.meta.EnchantmentStorageMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 
@@ -57,6 +58,7 @@ public final class PlayerShopListener implements Listener {
 
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final String SHOP_HEADER = "[shop]";
+    private static final String SHOP_HEADER_ALIAS = "[shops]";
     private static final String ADMIN_SHOP_HEADER = "[adminshop]";
     private static final String ADMIN_SHOP_SHORT_HEADER = "[ashop]";
     private static final Set<Material> CHEST_TYPES = Set.of(Material.CHEST, Material.TRAPPED_CHEST);
@@ -100,6 +102,22 @@ public final class PlayerShopListener implements Listener {
         paymentLedger.shutdown();
     }
 
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
+    public void onLegacyShopInteract(PlayerInteractEvent event) {
+        if (!plugin.getConfigManager().playerShopsEnabled
+            || event.getAction() != Action.RIGHT_CLICK_BLOCK
+            || event.getHand() != EquipmentSlot.HAND
+            || event.getClickedBlock() == null
+            || isShopSign(event.getClickedBlock())
+            || isMarketPurchaseSign(event.getClickedBlock())) {
+            return;
+        }
+        MarketStallManager stalls = plugin.getMarketStallManager();
+        if (stalls != null) {
+            stalls.tryRecoverLegacyShopSign(event.getClickedBlock());
+        }
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onSignChange(SignChangeEvent event) {
         if (isShopSign(event.getBlock()) || isMarketPurchaseSign(event.getBlock())) {
@@ -114,7 +132,7 @@ public final class PlayerShopListener implements Listener {
         }
         String header = cleanLine(eventLine(event, 0));
         boolean adminShop = isAdminShopHeader(header);
-        if (!SHOP_HEADER.equalsIgnoreCase(header) && !adminShop) {
+        if (!isPlayerShopHeader(header) && !adminShop) {
             return;
         }
         Player player = event.getPlayer();
@@ -149,7 +167,15 @@ public final class PlayerShopListener implements Listener {
         if (plugin.getMarketStallManager() != null
             && !plugin.getMarketStallManager().canCreateShopAt(player, chestBlock, signBlock)) {
             markSignError(event, "Use your chest");
-            player.sendMessage(MessageUtil.warn("Inside your stall, attach a wall sign directly to a chest or trapped chest."));
+            player.sendMessage(MessageUtil.warn("Inside a stall you manage, attach a wall sign directly to a chest or trapped chest."));
+            return;
+        }
+        MarketStallManager.ShopIdentity shopOwner = plugin.getMarketStallManager() == null
+            ? new MarketStallManager.ShopIdentity(player.getUniqueId(), player.getName())
+            : plugin.getMarketStallManager().shopIdentityFor(player, chestBlock, signBlock);
+        if (shopOwner == null) {
+            markSignError(event, "No stall access");
+            player.sendMessage(MessageUtil.warn("You no longer have permission to manage this stall."));
             return;
         }
         if (isShopChest(chestBlock) || isShopSign(signBlock)) {
@@ -203,8 +229,8 @@ public final class PlayerShopListener implements Listener {
         }
 
         ShopData data = new ShopData(
-            player.getUniqueId(),
-            player.getName(),
+            adminShop ? player.getUniqueId() : shopOwner.ownerId(),
+            adminShop ? player.getName() : shopOwner.ownerName(),
             blockKey(chestBlock),
             blockKey(signBlock),
             encoded,
@@ -225,7 +251,9 @@ public final class PlayerShopListener implements Listener {
             }
             player.sendMessage(MessageUtil.success(adminShop
                 ? "Admin shop created. Buyers pay from their inventory and stock is infinite."
-                : "Shop created. Players buy by right-clicking the sign."));
+                : shopOwner.ownerId().equals(player.getUniqueId())
+                    ? "Shop created. Players buy by right-clicking the sign."
+                    : "Shop created for " + shopOwner.ownerName() + ". Players buy by right-clicking the sign."));
             signBlock.getWorld().playSound(signBlock.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 0.8f, 1.4f);
         });
     }
@@ -378,7 +406,13 @@ public final class PlayerShopListener implements Listener {
             buyer.sendMessage(MessageUtil.error("That shop is missing data. Ask the owner to recreate it."));
             return;
         }
-        if (!data.adminShop() && !plugin.getConfigManager().playerShopsAllowOwnerPurchases && buyer.getUniqueId().equals(data.ownerUuid())) {
+        refreshShopSignLines(signBlock, data);
+        if (blocksOwnerPurchase(
+            data.adminShop(),
+            plugin.getConfigManager().playerShopsAllowOwnerPurchases,
+            buyer.getUniqueId(),
+            data.ownerUuid()
+        )) {
             buyer.sendMessage(MessageUtil.warn("You cannot buy from your own shop."));
             return;
         }
@@ -546,6 +580,92 @@ public final class PlayerShopListener implements Listener {
         }
     }
 
+    boolean recoverLegacyShopSign(Block signBlock, UUID ownerUuid, String ownerName) {
+        if (!plugin.getConfigManager().playerShopsEnabled || signBlock == null || ownerUuid == null || ownerName == null
+            || ownerName.isBlank() || isMarketPurchaseSign(signBlock)) {
+            return false;
+        }
+        if (isShopSign(signBlock)) {
+            return readShopData(signBlock) != null;
+        }
+        BlockState state = signBlock.getState();
+        if (!(state instanceof Sign sign) || !isPlayerShopHeader(signText(sign, 0))) {
+            return false;
+        }
+
+        Block chestBlock = attachedChestBlock(signBlock);
+        if (chestBlock == null || !chestAvailableForRecovery(chestBlock, signBlock, ownerUuid)) {
+            return false;
+        }
+        Integer amount = parseLeadingInt(signText(sign, 2));
+        Integer price = parseLeadingInt(signText(sign, 3));
+        ShopCurrency currency = ShopCurrency.parse(signText(sign, 3));
+        if (amount == null || amount <= 0 || amount > plugin.getConfigManager().playerShopsMaxAmountPerPurchase
+            || price == null || price <= 0 || price > plugin.getConfigManager().playerShopsMaxPrice
+            || currency == null) {
+            return false;
+        }
+
+        Inventory inventory = shopInventory(chestBlock);
+        ItemStack prototype = firstChestItem(inventory);
+        if (prototype == null || prototype.getType().isAir()) {
+            return false;
+        }
+        prototype = prototype.asOne();
+        String itemName = displayName(prototype);
+        if (!storedItemNameMatches(signText(sign, 1), itemName) || isLegendaryPrototype(prototype)) {
+            return false;
+        }
+        String encoded = encodeItem(prototype);
+        if (encoded == null) {
+            return false;
+        }
+
+        ShopData data = new ShopData(
+            ownerUuid,
+            ownerName,
+            blockKey(chestBlock),
+            blockKey(signBlock),
+            encoded,
+            itemName,
+            amount,
+            price,
+            currency,
+            false
+        );
+        if (!writeShopData(signBlock, chestBlock, data)) {
+            return false;
+        }
+        plugin.getLogger().info("Recovered legacy chest shop at " + blockKey(signBlock) + ".");
+        return true;
+    }
+
+    private boolean chestAvailableForRecovery(Block chestBlock, Block signBlock, UUID ownerUuid) {
+        String expectedSign = blockKey(signBlock);
+        String expectedOwner = ownerUuid.toString();
+        for (Block shopChest : shopChestBlocks(chestBlock)) {
+            BlockState state = shopChest.getState();
+            if (!(state instanceof TileState tile)) {
+                return false;
+            }
+            PersistentDataContainer pdc = tile.getPersistentDataContainer();
+            boolean hasShopData = pdc.has(keyShopChest, PersistentDataType.BYTE)
+                || pdc.has(keySignBlock, PersistentDataType.STRING)
+                || pdc.has(keyOwnerUuid, PersistentDataType.STRING)
+                || pdc.has(keyAdminShop, PersistentDataType.BYTE);
+            if (!hasShopData) {
+                continue;
+            }
+            if (!pdc.has(keyShopChest, PersistentDataType.BYTE)
+                || !expectedSign.equals(pdc.get(keySignBlock, PersistentDataType.STRING))
+                || !expectedOwner.equals(pdc.get(keyOwnerUuid, PersistentDataType.STRING))
+                || pdc.getOrDefault(keyAdminShop, PersistentDataType.BYTE, (byte) 0) != (byte) 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private void clearShop(Block block) {
         ShopData data = isShopSign(block) ? readShopData(block) : null;
         Block signBlock = isShopSign(block) ? block : shopSignBlockFromChest(block);
@@ -597,7 +717,18 @@ public final class PlayerShopListener implements Listener {
             return true;
         }
         String owner = ownerUuid(block);
-        return owner != null && owner.equals(player.getUniqueId().toString());
+        if (owner == null) return false;
+        if (owner.equals(player.getUniqueId().toString())) return true;
+        try {
+            return plugin.getMarketStallManager() != null
+                && plugin.getMarketStallManager().canManageShopForOwner(player, block, UUID.fromString(owner));
+        } catch (IllegalArgumentException ignored) {
+            return false;
+        }
+    }
+
+    static boolean blocksOwnerPurchase(boolean adminShop, boolean allowOwnerPurchases, UUID buyerId, UUID ownerId) {
+        return !adminShop && !allowOwnerPurchases && buyerId != null && buyerId.equals(ownerId);
     }
 
     private String ownerUuid(Block block) {
@@ -952,6 +1083,17 @@ public final class PlayerShopListener implements Listener {
         sign.getSide(Side.FRONT).line(3, Component.text(data.price() + " " + data.currency().shortName(), NamedTextColor.DARK_RED));
     }
 
+    private void refreshShopSignLines(Block signBlock, ShopData data) {
+        BlockState state = signBlock.getState();
+        if (!(state instanceof Sign sign)
+            || trimSign(data.itemName()).equals(signText(sign, 1))) {
+            return;
+        }
+        writeStoredSignLines(sign, data);
+        sign.setWaxed(true);
+        sign.update(true, false);
+    }
+
     private void markSignError(SignChangeEvent event, String error) {
         event.line(0, Component.text("[Shop]", NamedTextColor.DARK_RED));
         event.line(1, Component.text("Invalid", NamedTextColor.RED));
@@ -1009,11 +1151,46 @@ public final class PlayerShopListener implements Listener {
         if (item.hasItemMeta() && item.getItemMeta() != null && item.getItemMeta().hasDisplayName()) {
             return PLAIN.serialize(item.getItemMeta().displayName());
         }
+        if (item.getItemMeta() instanceof EnchantmentStorageMeta bookMeta
+            && !bookMeta.getStoredEnchants().isEmpty()) {
+            List<String> enchantments = bookMeta.getStoredEnchants().entrySet().stream()
+                .map(entry -> compactVanillaEnchantName(entry.getKey().getKey().getKey(), entry.getValue()))
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
+            return enchantments.size() == 1
+                ? enchantments.getFirst()
+                : enchantments.getFirst() + " +" + (enchantments.size() - 1);
+        }
         return prettyMaterial(item.getType());
     }
 
+    static String compactVanillaEnchantName(String key, int level) {
+        String normalized = key == null ? "enchant" : key.trim().toLowerCase(Locale.ROOT);
+        String name = switch (normalized) {
+            case "bane_of_arthropods" -> "Bane Arth.";
+            case "binding_curse" -> "Binding Curse";
+            case "blast_protection" -> "Blast Prot";
+            case "depth_strider" -> "Depth Str.";
+            case "feather_falling" -> "Feather Fall";
+            case "fire_protection" -> "Fire Prot";
+            case "luck_of_the_sea" -> "Luck Sea";
+            case "projectile_protection" -> "Proj. Prot";
+            case "sweeping_edge" -> "Sweeping";
+            case "vanishing_curse" -> "Vanishing Curse";
+            default -> prettyWords(normalized);
+        };
+        if ("vanishing_curse".equals(normalized)) {
+            return name;
+        }
+        return name + " " + romanNumeral(Math.max(1, level));
+    }
+
     private String prettyMaterial(Material material) {
-        String[] words = material.name().toLowerCase(Locale.ROOT).split("_");
+        return prettyWords(material.name().toLowerCase(Locale.ROOT));
+    }
+
+    private static String prettyWords(String raw) {
+        String[] words = raw.split("_");
         StringBuilder builder = new StringBuilder();
         for (String word : words) {
             if (word.isBlank()) {
@@ -1027,12 +1204,33 @@ public final class PlayerShopListener implements Listener {
         return builder.toString();
     }
 
-    private String trimSign(String text) {
-        String safe = safe(text);
-        return safe.length() <= 15 ? safe : safe.substring(0, 15);
+    private static String romanNumeral(int value) {
+        return switch (value) {
+            case 1 -> "I";
+            case 2 -> "II";
+            case 3 -> "III";
+            case 4 -> "IV";
+            case 5 -> "V";
+            default -> Integer.toString(value);
+        };
     }
 
-    private String safe(String text) {
+    static String trimSign(String text) {
+        String safe = safe(text);
+        if (safe.length() <= 15) {
+            return safe;
+        }
+        int suffixStart = safe.lastIndexOf(" +");
+        if (suffixStart > 0) {
+            String suffix = safe.substring(suffixStart);
+            if (suffix.length() < 15) {
+                return safe.substring(0, 15 - suffix.length()).stripTrailing() + suffix;
+            }
+        }
+        return safe.substring(0, 15).stripTrailing();
+    }
+
+    private static String safe(String text) {
         return text == null ? "" : text.replace("<", "").replace(">", "");
     }
 
@@ -1043,6 +1241,21 @@ public final class PlayerShopListener implements Listener {
     private boolean isAdminShopHeader(String header) {
         String clean = cleanLine(header).toLowerCase(Locale.ROOT);
         return ADMIN_SHOP_HEADER.equals(clean) || ADMIN_SHOP_SHORT_HEADER.equals(clean);
+    }
+
+    static boolean isPlayerShopHeader(String header) {
+        String clean = header == null ? "" : header.trim();
+        return SHOP_HEADER.equalsIgnoreCase(clean) || SHOP_HEADER_ALIAS.equalsIgnoreCase(clean);
+    }
+
+    static boolean storedItemNameMatches(String signName, String itemName) {
+        String visible = signName == null ? "" : signName.trim();
+        return !visible.isBlank() && visible.equalsIgnoreCase(trimSign(itemName));
+    }
+
+    private String signText(Sign sign, int line) {
+        Component component = sign.getSide(Side.FRONT).line(line);
+        return component == null ? "" : PLAIN.serialize(component);
     }
 
     private boolean isLegendaryPrototype(ItemStack item) {
@@ -1081,11 +1294,12 @@ public final class PlayerShopListener implements Listener {
         List<Component> lines = new ArrayList<>(List.of(
             MessageUtil.info("Player shops use a wall sign attached to a chest or double chest."),
             MessageUtil.info("In a market stall, signs can only be placed directly onto your chest or trapped chest."),
-            MessageUtil.info("Line 1: <white>[shop]</white>"),
+            MessageUtil.info("Line 1: <white>[shop]</white> (the <white>[shops]</white> alias also works)."),
             MessageUtil.info("Line 2: <white>chest</white> for the first item in the chest, or a vanilla item id."),
             MessageUtil.info("Line 3: amount sold per purchase, like <white>4</white>."),
             MessageUtil.info("Line 4: price and currency, such as <white>5 diamond</white>, <white>12 iron</white>, or <white>25 essence</white>."),
             MessageUtil.info("Payments are stored safely outside the stock chest. Use <white>/shops collect</white> to claim them."),
+            MessageUtil.info("Trusted stall managers can maintain shops, but sales always pay the stall owner and managers purchase normally."),
             MessageUtil.info("Currencies: coal, copper, iron, gold, redstone, lapis, emerald, diamond, netherite, and Essence.")
         ));
         if (includeAdminHelp) {

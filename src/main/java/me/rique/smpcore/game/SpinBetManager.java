@@ -2,6 +2,7 @@ package me.rique.smpcore.game;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.BedrockCompat;
+import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.ItemEscrowService;
 import me.rique.smpcore.util.ItemEscrowService.EscrowedItem;
 import me.rique.smpcore.util.MenuDupeGuardListener;
@@ -526,17 +527,19 @@ public final class SpinBetManager implements Listener {
 
         Player winner = Bukkit.getPlayer(winnerId);
         if (!delivered && winner != null && winner.isOnline()) {
-            winner.sendMessage(MessageUtil.warn("Your winnings are safe. Clear space and use <white>/spinbet claim</white>."));
+            BedrockCompat.sendGameMessage(winner, MessageUtil.warn("Your winnings are safe. Clear space and use <white>/spinbet claim</white>."));
         }
 
         Player loser = Bukkit.getPlayer(loserId);
         if (winner != null && winner.isOnline()) {
-            winner.sendMessage(MessageUtil.success("You won the spin bet."));
+            BedrockCompat.sendGameMessage(winner, MessageUtil.success("You won the spin bet."));
             playWinnerEffects(winner);
+            BedrockCompat.syncGameInventory(winner);
         }
         if (loser != null && loser.isOnline()) {
-            loser.sendMessage(MessageUtil.warn("<white>" + miniEscape(winnerName) + "</white> won the spin bet."));
+            BedrockCompat.sendGameMessage(loser, MessageUtil.warn("<white>" + miniEscape(winnerName) + "</white> won the spin bet."));
             playLoserEffects(loser);
+            BedrockCompat.syncGameInventory(loser);
         }
         plugin.getLogger().info("Spin bet " + match.matchId() + " finished: " + winnerName + " beat " + loserName + ".");
         scheduleClose(match);
@@ -660,16 +663,18 @@ public final class SpinBetManager implements Listener {
         boolean delivered = awardCommittedWagers(match, winnerId, winnerName);
         Player winner = Bukkit.getPlayer(winnerId);
         if (winner != null && winner.isOnline()) {
-            winner.sendMessage(MessageUtil.success("<white>" + miniEscape(forfeiterName)
+            BedrockCompat.sendGameMessage(winner, MessageUtil.success("<white>" + miniEscape(forfeiterName)
                 + "</white> forfeited. You won both bets."));
             if (!delivered) {
-                winner.sendMessage(MessageUtil.warn("Your winnings are safe. Clear space and use <white>/spinbet claim</white>."));
+                BedrockCompat.sendGameMessage(winner, MessageUtil.warn("Your winnings are safe. Clear space and use <white>/spinbet claim</white>."));
             }
             playWinnerEffects(winner);
+            BedrockCompat.syncGameInventory(winner);
         }
         Player forfeiter = Bukkit.getPlayer(forfeiterId);
         if (forfeiter != null && forfeiter.isOnline()) {
-            forfeiter.sendMessage(MessageUtil.warn("You forfeited the spin bet and lost your wager."));
+            BedrockCompat.sendGameMessage(forfeiter, MessageUtil.warn("You forfeited the spin bet and lost your wager."));
+            BedrockCompat.syncGameInventory(forfeiter);
         }
         plugin.getLogger().info("Spin bet " + match.matchId() + " forfeited by "
             + forfeiterName + "; both wagers awarded to " + winnerName + ": " + reason);
@@ -812,7 +817,7 @@ public final class SpinBetManager implements Listener {
         SkullMeta meta = (SkullMeta) item.getItemMeta();
         meta.setOwningPlayer(player);
         meta.displayName(MM.deserialize(name));
-        meta.lore(List.of(MM.deserialize(line)));
+        meta.lore(CustomLoreUtil.wrapLoreLines(List.of(MM.deserialize(line))));
         item.setItemMeta(meta);
         return item;
     }
@@ -826,7 +831,7 @@ public final class SpinBetManager implements Listener {
         List<Component> lore = meta.hasLore() && meta.lore() != null ? new ArrayList<>(meta.lore()) : new ArrayList<>();
         lore.add(Component.empty());
         lore.add(MM.deserialize(color + miniEscape(ownerName) + "'s bet</" + color.substring(1)));
-        meta.lore(lore);
+        meta.lore(CustomLoreUtil.wrapLoreLines(lore));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         item.setItemMeta(meta);
         return item;

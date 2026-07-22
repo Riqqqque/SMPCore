@@ -28,6 +28,7 @@ public final class NpcHologramManager implements Listener {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final long UPDATE_INTERVAL_TICKS = 5L;
+    private static final long DUPLICATE_CLEANUP_INTERVAL_TICKS = 100L;
     private static final double DEFAULT_OFFSET = 0.38D;
     private static final int NAMEPLATE_LINE_WIDTH = 320;
     private static final String SCOREBOARD_TAG = "smpcore_npc_hologram";
@@ -38,6 +39,7 @@ public final class NpcHologramManager implements Listener {
     private final Map<String, HologramState> holograms = new ConcurrentHashMap<>();
     private BukkitTask task;
     private boolean listenerRegistered;
+    private long duplicateCleanupTicks;
 
     public NpcHologramManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -107,6 +109,11 @@ public final class NpcHologramManager implements Listener {
     }
 
     private void tick() {
+        duplicateCleanupTicks += UPDATE_INTERVAL_TICKS;
+        boolean cleanDuplicates = duplicateCleanupTicks >= DUPLICATE_CLEANUP_INTERVAL_TICKS;
+        if (cleanDuplicates) {
+            duplicateCleanupTicks = 0L;
+        }
         Iterator<Map.Entry<String, HologramState>> iterator = holograms.entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<String, HologramState> entry = iterator.next();
@@ -124,7 +131,9 @@ public final class NpcHologramManager implements Listener {
                 display = spawnDisplay(target, entry.getKey(), state.text(), state.verticalOffset());
                 entry.setValue(state.withDisplay(display.getUniqueId()));
             }
-            removeNearbyDuplicates(target, entry.getKey(), display.getUniqueId());
+            if (cleanDuplicates) {
+                removeNearbyDuplicates(target, entry.getKey(), display.getUniqueId());
+            }
             teleportIfNeeded(display, hologramLocation(target, state.verticalOffset()));
         }
     }
@@ -188,7 +197,10 @@ public final class NpcHologramManager implements Listener {
 
     private TextDisplay canonicalDisplay(String ownerId, UUID preferredId, World targetWorld) {
         TextDisplay preferred = display(preferredId);
-        TextDisplay canonical = preferred != null && preferred.getWorld().equals(targetWorld) ? preferred : null;
+        if (preferred != null && preferred.getWorld().equals(targetWorld)) {
+            return preferred;
+        }
+        TextDisplay canonical = null;
         for (World world : Bukkit.getWorlds()) {
             for (TextDisplay candidate : world.getEntitiesByClass(TextDisplay.class)) {
                 if (!ownerId.equals(candidate.getPersistentDataContainer().get(keyOwner, PersistentDataType.STRING))) continue;

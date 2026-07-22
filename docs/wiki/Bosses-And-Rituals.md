@@ -47,6 +47,8 @@ From tier 5 onward, successfully clearing a positional mechanic gives a small re
 
 Every mechanic starts with a title, a short chat explanation, the exact failure damage, an action-bar reminder, and one warning sound. Mechanics that change instructions mid-cast announce the new step once. Repeated action-bar updates do not repeat chat or sounds.
 
+The Veilbound Marshal's blue marker is an isolation check: the marked player stays inside and is immune to their own circle, while every other player must leave it. Ashen Crossfire follows the same ownership rule for each red marker. Widow's Claim trail pools become dangerous after they land, giving the hunted player time to keep moving.
+
 Late bosses also have short casts that seal all healing. Natural regeneration, potions, powers, enchants, relics, and healing from teammates cannot restore health until the cast ends. The seal appears in the title, chat explanation, and action bar.
 
 Extra players increase boss health, attack damage, ability pressure, target counts, and mechanic frequency. The scaling follows the current number of surviving fighters so a larger group cannot erase a boss with raw damage alone.
@@ -61,12 +63,14 @@ Use `/settings` to mute only the boss music. Mechanic warnings and combat sounds
 
 Successful participants also build permanent progress with [Mogrik's Boss Mastery](Boss-Mastery). Each boss has five cumulative ranks with Essence, common materials, utility relics, permanent Huntmarks, and unique gear without giving away rare progression materials.
 
+The shared reward chest now grows with the group that actually fought. Each additional meaningful combat contributor adds 25% to guaranteed boss progression materials, up to 2x materials with five contributors. Chance-based gear, tables, orbs, Soul Imprints, and other rare rolls keep their normal chance and quantity, so extra spectators or idle players cannot multiply jackpot loot.
+
 ## Arena rules
 
 - Building, breaking, explosions, natural mob spawning, fire spread, weather, PvP, and random block ticks are disabled.
 - The arena is a void world with a safety return if a player falls out.
 - The supplied arena world is installed automatically the first time the plugin starts.
-- Boss loot and progression are unchanged; only the summoning location and interaction changed.
+- Guaranteed progression materials scale with meaningful combat participation; rare-drop rolls do not.
 - A defeated boss creates a protected participant-only chest. It disappears when empty or after two minutes, then everyone returns to spawn.
 - Player-dropped items are owner-tagged. Anything still in the arena at cleanup is returned to its owner; unclaimed boss loot returns to the summoner.
 

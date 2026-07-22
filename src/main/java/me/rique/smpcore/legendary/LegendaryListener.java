@@ -99,6 +99,7 @@ import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerItemHeldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.inventory.CraftingInventory;
@@ -160,7 +161,7 @@ public final class LegendaryListener implements Listener {
     };
     private static final int[] MYTHIC_FUSION_MENU_SLOTS = RELIQUARY_CONTENT_SLOTS;
 
-    private static final int LEGENDARY_ITEM_DATA_VERSION = 21;
+    private static final int LEGENDARY_ITEM_DATA_VERSION = 22;
     private static final double ORB_OF_THE_MYSTICS_DROP_CHANCE = 0.02;
     private static final long ORB_OF_THE_MYSTICS_COOLDOWN_MS = 60L * 60L * 1000L;
     private static final int STARTUP_LEGENDARY_MIGRATION_CHUNKS_PER_TICK = 24;
@@ -175,7 +176,7 @@ public final class LegendaryListener implements Listener {
     private static final int HYPNOSIS_COOLDOWN = 5;
     private static final int HYPNOSIS_MAX = 10;
     private static final int EMERALD_BLADE_MAX_LEVEL = 20;
-    private static final double WARDEN_BLADE_MELEE_DAMAGE = 8.0;
+    private static final double WARDEN_BLADE_BASE_MELEE_DAMAGE = 8.0;
     private static final int WARDEN_BLADE_PROTECTION_SECONDS = 3 * 60;
     private static final int WARDEN_BLADE_PROTECTION_COOLDOWN = 420;
     private static final int WARDEN_BLADE_SOUND_WAVE_COOLDOWN = 40;
@@ -408,6 +409,8 @@ public final class LegendaryListener implements Listener {
     private final Set<UUID> activeMagnetPlayers = ConcurrentHashMap.newKeySet();
     private final Set<UUID> pendingMagnetRefresh = ConcurrentHashMap.newKeySet();
     private final Set<UUID> pendingWitherBladeLoreRefresh = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> pendingLifeStealerRefresh = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, LifeStealerState> activeLifeStealerStates = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> enderDragonByOwner = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> enderDragonSeatByOwner = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> enderDragonOwnerByDragon = new ConcurrentHashMap<>();
@@ -416,7 +419,9 @@ public final class LegendaryListener implements Listener {
     private final Map<UUID, String> enderDragonChunkTicketWorlds = new ConcurrentHashMap<>();
     private final Map<UUID, Long> enderDragonChunkTicketCenters = new ConcurrentHashMap<>();
     private final Map<UUID, PendingLegendaryHandoff> pendingLegendaryHandoffs = new ConcurrentHashMap<>();
+    private final List<BukkitTask> recurringTasks = new ArrayList<>();
     private BukkitTask startupMigrationTask;
+    private BukkitTask enderDragonTask;
     private boolean legendaryDuplicateAuditQueued;
     private boolean legendaryWorldAuditRequested;
     private boolean startupLegendaryMigrationComplete;
@@ -493,19 +498,17 @@ public final class LegendaryListener implements Listener {
             scheduleLoadedChunkLegendaryMigration();
             scheduleLegendaryDuplicateAudit(true);
         });
-        Bukkit.getScheduler().runTaskTimer(plugin, this::tickMagnets, 20L, 20L);
-        Bukkit.getScheduler().runTaskTimer(plugin, this::tickPercyTridentEffects, 20L, 20L);
-        Bukkit.getScheduler().runTaskTimer(plugin, this::tickLifeStealerLore, 20L, 20L);
-        Bukkit.getScheduler().runTaskTimer(plugin, this::tickLegendaryStates, 10L, 10L);
-        Bukkit.getScheduler().runTaskTimer(plugin, this::tickEnderSwordDragons, 1L, 1L);
-        Bukkit.getScheduler().runTaskTimer(plugin, this::cleanupExpiredLegendaryCooldowns, 20L * 60L, 20L * 60L);
+        recurringTasks.add(Bukkit.getScheduler().runTaskTimer(plugin, this::tickLegendaryPassives, 20L, 20L));
+        recurringTasks.add(Bukkit.getScheduler().runTaskTimer(plugin, this::reconcileLifeStealerInventories, 200L, 200L));
+        recurringTasks.add(Bukkit.getScheduler().runTaskTimer(plugin, this::tickLegendaryStates, 10L, 10L));
+        recurringTasks.add(Bukkit.getScheduler().runTaskTimer(plugin, this::cleanupExpiredLegendaryCooldowns, 20L * 60L, 20L * 60L));
         long duplicateAuditIntervalTicks = legendaryDuplicateAuditIntervalTicks();
-        Bukkit.getScheduler().runTaskTimer(
+        recurringTasks.add(Bukkit.getScheduler().runTaskTimer(
             plugin,
             () -> scheduleLegendaryDuplicateAudit(true),
             duplicateAuditIntervalTicks,
             duplicateAuditIntervalTicks
-        );
+        ));
     }
 
     @EventHandler
@@ -527,6 +530,8 @@ public final class LegendaryListener implements Listener {
         activeMagnetPlayers.remove(id);
         pendingMagnetRefresh.remove(id);
         pendingWitherBladeLoreRefresh.remove(id);
+        pendingLifeStealerRefresh.remove(id);
+        activeLifeStealerStates.remove(id);
         reliquaryReturnToMainMenuPlayers.remove(id);
         mythicFusionReturnToMainMenuPlayers.remove(id);
         shadowBladeActiveUntil.remove(id);
@@ -559,6 +564,12 @@ public final class LegendaryListener implements Listener {
             startupMigrationTask.cancel();
             startupMigrationTask = null;
         }
+        if (enderDragonTask != null) {
+            enderDragonTask.cancel();
+            enderDragonTask = null;
+        }
+        recurringTasks.forEach(BukkitTask::cancel);
+        recurringTasks.clear();
         for (UUID ownerId : new HashSet<>(enderDragonByOwner.keySet())) {
             despawnEnderSwordDragon(ownerId, false);
         }
@@ -567,10 +578,18 @@ public final class LegendaryListener implements Listener {
         }
         reliquaryReturnToMainMenuPlayers.clear();
         mythicFusionReturnToMainMenuPlayers.clear();
+        pendingLifeStealerRefresh.clear();
+        activeLifeStealerStates.clear();
         activeStrengthDomains.clear();
         shadowBladeActiveUntil.clear();
         cleanupTaggedEnderSwordDragons();
         cleanupTaggedEnderSwordSeats();
+    }
+
+    private void tickLegendaryPassives() {
+        tickMagnets();
+        tickPercyTridentEffects();
+        tickLifeStealerEffects();
     }
 
     @EventHandler(priority = EventPriority.NORMAL)
@@ -815,6 +834,7 @@ public final class LegendaryListener implements Listener {
         }
         queueMagnetTrackingRefresh(player);
         queueWitherBladeLoreRefresh(player);
+        queueLifeStealerRefresh(player);
         if (handleLegendaryCraftClick(event, player)) {
             return;
         }
@@ -1067,6 +1087,7 @@ public final class LegendaryListener implements Listener {
         if (event.getWhoClicked() instanceof Player player) {
             queueMagnetTrackingRefresh(player);
             queueWitherBladeLoreRefresh(player);
+            queueLifeStealerRefresh(player);
         }
         Inventory top = event.getView().getTopInventory();
         InventoryHolder holder = top.getHolder(false);
@@ -1098,6 +1119,7 @@ public final class LegendaryListener implements Listener {
             completeLegendaryHandoff(player, event.getItem());
             queueMagnetTrackingRefresh(player);
             queueWitherBladeLoreRefresh(player);
+            queueLifeStealerRefresh(player);
             if (containsStorageRestrictedLegendary(event.getItem().getItemStack())) {
                 scheduleLegendaryDuplicateAudit(true);
             }
@@ -1107,6 +1129,7 @@ public final class LegendaryListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onDropItem(PlayerDropItemEvent event) {
         queueWitherBladeLoreRefresh(event.getPlayer());
+        queueLifeStealerRefresh(event.getPlayer());
         if (containsStorageRestrictedLegendary(event.getItemDrop().getItemStack())) {
             trackLegendaryHandoff(event.getPlayer(), event.getItemDrop());
             scheduleLegendaryDuplicateAudit(true);
@@ -1153,6 +1176,11 @@ public final class LegendaryListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onSwapHands(PlayerSwapHandItemsEvent event) {
         queueWitherBladeLoreRefresh(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onRespawn(PlayerRespawnEvent event) {
+        queueLifeStealerRefresh(event.getPlayer());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -1582,6 +1610,19 @@ public final class LegendaryListener implements Listener {
 
     public void resyncLegendaryOwnership(Player player) {
         auditLegendaryClaimsAndDuplicates();
+    }
+
+    public void syncPlayerLegendaryOwnership(Player player) {
+        LegendaryAltarManager altarManager = plugin.getLegendaryAltarManager();
+        if (player == null || altarManager == null || !altarManager.areLegendaryClaimsReady()) {
+            return;
+        }
+
+        Map<String, String> heldLegendaryInstances = new LinkedHashMap<>();
+        collectLegendaryOwnership(player, player.getInventory(), heldLegendaryInstances);
+        collectLegendaryOwnership(player, player.getEnderChest(), heldLegendaryInstances);
+        collectLegendaryOwnership(player, player.getOpenInventory().getCursor(), heldLegendaryInstances);
+        altarManager.claimLegendaryOwnership(player.getUniqueId(), heldLegendaryInstances);
     }
 
     public void onLegendaryClaimsReady() {
@@ -2079,12 +2120,33 @@ public final class LegendaryListener implements Listener {
     public void onLethalDamage(EntityDamageEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
         ChronoState state = chronoStates.get(player.getUniqueId());
-        if (state != null && player.getHealth() - event.getFinalDamage() <= 0.0) {
+        boolean lethal = player.getHealth() - event.getFinalDamage() <= 0.0;
+        boolean lethalBossMechanic = plugin.getBossManager() != null
+            && plugin.getBossManager().isLethalBossMechanicDamage(player);
+        if (shouldTriggerChronoRescue(
+            state != null,
+            state == null ? 0L : state.readyAt(),
+            System.currentTimeMillis(),
+            lethal,
+            lethalBossMechanic
+        )) {
             event.setCancelled(true);
             activateChrono(player, true);
             return;
         }
-        tryGodChestplateRescue(player, event);
+        if (!lethalBossMechanic) {
+            tryGodChestplateRescue(player, event);
+        }
+    }
+
+    static boolean shouldTriggerChronoRescue(
+        boolean hasState,
+        long readyAt,
+        long now,
+        boolean lethal,
+        boolean lethalBossMechanic
+    ) {
+        return hasState && now >= readyAt && lethal && !lethalBossMechanic;
     }
 
     @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
@@ -2240,11 +2302,13 @@ public final class LegendaryListener implements Listener {
         } else if (held == LegendaryType.MIDAS_SWORD) {
             event.setDamage(MIDAS_SWORD_MELEE_DAMAGE);
         } else if (held == LegendaryType.WARDEN_BLADE) {
-            event.setDamage(WARDEN_BLADE_MELEE_DAMAGE);
+            event.setDamage(wardenBladeMeleeDamage(event.getDamage()));
         } else if (held == LegendaryType.FROST_SCYTHE) {
             event.setDamage(FROST_SCYTHE_MELEE_DAMAGE);
-            applyFrostScytheNausea(victim);
-            if (frostScytheSweepPlayers.add(attacker.getUniqueId())) {
+            if (!isBossEncounterEntity(victim)) {
+                applyFrostScytheNausea(victim);
+            }
+            if (!isBossEncounterEntity(victim) && frostScytheSweepPlayers.add(attacker.getUniqueId())) {
                 try {
                     sweepFrostScytheTargets(attacker, victim);
                 } finally {
@@ -2261,7 +2325,7 @@ public final class LegendaryListener implements Listener {
             event.setDamage(REAPER_SCYTHE_MELEE_DAMAGE);
             tryReaperScytheDrain(attacker, victim);
         } else if (held == LegendaryType.SHADOW_BLADE) {
-            event.setDamage(shadowBladeDamage(attacker));
+            event.setDamage(shadowBladeDamage(attacker, victim));
             if (victim instanceof Player) {
                 cancelShadowBlade(attacker, true);
             }
@@ -2278,13 +2342,17 @@ public final class LegendaryListener implements Listener {
             event.setDamage(event.getDamage() + STRENGTH_MACE_DAMAGE_BONUS);
         } else if (held == LegendaryType.PARADOX_REAVER) {
             event.setDamage(14.0);
-            victim.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 70, 1, false, true, true));
-            victim.addPotionEffect(new PotionEffect(PotionEffectType.WEAKNESS, 70, 0, false, true, true));
+            if (!isBossEncounterEntity(victim)) {
+                victim.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 70, 1, false, true, true));
+                victim.addPotionEffect(new PotionEffect(PotionEffectType.WEAKNESS, 70, 0, false, true, true));
+            }
             victim.getWorld().spawnParticle(Particle.REVERSE_PORTAL, victim.getLocation().add(0.0, 1.0, 0.0), 22, 0.35, 0.45, 0.35, 0.08);
         } else if (held == LegendaryType.TEMPEST_TRIDENT) {
             double bonus = (attacker.isInWater() || attacker.isInRain()) ? 9.0 : 7.0;
             event.setDamage(event.getDamage() + bonus);
-            victim.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 60, 0, false, true, true));
+            if (!isBossEncounterEntity(victim)) {
+                victim.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 60, 0, false, true, true));
+            }
             if (attacker.isInWater() || attacker.isInRain() || attacker.getWorld().hasStorm()) {
                 victim.getWorld().strikeLightningEffect(victim.getLocation());
             } else {
@@ -2292,13 +2360,16 @@ public final class LegendaryListener implements Listener {
             }
         } else if (held == LegendaryType.STORMFALL_MAUL) {
             event.setDamage(event.getDamage() + 6.0);
-            Vector push = victim.getLocation().toVector().subtract(attacker.getLocation().toVector()).setY(0.0);
-            if (push.lengthSquared() > 1.0E-6) {
-                victim.setVelocity(victim.getVelocity().add(push.normalize().multiply(0.75).setY(0.35)));
+            if (!isBossEncounterEntity(victim)) {
+                Vector push = victim.getLocation().toVector().subtract(attacker.getLocation().toVector()).setY(0.0);
+                if (push.lengthSquared() > 1.0E-6) {
+                    victim.setVelocity(victim.getVelocity().add(push.normalize().multiply(0.75).setY(0.35)));
+                }
             }
             victim.getWorld().spawnParticle(Particle.SONIC_BOOM, victim.getLocation().add(0.0, 1.0, 0.0), 1, 0.0, 0.0, 0.0, 0.0);
             for (LivingEntity nearby : victim.getWorld().getNearbyLivingEntities(victim.getLocation(), 4.5)) {
                 if (nearby.equals(victim) || nearby.equals(attacker)) continue;
+                if (isBossEncounterEntity(nearby)) continue;
                 if (nearby instanceof Player player && sameTeamOrSelf(attacker.getUniqueId(), player.getUniqueId())) continue;
                 Vector wave = nearby.getLocation().toVector().subtract(victim.getLocation().toVector()).setY(0.0);
                 if (wave.lengthSquared() > 1.0E-6) {
@@ -3534,6 +3605,10 @@ public final class LegendaryListener implements Listener {
     }
 
     private void useEnderSword(Player player) {
+        if (plugin.getBossManager() != null && plugin.getBossManager().isPlayerRestrictedByArena(player)) {
+            player.sendActionBar(MM.deserialize("<red>Dragon Mode is disabled during boss fights.</red>"));
+            return;
+        }
         if (plugin.getCombatLogListener() != null && plugin.getCombatLogListener().isInPlayerCombat(player)) {
             player.sendMessage(MessageUtil.error("You can't ride your Ender Dragon while in combat."));
             return;
@@ -3611,6 +3686,7 @@ public final class LegendaryListener implements Listener {
         UUID ownerId = player.getUniqueId();
         enderDragonByOwner.put(ownerId, dragon.getUniqueId());
         enderDragonOwnerByDragon.put(dragon.getUniqueId(), ownerId);
+        ensureEnderDragonTask();
         setCooldown(enderSwordSummonCd, ownerId, plugin.getConfigManager().enderSwordSummonCooldownSeconds);
 
         recallAndMountEnderDragon(player, dragon);
@@ -3659,7 +3735,10 @@ public final class LegendaryListener implements Listener {
     }
 
     private void tickEnderSwordDragons() {
-        if (enderDragonByOwner.isEmpty()) return;
+        if (enderDragonByOwner.isEmpty()) {
+            stopEnderDragonTask();
+            return;
+        }
 
         long now = System.currentTimeMillis();
         for (Map.Entry<UUID, UUID> entry : new HashMap<>(enderDragonByOwner).entrySet()) {
@@ -3675,6 +3754,11 @@ public final class LegendaryListener implements Listener {
                 despawnEnderSwordDragon(ownerId, false);
                 continue;
             }
+            if (plugin.getBossManager() != null && plugin.getBossManager().isPlayerRestrictedByArena(owner)) {
+                despawnEnderSwordDragon(ownerId, false);
+                owner.sendActionBar(MM.deserialize("<red>Dragon Mode ended when the boss fight began.</red>"));
+                continue;
+            }
             ArmorStand seat = ownedEnderDragonSeat(ownerId);
             if (seat == null) {
                 cleanupEnderDragon(ownerId, entry.getValue());
@@ -3687,6 +3771,20 @@ public final class LegendaryListener implements Listener {
             }
             despawnEnderSwordDragon(ownerId, false);
         }
+        if (enderDragonByOwner.isEmpty()) {
+            stopEnderDragonTask();
+        }
+    }
+
+    private void ensureEnderDragonTask() {
+        if (enderDragonTask != null) return;
+        enderDragonTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickEnderSwordDragons, 1L, 1L);
+    }
+
+    private void stopEnderDragonTask() {
+        if (enderDragonTask == null) return;
+        enderDragonTask.cancel();
+        enderDragonTask = null;
     }
 
     private void controlEnderDragon(Player owner, EnderDragon dragon, ArmorStand seat, long now) {
@@ -4160,6 +4258,7 @@ public final class LegendaryListener implements Listener {
             UUID ownerId = UUID.fromString(storedOwner);
             enderDragonOwnerByDragon.putIfAbsent(dragon.getUniqueId(), ownerId);
             enderDragonByOwner.putIfAbsent(ownerId, dragon.getUniqueId());
+            ensureEnderDragonTask();
             return ownerId;
         } catch (IllegalArgumentException ignored) {
             return null;
@@ -4270,13 +4369,15 @@ public final class LegendaryListener implements Listener {
 
         Entity hit = event.getHitEntity();
         if (hit instanceof LivingEntity living && !living.equals(shooter)) {
-            AbilityDamageContext.damage(shooter, living, 6.0);
-            Location pullTo = shooter.getLocation().clone().add(
-                shooter.getLocation().getDirection().normalize().multiply(1.1)
-            );
-            pullTo.setPitch(living.getLocation().getPitch());
-            pullTo.setYaw(living.getLocation().getYaw());
-            living.teleport(pullTo);
+            if (!isBossEncounterEntity(living)) {
+                AbilityDamageContext.damage(shooter, living, 6.0);
+                Location pullTo = shooter.getLocation().clone().add(
+                    shooter.getLocation().getDirection().normalize().multiply(1.1)
+                );
+                pullTo.setPitch(living.getLocation().getPitch());
+                pullTo.setYaw(living.getLocation().getYaw());
+                living.teleport(pullTo);
+            }
         } else if (event.getHitBlock() != null) {
             Location anchor = event.getHitBlock().getLocation().add(0.5, 0.5, 0.5);
             Location to = anchor.clone();
@@ -4388,7 +4489,7 @@ public final class LegendaryListener implements Listener {
 
     private void tryBlinkDaggerBackstab(Player attacker, LivingEntity victim) {
         UUID attackerId = attacker.getUniqueId();
-        if (victim.equals(attacker)) {
+        if (victim.equals(attacker) || isBossEncounterEntity(victim)) {
             return;
         }
         if (victim instanceof Player teammate && sameTeamOrSelf(attackerId, teammate.getUniqueId())) {
@@ -4476,14 +4577,16 @@ public final class LegendaryListener implements Listener {
             player.sendMessage(MessageUtil.warn("Hypnosis cooldown: <white>" + secondsLeft(hypnosisCd, ownerId) + "s</white>."));
             return;
         }
-        setCooldown(hypnosisCd, ownerId, HYPNOSIS_COOLDOWN);
 
         RayTraceResult hit = player.getWorld().rayTraceEntities(
             player.getEyeLocation(),
             player.getEyeLocation().getDirection(),
             24.0,
             0.4,
-            entity -> entity instanceof Mob mob && mob.isValid() && !mob.isDead()
+            entity -> entity instanceof Mob mob
+                && mob.isValid()
+                && !mob.isDead()
+                && !isBossEncounterEntity(mob)
         );
 
         if (hit == null || !(hit.getHitEntity() instanceof Mob mob)) {
@@ -4494,6 +4597,7 @@ public final class LegendaryListener implements Listener {
         UUID mobId = mob.getUniqueId();
         UUID currentOwner = ownerByMob.get(mobId);
         if (ownerId.equals(currentOwner)) {
+            setCooldown(hypnosisCd, ownerId, HYPNOSIS_COOLDOWN);
             healMob(mob, 20.0);
             player.sendMessage(MessageUtil.success("Controlled mob healed."));
             return;
@@ -4513,6 +4617,7 @@ public final class LegendaryListener implements Listener {
             }
         }
 
+        setCooldown(hypnosisCd, ownerId, HYPNOSIS_COOLDOWN);
         ownerByMob.put(mobId, ownerId);
         set.add(mobId);
         mob.setPersistent(true);
@@ -4521,6 +4626,7 @@ public final class LegendaryListener implements Listener {
     }
 
     private void directControlledMobs(Player owner, LivingEntity victim) {
+        if (isBossEncounterEntity(victim)) return;
         Set<UUID> set = controlledByOwner.get(owner.getUniqueId());
         if (set == null || set.isEmpty()) return;
         if (victim instanceof Player teammate && sameTeamOrSelf(owner.getUniqueId(), teammate.getUniqueId())) {
@@ -4706,7 +4812,7 @@ public final class LegendaryListener implements Listener {
     }
 
     private boolean canWardenBladeSoundWaveHit(Player attacker, LivingEntity target) {
-        if (target.equals(attacker)) {
+        if (target.equals(attacker) || isBossEncounterEntity(target)) {
             return false;
         }
         if (target.isInvulnerable()) {
@@ -5037,7 +5143,7 @@ public final class LegendaryListener implements Listener {
                 rhittaBurns.remove(targetId, state);
                 return;
             }
-            if (System.currentTimeMillis() > expiresAt) {
+            if (System.currentTimeMillis() > expiresAt || isBossEncounterEntity(target)) {
                 rhittaBurns.remove(targetId, state);
                 return;
             }
@@ -5340,19 +5446,19 @@ public final class LegendaryListener implements Listener {
     }
 
     private boolean canWitherBladeDamage(Player shooter, LivingEntity target) {
-        if (target.equals(shooter)) return false;
+        if (target.equals(shooter) || isBossEncounterEntity(target)) return false;
         return !(target instanceof Player teammate)
             || !sameTeamOrSelf(shooter.getUniqueId(), teammate.getUniqueId());
     }
 
     private boolean canFrostScytheAffect(Player attacker, LivingEntity target) {
-        if (target.equals(attacker)) return false;
+        if (target.equals(attacker) || isBossEncounterEntity(target)) return false;
         return !(target instanceof Player teammate)
             || !sameTeamOrSelf(attacker.getUniqueId(), teammate.getUniqueId());
     }
 
     private boolean canRhittaBurnTarget(Player attacker, LivingEntity target) {
-        if (target.equals(attacker)) {
+        if (target.equals(attacker) || isBossEncounterEntity(target)) {
             return false;
         }
         return !(target instanceof Player teammate)
@@ -5585,7 +5691,28 @@ public final class LegendaryListener implements Listener {
         }
     }
 
-    private void tickLifeStealerLore() {
+    private void queueLifeStealerRefresh(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (!pendingLifeStealerRefresh.add(playerId)) return;
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            pendingLifeStealerRefresh.remove(playerId);
+            if (!player.isOnline()) return;
+            refreshLifeStealerLore(player);
+        });
+    }
+
+    private void tickLifeStealerEffects() {
+        for (Map.Entry<UUID, LifeStealerState> entry : activeLifeStealerStates.entrySet()) {
+            Player player = Bukkit.getPlayer(entry.getKey());
+            if (player == null || !player.isOnline()) {
+                activeLifeStealerStates.remove(entry.getKey(), entry.getValue());
+                continue;
+            }
+            ensureLifeStealerEffects(player, entry.getValue());
+        }
+    }
+
+    private void reconcileLifeStealerInventories() {
         for (Player player : Bukkit.getOnlinePlayers()) {
             refreshLifeStealerLore(player);
         }
@@ -5612,6 +5739,12 @@ public final class LegendaryListener implements Listener {
             player.setItemOnCursor(cursor);
         }
 
+        UUID playerId = player.getUniqueId();
+        if (strongestState.stacks() <= 0) {
+            activeLifeStealerStates.remove(playerId);
+        } else {
+            activeLifeStealerStates.put(playerId, strongestState);
+        }
         ensureLifeStealerEffects(player, strongestState);
     }
 
@@ -5833,11 +5966,25 @@ public final class LegendaryListener implements Listener {
         }
     }
 
-    private double shadowBladeDamage(Player attacker) {
-        if (plugin.getSuperpowerManager() != null && plugin.getSuperpowerManager().hasPower(attacker, me.rique.smpcore.power.SuperpowerType.MONARCH)) {
+    private double shadowBladeDamage(Player attacker, LivingEntity target) {
+        if (!isBossEncounterEntity(target)
+            && plugin.getSuperpowerManager() != null
+            && plugin.getSuperpowerManager().hasPower(attacker, me.rique.smpcore.power.SuperpowerType.MONARCH)) {
             return SHADOW_BLADE_MONARCH_DAMAGE;
         }
         return SHADOW_BLADE_DAMAGE;
+    }
+
+    private boolean isBossEncounterEntity(Entity entity) {
+        return entity != null
+            && plugin.getBossManager() != null
+            && plugin.getBossManager().isBossEncounterEntity(entity);
+    }
+
+    private boolean isActiveBossFight(Player player) {
+        return player != null
+            && plugin.getBossManager() != null
+            && plugin.getBossManager().isActiveBossFight(player);
     }
 
     private void applyStrengthSwordStageHit(Player attacker, LivingEntity victim) {
@@ -6099,6 +6246,7 @@ public final class LegendaryListener implements Listener {
     private void syncShadowBladeAttackSpeed(Player player) {
         boolean holdingShadowBlade = typeOf(player.getInventory().getItemInMainHand()) == LegendaryType.SHADOW_BLADE;
         boolean shadowPower = holdingShadowBlade
+            && !isActiveBossFight(player)
             && plugin.getSuperpowerManager() != null
             && plugin.getSuperpowerManager().hasPower(player, me.rique.smpcore.power.SuperpowerType.NIGHTSHADE);
         syncPlayerAttributeModifier(
@@ -6303,7 +6451,8 @@ public final class LegendaryListener implements Listener {
     }
 
     private int shadowBladeDurationSeconds(Player player) {
-        return plugin.getSuperpowerManager() != null
+        return !isActiveBossFight(player)
+            && plugin.getSuperpowerManager() != null
             && plugin.getSuperpowerManager().hasPower(player, me.rique.smpcore.power.SuperpowerType.NIGHTSHADE)
             ? SHADOW_BLADE_SHADOW_DURATION_SECONDS
             : SHADOW_BLADE_DURATION_SECONDS;
@@ -6471,7 +6620,7 @@ public final class LegendaryListener implements Listener {
                 "Created " + type.display + " from " + source + "."
             );
         }
-        player.getInventory().addItem(reward);
+        InventoryRecipeUtil.giveOrDrop(player, reward);
         registerLegendaryInstance(player, reward, "altar".equals(source));
         announceLegendaryCraft(player, type);
         String sourceText = "trade".equals(source) ? "Traded materials for " : "Crafted ";
@@ -7101,7 +7250,8 @@ public final class LegendaryListener implements Listener {
             rarityLabelForMeta(meta, CustomLoreUtil.Rarity.MYTHIC.label()),
             "BLADE",
             List.of(
-                "<gray>Hit Damage: <white>" + formatDamageNumber(WARDEN_BLADE_MELEE_DAMAGE) + "</white></gray>",
+                "<gray>Base Hit Damage: <white>" + formatDamageNumber(WARDEN_BLADE_BASE_MELEE_DAMAGE) + "</white></gray>",
+                "<gray>Sharpness, Strength, and item bonuses stack.</gray>",
                 "<gray>Sculk Protection Cooldown: <white>" + WARDEN_BLADE_PROTECTION_COOLDOWN + "s</white></gray>",
                 "<gray>Sound Wave Cooldown: <white>" + WARDEN_BLADE_SOUND_WAVE_COOLDOWN + "s</white></gray>"
             ),
@@ -7120,6 +7270,10 @@ public final class LegendaryListener implements Listener {
                 )
             )
         );
+    }
+
+    static double wardenBladeMeleeDamage(double calculatedDamage) {
+        return Double.isFinite(calculatedDamage) ? Math.max(0.0D, calculatedDamage) : 0.0D;
     }
 
     private List<Component> buildMagnetLore(ItemMeta meta, boolean active) {
@@ -7237,9 +7391,11 @@ public final class LegendaryListener implements Listener {
 
     private List<Component> buildShadowBladeLore(ItemMeta meta, Player holder) {
         boolean monarch = holder != null
+            && !isActiveBossFight(holder)
             && plugin.getSuperpowerManager() != null
             && plugin.getSuperpowerManager().hasPower(holder, me.rique.smpcore.power.SuperpowerType.MONARCH);
         boolean shadow = holder != null
+            && !isActiveBossFight(holder)
             && plugin.getSuperpowerManager() != null
             && plugin.getSuperpowerManager().hasPower(holder, me.rique.smpcore.power.SuperpowerType.NIGHTSHADE);
         double damage = monarch ? SHADOW_BLADE_MONARCH_DAMAGE : SHADOW_BLADE_DAMAGE;
@@ -9052,7 +9208,7 @@ public final class LegendaryListener implements Listener {
             }
             case STORMFALL_MAUL -> {
                 setEnchantLevel(meta, enchantDensity, 6);
-                setEnchantLevel(meta, enchantBreach, 4);
+                setEnchantLevel(meta, enchantBreach, 0);
                 setEnchantLevel(meta, enchantWindBurst, 2);
                 setEnchantLevel(meta, enchantUnbreaking, 4);
                 meta.lore(buildMythicLore(
@@ -9208,7 +9364,7 @@ public final class LegendaryListener implements Listener {
             ));
             case HARD_HITTER -> {
                 setEnchantLevel(meta, enchantDensity, 5);
-                setEnchantLevel(meta, enchantBreach, 4);
+                setEnchantLevel(meta, enchantBreach, 0);
                 setEnchantLevel(meta, enchantWindBurst, 1);
                 meta.lore(buildLegendaryLore(
                     meta,
@@ -9218,7 +9374,7 @@ public final class LegendaryListener implements Listener {
                     CustomLoreUtil.section(
                         "Item Ability",
                         "Heavy Impact",
-                        "<gray>Comes preloaded with <white>Density V</white>, <white>Breach IV</white>, and <white>Wind Burst I</white>.</gray>",
+                        "<gray>Comes preloaded with <white>Density V</white> and <white>Wind Burst I</white>.</gray>",
                         "<gray>No extra plugin effect is added on top of the mace enchantments.</gray>"
                     )
                 ));

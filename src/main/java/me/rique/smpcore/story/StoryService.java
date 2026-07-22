@@ -49,6 +49,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 public final class StoryService implements Listener {
@@ -79,6 +80,7 @@ public final class StoryService implements Listener {
     private final Map<UUID, Long> queuedSaveRevisions = new ConcurrentHashMap<>();
     private final Map<UUID, List<BukkitTask>> sequences = new HashMap<>();
     private final Set<UUID> loading = ConcurrentHashMap.newKeySet();
+    private final AtomicLong contentLoadGeneration = new AtomicLong();
     private final ExecutorService contentExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "SMPCore-Story-Content");
         thread.setDaemon(true);
@@ -97,6 +99,7 @@ public final class StoryService implements Listener {
 
     public void shutdown() {
         shuttingDown = true;
+        contentLoadGeneration.incrementAndGet();
         cancelAllSequences();
         List<CompletableFuture<Void>> saves = new ArrayList<>();
         for (StoryProfile profile : profiles.values()) saves.add(save(profile));
@@ -107,6 +110,7 @@ public final class StoryService implements Listener {
         }
         contentExecutor.shutdownNow();
         profiles.clear();
+        loading.clear();
         saveChains.clear();
         queuedSaveRevisions.clear();
     }
@@ -114,9 +118,10 @@ public final class StoryService implements Listener {
     public void reload(boolean notifyStaff) {
         if (shuttingDown) return;
         cancelAllSequences();
+        long generation = contentLoadGeneration.incrementAndGet();
         CompletableFuture.supplyAsync(() -> StoryContent.load(plugin), contentExecutor)
             .whenComplete((loaded, failure) -> runSync(() -> {
-                if (shuttingDown) return;
+                if (!isCurrentContentLoad(generation, contentLoadGeneration.get(), shuttingDown)) return;
                 if (failure != null || loaded == null) {
                     plugin.getLogger().severe("Could not load The Eleventh Oath content: " + (failure == null ? "unknown error" : failure.getMessage()));
                     return;
@@ -192,8 +197,11 @@ public final class StoryService implements Listener {
                 profile.setFlag("history_migrated", "true");
                 changed = true;
             }
-            profiles.put(playerId, profile);
             Player current = Bukkit.getPlayer(playerId);
+            if (!shouldRetainLoadedProfile(shuttingDown, current != null && current.isOnline())) {
+                return;
+            }
+            profiles.put(playerId, profile);
             if (current != null && plugin.getMayorQuestManager() != null) {
                 Set<String> completed = plugin.getMayorQuestManager().completedQuestIds(current);
                 for (String questId : completed) profile.setFlag("quest.mayor." + StoryProfile.normalize(questId), "complete");
@@ -830,6 +838,14 @@ public final class StoryService implements Listener {
         Bukkit.getScheduler().runTask(plugin, () -> {
             if (!shuttingDown && plugin.isEnabled()) task.run();
         });
+    }
+
+    static boolean isCurrentContentLoad(long completedGeneration, long currentGeneration, boolean shuttingDown) {
+        return !shuttingDown && completedGeneration == currentGeneration;
+    }
+
+    static boolean shouldRetainLoadedProfile(boolean shuttingDown, boolean playerOnline) {
+        return !shuttingDown && playerOnline;
     }
 
     private static int bossOrder(String id) {

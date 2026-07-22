@@ -1,6 +1,9 @@
 package me.rique.smpcore.util;
 
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.TextComponent;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextColor;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.junit.jupiter.api.Test;
 
@@ -8,6 +11,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CustomLoreUtilTest {
@@ -158,5 +162,92 @@ class CustomLoreUtilTest {
 
         List<Component> cleaned = CustomLoreUtil.removeManagedLines(normalized, Set.of("Reforge Stats:"));
         assertTrue(cleaned.stream().map(PLAIN::serialize).noneMatch(line -> line.contains("Wear -10%")));
+    }
+
+    @Test
+    void customEnchantsWrapUnderOneLeftAlignedHeader() {
+        List<String> enchants = List.of(
+            "Sharpness V", "Mending I", "Dash I", "Delicate I", "Echoing I", "Essence Capture I", "Frostbite I",
+            "Kingslayer I", "Reinforced I", "Soul Siphon I", "Telekinesis I", "Wise III"
+        );
+
+        List<String> lines = CustomLoreUtil.formatCustomEnchantLore(enchants).stream()
+            .map(PLAIN::serialize)
+            .toList();
+        String combined = String.join(" ", lines);
+
+        assertTrue(lines.size() > 1);
+        assertEquals(1L, lines.stream().filter(line -> line.startsWith("Enchants:")).count());
+        assertTrue(lines.stream().noneMatch(line -> line.startsWith(" ")));
+        assertTrue(lines.stream().allMatch(line -> line.codePointCount(0, line.length()) <= CustomLoreUtil.MAX_LORE_WIDTH));
+        for (String enchant : enchants) {
+            assertTrue(combined.contains(enchant));
+        }
+    }
+
+    @Test
+    void runicOvercapEnchantIsGoldWithoutRecoloringNormalEnchants() {
+        List<Component> lore = CustomLoreUtil.formatCustomEnchantLore(
+            List.of("Mending I", "Sharpness VII", "Unbreaking III"),
+            Set.of("Sharpness VII")
+        );
+
+        assertEquals(NamedTextColor.GOLD, colorOf(lore, "Sharpness VII"));
+        assertEquals(NamedTextColor.AQUA, colorOf(lore, "Mending I"));
+        assertEquals(NamedTextColor.AQUA, colorOf(lore, "Unbreaking III"));
+        assertTrue(CustomLoreUtil.isRunicEnhancedLevel(6, 5));
+        assertTrue(CustomLoreUtil.isRunicEnhancedLevel(7, 5));
+        assertFalse(CustomLoreUtil.isRunicEnhancedLevel(5, 5));
+        assertFalse(CustomLoreUtil.isRunicEnhancedLevel(8, 5));
+    }
+
+    @Test
+    void vanillaEnchantNamesUseReadableMinecraftWording() {
+        assertEquals("Sharpness V", CustomLoreUtil.vanillaEnchantDisplay("sharpness", 5));
+        assertEquals("Luck of the Sea III", CustomLoreUtil.vanillaEnchantDisplay("luck_of_the_sea", 3));
+        assertEquals("Curse of Binding I", CustomLoreUtil.vanillaEnchantDisplay("binding_curse", 1));
+        assertEquals("Bane of Arthropods IV", CustomLoreUtil.vanillaEnchantDisplay("bane_of_arthropods", 4));
+    }
+
+    @Test
+    void enchantLoreMigrationRemovesOldHeadersAndWrappedContinuations() {
+        List<Component> current = new java.util.ArrayList<>();
+        current.add(Component.text("A weapon description."));
+        current.addAll(CustomLoreUtil.formatCustomEnchantLore(List.of(
+            "Dash I", "Delicate I", "Echoing I", "Essence Capture I", "Frostbite I"
+        )));
+        current.add(Component.text("Enchants: Kingslayer I • Reinforced I"));
+        current.add(Component.text("  • Soul Siphon I"));
+        current.add(Component.text("LEGENDARY WEAPON"));
+
+        List<String> cleaned = CustomLoreUtil.stripCustomEnchantLore(current).stream()
+            .map(PLAIN::serialize)
+            .toList();
+
+        assertEquals(List.of("A weapon description.", "LEGENDARY WEAPON"), cleaned);
+        assertFalse(cleaned.stream().anyMatch(line -> line.contains("Enchants:") || line.contains("Soul Siphon")));
+    }
+
+    private static TextColor colorOf(List<Component> lines, String text) {
+        for (Component line : lines) {
+            TextColor color = colorOf(line, text);
+            if (color != null) {
+                return color;
+            }
+        }
+        return null;
+    }
+
+    private static TextColor colorOf(Component component, String text) {
+        if (component instanceof TextComponent textComponent && textComponent.content().contains(text)) {
+            return textComponent.color();
+        }
+        for (Component child : component.children()) {
+            TextColor color = colorOf(child, text);
+            if (color != null) {
+                return color;
+            }
+        }
+        return null;
     }
 }

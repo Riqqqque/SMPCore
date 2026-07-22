@@ -3,6 +3,8 @@ package me.rique.smpcore.command;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import io.papermc.paper.command.brigadier.Commands;
+import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
+import io.papermc.paper.command.brigadier.argument.resolvers.selector.PlayerSelectorArgumentResolver;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.tavern.TavernManager;
 import me.rique.smpcore.tavern.TavernManager.StationType;
@@ -36,6 +38,13 @@ public final class TavernCommand {
                         .executes(ctx -> set(plugin, ctx.getSource().getSender(), StringArgumentType.getString(ctx, "type"), true))))
                 .then(Commands.literal("list")
                     .executes(ctx -> list(plugin, ctx.getSource().getSender())))
+                .then(Commands.literal("sober")
+                    .then(Commands.argument("player", ArgumentTypes.player())
+                        .executes(ctx -> sober(
+                            plugin,
+                            ctx.getSource().getSender(),
+                            ctx.getArgument("player", PlayerSelectorArgumentResolver.class).resolve(ctx.getSource())
+                        ))))
                 .then(Commands.literal("leaderboard")
                     .then(Commands.literal("spawn")
                         .then(Commands.argument("game", StringArgumentType.word())
@@ -118,10 +127,30 @@ public final class TavernCommand {
         return Command.SINGLE_SUCCESS;
     }
 
+    private static int sober(SMPCore plugin, CommandSender sender, List<Player> targets) {
+        if (targets == null || targets.isEmpty()) {
+            sender.sendMessage(MessageUtil.error("Player not found."));
+            return 0;
+        }
+        TavernManager manager = plugin.getTavernManager();
+        if (manager == null) {
+            sender.sendMessage(MessageUtil.error("Tavern system is not ready yet."));
+            return 0;
+        }
+        Player target = targets.get(0);
+        boolean changed = manager.clearIntoxicationByAdmin(target);
+        target.sendMessage(MessageUtil.success("Staff cleared your tavern intoxication and nausea."));
+        sender.sendMessage(changed
+            ? MessageUtil.success("Cleared tavern intoxication and nausea from <white>" + target.getName() + "</white>.")
+            : MessageUtil.info("<white>" + target.getName() + "</white> had no tavern intoxication to clear."));
+        return Command.SINGLE_SUCCESS;
+    }
+
     private static int usage(CommandSender sender) {
         sender.sendMessage(MessageUtil.info("<white>/tavernadmin set \\<slots|table|darts|rumors></white> while looking at a block."));
         sender.sendMessage(MessageUtil.info("<white>/tavernadmin leaderboard spawn \\<slots|cards|darts|roulette></white> - wins and playtime for that game."));
         sender.sendMessage(MessageUtil.info("<white>/tavernadmin leaderboard remove</white> while standing nearby."));
+        sender.sendMessage(MessageUtil.info("<white>/tavernadmin sober \\<player></white> - clear stuck tavern intoxication and nausea."));
         sender.sendMessage(MessageUtil.info("Use <white>/brewmaster spawn</white> and <white>/adventurer spawn</white> for the quest NPCs."));
         return Command.SINGLE_SUCCESS;
     }

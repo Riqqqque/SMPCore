@@ -53,7 +53,7 @@ public final class RareDropVisualListener implements Listener {
 
     private static final double HOLOGRAM_HEIGHT = 0.70;
     private static final long HOLOGRAM_TICK_INTERVAL_TICKS = 10L;
-    private static final long RECONCILE_INTERVAL_TICKS = 20L * 30L;
+    private static final long RECONCILE_INTERVAL_TICKS = 20L * 60L * 5L;
     private static final String TEAM_PREFIX = "smpd_";
     private static final NamedTextColor[] GLOW_COLORS = {
         NamedTextColor.GOLD,

@@ -32,6 +32,16 @@ final class SpawnerDataTest {
         assertEquals(16.0, data.speedMultiplier(32, 16.0), 0.0001);
         assertEquals(13, data.adjustedDelay(200, 32, 16.0));
         assertEquals(50, data.adjustedDelay(800, 32, 16.0));
+        assertEquals(1000.0 / 90.0, data.effectiveSpeedMultiplier(200, 800, 32, 16.0, 40), 0.0001);
+    }
+
+    @Test
+    void effectiveSpeedReportsTheActualConfiguredCycleRate() {
+        SpawnerData noSugar = new SpawnerData("world", 0, 64, 0, "PIG", 1, 0, false, false);
+        SpawnerData maxSugar = new SpawnerData("world", 0, 64, 0, "PIG", 1, 32, false, false);
+
+        assertEquals(1.0, noSugar.effectiveSpeedMultiplier(200, 800, 32, 16.0, 40), 0.0001);
+        assertEquals(1000.0 / 90.0, maxSugar.effectiveSpeedMultiplier(200, 800, 32, 16.0, 40), 0.0001);
     }
 
     @Test

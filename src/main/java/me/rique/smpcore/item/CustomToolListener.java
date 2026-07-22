@@ -105,7 +105,7 @@ public final class CustomToolListener implements Listener {
     private static final long ADVANCED_PICKAXE_CONTEXT_TTL_MS = 2_000L;
     private static final int SURVEYOR_SCAN_RADIUS = 24;
     private static final long SURVEYOR_SCAN_COOLDOWN_MS = 20_000L;
-    private static final int SURVEYOR_SCAN_BUDGET_PER_TICK = 6_000;
+    private static final int SURVEYOR_SCAN_BUDGET_PER_TICK = 2_000;
     private static final double MENDERS_KIT_REPAIR_PERCENT = 0.35;
     private static final int PASSIVE_NIGHT_VISION_TICKS = 600;
     private static final int PASSIVE_HASTE_TICKS = 12 * 20;

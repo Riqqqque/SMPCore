@@ -33,6 +33,7 @@
 **Community**
 
 - [Teams and SMP Start](Teams-And-SMP-Start)
+- [Waystones](Waystones)
 - [Player Shops](Player-Shops)
 - [Duels and Betting](Duels-And-Betting)
 - [Spawn Tavern](Spawn-Tavern)
