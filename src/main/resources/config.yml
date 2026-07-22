@@ -41,6 +41,13 @@ smp-start:
   # Real 24-hour days counted from /startsmp. Day 3 begins after 48 hours; Day 5 after 96 hours.
   nether-unlock-day: 3
   end-unlock-day: 5
+  # Optional exact UTC epoch milliseconds. A positive value overrides the matching day-based time.
+  nether-unlock-at: 0
+  # July 21, 2026 at 7:00 PM America/Denver (July 22 at 1:00 AM UTC).
+  end-unlock-at: 1784682000000
+  # Managed by /startsmp unlock. Both flags reset when a new SMP start state is created.
+  nether-unlocked-early: false
+  end-unlocked-early: false
   lock-plugin-commands-before-start: true
   lock-block-edits-before-start: true
   start-broadcast: "<gold><bold>The SMP has started!</bold></gold> <gray>The world border is now <white>{border}</white> blocks wide. PvP unlocks in <white>{grace}</white>.</gray>"
@@ -58,6 +65,18 @@ boss-music:
 homes:
   default-max: 1
   multiple-max: 5
+
+wild:
+  enabled: true
+  # /wild always targets this Overworld, even when used from another dimension.
+  world: "world"
+  cooldown-seconds: 300
+  # Landing blocks stay this far inside the live vanilla world border.
+  border-padding: 32
+  minimum-spawn-distance: 600
+  # Candidates load one chunk at a time. Only this many player searches can generate chunks together.
+  search-attempts: 24
+  max-concurrent-searches: 2
 
 spawn:
   world: "world"
@@ -161,7 +180,6 @@ back:
 
 death-chest:
   enabled: true
-  disable-in-player-combat: false
   lifetime-minutes: 90
   search-radius: 4
   vertical-search-radius: 4
@@ -444,7 +462,7 @@ custom-enchants:
     ancient-city-chest-chance: 0.23
     vertical-boost: 0.82
     forward-boost: 0.75
-    hunger-cost: 4
+    hunger-cost: 2
   dash:
     cooldown-seconds: 15
     horizontal-boost: 1.85

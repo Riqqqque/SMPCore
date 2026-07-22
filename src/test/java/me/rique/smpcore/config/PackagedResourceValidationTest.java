@@ -92,6 +92,7 @@ class PackagedResourceValidationTest {
         Path packRoot = Path.of("src", "main", "resourcepack");
         assertItemTexture(packRoot, "backpack", "generated", 16, 16);
         assertItemTexture(packRoot, "expanded_backpack", "generated", 16, 16);
+        assertItemTexture(packRoot, "first_dragon_sigil", "generated", 64, 64);
     }
 
     @Test

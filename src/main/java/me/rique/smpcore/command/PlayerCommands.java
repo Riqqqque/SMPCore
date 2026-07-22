@@ -14,6 +14,7 @@ import me.rique.smpcore.power.SuperpowerType;
 import me.rique.smpcore.util.CommandSuggestionUtil;
 import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.ScheduledDimensionPolicy;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -21,12 +22,14 @@ import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.inventory.ItemStack;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -38,6 +41,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class PlayerCommands {
 
     private static final Map<UUID, Long> SPAWN_COOLDOWNS = new ConcurrentHashMap<>();
+    private static final Set<UUID> PENDING_SPAWN_TELEPORTS = ConcurrentHashMap.newKeySet();
     private static final String POWER_COMMAND_PERMISSION = "smpcore.superpower.command";
     private static final String POWER_COMMAND_BYPASS_PERMISSION = "smpcore.superpower.command.all";
 
@@ -250,13 +254,20 @@ public final class PlayerCommands {
                 .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.top"))
                 .executes(ctx -> {
                     Player player = (Player) ctx.getSource().getSender();
-                    plugin.getPlayerManager().saveBackLocation(player);
+                    if (isInPlayerCombat(plugin, player) || denyRestrictedTeleport(plugin, player, "/top")) {
+                        return 0;
+                    }
+                    Location returnLocation = player.getLocation().clone();
                     Location dest = LocationUtil.getTopLocation(player.getLocation());
-                    player.teleportAsync(dest).thenAccept(ok -> {
+                    player.teleportAsync(dest, PlayerTeleportEvent.TeleportCause.PLUGIN).whenComplete((ok, error) -> {
                         Bukkit.getScheduler().runTask(plugin, () -> {
                             if (!player.isOnline()) return;
-                            if (ok) player.sendMessage(MessageUtil.success("Teleported to the top."));
-                            else    player.sendMessage(MessageUtil.error("Teleport failed."));
+                            if (error == null && Boolean.TRUE.equals(ok)) {
+                                plugin.getPlayerManager().saveBackLocation(player.getUniqueId(), returnLocation);
+                                player.sendMessage(MessageUtil.success("Teleported to the top."));
+                            } else {
+                                player.sendMessage(MessageUtil.error("Teleport failed."));
+                            }
                         });
                     });
                     return Command.SINGLE_SUCCESS;
@@ -725,6 +736,9 @@ public final class PlayerCommands {
                 .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.back"))
                 .executes(ctx -> {
                     Player player = (Player) ctx.getSource().getSender();
+                    if (isInPlayerCombat(plugin, player) || denyRestrictedTeleport(plugin, player, "/back")) {
+                        return 0;
+                    }
                     Location back = plugin.getPlayerManager().getBackLocation(player.getUniqueId());
                     if (back == null) {
                         player.sendMessage(MessageUtil.error("No previous location saved."));
@@ -735,12 +749,24 @@ public final class PlayerCommands {
                         player.sendMessage(MessageUtil.error("That saved location is not safe anymore."));
                         return 0;
                     }
-                    plugin.getPlayerManager().saveBackLocation(player);
-                    player.teleportAsync(safe).thenAccept(ok -> {
+                    if (isScheduledDimensionLocked(plugin, player, safe.getWorld())) {
+                        return 0;
+                    }
+                    boolean crossWorld = !player.getWorld().getUID().equals(safe.getWorld().getUID());
+                    if (crossWorld && !prepareCrossWorldTeleport(player)) {
+                        player.sendMessage(MessageUtil.warn("Leave your seat or mount, then try /back again."));
+                        return 0;
+                    }
+                    Location returnLocation = player.getLocation().clone();
+                    player.teleportAsync(safe, PlayerTeleportEvent.TeleportCause.PLUGIN).whenComplete((ok, error) -> {
                         Bukkit.getScheduler().runTask(plugin, () -> {
                             if (!player.isOnline()) return;
-                            if (ok) player.sendMessage(MessageUtil.success("Returned to previous location."));
-                            else    player.sendMessage(MessageUtil.error("Teleport failed."));
+                            if (error == null && Boolean.TRUE.equals(ok)) {
+                                plugin.getPlayerManager().saveBackLocation(player.getUniqueId(), returnLocation);
+                                player.sendMessage(MessageUtil.success("Returned to previous location."));
+                            } else {
+                                player.sendMessage(MessageUtil.error("Teleport failed."));
+                            }
                         });
                     });
                     return Command.SINGLE_SUCCESS;
@@ -760,37 +786,86 @@ public final class PlayerCommands {
                     if (isInPlayerCombat(plugin, player)) {
                         return 0;
                     }
+                    if (denyRestrictedTeleport(plugin, player, "/spawn")) {
+                        return 0;
+                    }
                     if (!canUseSpawn(plugin, player)) {
                         return 0;
                     }
-                    World world = Bukkit.getWorld(plugin.getConfigManager().spawnWorld);
-                    if (world == null) {
-                        player.sendMessage(MessageUtil.error("Spawn world is not loaded."));
+                    UUID playerId = player.getUniqueId();
+                    if (!PENDING_SPAWN_TELEPORTS.add(playerId)) {
+                        player.sendMessage(MessageUtil.warn("Your spawn teleport is still loading."));
                         return 0;
                     }
                     Location spawn = plugin.getExactSpawnListener() == null
                         ? plugin.getConfigManager().exactSpawnLocation()
                         : plugin.getExactSpawnListener().exactSpawnLocation();
-                    if (spawn == null) {
+                    if (spawn == null || spawn.getWorld() == null) {
+                        PENDING_SPAWN_TELEPORTS.remove(playerId);
                         player.sendMessage(MessageUtil.error("Spawn is not ready right now."));
                         return 0;
                     }
-                    plugin.getPlayerManager().saveBackLocation(player);
-                    startSpawnCooldown(plugin, player);
-                    player.teleportAsync(spawn).thenAccept(ok -> {
-                        Bukkit.getScheduler().runTask(plugin, () -> {
-                            if (!player.isOnline()) return;
-                            if (isInPlayerCombat(plugin, player)) {
-                                clearSpawnCooldown(player);
-                                return;
-                            }
-                            if (ok) player.sendMessage(MessageUtil.success("Teleported to spawn."));
-                            else {
-                                clearSpawnCooldown(player);
-                                player.sendMessage(MessageUtil.error("Teleport failed."));
-                            }
-                        });
-                    });
+
+                    World spawnWorld = spawn.getWorld();
+                    CompletableFuture<?> chunkLoad;
+                    try {
+                        chunkLoad = spawnWorld.getChunkAtAsync(spawn.getBlockX() >> 4, spawn.getBlockZ() >> 4, true);
+                    } catch (RuntimeException ex) {
+                        PENDING_SPAWN_TELEPORTS.remove(playerId);
+                        player.sendMessage(MessageUtil.error("Spawn could not be loaded. Try again shortly."));
+                        plugin.getLogger().warning("Could not start spawn chunk load for " + player.getName() + ": " + ex.getMessage());
+                        return 0;
+                    }
+
+                    Location expectedSpawn = spawn.clone();
+                    chunkLoad.whenComplete((ignored, loadError) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (!player.isOnline()) {
+                            PENDING_SPAWN_TELEPORTS.remove(playerId);
+                            return;
+                        }
+                        if (loadError != null) {
+                            PENDING_SPAWN_TELEPORTS.remove(playerId);
+                            player.sendMessage(MessageUtil.error("Spawn could not be loaded. Try again shortly."));
+                            return;
+                        }
+                        if (isInPlayerCombat(plugin, player)) {
+                            PENDING_SPAWN_TELEPORTS.remove(playerId);
+                            return;
+                        }
+                        if (denyRestrictedTeleport(plugin, player, "/spawn")) {
+                            PENDING_SPAWN_TELEPORTS.remove(playerId);
+                            return;
+                        }
+                        Location currentSpawn = plugin.getExactSpawnListener() == null
+                            ? plugin.getConfigManager().exactSpawnLocation()
+                            : plugin.getExactSpawnListener().exactSpawnLocation();
+                        if (!sameSpawnDestination(expectedSpawn, currentSpawn)) {
+                            PENDING_SPAWN_TELEPORTS.remove(playerId);
+                            player.sendMessage(MessageUtil.warn("Spawn moved while loading. Please try again."));
+                            return;
+                        }
+
+                        Location returnLocation = player.getLocation().clone();
+                        boolean crossWorld = !player.getWorld().getUID().equals(expectedSpawn.getWorld().getUID());
+                        if (crossWorld && !prepareCrossWorldTeleport(player)) {
+                            PENDING_SPAWN_TELEPORTS.remove(playerId);
+                            player.sendMessage(MessageUtil.warn("Leave your seat or mount, then try /spawn again."));
+                            return;
+                        }
+                        player.teleportAsync(expectedSpawn, PlayerTeleportEvent.TeleportCause.PLUGIN).whenComplete((success, teleportError) ->
+                            Bukkit.getScheduler().runTask(plugin, () -> {
+                                PENDING_SPAWN_TELEPORTS.remove(playerId);
+                                if (!player.isOnline()) return;
+                                if (teleportError != null || !Boolean.TRUE.equals(success)) {
+                                    player.sendMessage(MessageUtil.error("Teleport failed or was blocked."));
+                                    return;
+                                }
+                                plugin.getPlayerManager().saveBackLocation(playerId, returnLocation);
+                                startSpawnCooldown(plugin, player);
+                                player.sendMessage(MessageUtil.success("Teleported to spawn."));
+                            })
+                        );
+                    }));
                     return Command.SINGLE_SUCCESS;
                 })
                 .build(),
@@ -798,11 +873,64 @@ public final class PlayerCommands {
         );
     }
 
+    static boolean sameSpawnDestination(Location expected, Location current) {
+        if (expected == null || current == null || expected.getWorld() == null || current.getWorld() == null) {
+            return false;
+        }
+        return expected.getWorld().getUID().equals(current.getWorld().getUID())
+            && Double.compare(expected.getX(), current.getX()) == 0
+            && Double.compare(expected.getY(), current.getY()) == 0
+            && Double.compare(expected.getZ(), current.getZ()) == 0
+            && Float.compare(expected.getYaw(), current.getYaw()) == 0
+            && Float.compare(expected.getPitch(), current.getPitch()) == 0;
+    }
+
     private static boolean isInPlayerCombat(SMPCore plugin, Player player) {
         if (plugin.getCombatLogListener() == null || !plugin.getCombatLogListener().isInPlayerCombat(player)) {
             return false;
         }
         player.sendMessage(MessageUtil.warn("You cannot teleport while in combat."));
+        return true;
+    }
+
+    private static boolean denyRestrictedTeleport(SMPCore plugin, Player player, String command) {
+        boolean inDuel = plugin.getDuelManager() != null && plugin.getDuelManager().blocksExternalTeleport(player);
+        if (inDuel) {
+            player.sendMessage(MessageUtil.warn("You cannot use " + command + " during a duel."));
+            return true;
+        }
+        boolean inBossFight = (plugin.getBossManager() != null && plugin.getBossManager().isActiveBossFight(player))
+            || (plugin.getBossDungeonManager() != null && plugin.getBossDungeonManager().blocksExternalTeleport(player));
+        if (inBossFight) {
+            player.sendMessage(MessageUtil.warn("You cannot leave an active boss fight."));
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean prepareCrossWorldTeleport(Player player) {
+        if (player.isInsideVehicle()) {
+            player.leaveVehicle();
+        }
+        if (!player.getPassengers().isEmpty()) {
+            player.eject();
+        }
+        return !player.isInsideVehicle() && player.getPassengers().isEmpty();
+    }
+
+    private static boolean isScheduledDimensionLocked(SMPCore plugin, Player player, World destination) {
+        World.Environment from = player.getWorld().getEnvironment();
+        World.Environment to = destination.getEnvironment();
+        if (to != World.Environment.NETHER && to != World.Environment.THE_END) {
+            return false;
+        }
+        boolean bypass = player.hasPermission("smpcore.startsmp.bypass-dimension-lock");
+        boolean unlocked = plugin.getSmpStartManager() == null || plugin.getSmpStartManager().isDimensionUnlocked(to);
+        if (!ScheduledDimensionPolicy.blocksTravel(from, to, bypass, unlocked)) {
+            return false;
+        }
+        String dimension = to == World.Environment.NETHER ? "Nether" : "End";
+        player.sendMessage(MessageUtil.warn("The <white>" + dimension + "</white> is still locked."));
         return true;
     }
 
@@ -839,10 +967,6 @@ public final class PlayerCommands {
         );
     }
 
-    private static void clearSpawnCooldown(Player player) {
-        SPAWN_COOLDOWNS.remove(player.getUniqueId());
-    }
-
     private static void sendPlayerHelp(Player player) {
         List<String> lines = new ArrayList<>();
         lines.add("<gold><bold>Player Commands</bold></gold>");
@@ -867,6 +991,9 @@ public final class PlayerCommands {
         }
         if (player.hasPermission("smpcore.roulette")) {
             lines.add("<gray><white>/roulette claim</white> - Recover an interrupted roulette payout</gray>");
+        }
+        if (player.hasPermission("smpcore.bounties")) {
+            lines.add("<gray><white>/bounties</white> - View every active player bounty</gray>");
         }
         if (player.hasPermission("smpcore.leaderboard")) {
             lines.add("<gray><white>/leaderboards</white> (<white>/lb</white>) - View kills, deaths, boss damage, and fight reports</gray>");
@@ -894,6 +1021,9 @@ public final class PlayerCommands {
         if (player.hasPermission("smpcore.spawn")) {
             lines.add("<gray><white>/spawn</white> - Teleport to spawn</gray>");
         }
+        if (player.hasPermission("smpcore.wild")) {
+            lines.add("<gray><white>/wild</white> - Find safe ground inside the world border</gray>");
+        }
         if (player.hasPermission("smpcore.back")) {
             lines.add("<gray><white>/back</white> - Return to your last saved location</gray>");
         }
@@ -905,6 +1035,9 @@ public final class PlayerCommands {
         }
         if (player.hasPermission("smpcore.startsmp.lock")) {
             lines.add("<gray><white>/startsmp lock</white> - Re-enable the pre-start spawn barrier and lockdown</gray>");
+        }
+        if (player.hasPermission("smpcore.startsmp") && player.hasPermission("smpcore.startsmp.unlock-dimensions")) {
+            lines.add("<gray><white>/startsmp unlock nether|end</white> - Open a scheduled dimension early</gray>");
         }
         if (player.hasPermission("smpcore.time")) {
             lines.add("<gray><white>/day</white>, <white>/night</white> - Change time in your current world</gray>");

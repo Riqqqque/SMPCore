@@ -1,5 +1,6 @@
 package me.rique.smpcore.tavern;
 
+import com.destroystokyo.paper.profile.PlayerProfile;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.InventoryRecipeUtil;
@@ -9,6 +10,7 @@ import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -33,6 +35,7 @@ import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 
@@ -55,7 +58,9 @@ import java.util.concurrent.ConcurrentHashMap;
 
 final class TavernBountyManager implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
+    private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final int MENU_SIZE = 54;
+    private static final int BOUNTIES_PER_PAGE = 45;
     private static final int DAILY_KILLS = 12, DAILY_ORES = 24, DAILY_FISH = 6;
     private final SMPCore plugin;
     private final ItemEscrowService escrow;
@@ -72,6 +77,7 @@ final class TavernBountyManager implements Listener {
     private final Map<UUID, PendingOffer> pendingOffers = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> pendingCancels = new ConcurrentHashMap<>();
     private final Set<UUID> pendingActions = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, PlayerProfile> playerProfiles = new ConcurrentHashMap<>();
 
     TavernBountyManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -86,9 +92,17 @@ final class TavernBountyManager implements Listener {
     }
 
     void start() {
+        Bukkit.getOnlinePlayers().forEach(this::cachePlayerProfile);
         Set<UUID> retained = loadBounties();
         escrow.start(Bukkit.getOnlinePlayers(), retained);
-        bounties.values().removeIf(bounty -> bounty.kind == BountyKind.ITEM && escrow.retainedEscrow(bounty.escrowId) == null);
+        bounties.values().removeIf(bounty -> {
+            boolean missing = bounty.kind == BountyKind.ITEM && escrow.retainedEscrow(bounty.escrowId) == null;
+            if (missing) {
+                plugin.getLogger().severe("Removed player bounty " + bounty.id
+                    + " because its item escrow is missing. Review the escrow backup before compensating the creator.");
+            }
+            return missing;
+        });
         saveBounties();
     }
 
@@ -99,6 +113,10 @@ final class TavernBountyManager implements Listener {
 
     void open(Player player) {
         openMain(player);
+    }
+
+    void openActiveBounties(Player player) {
+        openBounties(player, false, 0, true);
     }
 
     private void openMain(Player player) {
@@ -119,7 +137,8 @@ final class TavernBountyManager implements Listener {
             "<green><bold>POST A BOUNTY</bold></green>",
             List.of(
                 "<gray>Choose an online target.</gray>",
-                "<gray>Offer Essence or your held item stack.</gray>"
+                "<gray>Offer Essence, ingots, or a held item.</gray>",
+                "<gray>Orbs and Soul Imprints are supported.</gray>"
             ),
             "bounty:targets"
         ));
@@ -183,7 +202,7 @@ final class TavernBountyManager implements Listener {
         for (Player target : targets) {
             if (slot >= 45) break;
             inv.setItem(slot++, button(
-                Material.PLAYER_HEAD,
+                playerHead(target.getUniqueId(), target.getName()),
                 "<red>" + target.getName() + "</red>",
                 List.of("<yellow>Click to choose this target.</yellow>"),
                 "bounty:target:" + target.getUniqueId()
@@ -209,18 +228,63 @@ final class TavernBountyManager implements Listener {
                 "bounty:offer:essence:" + amounts[i]
             ));
         }
+
         ItemStack held = player.getInventory().getItemInMainHand();
+        setItemOffer(inv, player, held, 19, BountyItemChoice.IRON);
+        setItemOffer(inv, player, held, 21, BountyItemChoice.GOLD);
+        setItemOffer(inv, player, held, 23, BountyItemChoice.DIAMOND);
+        setItemOffer(inv, player, held, 25, BountyItemChoice.NETHERITE);
+        setItemOffer(inv, player, held, 30, BountyItemChoice.ORB);
+        setItemOffer(inv, player, held, 32, BountyItemChoice.SOUL_IMPRINT);
+
         String heldDescription = held.getType().isAir()
-            ? "<red>Hold the item stack you want to post.</red>"
-            : "<gray>Escrow: <white>" + held.getAmount() + "x " + pretty(held.getType()) + "</white></gray>";
-        inv.setItem(31, button(
-            held.getType().isAir() ? Material.BARRIER : held.getType(),
-            "<aqua>Held Item Stack</aqua>",
-            List.of(heldDescription, "<gray>Custom items remain intact.</gray>"),
-            "bounty:offer:item"
+            ? "<red>Hold the exact stack you want to post.</red>"
+            : "<gray>Ready: <white>" + held.getAmount() + "x " + bountyItemDisplayName(held, player) + "</white></gray>";
+        inv.setItem(40, button(
+            held.getType().isAir() ? new ItemStack(Material.BARRIER) : held,
+            "<aqua>Other Held Item</aqua>",
+            List.of(heldDescription, "<gray>The complete stack is safely escrowed.</gray>"),
+            "bounty:offer:item:any"
+        ));
+        inv.setItem(45, button(
+            Material.BOOK,
+            "<yellow>Bounty Payments</yellow>",
+            List.of(
+                "<gray>Hold the amount you want to offer.</gray>",
+                "<gray>The whole held stack becomes the reward.</gray>",
+                "<gray>Cancelled or unclaimed rewards stay recoverable.</gray>"
+            ),
+            "close"
         ));
         inv.setItem(49, button(Material.ARROW, "<yellow>Back</yellow>", List.of(), "bounty:targets"));
         player.openInventory(inv);
+    }
+
+    private void setItemOffer(Inventory inventory, Player player, ItemStack held, int slot, BountyItemChoice choice) {
+        boolean ready = matchesItemChoice(choice, held);
+        String status = ready
+            ? "<green>Ready: <white>" + held.getAmount() + "x " + bountyItemDisplayName(held, player) + "</white></green>"
+            : "<gray>Hold " + choice.heldInstruction + " in your main hand.</gray>";
+        ItemStack icon = choice == BountyItemChoice.ORB
+            ? relicPreview(player, "veilshift_orb", choice.icon)
+            : choice == BountyItemChoice.SOUL_IMPRINT
+                ? relicPreview(player, "soul_imprint", choice.icon)
+                : new ItemStack(choice.icon);
+        String name = choice == BountyItemChoice.SOUL_IMPRINT && plugin.getSeasonRelicManager() != null
+            ? plugin.getSeasonRelicManager().soulImprintDisplayName(player)
+            : choice.displayName;
+        inventory.setItem(slot, button(
+            icon,
+            "<gold>" + name + "</gold>",
+            List.of(status, "<gray>The entire held stack is used.</gray>"),
+            "bounty:offer:item:" + choice.token
+        ));
+    }
+
+    private ItemStack relicPreview(Player player, String relicId, Material fallback) {
+        if (plugin.getSeasonRelicManager() == null) return new ItemStack(fallback);
+        ItemStack preview = plugin.getSeasonRelicManager().createRelicPreview(player, relicId);
+        return preview == null || preview.getType().isAir() ? new ItemStack(fallback) : preview;
     }
 
     private void openConfirm(Player player, PendingOffer offer) {
@@ -229,7 +293,7 @@ final class TavernBountyManager implements Listener {
         String escrowDescription = offer.kind == BountyKind.ESSENCE
             ? "<gray>Escrow: <white>" + offer.amount + " Essence</white></gray>"
             : "<gray>Escrow: <white>" + offer.preview.getAmount() + "x "
-                + pretty(offer.preview.getType()) + "</white></gray>";
+                + bountyItemDisplayName(offer.preview, player) + "</white></gray>";
         inv.setItem(13, button(
             offer.kind == BountyKind.ESSENCE ? Material.AMETHYST_SHARD : offer.preview.getType(),
             "<gold>Bounty on " + (target.getName() == null ? "Player" : target.getName()) + "</gold>",
@@ -242,31 +306,59 @@ final class TavernBountyManager implements Listener {
     }
 
     private void openBounties(Player player, boolean mineOnly) {
+        openBounties(player, mineOnly, 0, false);
+    }
+
+    private void openBounties(Player player, boolean mineOnly, int requestedPage, boolean readOnly) {
         Inventory inv = menu(
             player,
             mineOnly ? "My Posted Bounties" : "Active Bounties",
             mineOnly ? "My Bounties" : "Active Bounties"
         );
+        List<PlayerBounty> visible = bounties.values().stream()
+            .filter(bounty -> !mineOnly || bounty.creatorId.equals(player.getUniqueId()))
+            .sorted(Comparator.comparingLong(PlayerBounty::createdAt))
+            .toList();
+        int pageCount = pageCount(visible.size());
+        int page = Math.max(0, Math.min(requestedPage, pageCount - 1));
+        int fromIndex = page * BOUNTIES_PER_PAGE;
+        int toIndex = Math.min(visible.size(), fromIndex + BOUNTIES_PER_PAGE);
         int slot = 0;
-        for (PlayerBounty bounty : bounties.values().stream().sorted(Comparator.comparingLong(PlayerBounty::createdAt)).toList()) {
-            if ((mineOnly && !bounty.creatorId.equals(player.getUniqueId())) || slot >= 45) continue;
-            String reward = bounty.kind == BountyKind.ESSENCE ? bounty.amount + " Essence" : bounty.itemAmount + "x " + bounty.itemName;
+        for (PlayerBounty bounty : visible.subList(fromIndex, toIndex)) {
+            String reward = rewardText(bounty, player);
             boolean creator = bounty.creatorId.equals(player.getUniqueId());
+            boolean cancellable = creator && !readOnly;
             inv.setItem(slot++, button(
-                bounty.kind == BountyKind.ESSENCE ? Material.AMETHYST_SHARD : bounty.itemMaterial,
+                playerHead(bounty.targetId, bounty.targetName),
                 "<red>" + bounty.targetName + "</red>",
                 List.of(
                     "<gray>Posted by: <white>" + bounty.creatorName + "</white></gray>",
                     "<gray>Reward: <white>" + reward + "</white></gray>",
-                    creator
+                    cancellable
                         ? "<yellow>Click to cancel and refund.</yellow>"
+                        : creator
+                            ? "<dark_gray>Your posting. Manage it at the Rumor Board.</dark_gray>"
                         : "<dark_gray>Defeat this player to claim.</dark_gray>"
                 ),
-                creator ? "bounty:cancel:" + bounty.id : "close"
+                cancellable ? "bounty:cancel:" + bounty.id : "noop"
             ));
         }
-        if (slot == 0) inv.setItem(22, button(Material.PAPER, "<gray>No matching bounties</gray>", List.of(), "close"));
-        inv.setItem(49, button(Material.ARROW, "<yellow>Back</yellow>", List.of(), "main"));
+        if (visible.isEmpty()) {
+            inv.setItem(22, button(Material.PAPER, "<gray>No active bounties</gray>", List.of("<dark_gray>Check again later.</dark_gray>"), "noop"));
+        }
+        String view = readOnly ? "view" : mineOnly ? "mine" : "list";
+        if (page > 0) {
+            inv.setItem(45, button(Material.ARROW, "<yellow>Previous Page</yellow>", List.of(), pageAction(view, page - 1)));
+        }
+        inv.setItem(49, button(
+            readOnly ? Material.BARRIER : Material.ARROW,
+            readOnly ? "<red>Close</red>" : "<yellow>Back</yellow>",
+            List.of("<gray>Page <white>" + (page + 1) + "/" + pageCount + "</white></gray>"),
+            readOnly ? "close" : "main"
+        ));
+        if (page + 1 < pageCount) {
+            inv.setItem(53, button(Material.ARROW, "<yellow>Next Page</yellow>", List.of(), pageAction(view, page + 1)));
+        }
         player.openInventory(inv);
     }
 
@@ -298,6 +390,7 @@ final class TavernBountyManager implements Listener {
     private void handle(Player player, String action) {
         String[] p = action.split(":");
         if (action.equals("close")) player.closeInventory();
+        else if (action.equals("noop")) return;
         else if (action.equals("main")) openMain(player);
         else if (action.equals("daily:open")) openDailies(player);
         else if (action.equals("bounty:list")) openBounties(player, false);
@@ -305,31 +398,89 @@ final class TavernBountyManager implements Listener {
         else if (action.equals("bounty:targets")) openTargets(player);
         else if (action.equals("bounty:offer")) openOffer(player);
         else if (action.equals("bounty:confirm")) confirm(player);
-        else if (p.length == 3 && p[0].equals("daily") && p[1].equals("claim")) {
-            claimDaily(player, Integer.parseInt(p[2]));
-        } else if (p.length == 3 && p[0].equals("bounty") && p[1].equals("target")) {
-            selectedTargets.put(player.getUniqueId(), UUID.fromString(p[2]));
-            openOffer(player);
-        } else if (p.length == 4 && p[0].equals("bounty") && p[1].equals("offer") && p[2].equals("essence")) {
-            PendingOffer offer = new PendingOffer(
-                selectedTargets.get(player.getUniqueId()),
-                BountyKind.ESSENCE,
-                Long.parseLong(p[3]),
-                null
-            );
-            pendingOffers.put(player.getUniqueId(), offer);
-            openConfirm(player, offer);
+        else if (p.length == 4 && p[0].equals("bounty") && p[2].equals("page")) {
+            Integer page = parseInteger(p[3]);
+            if (page == null || page < 0) return;
+            switch (p[1]) {
+                case "list" -> openBounties(player, false, page, false);
+                case "mine" -> openBounties(player, true, page, false);
+                case "view" -> openBounties(player, false, page, true);
+                default -> { }
+            }
         }
-        else if (action.equals("bounty:offer:item")) prepareItemOffer(player);
-        else if (p.length == 3 && p[0].equals("bounty") && p[1].equals("cancel")) openCancelConfirm(player, UUID.fromString(p[2]));
+        else if (p.length == 3 && p[0].equals("daily") && p[1].equals("claim")) {
+            Integer dailyIndex = parseInteger(p[2]);
+            if (dailyIndex != null) claimDaily(player, dailyIndex);
+        } else if (p.length == 3 && p[0].equals("bounty") && p[1].equals("target")) {
+            UUID targetId = parseUuid(p[2]);
+            if (targetId != null) {
+                selectedTargets.put(player.getUniqueId(), targetId);
+                openOffer(player);
+            }
+        } else if (p.length == 4 && p[0].equals("bounty") && p[1].equals("offer") && p[2].equals("essence")) {
+            Long amount = parseLong(p[3]);
+            if (amount != null) {
+                PendingOffer offer = new PendingOffer(
+                    selectedTargets.get(player.getUniqueId()),
+                    BountyKind.ESSENCE,
+                    amount,
+                    null
+                );
+                pendingOffers.put(player.getUniqueId(), offer);
+                openConfirm(player, offer);
+            }
+        }
+        else if (action.equals("bounty:offer:item")) prepareItemOffer(player, BountyItemChoice.ANY);
+        else if (p.length == 4 && p[0].equals("bounty") && p[1].equals("offer") && p[2].equals("item")) {
+            BountyItemChoice choice = BountyItemChoice.fromToken(p[3]);
+            if (choice != null) prepareItemOffer(player, choice);
+        }
         else if (action.equals("bounty:cancel:confirm")) confirmCancel(player);
+        else {
+            UUID bountyId = cancelTargetId(action);
+            if (bountyId != null) openCancelConfirm(player, bountyId);
+        }
     }
 
-    private void prepareItemOffer(Player player) {
+    static UUID cancelTargetId(String action) {
+        if (action == null || !action.startsWith("bounty:cancel:") || action.equals("bounty:cancel:confirm")) return null;
+        return parseUuid(action.substring("bounty:cancel:".length()));
+    }
+
+    static int pageCount(int entryCount) {
+        return Math.max(1, (Math.max(0, entryCount) + BOUNTIES_PER_PAGE - 1) / BOUNTIES_PER_PAGE);
+    }
+
+    static String pageAction(String view, int page) {
+        String safeView = switch (view) {
+            case "mine", "view" -> view;
+            default -> "list";
+        };
+        return "bounty:" + safeView + ":page:" + Math.max(0, page);
+    }
+
+    private static Integer parseInteger(String raw) {
+        try {
+            return Integer.valueOf(raw);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static Long parseLong(String raw) {
+        try {
+            return Long.valueOf(raw);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private void prepareItemOffer(Player player, BountyItemChoice choice) {
         UUID target = selectedTargets.get(player.getUniqueId());
         ItemStack held = player.getInventory().getItemInMainHand();
-        if (target == null || held.getType().isAir() || escrow.hasAnyEscrowMarker(held) || escrow.hasMenuPreviewMarker(held)) {
-            player.sendMessage(MessageUtil.warn("Hold a valid item stack first."));
+        if (target == null || !matchesItemChoice(choice, held)
+            || escrow.hasAnyEscrowMarker(held) || escrow.hasMenuPreviewMarker(held)) {
+            player.sendMessage(MessageUtil.warn("Hold " + choice.heldInstruction + " in your main hand first."));
             openOffer(player);
             return;
         }
@@ -343,9 +494,17 @@ final class TavernBountyManager implements Listener {
         if (offer == null || offer.targetId == null || offer.targetId.equals(player.getUniqueId())) return;
         OfflinePlayer target = Bukkit.getOfflinePlayer(offer.targetId);
         if (target.getName() == null) return;
+        if (offer.kind == BountyKind.ESSENCE && offer.amount <= 0L) {
+            player.sendMessage(MessageUtil.error("That Essence bounty amount is invalid."));
+            return;
+        }
         UUID id = UUID.randomUUID();
         PlayerBounty bounty;
         if (offer.kind == BountyKind.ESSENCE) {
+            if (plugin.getEssenceManager() == null || !plugin.getEssenceManager().isLoaded(player)) {
+                player.sendMessage(MessageUtil.warn("Your Essence is still loading. Try again in a moment."));
+                return;
+            }
             if (!plugin.getEssenceManager().spend(player, offer.amount, "player_bounty_post")) {
                 player.sendMessage(MessageUtil.warn("You do not have enough Essence."));
                 return;
@@ -393,19 +552,27 @@ final class TavernBountyManager implements Listener {
                 captured.escrowId(),
                 captured.item().getType(),
                 captured.item().getAmount(),
-                pretty(captured.item().getType()),
+                bountyItemName(captured.item()),
                 System.currentTimeMillis()
             );
         }
         bounties.put(id, bounty);
         if (!saveBounties()) {
             bounties.remove(id);
-            refund(player, bounty);
-            player.sendMessage(MessageUtil.error("The bounty could not be saved; your offer was returned."));
+            boolean returned = refund(player, bounty);
+            if (!returned) {
+                plugin.getLogger().severe("Could not return the failed bounty posting " + id + " to " + player.getName() + ".");
+            }
+            player.sendMessage(returned
+                ? MessageUtil.error("The bounty could not be saved; your offer was returned.")
+                : MessageUtil.error("The bounty could not be saved and its refund needs staff review."));
             return;
         }
         player.closeInventory();
-        Bukkit.broadcast(MessageUtil.info("<white>" + player.getName() + "</white> posted a bounty on <red>" + bounty.targetName + "</red>: <gold>" + rewardText(bounty) + "</gold>."));
+        for (Player viewer : Bukkit.getOnlinePlayers()) {
+            viewer.sendMessage(MessageUtil.info("<white>" + player.getName() + "</white> posted a bounty on <red>"
+                + bounty.targetName + "</red>: <gold>" + rewardText(bounty, viewer) + "</gold>."));
+        }
     }
 
     private void openCancelConfirm(Player player, UUID id) {
@@ -415,7 +582,7 @@ final class TavernBountyManager implements Listener {
         Inventory inv = menu(player, "Cancel Bounty?", "Cancel Bounty");
         inv.setItem(13, button(
             bounty.kind == BountyKind.ESSENCE ? Material.AMETHYST_SHARD : bounty.itemMaterial,
-            "<gold>Return " + rewardText(bounty) + "</gold>",
+            "<gold>Return " + rewardText(bounty, player) + "</gold>",
             List.of("<gray>Target: <white>" + bounty.targetName + "</white></gray>"),
             "close"
         ));
@@ -432,6 +599,11 @@ final class TavernBountyManager implements Listener {
     private void cancel(Player player, UUID id) {
         PlayerBounty bounty = bounties.get(id);
         if (bounty == null || !bounty.creatorId.equals(player.getUniqueId())) return;
+        if (bounty.kind == BountyKind.ESSENCE && !canReceiveEssence(player, bounty.amount)) {
+            player.sendMessage(MessageUtil.warn("Make room below the Essence cap before cancelling this bounty."));
+            openBounties(player, true);
+            return;
+        }
         if (!bounties.remove(id, bounty)) return;
         if (!saveBounties()) {
             bounties.putIfAbsent(id, bounty);
@@ -439,17 +611,21 @@ final class TavernBountyManager implements Listener {
             openBounties(player, true);
             return;
         }
-        refund(player, bounty);
-        player.sendMessage(MessageUtil.success("Bounty cancelled. The full offer was returned."));
+        if (refund(player, bounty)) {
+            player.sendMessage(MessageUtil.success("Bounty cancelled. The full offer was returned."));
+        } else {
+            plugin.getLogger().severe("Bounty " + bounty.id + " was cancelled but its refund could not be completed for " + player.getName() + ".");
+            player.sendMessage(MessageUtil.error("The bounty was cancelled, but its refund needs staff review."));
+        }
         openBounties(player, true);
     }
 
-    private void refund(Player player, PlayerBounty bounty) {
+    private boolean refund(Player player, PlayerBounty bounty) {
         if (bounty.kind == BountyKind.ESSENCE) {
-            plugin.getEssenceManager().credit(player, bounty.amount, "player_bounty_refund");
-        } else {
-            deliverEscrow(bounty, player.getUniqueId(), player.getName());
+            return plugin.getEssenceManager() != null
+                && plugin.getEssenceManager().refund(player, bounty.amount, "player_bounty_refund") == bounty.amount;
         }
+        return deliverEscrow(bounty, player.getUniqueId(), player.getName());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -465,6 +641,20 @@ final class TavernBountyManager implements Listener {
             .filter(bounty -> !bounty.creatorId.equals(killer.getUniqueId()))
             .toList();
         if (claims.isEmpty()) return;
+        long essenceReward = 0L;
+        try {
+            for (PlayerBounty bounty : claims) {
+                if (bounty.kind == BountyKind.ESSENCE) essenceReward = Math.addExact(essenceReward, bounty.amount);
+            }
+        } catch (ArithmeticException ex) {
+            plugin.getLogger().severe("Refused an overflowing bounty payout for " + killer.getName() + ".");
+            killer.sendMessage(MessageUtil.error("This bounty payout needs staff review."));
+            return;
+        }
+        if (essenceReward > 0L && !canReceiveEssence(killer, essenceReward)) {
+            killer.sendMessage(MessageUtil.warn("Make room below the Essence cap before claiming this bounty."));
+            return;
+        }
         long now = System.currentTimeMillis();
         String cooldownKey = killer.getUniqueId() + ":" + victim.getUniqueId();
         if (now - claimCooldowns.getOrDefault(cooldownKey, 0L) < 30L * 60L * 1000L) {
@@ -488,9 +678,14 @@ final class TavernBountyManager implements Listener {
         }
         for (PlayerBounty bounty : removed) {
             if (bounty.kind == BountyKind.ESSENCE) {
-                plugin.getEssenceManager().credit(killer, bounty.amount, "player_bounty_claim");
+                if (!plugin.getEssenceManager().credit(killer, bounty.amount, "player_bounty_claim")) {
+                    plugin.getLogger().severe("Could not complete Essence payout for claimed bounty " + bounty.id
+                        + " to " + killer.getName() + ".");
+                }
             } else {
-                deliverEscrow(bounty, killer.getUniqueId(), killer.getName());
+                if (!deliverEscrow(bounty, killer.getUniqueId(), killer.getName())) {
+                    plugin.getLogger().severe("Could not locate item escrow for claimed bounty " + bounty.id + ".");
+                }
             }
         }
         Bukkit.broadcast(MessageUtil.success("<white>" + killer.getName() + "</white> claimed the bounty on <red>" + victim.getName() + "</red>."));
@@ -501,18 +696,20 @@ final class TavernBountyManager implements Listener {
         else claimCooldowns.replace(key, attempted, previous);
     }
 
-    private void deliverEscrow(PlayerBounty bounty, UUID recipientId, String recipientName) {
+    private boolean deliverEscrow(PlayerBounty bounty, UUID recipientId, String recipientName) {
         EscrowedItem item = escrow.retainedEscrow(bounty.escrowId);
-        if (item == null) return;
+        if (item == null) return false;
         escrow.retarget(item, recipientId, recipientName, "AWARDING");
         Player recipient = Bukkit.getPlayer(recipientId);
         if (recipient == null || !escrow.give(recipient, item)) {
             escrow.queueRecovery(recipientId, recipientName, item);
         }
+        return true;
     }
 
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
+        cachePlayerProfile(event.getPlayer());
         escrow.restorePendingRecovery(event.getPlayer());
         resetDaily(event.getPlayer());
     }
@@ -563,8 +760,17 @@ final class TavernBountyManager implements Listener {
             openDailies(player);
             return;
         }
+        if (!canReceiveEssence(player, reward)) {
+            player.sendMessage(MessageUtil.warn("Make room below the Essence cap before claiming this daily."));
+            openDailies(player);
+            return;
+        }
+        if (!plugin.getEssenceManager().credit(player, reward, "tavern_daily")) {
+            player.sendMessage(MessageUtil.error("That daily could not be paid. It remains claimable."));
+            openDailies(player);
+            return;
+        }
         pdc.set(dailyClaimMaskKey, PersistentDataType.INTEGER, mask | (1 << bit));
-        plugin.getEssenceManager().credit(player, reward, "tavern_daily");
         player.sendMessage(MessageUtil.success("Daily complete. You earned <white>" + reward + " Essence</white>."));
         player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 0.7f, 1.3f);
         openDailies(player);
@@ -585,15 +791,119 @@ final class TavernBountyManager implements Listener {
         return material.name().endsWith("_ORE") || material == Material.ANCIENT_DEBRIS;
     }
 
-    private String rewardText(PlayerBounty bounty) {
+    private boolean canReceiveEssence(Player player, long amount) {
+        return plugin.getEssenceManager() != null
+            && plugin.getEssenceManager().isLoaded(player)
+            && plugin.getEssenceManager().canCreditFully(player, amount);
+    }
+
+    private String rewardText(PlayerBounty bounty, Player viewer) {
         return bounty.kind == BountyKind.ESSENCE
             ? bounty.amount + " Essence"
-            : bounty.itemAmount + "x " + bounty.itemName;
+            : bounty.itemAmount + "x " + bountyDisplayName(bounty, viewer);
+    }
+
+    private String bountyDisplayName(PlayerBounty bounty, Player viewer) {
+        EscrowedItem retained = bounty.kind == BountyKind.ITEM ? escrow.retainedEscrow(bounty.escrowId) : null;
+        if (retained != null && retained.item() != null) {
+            return bountyItemDisplayName(retained.item(), viewer);
+        }
+        return MM.escapeTags(bounty.itemName == null || bounty.itemName.isBlank() ? pretty(bounty.itemMaterial) : bounty.itemName);
+    }
+
+    private String bountyItemDisplayName(ItemStack item, Player viewer) {
+        if (plugin.getSeasonRelicManager() != null && plugin.getSeasonRelicManager().isSoulImprint(item)) {
+            return plugin.getSeasonRelicManager().soulImprintDisplayName(viewer);
+        }
+        return MM.escapeTags(bountyItemName(item));
+    }
+
+    private String bountyItemName(ItemStack item) {
+        if (item == null || item.getType().isAir()) return "Item";
+        if (plugin.getSeasonRelicManager() != null) {
+            String relicName = plugin.getSeasonRelicManager().displayNameFor(plugin.getSeasonRelicManager().relicId(item));
+            if (relicName != null && !relicName.isBlank()) return safeItemName(relicName);
+        }
+        if (plugin.getLegendaryListener() != null && plugin.getLegendaryListener().isOrbOfTheMysticsItem(item)) {
+            return "Orb of the Mystics";
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null && meta.displayName() != null) {
+            String customName = safeItemName(PLAIN.serialize(meta.displayName()));
+            if (!customName.isBlank()) return customName;
+        }
+        return pretty(item.getType());
+    }
+
+    private static String safeItemName(String input) {
+        if (input == null) return "";
+        String cleaned = input.replaceAll("[\\p{Cntrl}]", " ").replaceAll("\\s+", " ").trim();
+        return cleaned.length() <= 64 ? cleaned : cleaned.substring(0, 64);
+    }
+
+    private boolean matchesItemChoice(BountyItemChoice choice, ItemStack item) {
+        if (choice == null || item == null || item.getType().isAir()) return false;
+        String relicId = plugin.getSeasonRelicManager() == null ? null : plugin.getSeasonRelicManager().relicId(item);
+        boolean mysticOrb = plugin.getLegendaryListener() != null && plugin.getLegendaryListener().isOrbOfTheMysticsItem(item);
+        return matchesRequestedOffer(choice.token, item.getType(), relicId, mysticOrb);
+    }
+
+    static boolean matchesRequestedOffer(String token, Material material, String relicId, boolean mysticOrb) {
+        if (token == null || material == null || material == Material.AIR
+            || material == Material.CAVE_AIR || material == Material.VOID_AIR) return false;
+        return switch (token) {
+            case "iron" -> material == Material.IRON_INGOT;
+            case "gold" -> material == Material.GOLD_INGOT;
+            case "diamond" -> material == Material.DIAMOND;
+            case "netherite" -> material == Material.NETHERITE_INGOT;
+            case "orb" -> mysticOrb || relicId != null && relicId.endsWith("_orb");
+            case "soul_imprint" -> "soul_imprint".equals(relicId);
+            case "any" -> true;
+            default -> false;
+        };
     }
 
     private String pretty(Material material) {
         String name = material.name().toLowerCase().replace('_', ' ');
         return Character.toUpperCase(name.charAt(0)) + name.substring(1);
+    }
+
+    private ItemStack playerHead(UUID playerId, String playerName) {
+        ItemStack head = new ItemStack(Material.PLAYER_HEAD);
+        ItemMeta itemMeta = head.getItemMeta();
+        if (!(itemMeta instanceof SkullMeta skullMeta) || playerId == null) {
+            return head;
+        }
+
+        Player online = Bukkit.getPlayer(playerId);
+        if (online != null) {
+            cachePlayerProfile(online);
+        }
+        PlayerProfile profile = playerProfiles.get(playerId);
+        if (profile == null) {
+            String profileName = safeProfileName(playerName);
+            profile = profileName == null
+                ? Bukkit.createProfile(playerId)
+                : Bukkit.createProfile(playerId, profileName);
+        }
+        skullMeta.setPlayerProfile(profile.clone());
+        head.setItemMeta(skullMeta);
+        return head;
+    }
+
+    private void cachePlayerProfile(Player player) {
+        if (player == null) return;
+        PlayerProfile profile = player.getPlayerProfile();
+        if (profile != null) {
+            playerProfiles.put(player.getUniqueId(), profile.clone());
+        }
+    }
+
+    private static String safeProfileName(String playerName) {
+        if (playerName == null || playerName.isBlank()) return null;
+        String cleaned = playerName.replaceAll("[^A-Za-z0-9_]", "");
+        if (cleaned.isBlank()) return null;
+        return cleaned.substring(0, Math.min(16, cleaned.length()));
     }
 
     private Inventory menu(Player player, String javaTitle, String bedrockTitle) {
@@ -609,7 +919,14 @@ final class TavernBountyManager implements Listener {
     }
 
     private ItemStack button(Material material, String name, List<String> lore, String action) {
-        ItemStack item = new ItemStack(material);
+        return button(new ItemStack(material), name, lore, action);
+    }
+
+    private ItemStack button(ItemStack prototype, String name, List<String> lore, String action) {
+        ItemStack item = prototype == null || prototype.getType().isAir()
+            ? new ItemStack(Material.BARRIER)
+            : prototype.clone();
+        item.setAmount(1);
         ItemMeta meta = item.getItemMeta();
         meta.displayName(MM.deserialize(MenuItemUtil.visibleMiniName(name)));
         meta.lore(MenuItemUtil.visibleMiniLore(name, lore).stream().map(MM::deserialize).toList());
@@ -661,6 +978,12 @@ final class TavernBountyManager implements Listener {
                     yaml.getString(path + ".item-name", "Item"),
                     yaml.getLong(path + ".created")
                 );
+                if (kind == BountyKind.ESSENCE && bounty.amount <= 0L) {
+                    throw new IllegalArgumentException("invalid Essence amount");
+                }
+                if (kind == BountyKind.ITEM && (escrowId == null || bounty.itemAmount <= 0 || bounty.itemMaterial.isAir())) {
+                    throw new IllegalArgumentException("invalid item escrow metadata");
+                }
                 bounties.put(id, bounty);
                 if (escrowId != null) retained.add(escrowId);
             } catch (RuntimeException ex) {
@@ -705,7 +1028,7 @@ final class TavernBountyManager implements Listener {
             return false;
         }
     }
-    private UUID parseUuid(String raw) {
+    private static UUID parseUuid(String raw) {
         try {
             return raw == null ? null : UUID.fromString(raw);
         } catch (IllegalArgumentException ex) {
@@ -714,6 +1037,35 @@ final class TavernBountyManager implements Listener {
     }
 
     private enum BountyKind { ESSENCE, ITEM }
+
+    private enum BountyItemChoice {
+        IRON("iron", "Iron Ingots", "an Iron Ingot stack", Material.IRON_INGOT),
+        GOLD("gold", "Gold Ingots", "a Gold Ingot stack", Material.GOLD_INGOT),
+        DIAMOND("diamond", "Diamonds", "a Diamond stack", Material.DIAMOND),
+        NETHERITE("netherite", "Netherite Ingots", "a Netherite Ingot stack", Material.NETHERITE_INGOT),
+        ORB("orb", "Any Orb", "any custom Orb stack", Material.ENDER_EYE),
+        SOUL_IMPRINT("soul_imprint", "Soul Imprint", "a Soul Imprint stack", Material.END_CRYSTAL),
+        ANY("any", "Other Held Item", "a valid item stack", Material.CHEST);
+
+        private final String token;
+        private final String displayName;
+        private final String heldInstruction;
+        private final Material icon;
+
+        BountyItemChoice(String token, String displayName, String heldInstruction, Material icon) {
+            this.token = token;
+            this.displayName = displayName;
+            this.heldInstruction = heldInstruction;
+            this.icon = icon;
+        }
+
+        private static BountyItemChoice fromToken(String token) {
+            for (BountyItemChoice choice : values()) {
+                if (choice.token.equals(token)) return choice;
+            }
+            return null;
+        }
+    }
     private record PendingOffer(UUID targetId, BountyKind kind, long amount, ItemStack preview) {}
     private record PlayerBounty(
         UUID id,

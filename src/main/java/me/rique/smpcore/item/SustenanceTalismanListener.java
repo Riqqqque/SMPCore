@@ -434,7 +434,7 @@ public final class SustenanceTalismanListener implements Listener {
                 player.sendMessage(MessageUtil.warn("You need at least one empty inventory slot."));
                 return false;
             }
-            player.getInventory().addItem(result);
+            InventoryRecipeUtil.giveOrDrop(player, result);
             return true;
         }
 

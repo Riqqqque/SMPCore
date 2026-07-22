@@ -466,7 +466,7 @@ public final class CorruptionManager implements Listener {
         syncChunkStations(event.getChunk());
     }
 
-    @EventHandler
+    @EventHandler(ignoreCancelled = true)
     public void onChunkUnload(ChunkUnloadEvent event) {
         removeChunkHolograms(event.getChunk());
     }
@@ -2525,7 +2525,9 @@ public final class CorruptionManager implements Listener {
         }
     }
 
-    private record CorruptionMenuHolder(UUID playerId, BlockKey station) implements InventoryHolder, MenuDupeGuardListener.MutableMenuHolder {
+    private record CorruptionMenuHolder(UUID playerId, BlockKey station) implements InventoryHolder, MenuDupeGuardListener.RecoveryTrackedMenuHolder {
+        @Override public String recoverySurface() { return "Corruption Table"; }
+        @Override public int[] recoverySlots() { return new int[] { ITEM_SLOT, ESSENCE_SLOT }; }
         @Override
         public Inventory getInventory() {
             return null;

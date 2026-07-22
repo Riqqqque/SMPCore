@@ -80,6 +80,9 @@ public final class SmpStartManager implements Listener {
     private final Set<UUID> preStartBarrierPreviewers = ConcurrentHashMap.newKeySet();
     private BossBar graceBossBar;
     private BukkitTask graceBossBarTask;
+    private BukkitTask dimensionUnlockTask;
+    private boolean trackedNetherUnlocked;
+    private boolean trackedEndUnlocked;
     private WorldBorder preStartPlayerBorder;
 
     public SmpStartManager(SMPCore plugin) {
@@ -90,10 +93,13 @@ public final class SmpStartManager implements Listener {
 
     public void applyConfiguredState() {
         if (!plugin.getConfigManager().smpStartEnabled) {
+            stopDimensionUnlockMonitor();
             clearPreStartPlayerBorders();
             stopGraceBossBar();
             return;
         }
+
+        startDimensionUnlockMonitor();
 
         World world = configuredWorld();
         if (world == null) {
@@ -112,6 +118,7 @@ public final class SmpStartManager implements Listener {
     }
 
     public void shutdown() {
+        stopDimensionUnlockMonitor();
         clearPreStartPlayerBorders();
         preStartBarrierPreviewers.clear();
         stopGraceBossBar();
@@ -142,6 +149,7 @@ public final class SmpStartManager implements Listener {
         long now = System.currentTimeMillis();
         config.smpStarted = true;
         config.smpStartedAt = now;
+        resetEarlyDimensionUnlocks();
         if (graceMinutesOverride != null) {
             int graceMinutes = Math.max(0, Math.min(7 * 24 * 60, graceMinutesOverride));
             config.smpPostStartGraceMinutes = graceMinutes;
@@ -188,6 +196,37 @@ public final class SmpStartManager implements Listener {
         setPreStartLockedState();
         Bukkit.broadcast(MessageUtil.warn("The SMP start area was locked by <white>" + sender.getName() + "</white>."));
         return new StartResult(true, "SMP start area locked around world spawn.");
+    }
+
+    public StartResult unlockDimensionEarly(CommandSender sender, World.Environment environment) {
+        ConfigManager config = plugin.getConfigManager();
+        if (!config.smpStartEnabled) {
+            return new StartResult(true, "Dimension scheduling is disabled, so every dimension is already open.");
+        }
+        if (!config.smpStarted || config.smpStartedAt <= 0L) {
+            return new StartResult(false, "Start the SMP before opening a scheduled dimension early.");
+        }
+        if (environment != World.Environment.NETHER && environment != World.Environment.THE_END) {
+            return new StartResult(false, "Only the Nether and End use scheduled unlocks.");
+        }
+
+        String dimension = dimensionName(environment);
+        if (isDimensionUnlocked(environment)) {
+            return new StartResult(true, "The " + dimension + " is already unlocked. No duplicate announcement was sent.");
+        }
+
+        setEarlyDimensionUnlock(environment, true);
+        plugin.saveConfig();
+        trackDimensionAsUnlocked(environment);
+        nextDimensionMessageAt.clear();
+        Bukkit.broadcast(dimensionUnlockBroadcast(environment, true));
+        Sound sound = environment == World.Environment.NETHER ? Sound.BLOCK_PORTAL_TRIGGER : Sound.BLOCK_END_PORTAL_SPAWN;
+        float pitch = environment == World.Environment.NETHER ? 0.8f : 1.15f;
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            player.playSound(player.getLocation(), sound, 0.85f, pitch);
+        }
+        plugin.getLogger().info(dimension + " unlocked early by " + sender.getName() + ".");
+        return new StartResult(true, dimension + " unlocked early and announced to the server.");
     }
 
     public Component statusMessage() {
@@ -376,7 +415,8 @@ public final class SmpStartManager implements Listener {
         }
 
         String root = commandRoot(event.getMessage());
-        if (!PluginCommandRoots.contains(root)) {
+        boolean publicWarp = plugin.getWarpManager() != null && plugin.getWarpManager().isWarpCommand(root);
+        if (!PluginCommandRoots.contains(root) && !publicWarp) {
             return;
         }
 
@@ -402,6 +442,9 @@ public final class SmpStartManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPreStartFoodChange(FoodLevelChangeEvent event) {
         if (!(event.getEntity() instanceof Player player)) {
+            return;
+        }
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().isDuelParticipant(player)) {
             return;
         }
         if (!isProtectedPreStartMember(player)) {
@@ -519,6 +562,7 @@ public final class SmpStartManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onGracePlayerDamage(EntityDamageEvent event) {
         if (!isGraceActive()) return;
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().shouldBypassSpawnDamage(event)) return;
         if (!(event.getEntity() instanceof Player victim)) return;
 
         Player attacker = graceAttacker(event, victim);
@@ -581,14 +625,25 @@ public final class SmpStartManager implements Listener {
 
         if (!world.getUID().equals(player.getWorld().getUID())) {
             clearPreStartPlayerBorder(player);
-            player.teleportAsync(world.getSpawnLocation());
+            prepareManagedTeleport(player);
+            player.teleportAsync(world.getSpawnLocation(), PlayerTeleportEvent.TeleportCause.PLUGIN);
             return;
         }
 
         player.setWorldBorder(preStartPlayerBorder);
         preStartBorderViewers.add(player.getUniqueId());
         if (!isInsidePreStartBarrier(player.getLocation(), 0.0D)) {
-            player.teleportAsync(world.getSpawnLocation());
+            prepareManagedTeleport(player);
+            player.teleportAsync(world.getSpawnLocation(), PlayerTeleportEvent.TeleportCause.PLUGIN);
+        }
+    }
+
+    private static void prepareManagedTeleport(Player player) {
+        if (player.isInsideVehicle()) {
+            player.leaveVehicle();
+        }
+        if (!player.getPassengers().isEmpty()) {
+            player.eject();
         }
     }
 
@@ -618,6 +673,7 @@ public final class SmpStartManager implements Listener {
         ConfigManager config = plugin.getConfigManager();
         config.smpStarted = false;
         config.smpStartedAt = 0L;
+        resetEarlyDimensionUnlocks();
         plugin.getConfig().set("smp-start.started", false);
         plugin.getConfig().set("smp-start.started-at", 0L);
         plugin.saveConfig();
@@ -950,6 +1006,9 @@ public final class SmpStartManager implements Listener {
     }
 
     private String dimensionStatus(World.Environment environment) {
+        if (isDimensionUnlockedEarly(environment) && plugin.getConfigManager().smpStarted) {
+            return "unlocked early";
+        }
         long remaining = dimensionUnlockMillisRemaining(environment, System.currentTimeMillis());
         if (remaining <= 0L) {
             return "unlocked";
@@ -967,10 +1026,115 @@ public final class SmpStartManager implements Listener {
 
     private long dimensionUnlockMillisRemaining(World.Environment environment, long now) {
         ConfigManager config = plugin.getConfigManager();
-        if (!config.smpStarted || config.smpStartedAt <= 0L) {
-            return Long.MAX_VALUE;
+        return dimensionUnlockMillisRemaining(
+            now,
+            config.smpStarted,
+            config.smpStartedAt,
+            dimensionUnlockDay(environment),
+            dimensionUnlockAt(environment),
+            isDimensionUnlockedEarly(environment)
+        );
+    }
+
+    static long dimensionUnlockMillisRemaining(long now, boolean started, long startedAt, int unlockDay, boolean unlockedEarly) {
+        return dimensionUnlockMillisRemaining(now, started, startedAt, unlockDay, 0L, unlockedEarly);
+    }
+
+    static long dimensionUnlockMillisRemaining(
+        long now,
+        boolean started,
+        long startedAt,
+        int unlockDay,
+        long configuredUnlockAt,
+        boolean unlockedEarly
+    ) {
+        if (!started || startedAt <= 0L) return Long.MAX_VALUE;
+        if (unlockedEarly) return 0L;
+        if (configuredUnlockAt > 0L) {
+            return Math.max(0L, configuredUnlockAt - Math.max(0L, now));
         }
-        return millisUntilUnlock(now, config.smpStartedAt, dimensionUnlockDay(environment));
+        return millisUntilUnlock(now, startedAt, unlockDay);
+    }
+
+    private long dimensionUnlockAt(World.Environment environment) {
+        ConfigManager config = plugin.getConfigManager();
+        return environment == World.Environment.NETHER ? config.smpNetherUnlockAt : config.smpEndUnlockAt;
+    }
+
+    private boolean isDimensionUnlockedEarly(World.Environment environment) {
+        ConfigManager config = plugin.getConfigManager();
+        return environment == World.Environment.NETHER ? config.smpNetherUnlockedEarly : config.smpEndUnlockedEarly;
+    }
+
+    private void setEarlyDimensionUnlock(World.Environment environment, boolean unlocked) {
+        ConfigManager config = plugin.getConfigManager();
+        if (environment == World.Environment.NETHER) {
+            config.smpNetherUnlockedEarly = unlocked;
+            plugin.getConfig().set("smp-start.nether-unlocked-early", unlocked);
+        } else if (environment == World.Environment.THE_END) {
+            config.smpEndUnlockedEarly = unlocked;
+            plugin.getConfig().set("smp-start.end-unlocked-early", unlocked);
+        }
+    }
+
+    private void resetEarlyDimensionUnlocks() {
+        setEarlyDimensionUnlock(World.Environment.NETHER, false);
+        setEarlyDimensionUnlock(World.Environment.THE_END, false);
+    }
+
+    private Component dimensionUnlockBroadcast(World.Environment environment, boolean early) {
+        if (environment == World.Environment.NETHER) {
+            return MessageUtil.prefixedRaw("<gradient:#ef4444:#f97316><bold>THE NETHER IS OPEN</bold></gradient> <gray>"
+                + (early ? "It has been unlocked ahead of schedule." : "The scheduled gateway has opened.") + "</gray>");
+        }
+        return MessageUtil.prefixedRaw("<gradient:#a855f7:#22d3ee><bold>THE END IS OPEN</bold></gradient> <gray>"
+            + (early ? "It has been unlocked ahead of schedule." : "The scheduled gateway has opened.") + "</gray>");
+    }
+
+    private void startDimensionUnlockMonitor() {
+        stopDimensionUnlockMonitor();
+        trackedNetherUnlocked = isDimensionUnlocked(World.Environment.NETHER);
+        trackedEndUnlocked = isDimensionUnlocked(World.Environment.THE_END);
+        dimensionUnlockTask = Bukkit.getScheduler().runTaskTimer(plugin, this::checkScheduledDimensionUnlocks, 20L, 20L);
+    }
+
+    private void stopDimensionUnlockMonitor() {
+        if (dimensionUnlockTask != null) {
+            dimensionUnlockTask.cancel();
+            dimensionUnlockTask = null;
+        }
+    }
+
+    private void checkScheduledDimensionUnlocks() {
+        trackedNetherUnlocked = checkScheduledDimensionUnlock(World.Environment.NETHER, trackedNetherUnlocked);
+        trackedEndUnlocked = checkScheduledDimensionUnlock(World.Environment.THE_END, trackedEndUnlocked);
+    }
+
+    private boolean checkScheduledDimensionUnlock(World.Environment environment, boolean wasUnlocked) {
+        boolean unlocked = isDimensionUnlocked(environment);
+        if (!wasUnlocked && unlocked && plugin.getConfigManager().smpStarted) {
+            Bukkit.broadcast(dimensionUnlockBroadcast(environment, false));
+            Sound sound = environment == World.Environment.NETHER ? Sound.BLOCK_PORTAL_TRIGGER : Sound.BLOCK_END_PORTAL_SPAWN;
+            float pitch = environment == World.Environment.NETHER ? 0.8f : 1.15f;
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                player.playSound(player.getLocation(), sound, 0.85f, pitch);
+            }
+            nextDimensionMessageAt.clear();
+            plugin.getLogger().info(dimensionName(environment) + " unlocked automatically on schedule.");
+        }
+        return unlocked;
+    }
+
+    private void trackDimensionAsUnlocked(World.Environment environment) {
+        if (environment == World.Environment.NETHER) {
+            trackedNetherUnlocked = true;
+        } else if (environment == World.Environment.THE_END) {
+            trackedEndUnlocked = true;
+        }
+    }
+
+    private String dimensionName(World.Environment environment) {
+        return environment == World.Environment.NETHER ? "Nether" : "End";
     }
 
     static long millisUntilUnlock(long now, long startedAt, int unlockDay) {

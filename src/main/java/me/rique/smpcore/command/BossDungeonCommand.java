@@ -138,7 +138,6 @@ public final class BossDungeonCommand {
             sender.sendMessage(MessageUtil.error("Unknown or unavailable dungeon point."));
             return 0;
         }
-        sender.sendMessage(MessageUtil.success("Teleported to the Boss Dungeon <white>" + point + "</white> point."));
         return Command.SINGLE_SUCCESS;
     }
 

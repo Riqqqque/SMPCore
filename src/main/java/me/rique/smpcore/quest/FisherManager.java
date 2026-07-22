@@ -222,12 +222,7 @@ public final class FisherManager implements Listener {
             "UNCOMMON",
             "FISHING ROD",
             List.of("<gray>A dependable rod from Corin.</gray>"),
-            List.of(CustomLoreUtil.section(
-                "Enchantments",
-                "Coastal Kit",
-                "<gray>Luck of the Sea I, Lure I</gray>",
-                "<gray>and Unbreaking II.</gray>"
-            ))
+            List.of()
         ));
         meta.getPersistentDataContainer().set(rewardRodKey, PersistentDataType.BYTE, (byte) 1);
         rod.setItemMeta(meta);

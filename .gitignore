@@ -19,6 +19,8 @@ logs/
 crash-reports/
 cache/
 node_modules/
+.codex-remote-attachments/
+tmp/
 
 # Local databases/backups
 *.db

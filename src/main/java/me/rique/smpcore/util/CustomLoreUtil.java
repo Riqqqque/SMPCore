@@ -8,14 +8,17 @@ import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Material;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.EnchantmentStorageMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -57,6 +60,7 @@ public final class CustomLoreUtil {
         List<String> topLines,
         List<LoreSection> sections
     ) {
+        applyStyledItemFlags(meta);
         List<Component> lore = new ArrayList<>();
         appendCustomEnchantLines(lore, meta);
         appendRawLines(lore, topLines);
@@ -126,32 +130,72 @@ public final class CustomLoreUtil {
     }
 
     public static boolean applyStyledItemFlags(ItemMeta meta) {
-        if (meta == null || !meta.hasAttributeModifiers() || meta.hasItemFlag(ItemFlag.HIDE_ATTRIBUTES)) {
+        if (meta == null) {
             return false;
         }
-        meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
-        return true;
+        boolean changed = false;
+        if (meta.hasAttributeModifiers() && !meta.hasItemFlag(ItemFlag.HIDE_ATTRIBUTES)) {
+            meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+            changed = true;
+        }
+        if (hasVanillaEnchants(meta) && !meta.hasItemFlag(ItemFlag.HIDE_ENCHANTS)) {
+            meta.addItemFlags(ItemFlag.HIDE_ENCHANTS);
+            changed = true;
+        }
+        return changed;
     }
 
     public static List<Component> customEnchantLore(ItemMeta meta) {
-        List<String> enchants = customEnchantLines(meta);
-        if (enchants.isEmpty()) {
+        return formatCustomEnchantLore(customEnchantLines(meta), runicEnchantLines(meta));
+    }
+
+    static List<Component> formatCustomEnchantLore(List<String> enchants) {
+        return formatCustomEnchantLore(enchants, Set.of());
+    }
+
+    static List<Component> formatCustomEnchantLore(List<String> enchants, Set<String> goldEnchants) {
+        if (enchants == null || enchants.isEmpty()) {
             return List.of();
         }
-        List<Component> lore = new ArrayList<>();
-        List<String> line = new ArrayList<>();
-        for (String enchant : enchants) {
-            String candidate = "Enchants: " + String.join(" • ", line) + (line.isEmpty() ? "" : " • ") + enchant;
-            if (!line.isEmpty() && candidate.codePointCount(0, candidate.length()) > MAX_LORE_WIDTH) {
-                lore.add(enchantLine(line));
-                line.clear();
+        Set<String> highlighted = goldEnchants == null ? Set.of() : goldEnchants;
+        Component line = Component.text("Enchants: ", NamedTextColor.AQUA);
+        for (int index = 0; index < enchants.size(); index++) {
+            String enchant = enchants.get(index);
+            if (index > 0) {
+                line = line.append(Component.text(" \u2022 ", NamedTextColor.DARK_GRAY));
             }
-            line.add(enchant);
+            line = line.append(Component.text(
+                enchant,
+                highlighted.contains(enchant) ? NamedTextColor.GOLD : NamedTextColor.AQUA
+            ));
         }
-        if (!line.isEmpty()) {
-            lore.add(enchantLine(line));
+        line = line.decoration(TextDecoration.ITALIC, false);
+        return wrapLine(line);
+    }
+
+    public static List<Component> stripCustomEnchantLore(List<Component> current) {
+        if (current == null || current.isEmpty()) {
+            return new ArrayList<>();
         }
-        return lore;
+        List<Component> cleaned = new ArrayList<>();
+        boolean removingContinuation = false;
+        for (Component line : current) {
+            if (line == null) {
+                continue;
+            }
+            String rawPlain = PLAIN.serialize(line);
+            String plain = rawPlain.trim();
+            if (isEnchantLine(plain)) {
+                removingContinuation = true;
+                continue;
+            }
+            if (removingContinuation && isContinuation(line, rawPlain)) {
+                continue;
+            }
+            removingContinuation = false;
+            cleaned.add(line);
+        }
+        return cleaned;
     }
 
     public static List<Component> normalizeLore(List<Component> current) {
@@ -217,7 +261,7 @@ public final class CustomLoreUtil {
             addSpacer(out);
             appendClassified(out, footer);
         }
-        return out;
+        return wrapComponentLines(out);
     }
 
     public static List<Component> wrapLoreLines(List<Component> lines) {
@@ -323,20 +367,157 @@ public final class CustomLoreUtil {
             return false;
         }
         ItemMeta meta = item.getItemMeta();
-        if (meta == null || !meta.hasLore() || meta.lore() == null || !isManagedItem(meta)) {
+        if (meta == null) {
             return false;
         }
-        List<Component> normalized = normalizeLore(meta.lore());
-        boolean loreChanged = !normalized.equals(meta.lore());
+        boolean conflictsChanged = resolveEnchantConflicts(meta);
+        if (!isManagedItem(meta)) {
+            if (conflictsChanged) {
+                item.setItemMeta(meta);
+            }
+            return conflictsChanged;
+        }
+        List<Component> current = meta.lore() == null ? List.of() : meta.lore();
+        List<Component> rebuilt = new ArrayList<>(customEnchantLore(meta));
+        rebuilt.addAll(stripCustomEnchantLore(current));
+        List<Component> normalized = normalizeLore(rebuilt);
+        boolean loreChanged = !normalized.equals(current);
         if (loreChanged) {
             meta.lore(normalized);
         }
         boolean flagsChanged = applyStyledItemFlags(meta);
-        if (!loreChanged && !flagsChanged) {
+        boolean stackSizeChanged = false;
+        if (item.getType() == Material.ENCHANTED_BOOK
+            && (!meta.hasMaxStackSize() || meta.getMaxStackSize() != 1)) {
+            meta.setMaxStackSize(1);
+            stackSizeChanged = true;
+        }
+        if (!loreChanged && !flagsChanged && !stackSizeChanged && !conflictsChanged) {
             return false;
         }
         item.setItemMeta(meta);
         return true;
+    }
+
+    public static boolean refreshEnchantLore(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        boolean conflictsChanged = resolveEnchantConflicts(meta);
+        List<Component> current = meta.lore() == null ? List.of() : meta.lore();
+        List<Component> rebuilt = new ArrayList<>(customEnchantLore(meta));
+        rebuilt.addAll(stripCustomEnchantLore(current));
+        List<Component> normalized = normalizeLore(rebuilt);
+        boolean loreChanged = !normalized.equals(current);
+        if (loreChanged) {
+            meta.lore(normalized);
+        }
+        boolean flagsChanged = applyStyledItemFlags(meta);
+        if (!loreChanged && !flagsChanged && !conflictsChanged) {
+            return false;
+        }
+        item.setItemMeta(meta);
+        return true;
+    }
+
+    public static boolean hasSmeltingSilkConflict(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        return meta != null && hasManagedEnchant(meta, "smelting_touch_enchant")
+            && (meta.hasEnchant(Enchantment.SILK_TOUCH)
+                || meta instanceof EnchantmentStorageMeta storageMeta
+                && storageMeta.hasStoredEnchant(Enchantment.SILK_TOUCH));
+    }
+
+    public static boolean hasAnyEnchantConflict(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        if (hasManagedEnchant(meta, "smelting_touch_enchant")
+            && (meta.hasEnchant(Enchantment.SILK_TOUCH)
+                || meta instanceof EnchantmentStorageMeta storageMeta
+                && storageMeta.hasStoredEnchant(Enchantment.SILK_TOUCH))) {
+            return true;
+        }
+        if (!vanillaConflictLosers(meta.getEnchants()).isEmpty()) {
+            return true;
+        }
+        return meta instanceof EnchantmentStorageMeta storageMeta
+            && !vanillaConflictLosers(storageMeta.getStoredEnchants()).isEmpty();
+    }
+
+    private static boolean resolveEnchantConflicts(ItemMeta meta) {
+        boolean changed = false;
+        if (hasManagedEnchant(meta, "smelting_touch_enchant")
+            && ItemEnchantConflictPolicy.customConflictsWithVanilla("smelting_touch_enchant", "silk_touch")) {
+            changed |= meta.removeEnchant(Enchantment.SILK_TOUCH);
+            if (meta instanceof EnchantmentStorageMeta storageMeta) {
+                changed |= storageMeta.removeStoredEnchant(Enchantment.SILK_TOUCH);
+            }
+        }
+        for (Enchantment loser : vanillaConflictLosers(meta.getEnchants())) {
+            changed |= meta.removeEnchant(loser);
+        }
+        if (meta instanceof EnchantmentStorageMeta storageMeta) {
+            for (Enchantment loser : vanillaConflictLosers(storageMeta.getStoredEnchants())) {
+                changed |= storageMeta.removeStoredEnchant(loser);
+            }
+        }
+        return changed;
+    }
+
+    private static List<Enchantment> vanillaConflictLosers(Map<Enchantment, Integer> enchants) {
+        if (enchants == null || enchants.size() < 2) {
+            return List.of();
+        }
+        List<Map.Entry<Enchantment, Integer>> candidates = new ArrayList<>(enchants.entrySet());
+        candidates.removeIf(entry -> entry.getKey() == null || entry.getValue() == null || entry.getValue() <= 0);
+        candidates.sort((left, right) -> ItemEnchantConflictPolicy.compareVanillaCandidates(
+            enchantKey(left.getKey()), left.getValue(), enchantKey(right.getKey()), right.getValue()
+        ));
+
+        List<Enchantment> accepted = new ArrayList<>();
+        List<Enchantment> losers = new ArrayList<>();
+        for (Map.Entry<Enchantment, Integer> candidate : candidates) {
+            Enchantment enchantment = candidate.getKey();
+            boolean conflicts = accepted.stream().anyMatch(existing ->
+                existing.conflictsWith(enchantment) || enchantment.conflictsWith(existing));
+            if (conflicts) {
+                losers.add(enchantment);
+            } else {
+                accepted.add(enchantment);
+            }
+        }
+        return losers;
+    }
+
+    private static boolean hasManagedEnchant(ItemMeta meta, String keyName) {
+        if (meta == null || keyName == null) {
+            return false;
+        }
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        for (org.bukkit.NamespacedKey key : pdc.getKeys()) {
+            if (!"smpcore".equalsIgnoreCase(key.getNamespace()) || !keyName.equals(key.getKey())) {
+                continue;
+            }
+            Integer level = pdc.get(key, PersistentDataType.INTEGER);
+            return level != null && level > 0;
+        }
+        return false;
+    }
+
+    private static String enchantKey(Enchantment enchantment) {
+        return enchantment == null || enchantment.getKey() == null ? "" : enchantment.getKey().getKey();
     }
 
     private static boolean isModifierLine(String plain) {
@@ -395,11 +576,6 @@ public final class CustomLoreUtil {
 
     private static void appendCustomEnchantLines(List<Component> lore, ItemMeta meta) {
         lore.addAll(customEnchantLore(meta));
-    }
-
-    private static Component enchantLine(List<String> enchants) {
-        return Component.text("Enchants: " + String.join(" • ", enchants), NamedTextColor.AQUA)
-            .decoration(TextDecoration.ITALIC, false);
     }
 
     private static void appendClassified(List<Component> target, List<ClassifiedLine> lines) {
@@ -532,11 +708,18 @@ public final class CustomLoreUtil {
     }
 
     private static boolean isManagedItem(ItemMeta meta) {
+        if (!runicEnchantLines(meta).isEmpty()) {
+            return true;
+        }
         if (meta.getPersistentDataContainer().getKeys().stream()
             .anyMatch(key -> "smpcore".equalsIgnoreCase(key.getNamespace()))) {
             return true;
         }
-        for (Component line : meta.lore()) {
+        List<Component> lore = meta.lore();
+        if (lore == null) {
+            return false;
+        }
+        for (Component line : lore) {
             String plain = PLAIN.serialize(line).trim();
             if (isEnchantLine(plain) || isModifierLine(plain) || isRarityFooter(plain)) {
                 return true;
@@ -549,18 +732,46 @@ public final class CustomLoreUtil {
         if (meta == null) {
             return List.of();
         }
-        List<String> lines = new ArrayList<>();
+        List<String> lines = new ArrayList<>(vanillaEnchantLines(meta));
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        String customBookId = null;
+        boolean customBookMarkerPresent = false;
+        boolean replenishBookMarkerPresent = false;
+        for (org.bukkit.NamespacedKey key : pdc.getKeys()) {
+            if (!"smpcore".equalsIgnoreCase(key.getNamespace())) {
+                continue;
+            }
+            if ("custom_enchant_book".equals(key.getKey())) {
+                customBookMarkerPresent = true;
+                customBookId = pdc.get(key, PersistentDataType.STRING);
+            } else if ("replenish_book".equals(key.getKey())) {
+                replenishBookMarkerPresent = true;
+            }
+        }
+        String selectedCustomBookKey = customBookId == null || customBookId.isBlank()
+            ? null
+            : customBookId.toLowerCase(Locale.ROOT) + "_enchant";
+        boolean hasCustomBookMarker = customBookMarkerPresent;
+        boolean hasReplenishBookMarker = replenishBookMarkerPresent;
         pdc.getKeys().forEach(key -> {
             if (!"smpcore".equalsIgnoreCase(key.getNamespace())) {
                 return;
             }
-            if ("replenish_hoe".equals(key.getKey()) && pdc.has(key, PersistentDataType.BYTE)) {
-                lines.add("Replenish I");
+            if (("replenish_hoe".equals(key.getKey()) || "replenish_book".equals(key.getKey()))
+                && pdc.has(key, PersistentDataType.BYTE)) {
+                Byte marker = pdc.get(key, PersistentDataType.BYTE);
+                if (marker != null && marker == (byte) 1
+                    && !(hasCustomBookMarker && hasReplenishBookMarker)) {
+                    lines.add("Replenish I");
+                }
                 return;
             }
             EnchantLine line = CUSTOM_ENCHANT_LINES.get(key.getKey());
             if (line == null) {
+                return;
+            }
+            if (hasReplenishBookMarker
+                || hasCustomBookMarker && !key.getKey().equals(selectedCustomBookKey)) {
                 return;
             }
             Integer level = pdc.get(key, PersistentDataType.INTEGER);
@@ -568,8 +779,81 @@ public final class CustomLoreUtil {
                 lines.add(line.display(level));
             }
         });
-        lines.sort(String::compareToIgnoreCase);
+        Map<String, String> unique = new java.util.TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        for (String line : lines) {
+            if (line != null && !line.isBlank()) {
+                unique.putIfAbsent(line, line);
+            }
+        }
+        return new ArrayList<>(unique.values());
+    }
+
+    private static boolean hasVanillaEnchants(ItemMeta meta) {
+        return meta != null && (!meta.getEnchants().isEmpty()
+            || meta instanceof EnchantmentStorageMeta storageMeta && !storageMeta.getStoredEnchants().isEmpty());
+    }
+
+    private static List<String> vanillaEnchantLines(ItemMeta meta) {
+        if (meta == null) {
+            return List.of();
+        }
+        Map<Enchantment, Integer> enchants = new HashMap<>(meta.getEnchants());
+        if (meta instanceof EnchantmentStorageMeta storageMeta) {
+            storageMeta.getStoredEnchants().forEach((enchantment, level) ->
+                enchants.merge(enchantment, level, Math::max));
+        }
+        List<String> lines = new ArrayList<>();
+        enchants.forEach((enchantment, level) -> {
+            if (enchantment != null && level != null && level > 0) {
+                lines.add(vanillaEnchantDisplay(enchantment.getKey().getKey(), level));
+            }
+        });
+        lines.sort(String.CASE_INSENSITIVE_ORDER);
         return lines;
+    }
+
+    private static Set<String> runicEnchantLines(ItemMeta meta) {
+        if (meta == null || meta.getEnchants().isEmpty()) {
+            return Set.of();
+        }
+        Set<String> highlighted = new HashSet<>();
+        meta.getEnchants().forEach((enchantment, level) -> {
+            if (enchantment == null || level == null
+                || !isRunicEnhancedLevel(level, enchantment.getMaxLevel())) {
+                return;
+            }
+            highlighted.add(vanillaEnchantDisplay(enchantment.getKey().getKey(), level));
+        });
+        return highlighted;
+    }
+
+    static boolean isRunicEnhancedLevel(int level, int normalMaxLevel) {
+        int safeMax = Math.max(1, normalMaxLevel);
+        return level == safeMax + 1 || level == safeMax + 2;
+    }
+
+    static String vanillaEnchantDisplay(String key, int level) {
+        String normalized = key == null ? "enchant" : key.trim().toLowerCase(Locale.ROOT);
+        String name = switch (normalized) {
+            case "bane_of_arthropods" -> "Bane of Arthropods";
+            case "binding_curse" -> "Curse of Binding";
+            case "luck_of_the_sea" -> "Luck of the Sea";
+            case "vanishing_curse" -> "Curse of Vanishing";
+            default -> titleWords(normalized);
+        };
+        return name + " " + roman(Math.max(1, level));
+    }
+
+    private static String titleWords(String raw) {
+        String[] words = raw.split("_+");
+        StringBuilder out = new StringBuilder();
+        for (String word : words) {
+            if (word.isBlank()) continue;
+            if (!out.isEmpty()) out.append(' ');
+            out.append(Character.toUpperCase(word.charAt(0)));
+            if (word.length() > 1) out.append(word.substring(1));
+        }
+        return out.isEmpty() ? "Enchant" : out.toString();
     }
 
     private static String roman(int value) {
@@ -585,7 +869,7 @@ public final class CustomLoreUtil {
 
     private record EnchantLine(String name, int maxLevel) {
         private String display(int rawLevel) {
-            int level = Math.max(1, Math.min(255, rawLevel));
+            int level = Math.max(1, Math.min(Math.max(1, maxLevel), rawLevel));
             return name + " " + roman(level);
         }
     }

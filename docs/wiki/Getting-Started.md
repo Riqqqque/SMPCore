@@ -19,7 +19,9 @@ Before staff runs `/startsmp`, players remain inside the launch barrier. The Sea
 - Set a safe home with `/sethome`.
 - Use `/veinminer` to check whether vein mining is enabled. Sneak while mining to activate it.
 - Normal mining, hostile-mob kills, XP gain, and player kills build Essence progress automatically.
-- Returning players log back in where they logged out. `/spawn` is always available when you want to return.
+- Returning players log back in where they logged out. `/spawn` safely returns you from the Overworld, Nether, End, or an idle dungeon; it cannot be used to escape an active boss fight.
+- Use `/warp list` to see public destinations; each can also have a short command such as `/tavern`.
+- Discover player-built [Waystones](Waystones) by right-clicking their signs. Right-click a known waystone again to travel between discoveries.
 
 ## Your first upgrades
 

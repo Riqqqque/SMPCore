@@ -43,6 +43,7 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.inventory.EquipmentSlot;
@@ -66,6 +67,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class BlackMarketManager implements Listener {
 
@@ -82,10 +84,12 @@ public final class BlackMarketManager implements Listener {
     private final NamespacedKey trophyOwnerKey;
     private final NamespacedKey trophyOwnerNameKey;
     private final NamespacedKey trophyDisplayKey;
+    private final NamespacedKey trophyGlowDisplayKey;
     private final NamespacedKey displayXKey;
     private final NamespacedKey displayYKey;
     private final NamespacedKey displayZKey;
     private final Map<UUID, Long> nextPurchaseAt = new ConcurrentHashMap<>();
+    private final AtomicBoolean trophyVisibilityRefreshQueued = new AtomicBoolean();
 
     public BlackMarketManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -97,6 +101,7 @@ public final class BlackMarketManager implements Listener {
         this.trophyOwnerKey = new NamespacedKey(plugin, "boss_souvenir_owner");
         this.trophyOwnerNameKey = new NamespacedKey(plugin, "boss_souvenir_owner_name");
         this.trophyDisplayKey = new NamespacedKey(plugin, "boss_souvenir_display");
+        this.trophyGlowDisplayKey = new NamespacedKey(plugin, "boss_souvenir_glow_display");
         this.displayXKey = new NamespacedKey(plugin, "boss_souvenir_x");
         this.displayYKey = new NamespacedKey(plugin, "boss_souvenir_y");
         this.displayZKey = new NamespacedKey(plugin, "boss_souvenir_z");
@@ -115,6 +120,7 @@ public final class BlackMarketManager implements Listener {
         }
         removeAllDisplays();
         nextPurchaseAt.clear();
+        trophyVisibilityRefreshQueued.set(false);
     }
 
     public void openFromNpc(Player player) {
@@ -334,6 +340,11 @@ public final class BlackMarketManager implements Listener {
         nextPurchaseAt.remove(event.getPlayer().getUniqueId());
     }
 
+    @EventHandler
+    public void onJoin(PlayerJoinEvent event) {
+        Bukkit.getScheduler().runTask(plugin, () -> syncViewerTrophyVisibility(event.getPlayer()));
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPlace(BlockPlaceEvent event) {
         BossManager.BossType boss = trophyBoss(event.getItemInHand());
@@ -460,31 +471,43 @@ public final class BlackMarketManager implements Listener {
     private void ensureDisplay(Block block) {
         BossManager.BossType boss = trophyBoss(block);
         if (boss == null || block.getWorld() == null) return;
-        List<ItemDisplay> matches = new ArrayList<>();
+        List<ItemDisplay> normalMatches = new ArrayList<>();
+        List<ItemDisplay> glowMatches = new ArrayList<>();
         Location center = block.getLocation().add(0.5, 1.12, 0.5);
         for (Entity entity : block.getWorld().getNearbyEntities(center, 1.25, 1.75, 1.25)) {
-            if (entity instanceof ItemDisplay display && displayMatches(display, block)) matches.add(display);
+            if (!(entity instanceof ItemDisplay display) || !displayMatches(display, block)) continue;
+            (isGlowDisplay(display) ? glowMatches : normalMatches).add(display);
         }
-        ItemDisplay display = matches.isEmpty()
+
+        ItemDisplay normalDisplay = normalMatches.isEmpty()
             ? block.getWorld().spawn(center, ItemDisplay.class)
-            : matches.getFirst();
-        for (int index = 1; index < matches.size(); index++) matches.get(index).remove();
-        configureDisplay(display, block, boss);
+            : normalMatches.getFirst();
+        ItemDisplay glowDisplay = glowMatches.isEmpty()
+            ? block.getWorld().spawn(center, ItemDisplay.class)
+            : glowMatches.getFirst();
+        for (int index = 1; index < normalMatches.size(); index++) normalMatches.get(index).remove();
+        for (int index = 1; index < glowMatches.size(); index++) glowMatches.get(index).remove();
+
+        configureDisplay(normalDisplay, block, boss, false);
+        configureDisplay(glowDisplay, block, boss, true);
+        syncTrophyVisibility(block, normalDisplay, glowDisplay);
     }
 
-    private void configureDisplay(ItemDisplay display, Block block, BossManager.BossType boss) {
+    private void configureDisplay(ItemDisplay display, Block block, BossManager.BossType boss, boolean glowing) {
         TrophyDefinition trophy = trophy(boss);
         Location target = block.getLocation().add(0.5, 1.12, 0.5);
         if (!display.getWorld().equals(block.getWorld()) || display.getLocation().distanceSquared(target) > 0.000001D) {
             display.teleport(target);
         }
+        // The glowing layer is opt-in so a joining or newly tracking enemy never receives it by default.
+        display.setVisibleByDefault(!glowing);
         display.setItemStack(trophyDisplayItem(boss));
         display.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
         display.setBillboard(Display.Billboard.FIXED);
         display.setBrightness(new Display.Brightness(15, 15));
         display.setViewRange(VisualRangeUtil.blocksToDisplayViewRange(24));
-        display.setGlowing(true);
-        display.setGlowColorOverride(trophy.color());
+        display.setGlowing(glowing);
+        display.setGlowColorOverride(glowing ? trophy.color() : null);
         display.setShadowRadius(0.22F);
         display.setShadowStrength(0.75F);
         display.setGravity(false);
@@ -499,6 +522,7 @@ public final class BlackMarketManager implements Listener {
         ));
         PersistentDataContainer pdc = display.getPersistentDataContainer();
         pdc.set(trophyDisplayKey, PersistentDataType.STRING, boss.id());
+        pdc.set(trophyGlowDisplayKey, PersistentDataType.BYTE, glowing ? (byte) 1 : (byte) 0);
         pdc.set(displayXKey, PersistentDataType.INTEGER, block.getX());
         pdc.set(displayYKey, PersistentDataType.INTEGER, block.getY());
         pdc.set(displayZKey, PersistentDataType.INTEGER, block.getZ());
@@ -550,6 +574,80 @@ public final class BlackMarketManager implements Listener {
         return display.getPersistentDataContainer().has(trophyDisplayKey, PersistentDataType.STRING);
     }
 
+    private boolean isGlowDisplay(ItemDisplay display) {
+        Byte glowing = display.getPersistentDataContainer().get(trophyGlowDisplayKey, PersistentDataType.BYTE);
+        return glowing != null && glowing == (byte) 1;
+    }
+
+    public void requestTrophyGlowRefresh() {
+        if (!trophyVisibilityRefreshQueued.compareAndSet(false, true)) return;
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            trophyVisibilityRefreshQueued.set(false);
+            for (Player viewer : Bukkit.getOnlinePlayers()) syncViewerTrophyVisibility(viewer);
+        });
+    }
+
+    private void syncTrophyVisibility(Block block, ItemDisplay normalDisplay, ItemDisplay glowDisplay) {
+        UUID ownerId = trophyOwner(block);
+        String ownerTeam = ownerId == null || plugin.getTeamManager() == null
+            ? null
+            : plugin.getTeamManager().teamDisplayName(ownerId);
+        for (Player viewer : Bukkit.getOnlinePlayers()) {
+            boolean showGlow = canViewerSeeTrophyGlow(
+                viewer.getUniqueId(),
+                ownerId,
+                plugin.getTeamManager() == null ? null : plugin.getTeamManager().teamDisplayName(viewer.getUniqueId()),
+                ownerTeam
+            );
+            applyTrophyLayerVisibility(viewer, normalDisplay, glowDisplay, showGlow);
+        }
+    }
+
+    private void syncViewerTrophyVisibility(Player viewer) {
+        if (viewer == null || !viewer.isOnline()) return;
+        for (World world : Bukkit.getWorlds()) {
+            for (ItemDisplay display : world.getEntitiesByClass(ItemDisplay.class)) {
+                if (!isTrophyDisplay(display)) continue;
+                Block block = displayAnchor(display);
+                if (block == null || trophyBoss(block) == null) continue;
+                UUID ownerId = trophyOwner(block);
+                String ownerTeam = ownerId == null || plugin.getTeamManager() == null
+                    ? null
+                    : plugin.getTeamManager().teamDisplayName(ownerId);
+                String viewerTeam = plugin.getTeamManager() == null
+                    ? null
+                    : plugin.getTeamManager().teamDisplayName(viewer.getUniqueId());
+                boolean showGlow = canViewerSeeTrophyGlow(viewer.getUniqueId(), ownerId, viewerTeam, ownerTeam);
+                if (isGlowDisplay(display)) {
+                    setEntityVisible(viewer, display, showGlow);
+                } else {
+                    setEntityVisible(viewer, display, !showGlow);
+                }
+            }
+        }
+    }
+
+    private void applyTrophyLayerVisibility(
+        Player viewer,
+        ItemDisplay normalDisplay,
+        ItemDisplay glowDisplay,
+        boolean showGlow
+    ) {
+        setEntityVisible(viewer, normalDisplay, !showGlow);
+        setEntityVisible(viewer, glowDisplay, showGlow);
+    }
+
+    private void setEntityVisible(Player viewer, Entity entity, boolean visible) {
+        if (visible) viewer.showEntity(plugin, entity);
+        else viewer.hideEntity(plugin, entity);
+    }
+
+    static boolean canViewerSeeTrophyGlow(UUID viewerId, UUID ownerId, String viewerTeam, String ownerTeam) {
+        if (viewerId == null || ownerId == null) return false;
+        if (viewerId.equals(ownerId)) return true;
+        return ownerTeam != null && !ownerTeam.isBlank() && ownerTeam.equals(viewerTeam);
+    }
+
     private Block displayAnchor(ItemDisplay display) {
         PersistentDataContainer pdc = display.getPersistentDataContainer();
         Integer x = pdc.get(displayXKey, PersistentDataType.INTEGER);
@@ -573,6 +671,17 @@ public final class BlackMarketManager implements Listener {
     private String trophyOwnerName(Block block) {
         if (!(block.getState() instanceof TileState state)) return null;
         return state.getPersistentDataContainer().get(trophyOwnerNameKey, PersistentDataType.STRING);
+    }
+
+    private UUID trophyOwner(Block block) {
+        if (!(block.getState() instanceof TileState state)) return null;
+        String stored = state.getPersistentDataContainer().get(trophyOwnerKey, PersistentDataType.STRING);
+        if (stored == null || stored.isBlank()) return null;
+        try {
+            return UUID.fromString(stored);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     private boolean isTrophyInventory(Inventory inventory) {

@@ -4,10 +4,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 public final class BossMechanics {
     private static final List<Signature> SIGNATURES = List.of(
-        new Signature("yule_the_minion", "marshal_stack", "Hold the Line", "Stack on the blue-marked player.", List.of("Hold the Line", "Veilbound Muster")),
+        new Signature("yule_the_minion", "marshal_stack", "Blue Isolation", "Leave the blue-marked player alone inside the circle.", List.of("Blue Isolation", "Veilbound Muster")),
         new Signature("kael_the_ashen", "ashen_crossfire", "Ashen Crossfire", "Spread marked shots before they land.", List.of("Ashen Crossfire", "Deadeye")),
         new Signature("vesper_the_widow_queen", "widows_trail", "Widow's Claim", "Keep moving and leave the venom trail behind.", List.of("Widow's Claim", "Webbreak")),
         new Signature("mirewood_the_root_tyrant", "root_wards", "Root Wards", "Stand inside every green ward before it closes.", List.of("Root Wards", "Briar Lattice")),
@@ -49,13 +50,22 @@ public final class BossMechanics {
         return Math.min(safeMaximum, Math.max(1, (players + 1) / 2));
     }
 
-    public static double splitDamage(double totalDamage, int stackSize, double soloCap) {
-        double safeTotal = Math.max(0.0, totalDamage);
-        int players = Math.max(1, stackSize);
-        if (players == 1) {
-            return Math.min(safeTotal, Math.max(0.0, soloCap));
+    public static boolean isOtherPlayerInsideMarker(
+        UUID markerOwnerId,
+        UUID candidateId,
+        double distanceSquared,
+        double radius
+    ) {
+        if (markerOwnerId == null || candidateId == null || markerOwnerId.equals(candidateId)) {
+            return false;
         }
-        return safeTotal / players;
+        double safeRadius = Math.max(0.0, radius);
+        return Math.max(0.0, distanceSquared) <= safeRadius * safeRadius;
+    }
+
+    public static int settledTrailPointCount(int totalPoints, boolean pointPlacedThisTick) {
+        int safeTotal = Math.max(0, totalPoints);
+        return pointPlacedThisTick ? Math.max(0, safeTotal - 1) : safeTotal;
     }
 
     public static double staggerThreshold(double maxHealth, int playerCount) {

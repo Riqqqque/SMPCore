@@ -45,6 +45,9 @@ public final class SMPCoreCommand {
                         if (plugin.getExactSpawnListener() != null) {
                             plugin.getExactSpawnListener().applyConfiguredSpawn();
                         }
+                        if (plugin.getSmpStartManager() != null) {
+                            plugin.getSmpStartManager().applyConfiguredState();
+                        }
                         if (plugin.getSpawnAmbienceManager() != null) {
                             plugin.getSpawnAmbienceManager().reloadConfig();
                         }
@@ -68,7 +71,8 @@ public final class SMPCoreCommand {
                             plugin.getLegendaryAltarManager().reloadConfig();
                         }
                         ctx.getSource().getSender().sendMessage(
-                            MessageUtil.success("Configuration reloaded."));
+                            MessageUtil.success("Configuration reloaded. Golden Apple surround: <white>"
+                                + plugin.getConfigManager().goldenAppleSurroundMaterial.name() + "</white>."));
                         return Command.SINGLE_SUCCESS;
                     }))
                 .then(Commands.literal("bedrock")

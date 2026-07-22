@@ -84,7 +84,8 @@ public final class PluginActivityLogger implements Listener {
     }
 
     private boolean isTrackedCommand(String root) {
-        return PluginCommandRoots.contains(root);
+        return PluginCommandRoots.contains(root)
+            || (plugin.getWarpManager() != null && plugin.getWarpManager().isWarpCommand(root));
     }
 
     private String rootCommand(String command) {

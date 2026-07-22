@@ -3,6 +3,7 @@ package me.rique.smpcore.shop;
 import io.papermc.paper.event.player.PlayerOpenSignEvent;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.AtomicYamlFile;
+import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -10,6 +11,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
@@ -63,6 +65,7 @@ public final class MarketStallManager implements Listener {
     private static final long TRANSFER_MILLIS = 60_000L;
     private static final long MAX_PRICE = 100_000_000L;
     private static final long MAX_VOLUME = 100_000L;
+    private static final int MAX_MANAGERS_PER_STALL = 5;
     private static final NumberFormat NUMBERS = NumberFormat.getIntegerInstance(Locale.US);
 
     private final SMPCore plugin;
@@ -125,11 +128,11 @@ public final class MarketStallManager implements Listener {
         ItemStack wand = new ItemStack(Material.BLAZE_ROD);
         ItemMeta meta = wand.getItemMeta();
         meta.displayName(MessageUtil.parse("<gold><bold>Market Stall Wand</bold></gold>"));
-        meta.lore(List.of(
+        meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
             MessageUtil.parse("<gray>Left-click: first corner</gray>"),
             MessageUtil.parse("<gray>Right-click: second corner</gray>"),
             MessageUtil.parse("<dark_gray>Then look at the sale sign and use /stall admin create.</dark_gray>")
-        ));
+        )));
         meta.getPersistentDataContainer().set(wandKey, PersistentDataType.BYTE, (byte) 1);
         wand.setItemMeta(meta);
         return wand;
@@ -146,18 +149,20 @@ public final class MarketStallManager implements Listener {
         return signIndex.containsKey(blockKey(block));
     }
 
-    public boolean allowsSpawnBlockPlacement(Player player, Block block) {
-        Stall stall = stallAt(block == null ? null : block.getLocation());
-        return stall != null && stall.isOwner(player) && isAllowedPlacement(stall, block);
+    boolean tryRecoverLegacyShopSign(Block block) {
+        PlayerShopListener shops = plugin.getPlayerShopListener();
+        if (block == null || shops == null || isPurchaseSign(block)) return false;
+        Stall stall = stallAt(block.getLocation());
+        return stall != null
+            && stall.ownerId != null
+            && stall.ownerName != null
+            && stall.placedBlocks.contains(blockKey(block))
+            && isWallSignAttachedToStorageInStall(stall, block)
+            && shops.recoverLegacyShopSign(block, stall.ownerId, stall.ownerName);
     }
 
-    public boolean allowsSpawnBlockBreak(Player player, Block block) {
-        Stall stall = stallAt(block == null ? null : block.getLocation());
-        if (stall == null || !stall.isOwner(player)) return false;
-        boolean placedByOwner = stall.placedBlocks.contains(blockKey(block));
-        boolean editableFixture = isOwnerEditableMaterial(block.getType()) && !hasInventoryItems(block);
-        boolean chestShopSign = isWallSignAttachedToStorageInStall(stall, block);
-        return canOwnerBreakStallBlock(isPurchaseSign(block), placedByOwner, editableFixture, chestShopSign);
+    public boolean handlesSpawnBlockChange(Block block) {
+        return stallAt(block == null ? null : block.getLocation()) != null;
     }
 
     public boolean allowsSpawnInteraction(PlayerInteractEvent event) {
@@ -168,7 +173,7 @@ public final class MarketStallManager implements Listener {
         Stall stall = stallAt(block.getLocation());
         if (stall == null || event.getAction() != Action.RIGHT_CLICK_BLOCK) return false;
         if (block.getBlockData() instanceof Openable) return true;
-        if (!stall.isOwner(event.getPlayer())) return false;
+        if (!stall.canManage(event.getPlayer())) return false;
         Material held = event.getItem() == null ? null : event.getItem().getType();
         return stall.placedBlocks.contains(blockKey(block))
             || isOwnerEditableMaterial(block.getType())
@@ -183,7 +188,7 @@ public final class MarketStallManager implements Listener {
         if (chestStall == null && signStall == null) return true;
         return chestStall != null
             && chestStall == signStall
-            && chestStall.isOwner(player)
+            && chestStall.canManage(player)
             && isPlaceableStorageMaterial(chest.getType())
             && chestStall.placedBlocks.contains(blockKey(sign))
             && isWallSignAttachedToStorage(sign, chest);
@@ -194,26 +199,26 @@ public final class MarketStallManager implements Listener {
         Block block = event.getSign().getBlock();
         if (plugin.getPlayerShopListener() != null && plugin.getPlayerShopListener().isShopPurchaseSign(block)) return;
         Stall stall = stallAt(block.getLocation());
-        if (stall == null || canEditStallSign(isAdmin(event.getPlayer()), isPurchaseSign(block), stall.isOwner(event.getPlayer()))) {
+        if (stall == null || canEditStallSign(isAdmin(event.getPlayer()), isPurchaseSign(block), stall.canManage(event.getPlayer()))) {
             return;
         }
         event.setCancelled(true);
         event.getPlayer().sendMessage(MessageUtil.warn(isPurchaseSign(block)
             ? "That market sign is managed by the server."
-            : "Only this stall's owner can edit its signs."));
+            : "Only this stall's owner or a trusted manager can edit its signs."));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onStallSignChange(SignChangeEvent event) {
         if (plugin.getPlayerShopListener() != null && plugin.getPlayerShopListener().isShopPurchaseSign(event.getBlock())) return;
         Stall stall = stallAt(event.getBlock().getLocation());
-        if (stall == null || canEditStallSign(isAdmin(event.getPlayer()), isPurchaseSign(event.getBlock()), stall.isOwner(event.getPlayer()))) {
+        if (stall == null || canEditStallSign(isAdmin(event.getPlayer()), isPurchaseSign(event.getBlock()), stall.canManage(event.getPlayer()))) {
             return;
         }
         event.setCancelled(true);
         event.getPlayer().sendMessage(MessageUtil.warn(isPurchaseSign(event.getBlock())
             ? "That market sign is managed by the server."
-            : "Only this stall's owner can edit its signs."));
+            : "Only this stall's owner or a trusted manager can edit its signs."));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
@@ -226,12 +231,12 @@ public final class MarketStallManager implements Listener {
             return;
         }
         Stall stall = stallAt(block.getLocation());
-        if (stall == null || isAdmin(event.getPlayer()) || stall.isOwner(event.getPlayer())) return;
+        if (stall == null || isAdmin(event.getPlayer()) || stall.canManage(event.getPlayer())) return;
         event.setCancelled(true);
         event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
         event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
         if (event.getHand() == EquipmentSlot.HAND) {
-            event.getPlayer().sendMessage(MessageUtil.warn("Only this stall's owner can edit its signs."));
+            event.getPlayer().sendMessage(MessageUtil.warn("Only this stall's owner or a trusted manager can edit its signs."));
         }
     }
 
@@ -287,8 +292,8 @@ public final class MarketStallManager implements Listener {
     public void onPlace(BlockPlaceEvent event) {
         Stall stall = stallAt(event.getBlockPlaced().getLocation());
         if (stall == null || isAdmin(event.getPlayer())) return;
-        if (!stall.isOwner(event.getPlayer())) {
-            deny(event.getPlayer(), event, "Only this stall's owner can place shop fixtures here.");
+        if (!stall.canManage(event.getPlayer())) {
+            deny(event.getPlayer(), event, "Only this stall's owner or a trusted manager can place shop fixtures here.");
             return;
         }
         if (!isAllowedPlacement(stall, event.getBlockPlaced())) {
@@ -306,7 +311,7 @@ public final class MarketStallManager implements Listener {
     public void onPlaceComplete(BlockPlaceEvent event) {
         if (isAdmin(event.getPlayer())) return;
         Stall stall = stallAt(event.getBlockPlaced().getLocation());
-        if (stall == null || !stall.isOwner(event.getPlayer()) || !isAllowedPlacement(stall, event.getBlockPlaced())) return;
+        if (stall == null || !stall.canManage(event.getPlayer()) || !isAllowedPlacement(stall, event.getBlockPlaced())) return;
         if (stall.placedBlocks.add(blockKey(event.getBlockPlaced())) && !save()) {
             stall.placedBlocks.remove(blockKey(event.getBlockPlaced()));
             event.getBlockPlaced().breakNaturally(event.getItemInHand());
@@ -321,7 +326,7 @@ public final class MarketStallManager implements Listener {
         boolean placedByOwner = stall.placedBlocks.contains(blockKey(event.getBlock()));
         boolean editableFixture = isOwnerEditableMaterial(event.getBlock().getType());
         boolean chestShopSign = isWallSignAttachedToStorageInStall(stall, event.getBlock());
-        if (!stall.isOwner(event.getPlayer()) || !canOwnerBreakStallBlock(
+        if (!stall.canManage(event.getPlayer()) || !canOwnerBreakStallBlock(
             isPurchaseSign(event.getBlock()),
             placedByOwner,
             editableFixture,
@@ -354,9 +359,9 @@ public final class MarketStallManager implements Listener {
     public void onInventoryOpen(InventoryOpenEvent event) {
         Location location = event.getInventory().getLocation();
         Stall stall = stallAt(location);
-        if (stall == null || !(event.getPlayer() instanceof Player player) || isAdmin(player) || stall.isOwner(player)) return;
+        if (stall == null || !(event.getPlayer() instanceof Player player) || isAdmin(player) || stall.canManage(player)) return;
         event.setCancelled(true);
-        player.sendMessage(MessageUtil.warn("Buy from a chest shop sign. Only the stall owner can open its storage."));
+        player.sendMessage(MessageUtil.warn("Buy from a chest shop sign. Only the stall owner or a trusted manager can open its storage."));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -649,6 +654,15 @@ public final class MarketStallManager implements Listener {
         Stall stall = ownedStall(player == null ? null : player.getUniqueId());
         if (player == null) return;
         if (stall == null) {
+            List<Stall> managed = managedStalls(player.getUniqueId());
+            if (!managed.isEmpty()) {
+                player.sendMessage(MessageUtil.prefixedRaw("<gold><bold>Managed Market Stalls</bold></gold>"));
+                for (Stall trusted : managed) {
+                    player.sendMessage(MessageUtil.info("Stall <white>" + trusted.id + "</white> for <white>" + trusted.ownerName + "</white>."));
+                }
+                player.sendMessage(MessageUtil.info("You may stock, open, create, and remove those chest shops. Purchases still charge you normally."));
+                return;
+            }
             player.sendMessage(MessageUtil.info("You do not own a market stall. Right-click an available stall's sale sign to buy one."));
             player.sendMessage(MessageUtil.info("Shop payments: <white>/shops balance</white> and <white>/shops collect</white>."));
             return;
@@ -657,7 +671,84 @@ public final class MarketStallManager implements Listener {
         player.sendMessage(MessageUtil.info("Stall: <white>" + stall.id + "</white> <dark_gray>|</dark_gray> Price: <white>" + NUMBERS.format(stall.price) + " Essence</white>"));
         player.sendMessage(MessageUtil.info("Place chests, then attach wall signs directly to them. Use <white>/shops</white> for the four sign lines."));
         player.sendMessage(MessageUtil.info("You may remove shop storage, lanterns, furnaces, smokers, crafting tables, bookshelves, and pots. Structural wood and shelves stay protected."));
+        player.sendMessage(MessageUtil.info("Trusted managers: <white>" + managerSummary(stall) + "</white>. Toggle access with <white>/stall manager &lt;player&gt;</white>."));
         player.sendMessage(MessageUtil.info("Use <white>/stall transfer &lt;player&gt;</white> or <white>/stall sell</white>. Remove all fixtures before selling it back."));
+    }
+
+    public void sendManagers(Player owner) {
+        if (owner == null) return;
+        Stall stall = ownedStall(owner.getUniqueId());
+        if (stall == null) {
+            owner.sendMessage(MessageUtil.warn("You do not own a stall."));
+            return;
+        }
+        owner.sendMessage(MessageUtil.info("Trusted stall managers: <white>" + managerSummary(stall) + "</white>."));
+        owner.sendMessage(MessageUtil.info("Use <white>/stall manager &lt;player&gt;</white> to grant or revoke access."));
+    }
+
+    public void toggleManager(Player owner, String targetName) {
+        if (owner == null || targetName == null || targetName.isBlank()) return;
+        Stall stall = ownedStall(owner.getUniqueId());
+        if (stall == null) {
+            owner.sendMessage(MessageUtil.warn("You do not own a stall."));
+            return;
+        }
+        Map.Entry<UUID, String> trustedMatch = stall.managers.entrySet().stream()
+            .filter(entry -> entry.getValue().equalsIgnoreCase(targetName.trim()))
+            .findFirst()
+            .orElse(null);
+        OfflinePlayer target = trustedMatch == null
+            ? cachedPlayer(targetName)
+            : Bukkit.getOfflinePlayer(trustedMatch.getKey());
+        if (target == null || target.getUniqueId() == null || (trustedMatch == null && target.getName() == null)) {
+            owner.sendMessage(MessageUtil.warn("That player must be online or have joined the server before."));
+            return;
+        }
+        UUID targetId = target.getUniqueId();
+        String name = trustedMatch == null ? target.getName() : trustedMatch.getValue();
+        if (targetId.equals(owner.getUniqueId())) {
+            owner.sendMessage(MessageUtil.warn("You already have full access as the stall owner."));
+            return;
+        }
+
+        String previous = stall.managers.remove(targetId);
+        boolean granting = previous == null;
+        if (granting) {
+            if (stall.managers.size() >= MAX_MANAGERS_PER_STALL) {
+                owner.sendMessage(MessageUtil.warn("A stall can have at most " + MAX_MANAGERS_PER_STALL + " trusted managers."));
+                return;
+            }
+            stall.managers.put(targetId, name);
+        }
+        if (!save()) {
+            if (granting) {
+                stall.managers.remove(targetId);
+            } else {
+                stall.managers.put(targetId, previous);
+            }
+            owner.sendMessage(MessageUtil.error("That stall permission could not be saved."));
+            return;
+        }
+
+        owner.sendMessage(granting
+            ? MessageUtil.success("<white>" + name + "</white> can now manage stall <white>" + stall.id + "</white>.")
+            : MessageUtil.success("Removed <white>" + previous + "</white>'s access to stall <white>" + stall.id + "</white>."));
+        Player online = target.getPlayer();
+        if (online != null && online.isOnline()) {
+            online.sendMessage(granting
+                ? MessageUtil.info("<white>" + owner.getName() + "</white> trusted you to manage stall <white>" + stall.id + "</white>. You can still buy from its shops normally.")
+                : MessageUtil.info("Your manager access to stall <white>" + stall.id + "</white> was removed."));
+        }
+    }
+
+    public List<String> managerSuggestions(Player owner) {
+        Set<String> names = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        Bukkit.getOnlinePlayers().forEach(player -> {
+            if (owner == null || !player.getUniqueId().equals(owner.getUniqueId())) names.add(player.getName());
+        });
+        Stall stall = ownedStall(owner == null ? null : owner.getUniqueId());
+        if (stall != null) names.addAll(stall.managers.values());
+        return List.copyOf(names);
     }
 
     public void requestTransfer(Player owner, Player target) {
@@ -698,10 +789,13 @@ public final class MarketStallManager implements Listener {
         }
         UUID previousOwner = stall.ownerId;
         String previousName = stall.ownerName;
+        Map<UUID, String> previousManagers = new LinkedHashMap<>(stall.managers);
         int transferredShops = transferChestShops(stall, previousOwner, target.getUniqueId(), target.getName());
+        stall.managers.clear();
         setOwner(stall, target.getUniqueId(), target.getName());
         if (!save()) {
             setOwner(stall, previousOwner, previousName);
+            stall.managers.putAll(previousManagers);
             transferChestShops(stall, target.getUniqueId(), previousOwner, previousName);
             target.sendMessage(MessageUtil.error("The stall transfer could not be saved."));
             return;
@@ -773,9 +867,12 @@ public final class MarketStallManager implements Listener {
         }
         UUID previousOwner = stall.ownerId;
         String previousName = stall.ownerName;
+        Map<UUID, String> previousManagers = new LinkedHashMap<>(stall.managers);
+        stall.managers.clear();
         setOwner(stall, null, null);
         if (!save()) {
             setOwner(stall, previousOwner, previousName);
+            stall.managers.putAll(previousManagers);
             updateSign(stall);
             owner.sendMessage(MessageUtil.error("The stall sale could not be saved."));
             return;
@@ -783,6 +880,7 @@ public final class MarketStallManager implements Listener {
         long paid = plugin.getEssenceManager().refund(owner, refund, "market stall resale");
         if (paid != refund) {
             setOwner(stall, previousOwner, previousName);
+            stall.managers.putAll(previousManagers);
             save();
             updateSign(stall);
             owner.sendMessage(MessageUtil.error("The refund could not be completed, so you still own the stall."));
@@ -849,12 +947,58 @@ public final class MarketStallManager implements Listener {
         );
     }
 
+    public ShopIdentity shopIdentityFor(Player actor, Block chest, Block sign) {
+        if (actor == null) return null;
+        Stall chestStall = stallAt(chest == null ? null : chest.getLocation());
+        Stall signStall = stallAt(sign == null ? null : sign.getLocation());
+        if (chestStall == null && signStall == null) {
+            return new ShopIdentity(actor.getUniqueId(), actor.getName());
+        }
+        if (chestStall == null || chestStall != signStall || !chestStall.canManage(actor)
+            || chestStall.ownerId == null || chestStall.ownerName == null) {
+            return null;
+        }
+        return new ShopIdentity(chestStall.ownerId, chestStall.ownerName);
+    }
+
+    public boolean canManageShopForOwner(Player actor, Block shopBlock, UUID shopOwnerId) {
+        Stall stall = stallAt(shopBlock == null ? null : shopBlock.getLocation());
+        return stall != null && shopOwnerId != null && shopOwnerId.equals(stall.ownerId) && stall.canManage(actor);
+    }
+
     private Stall ownedStall(UUID ownerId) {
         return ownerId == null ? null : ownershipIndex.get(ownerId);
     }
 
+    private List<Stall> managedStalls(UUID playerId) {
+        if (playerId == null) return List.of();
+        List<Stall> managed = new ArrayList<>();
+        for (Stall stall : stalls.values()) {
+            if (stall.managers.containsKey(playerId)) managed.add(stall);
+        }
+        return managed;
+    }
+
     private boolean hasStall(UUID ownerId) {
         return ownedStall(ownerId) != null;
+    }
+
+    private OfflinePlayer cachedPlayer(String input) {
+        String clean = input == null ? "" : input.trim();
+        if (clean.isBlank()) return null;
+        Player online = Bukkit.getPlayerExact(clean);
+        if (online != null) return online;
+        OfflinePlayer cached = Bukkit.getOfflinePlayerIfCached(clean);
+        if (cached != null) return cached;
+        for (OfflinePlayer player : Bukkit.getOfflinePlayers()) {
+            if (player.getName() != null && player.getName().equalsIgnoreCase(clean)) return player;
+        }
+        return null;
+    }
+
+    private String managerSummary(Stall stall) {
+        if (stall == null || stall.managers.isEmpty()) return "none";
+        return String.join(", ", stall.managers.values().stream().sorted(String.CASE_INSENSITIVE_ORDER).toList());
     }
 
     private void setOwner(Stall stall, UUID ownerId, String ownerName) {
@@ -967,7 +1111,7 @@ public final class MarketStallManager implements Listener {
 
     private boolean save() {
         YamlConfiguration yaml = new YamlConfiguration();
-        yaml.set("schema", 1);
+        yaml.set("schema", 2);
         for (Stall stall : stalls.values()) stall.save(yaml, "stalls." + stall.id);
         try {
             AtomicYamlFile.save(yaml, file);
@@ -1065,6 +1209,11 @@ public final class MarketStallManager implements Listener {
 
     static boolean canEditStallSign(boolean admin, boolean purchaseSign, boolean owner) {
         return admin || (!purchaseSign && owner);
+    }
+
+    static boolean canManageStall(UUID ownerId, Set<UUID> managers, UUID actorId) {
+        return ownerId != null && actorId != null
+            && (ownerId.equals(actorId) || managers != null && managers.contains(actorId));
     }
 
     static boolean canAcquireStall(boolean stallAvailable, boolean alreadyOwnsStall) {
@@ -1171,6 +1320,8 @@ public final class MarketStallManager implements Listener {
 
     private record TransferRequest(String stallId, UUID ownerId, UUID targetId, long expiresAt) {}
 
+    public record ShopIdentity(UUID ownerId, String ownerName) {}
+
     private static final class Stall {
         private final String id;
         private final UUID worldId;
@@ -1185,6 +1336,7 @@ public final class MarketStallManager implements Listener {
         private long price;
         private UUID ownerId;
         private String ownerName;
+        private final Map<UUID, String> managers = new LinkedHashMap<>();
         private final Set<String> placedBlocks = new HashSet<>();
 
         private Stall(
@@ -1235,6 +1387,20 @@ public final class MarketStallManager implements Listener {
                 section.getInt("bounds.min-z"), section.getInt("bounds.max-z"),
                 sign, price, owner, owner == null ? null : section.getString("owner.name", "Player")
             );
+            ConfigurationSection managers = section.getConfigurationSection("managers");
+            if (owner != null && managers != null) {
+                for (String rawManagerId : managers.getKeys(false).stream().sorted().limit(MAX_MANAGERS_PER_STALL).toList()) {
+                    try {
+                        UUID managerId = UUID.fromString(rawManagerId);
+                        String managerName = managers.getString(rawManagerId);
+                        if (!managerId.equals(owner) && managerName != null && !managerName.isBlank()) {
+                            stall.managers.put(managerId, managerName.trim());
+                        }
+                    } catch (IllegalArgumentException ignored) {
+                        // Keep the stall usable if one manually edited manager entry is malformed.
+                    }
+                }
+            }
             if (stall.minX > stall.maxX || stall.minY > stall.maxY || stall.minZ > stall.maxZ || stall.volume() > MAX_VOLUME) return null;
             for (String placed : section.getStringList("placed-blocks")) {
                 if (stall.shouldRetainPlacedBlock(placed)) stall.placedBlocks.add(placed);
@@ -1255,6 +1421,9 @@ public final class MarketStallManager implements Listener {
             yaml.set(path + ".price", price);
             yaml.set(path + ".owner.uuid", ownerId == null ? null : ownerId.toString());
             yaml.set(path + ".owner.name", ownerId == null ? null : ownerName);
+            for (Map.Entry<UUID, String> manager : managers.entrySet()) {
+                yaml.set(path + ".managers." + manager.getKey(), manager.getValue());
+            }
             yaml.set(path + ".placed-blocks", placedBlocks.stream().sorted().toList());
         }
 
@@ -1291,8 +1460,8 @@ public final class MarketStallManager implements Listener {
             return !material.isAir() && isFixtureMaterial(material);
         }
 
-        private boolean isOwner(Player player) {
-            return player != null && ownerId != null && ownerId.equals(player.getUniqueId());
+        private boolean canManage(Player player) {
+            return player != null && canManageStall(ownerId, managers.keySet(), player.getUniqueId());
         }
 
         private long volume() {

@@ -3,6 +3,7 @@ package me.rique.smpcore.boss;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BossBalanceTest {
@@ -66,6 +67,30 @@ class BossBalanceTest {
         assertEquals(1.0, BossBalance.multiplayerDamageScale(8, 1));
         assertEquals(1.345, BossBalance.multiplayerDamageScale(8, 4), 0.001);
         assertTrue(BossBalance.multiplayerHealthScale(8, 7) > BossBalance.multiplayerHealthScale(2, 7));
+    }
+
+    @Test
+    void sharedBossMaterialsScaleWithoutRewardingTokenParticipation() {
+        assertEquals(1.0, BossBalance.multiplayerLootScale(1));
+        assertEquals(1.25, BossBalance.multiplayerLootScale(2));
+        assertEquals(1.75, BossBalance.multiplayerLootScale(4));
+        assertEquals(2.0, BossBalance.multiplayerLootScale(5));
+        assertEquals(2.0, BossBalance.multiplayerLootScale(20));
+
+        assertFalse(BossBalance.qualifiesForGroupLoot(9.99, 200.0));
+        assertFalse(BossBalance.qualifiesForGroupLoot(20.0, 1_000.0));
+        assertTrue(BossBalance.qualifiesForGroupLoot(25.0, 1_000.0));
+        assertFalse(BossBalance.qualifiesForGroupLoot(Double.NaN, 1_000.0));
+    }
+
+    @Test
+    void fractionalBossMaterialScalingRoundsFairlyAndNeverChangesSoloLoot() {
+        assertEquals(4, BossBalance.scaledBossMaterialAmount(4, 1, 0.0));
+        assertEquals(5, BossBalance.scaledBossMaterialAmount(4, 2, 0.99));
+        assertEquals(3, BossBalance.scaledBossMaterialAmount(2, 2, 0.49));
+        assertEquals(2, BossBalance.scaledBossMaterialAmount(2, 2, 0.50));
+        assertEquals(8, BossBalance.scaledBossMaterialAmount(4, 5, 0.99));
+        assertEquals(0, BossBalance.scaledBossMaterialAmount(0, 5, 0.0));
     }
 
     @Test

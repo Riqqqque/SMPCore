@@ -19,6 +19,7 @@ import me.rique.smpcore.item.AgriculturalPylonListener;
 import me.rique.smpcore.item.CorruptionManager;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.CustomToolListener;
+import me.rique.smpcore.item.FirstDragonSigilListener;
 import me.rique.smpcore.item.ReplenishListener;
 import me.rique.smpcore.item.ReforgeManager;
 import me.rique.smpcore.item.RewardLanternListener;
@@ -29,6 +30,7 @@ import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.legendary.MythicForgeListener;
 import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.power.SuperpowerType;
+import me.rique.smpcore.quest.MinerManager;
 import me.rique.smpcore.season.SeasonRelicManager;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -76,6 +78,8 @@ public final class AdminCommands {
     private static final String DOMINION_CORE_ITEM_ID = BossManager.DOMINION_CORE_ITEM_ID;
     private static final String REFORGE_STONE_ITEM_ID = ReforgeManager.STONE_ID;
     private static final String CORRUPTION_ANCHOR_ITEM_ID = CorruptionManager.STATION_ITEM_ID;
+    private static final String FIRST_DRAGON_SIGIL_ITEM_ID = FirstDragonSigilListener.ITEM_ID;
+    private static final String VEINWAKE_PICK_ITEM_ID = "veinwake_pick";
     private static final Set<String> ABSOLUTE_OWNER_ACCOUNTS = Set.of("riqqqque");
     private static final List<String> CUSTOM_ITEM_IDS = List.of(
         BACKPACK_ITEM_ID,
@@ -98,6 +102,8 @@ public final class AdminCommands {
         DOMINION_CORE_ITEM_ID,
         REFORGE_STONE_ITEM_ID,
         CORRUPTION_ANCHOR_ITEM_ID,
+        FIRST_DRAGON_SIGIL_ITEM_ID,
+        VEINWAKE_PICK_ITEM_ID,
         CustomToolListener.ADVANCED_PICKAXE_ID,
         CustomToolListener.GRAPPLE_HOOK_ID,
         CustomToolListener.SPELUNKER_LANTERN_ID,
@@ -455,6 +461,10 @@ public final class AdminCommands {
                     if (!(ctx.getSource().getSender() instanceof Player self)) {
                         ctx.getSource().getSender().sendMessage(MessageUtil.error("Must be a player.")); return 0;
                     }
+                    if (plugin.getDuelManager() != null && plugin.getDuelManager().isDuelParticipant(self)) {
+                        self.sendMessage(MessageUtil.warn("God mode cannot be changed during a duel."));
+                        return 0;
+                    }
                     boolean now = plugin.getPlayerManager().toggleGod(self);
                     self.sendMessage(MessageUtil.success("God mode <white>" + (now ? "ON" : "OFF") + "</white>."));
                     return Command.SINGLE_SUCCESS;
@@ -466,6 +476,10 @@ public final class AdminCommands {
                             .resolve(ctx.getSource());
                         if (targets.isEmpty()) { ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found.")); return 0; }
                         Player target = targets.get(0);
+                        if (plugin.getDuelManager() != null && plugin.getDuelManager().isDuelParticipant(target)) {
+                            ctx.getSource().getSender().sendMessage(MessageUtil.warn("God mode cannot be changed for a duel participant."));
+                            return 0;
+                        }
                         boolean now = plugin.getPlayerManager().toggleGod(target);
                         target.sendMessage(MessageUtil.success("God mode <white>" + (now ? "ON" : "OFF") + "</white>."));
                         ctx.getSource().getSender().sendMessage(MessageUtil.success(
@@ -1087,10 +1101,60 @@ public final class AdminCommands {
                                 String itemId = StringArgumentType.getString(ctx, "item");
                                 return giveCustomItem(plugin, ctx.getSource().getSender(), targets.get(0), itemId);
                             }))))
+                .then(Commands.literal("revoke")
+                    .then(Commands.argument("item", StringArgumentType.word())
+                        .suggests((ctx, builder) -> builder.suggest(FIRST_DRAGON_SIGIL_ITEM_ID).buildFuture())
+                        .then(Commands.argument("target", ArgumentTypes.player())
+                            .executes(ctx -> revokeCustomItem(
+                                plugin,
+                                ctx.getSource().getSender(),
+                                ctx.getArgument("target", PlayerSelectorArgumentResolver.class).resolve(ctx.getSource()),
+                                StringArgumentType.getString(ctx, "item")
+                            )))))
+                .then(Commands.literal("take")
+                    .then(Commands.argument("item", StringArgumentType.word())
+                        .suggests((ctx, builder) -> builder.suggest(FIRST_DRAGON_SIGIL_ITEM_ID).buildFuture())
+                        .then(Commands.argument("target", ArgumentTypes.player())
+                            .executes(ctx -> revokeCustomItem(
+                                plugin,
+                                ctx.getSource().getSender(),
+                                ctx.getArgument("target", PlayerSelectorArgumentResolver.class).resolve(ctx.getSource()),
+                                StringArgumentType.getString(ctx, "item")
+                            )))))
                 .build(),
-            "Give non-legendary custom items",
+            "Give or revoke non-legendary custom items",
             List.of("citem")
         );
+    }
+
+    private static int revokeCustomItem(
+        SMPCore plugin,
+        CommandSender sender,
+        List<Player> targets,
+        String requestedId
+    ) {
+        String itemId = normalizeCustomItemId(requestedId);
+        if (!FIRST_DRAGON_SIGIL_ITEM_ID.equals(itemId)) {
+            sender.sendMessage(MessageUtil.error("Only <white>first_dragon_sigil</white> supports revocation."));
+            return 0;
+        }
+        if (targets == null || targets.isEmpty()) {
+            sender.sendMessage(MessageUtil.error("Player not found."));
+            return 0;
+        }
+        FirstDragonSigilListener sigils = plugin.getFirstDragonSigilListener();
+        if (sigils == null) {
+            sender.sendMessage(MessageUtil.error("First Dragon Sigil system is not ready yet."));
+            return 0;
+        }
+        Player target = targets.get(0);
+        int removed = sigils.revoke(target);
+        target.sendMessage(MessageUtil.warn("Your First Dragon's Sigil has been revoked by staff."));
+        sender.sendMessage(MessageUtil.success(
+            "Revoked <white>" + target.getName() + "</white>'s First Dragon Sigil and removed <white>"
+                + removed + "</white> visible cop" + (removed == 1 ? "y" : "ies") + "."
+        ));
+        return Command.SINGLE_SUCCESS;
     }
 
     private static int giveCustomItem(SMPCore plugin, CommandSender sender, Player target, String requestedId) {
@@ -1116,6 +1180,8 @@ public final class AdminCommands {
             case DOMINION_CORE_ITEM_ID -> createDominionCoreAdminItem(plugin, sender);
             case REFORGE_STONE_ITEM_ID -> createReforgeStoneAdminItem(plugin, sender, itemId);
             case CORRUPTION_ANCHOR_ITEM_ID -> createCorruptionAnchorAdminItem(plugin, sender);
+            case FIRST_DRAGON_SIGIL_ITEM_ID -> createFirstDragonSigilAdminItem(plugin, sender, target);
+            case VEINWAKE_PICK_ITEM_ID -> createVeinwakePickAdminItem(plugin, sender);
             case CustomToolListener.ADVANCED_PICKAXE_ID,
                  CustomToolListener.GRAPPLE_HOOK_ID,
                  CustomToolListener.SPELUNKER_LANTERN_ID,
@@ -1337,6 +1403,24 @@ public final class AdminCommands {
             return null;
         }
         return new AdminGiveItem(corruptionManager.createStationItem(), "Corruption Anchor");
+    }
+
+    private static AdminGiveItem createFirstDragonSigilAdminItem(SMPCore plugin, CommandSender sender, Player target) {
+        FirstDragonSigilListener sigils = plugin.getFirstDragonSigilListener();
+        if (sigils == null) {
+            sender.sendMessage(MessageUtil.error("First Dragon Sigil system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(sigils.createSigil(target), "The First Dragon's Sigil");
+    }
+
+    private static AdminGiveItem createVeinwakePickAdminItem(SMPCore plugin, CommandSender sender) {
+        MinerManager miner = plugin.getMinerManager();
+        if (miner == null) {
+            sender.sendMessage(MessageUtil.error("Miner system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(miner.createVeinwakePick(), "Veinwake Pick");
     }
 
     private static AdminGiveItem createCustomToolAdminItem(SMPCore plugin, CommandSender sender, String itemId) {
@@ -1579,6 +1663,8 @@ public final class AdminCommands {
             case "talisman", "sustenance_talisman", "talisman_of_sustenance" -> TALISMAN_OF_SUSTENANCE_ITEM_ID;
             case "theworld", "the_world", "worldclock", "world_clock", "clock" -> THE_WORLD_CLOCK_ITEM_ID;
             case "wardenheart", "warden_heart" -> WARDEN_HEART_ITEM_ID;
+            case "dragonsigil", "dragon_sigil", "firstdragon", "first_dragon", "firstdragonsigil", "first_dragon_sigil" -> FIRST_DRAGON_SIGIL_ITEM_ID;
+            case "veinwake", "veinwakepick", "veinwake_pick", "veinwakepickaxe", "veinwake_pickaxe" -> VEINWAKE_PICK_ITEM_ID;
             default -> normalized;
         };
     }

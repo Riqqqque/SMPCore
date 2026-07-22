@@ -124,7 +124,17 @@ Spawn independent hologram boards:
 
 Run `/tavernadmin list` and test repeated play, pending payouts, disconnect cleanup, card host transfer, dart anti-autoclick timing, blackjack dealer distance, and local win announcements.
 
-## 7. Market stalls
+## 7. Public warps
+
+Stand at the exact arrival point, face the direction players should face, and create the warp:
+
+```text
+/warp create Tavern
+```
+
+Players can immediately use `/tavern` or `/warp tavern`. Use `/warp move Tavern` after repositioning, `/warp info Tavern` to verify it, and `/warp delete Tavern` to remove it. Warp names cannot replace another server command.
+
+## 8. Market stalls
 
 For each stall:
 
@@ -140,7 +150,9 @@ For each stall:
 
 Back up `market-stall-templates.yml` with the launch world and SMPCore data.
 
-## 8. Spawn life and collectibles
+## 9. Spawn life and collectibles
+
+Run `/goblins audit` after major spawn building changes. If the report finds overwritten or fully enclosed heads, use `/goblins audit prune`; the active hunt total and Mining Luck scaling update immediately.
 
 - Place ambient NPCs with `/spawnlife spawn <type>`.
 - Give hidden goblins with `/goblins give [amount]`; every placed head receives a unique collectible ID.
@@ -149,7 +161,7 @@ Back up `market-stall-templates.yml` with the launch world and SMPCore data.
 - Test Bone/Cod/Salmon feeding cooldowns.
 - Run `/bedrockskulls scan [radius]` around custom decorative heads, then restart only when the bridge configuration requires it.
 
-## 9. Launch gate and SMP start
+## 10. Launch gate and SMP start
 
 Launch access and season start are separate.
 
@@ -161,9 +173,13 @@ Launch access and season start are separate.
 6. `/launchaccess open` allows the public to join while keeping them staged.
 7. Run `/startsmp [graceMinutes]` only at the actual launch moment.
 
-`/startsmp` sends the Season of the Veil introduction to everyone, removes the personal barrier, begins PvP grace, schedules the Nether for real Day 3, and the End for real Day 5.
+`/startsmp` sends the Season of the Veil introduction to everyone, removes the personal barrier, begins PvP grace, schedules the Nether for real Day 3, and the End for real Day 5. A positive `smp-start.nether-unlock-at` or `smp-start.end-unlock-at` UTC epoch-millisecond value overrides the matching day-based time. Scheduled openings announce themselves automatically.
 
-## 10. Final smoke test
+For the current season, `smp-start.end-unlock-at` is `1784682000000`: July 21, 2026 at 7:00 PM America/Denver, or July 22 at 1:00 AM UTC.
+
+If launch pacing changes, `/startsmp unlock nether` or `/startsmp unlock end` permanently opens that dimension for the current season and announces it to everyone. Repeating the command does not repeat the announcement.
+
+## 11. Final smoke test
 
 - `/menu`, every submenu, Back buttons, and live Essence values.
 - `/settings` music toggles and Drop Safety.

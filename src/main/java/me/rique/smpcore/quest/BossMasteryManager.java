@@ -299,7 +299,10 @@ public final class BossMasteryManager implements Listener {
         meta.getPersistentDataContainer().set(itemIdKey, PersistentDataType.STRING, id);
         meta.addEnchant(mainEnchant, level, true);
         if (material == Material.CROSSBOW) meta.addEnchant(Enchantment.PIERCING, 4, true);
-        if (material == Material.MACE) meta.addEnchant(Enchantment.BREACH, 3, true);
+        if (material == Material.MACE && !mainEnchant.conflictsWith(Enchantment.BREACH)
+            && !Enchantment.BREACH.conflictsWith(mainEnchant)) {
+            meta.addEnchant(Enchantment.BREACH, 3, true);
+        }
         meta.addEnchant(Enchantment.UNBREAKING, 3, true);
         meta.addEnchant(Enchantment.MENDING, 1, true);
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);

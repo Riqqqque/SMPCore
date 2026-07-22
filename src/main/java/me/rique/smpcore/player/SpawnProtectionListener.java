@@ -4,6 +4,7 @@ import io.papermc.paper.event.entity.EntityMoveEvent;
 import io.papermc.paper.event.player.PlayerItemFrameChangeEvent;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.config.ConfigManager;
+import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
@@ -295,12 +296,12 @@ public final class SpawnProtectionListener implements Listener {
             return item;
         }
         meta.displayName(MessageUtil.parse("<gold><bold>Admin Spawn Stick</bold></gold>"));
-        meta.lore(List.of(
+        meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
             MessageUtil.parse("<gray>Left-click: inspect a spawn block.</gray>"),
             MessageUtil.parse("<gray>Right-click: arm public-use toggle.</gray>"),
             MessageUtil.parse("<gray>Right-click same block again to confirm.</gray>"),
             MessageUtil.parse("<dark_gray>Only works for spawn builders/admins.</dark_gray>")
-        ));
+        )));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         meta.getPersistentDataContainer().set(adminSpawnStickKey, PersistentDataType.BYTE, (byte) 1);
         item.setItemMeta(meta);
@@ -380,7 +381,8 @@ public final class SpawnProtectionListener implements Listener {
     }
 
     public boolean canBypassSpawnSafety(Player player) {
-        return canBypassSpawnProtection(player);
+        return canBypassSpawnProtection(player)
+            || plugin.getDuelManager() != null && plugin.getDuelManager().isDuelParticipant(player);
     }
 
     public boolean blocksProtectedSpawnDeath(Player player) {
@@ -490,42 +492,42 @@ public final class SpawnProtectionListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
     public void onBlockBreakEarly(BlockBreakEvent event) {
         if (plugin.getDuelManager() != null && plugin.getDuelManager().allowsArenaBlockBreak(event.getPlayer(), event.getBlock())) return;
-        if (plugin.getMarketStallManager() != null && plugin.getMarketStallManager().allowsSpawnBlockBreak(event.getPlayer(), event.getBlock())) return;
+        if (plugin.getMarketStallManager() != null && plugin.getMarketStallManager().handlesSpawnBlockChange(event.getBlock())) return;
         enforceProtectedBlockEvent(event, event.getPlayer(), event.getBlock(), FLAG_BUILD, true);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onBlockBreak(BlockBreakEvent event) {
         if (plugin.getDuelManager() != null && plugin.getDuelManager().allowsArenaBlockBreak(event.getPlayer(), event.getBlock())) return;
-        if (plugin.getMarketStallManager() != null && plugin.getMarketStallManager().allowsSpawnBlockBreak(event.getPlayer(), event.getBlock())) return;
+        if (plugin.getMarketStallManager() != null && plugin.getMarketStallManager().handlesSpawnBlockChange(event.getBlock())) return;
         enforceProtectedBlockEvent(event, event.getPlayer(), event.getBlock(), FLAG_BUILD, true);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = false)
     public void onBlockBreakFinal(BlockBreakEvent event) {
         if (plugin.getDuelManager() != null && plugin.getDuelManager().allowsArenaBlockBreak(event.getPlayer(), event.getBlock())) return;
-        if (plugin.getMarketStallManager() != null && plugin.getMarketStallManager().allowsSpawnBlockBreak(event.getPlayer(), event.getBlock())) return;
+        if (plugin.getMarketStallManager() != null && plugin.getMarketStallManager().handlesSpawnBlockChange(event.getBlock())) return;
         enforceProtectedBlockEvent(event, event.getPlayer(), event.getBlock(), FLAG_BUILD, false);
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
     public void onBlockPlaceEarly(BlockPlaceEvent event) {
         if (plugin.getDuelManager() != null && plugin.getDuelManager().allowsArenaBlockPlacement(event.getPlayer(), event.getBlockPlaced())) return;
-        if (plugin.getMarketStallManager() != null && plugin.getMarketStallManager().allowsSpawnBlockPlacement(event.getPlayer(), event.getBlockPlaced())) return;
+        if (plugin.getMarketStallManager() != null && plugin.getMarketStallManager().handlesSpawnBlockChange(event.getBlockPlaced())) return;
         enforceProtectedBlockEvent(event, event.getPlayer(), event.getBlockPlaced(), FLAG_BUILD, true);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onBlockPlace(BlockPlaceEvent event) {
         if (plugin.getDuelManager() != null && plugin.getDuelManager().allowsArenaBlockPlacement(event.getPlayer(), event.getBlockPlaced())) return;
-        if (plugin.getMarketStallManager() != null && plugin.getMarketStallManager().allowsSpawnBlockPlacement(event.getPlayer(), event.getBlockPlaced())) return;
+        if (plugin.getMarketStallManager() != null && plugin.getMarketStallManager().handlesSpawnBlockChange(event.getBlockPlaced())) return;
         enforceProtectedBlockEvent(event, event.getPlayer(), event.getBlockPlaced(), FLAG_BUILD, true);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = false)
     public void onBlockPlaceFinal(BlockPlaceEvent event) {
         if (plugin.getDuelManager() != null && plugin.getDuelManager().allowsArenaBlockPlacement(event.getPlayer(), event.getBlockPlaced())) return;
-        if (plugin.getMarketStallManager() != null && plugin.getMarketStallManager().allowsSpawnBlockPlacement(event.getPlayer(), event.getBlockPlaced())) return;
+        if (plugin.getMarketStallManager() != null && plugin.getMarketStallManager().handlesSpawnBlockChange(event.getBlockPlaced())) return;
         enforceProtectedBlockEvent(event, event.getPlayer(), event.getBlockPlaced(), FLAG_BUILD, false);
     }
 
@@ -1305,6 +1307,8 @@ public final class SpawnProtectionListener implements Listener {
             return;
         }
         Player attacker = attackingPlayer(event.getCombuster());
+        if (attacker != null && plugin.getDuelManager() != null
+            && plugin.getDuelManager().areOpponents(attacker.getUniqueId(), victim.getUniqueId())) return;
         if (attacker != null && shouldBlockPvp(attacker, victim)) {
             event.setCancelled(true);
             sendDeny(attacker);
@@ -1323,6 +1327,8 @@ public final class SpawnProtectionListener implements Listener {
         boolean potionInSpawn = isProtected(event.getPotion().getLocation());
         for (var affected : event.getAffectedEntities()) {
             if (affected instanceof Player victim && (potionInSpawn || isProtected(victim.getLocation()))) {
+                if (plugin.getDuelManager() != null
+                    && plugin.getDuelManager().areOpponents(shooter.getUniqueId(), victim.getUniqueId())) continue;
                 event.setIntensity(victim, 0.0);
             }
         }
@@ -1334,7 +1340,8 @@ public final class SpawnProtectionListener implements Listener {
             return;
         }
         Player shooter = projectileShooter(event.getEntity());
-        if (shooter == null || canBypassSpawnProtection(shooter)) {
+        if (shooter == null || canBypassSpawnProtection(shooter)
+            || plugin.getDuelManager() != null && plugin.getDuelManager().isDuelParticipant(shooter)) {
             return;
         }
         if (isProtected(event.getEntity().getLocation()) || isProtected(event.getAreaEffectCloud().getLocation())) {
@@ -1688,6 +1695,7 @@ public final class SpawnProtectionListener implements Listener {
 
     private boolean shouldBlockHungerDrain(Player player) {
         return player != null
+            && (plugin.getDuelManager() == null || !plugin.getDuelManager().isDuelParticipant(player))
             && !canBypassSpawnProtection(player)
             && isProtectedWithFlag(player.getLocation(), FLAG_HUNGER_DRAIN);
     }

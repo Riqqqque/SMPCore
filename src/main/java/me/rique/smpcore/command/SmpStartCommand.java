@@ -7,6 +7,7 @@ import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.smp.SmpStartManager;
 import me.rique.smpcore.util.CommandSuggestionUtil;
 import me.rique.smpcore.util.MessageUtil;
+import org.bukkit.World;
 
 import java.util.List;
 
@@ -41,6 +42,12 @@ public final class SmpStartCommand {
                         ctx.getSource().getSender().sendMessage(plugin.getSmpStartManager().statusMessage());
                         return Command.SINGLE_SUCCESS;
                     }))
+                .then(Commands.literal("unlock")
+                    .requires(src -> src.getSender().hasPermission("smpcore.startsmp.unlock-dimensions"))
+                    .then(Commands.literal("nether")
+                        .executes(ctx -> unlockDimension(plugin, ctx.getSource().getSender(), World.Environment.NETHER)))
+                    .then(Commands.literal("end")
+                        .executes(ctx -> unlockDimension(plugin, ctx.getSource().getSender(), World.Environment.THE_END))))
                 .then(Commands.literal("reset")
                     .requires(src -> src.getSender().hasPermission("smpcore.startsmp.reset"))
                     .executes(ctx -> {
@@ -82,5 +89,11 @@ public final class SmpStartCommand {
             "Open or lock the SMP staging barrier and grace-period flow",
             List.of("smpstart")
         );
+    }
+
+    private static int unlockDimension(SMPCore plugin, org.bukkit.command.CommandSender sender, World.Environment environment) {
+        SmpStartManager.StartResult result = plugin.getSmpStartManager().unlockDimensionEarly(sender, environment);
+        sender.sendMessage(result.success() ? MessageUtil.success(result.message()) : MessageUtil.error(result.message()));
+        return result.success() ? Command.SINGLE_SUCCESS : 0;
     }
 }

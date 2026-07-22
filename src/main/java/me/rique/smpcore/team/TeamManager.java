@@ -73,6 +73,8 @@ public final class TeamManager implements Listener {
     private static final long INVITE_DURATION_MS = 120_000L;
     private static final long ALLY_INVITE_DURATION_MS = 300_000L;
     private static final int TEAM_VAULT_SIZE = 54;
+    private static final int MAX_TEAM_VAULT_ITEM_BYTES = 1536 * 1024;
+    private static final int MAX_TEAM_VAULT_DATA_BYTES = 1536 * 1024;
     private static final int TEAM_BROWSER_SIZE = 54;
     private static final String SCOREBOARD_TEAM_PREFIX = "smpct_";
     private static final String SCOREBOARD_NO_TEAM_ID = SCOREBOARD_TEAM_PREFIX + "none";
@@ -308,13 +310,29 @@ public final class TeamManager implements Listener {
         });
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onTeamVaultClick(InventoryClickEvent event) {
         if (!(event.getView().getTopInventory().getHolder() instanceof TeamVaultHolder holder)) {
             return;
         }
+        if (event.getWhoClicked() instanceof Player player && denyRestrictedTeamVaultUse(player)) {
+            event.setCancelled(true);
+            return;
+        }
+        if (event.isCancelled()) {
+            return;
+        }
         if (isUnsafeTeamVaultClick(event)) {
             event.setCancelled(true);
+            return;
+        }
+        if (!canApplyTeamVaultClick(event)) {
+            event.setCancelled(true);
+            if (event.getWhoClicked() instanceof Player player) {
+                player.sendMessage(MessageUtil.warn(
+                    "That item carries too much stored data for shared storage. Nothing was moved."
+                ));
+            }
             return;
         }
         scheduleTeamVaultSyncAndSave(holder.teamKey(), "click");
@@ -334,6 +352,87 @@ public final class TeamManager implements Listener {
             || event.getClick() == ClickType.NUMBER_KEY
             || event.getClick() == ClickType.SWAP_OFFHAND
             || event.getClick() == ClickType.UNKNOWN;
+    }
+
+    private boolean canApplyTeamVaultClick(InventoryClickEvent event) {
+        Inventory top = event.getView().getTopInventory();
+        int topSize = top.getSize();
+        int rawSlot = event.getRawSlot();
+        ItemStack[] projected = cloneContents(top.getContents());
+
+        if (event.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY && rawSlot >= topSize) {
+            addToProjectedVault(projected, event.getCurrentItem());
+        } else if (rawSlot >= 0 && rawSlot < topSize) {
+            ItemStack cursor = event.getCursor();
+            switch (event.getAction()) {
+                case SWAP_WITH_CURSOR -> projected[rawSlot] = cloneOrNull(cursor);
+                case PLACE_ALL, PLACE_SOME -> mergeProjectedSlot(projected, rawSlot, cursor, cursor == null ? 0 : cursor.getAmount());
+                case PLACE_ONE -> mergeProjectedSlot(projected, rawSlot, cursor, 1);
+                default -> {
+                    return true;
+                }
+            }
+        } else {
+            return true;
+        }
+
+        try {
+            serialize(projected);
+            return true;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private void addToProjectedVault(ItemStack[] projected, ItemStack source) {
+        ItemStack remaining = cloneOrNull(source);
+        if (remaining == null) {
+            return;
+        }
+        for (int slot = 0; slot < projected.length && remaining.getAmount() > 0; slot++) {
+            ItemStack existing = projected[slot];
+            if (existing == null || !existing.isSimilar(remaining)) {
+                continue;
+            }
+            int room = Math.max(0, existing.getMaxStackSize() - existing.getAmount());
+            int moved = Math.min(room, remaining.getAmount());
+            if (moved > 0) {
+                existing.setAmount(existing.getAmount() + moved);
+                remaining.setAmount(remaining.getAmount() - moved);
+            }
+        }
+        for (int slot = 0; slot < projected.length && remaining.getAmount() > 0; slot++) {
+            if (projected[slot] != null && !projected[slot].getType().isAir()) {
+                continue;
+            }
+            int moved = Math.min(remaining.getMaxStackSize(), remaining.getAmount());
+            ItemStack placed = remaining.clone();
+            placed.setAmount(moved);
+            projected[slot] = placed;
+            remaining.setAmount(remaining.getAmount() - moved);
+        }
+    }
+
+    private void mergeProjectedSlot(ItemStack[] projected, int slot, ItemStack source, int requestedAmount) {
+        ItemStack incoming = cloneOrNull(source);
+        if (incoming == null || requestedAmount <= 0) {
+            return;
+        }
+        ItemStack existing = projected[slot];
+        if (existing == null || existing.getType().isAir()) {
+            incoming.setAmount(Math.min(incoming.getMaxStackSize(), requestedAmount));
+            projected[slot] = incoming;
+            return;
+        }
+        if (!existing.isSimilar(incoming)) {
+            return;
+        }
+        int room = Math.max(0, existing.getMaxStackSize() - existing.getAmount());
+        existing.setAmount(existing.getAmount() + Math.min(room, requestedAmount));
+    }
+
+    private ItemStack cloneOrNull(ItemStack item) {
+        return item == null || item.getType().isAir() || item.getAmount() <= 0 ? null : item.clone();
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -377,9 +476,16 @@ public final class TeamManager implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onTeamVaultDrag(InventoryDragEvent event) {
         if (!(event.getView().getTopInventory().getHolder() instanceof TeamVaultHolder holder)) {
+            return;
+        }
+        if (event.getWhoClicked() instanceof Player player && denyRestrictedTeamVaultUse(player)) {
+            event.setCancelled(true);
+            return;
+        }
+        if (event.isCancelled()) {
             return;
         }
 
@@ -1548,6 +1654,11 @@ public final class TeamManager implements Listener {
             player.sendMessage(MessageUtil.error(unavailable));
             return;
         }
+        String restriction = activeTeamVaultRestriction(player);
+        if (restriction != null) {
+            player.sendMessage(MessageUtil.warn(restriction));
+            return;
+        }
 
         TeamData team = teamOf(player.getUniqueId());
         if (team == null) {
@@ -1563,14 +1674,18 @@ public final class TeamManager implements Listener {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (!player.isOnline()) return;
 
+                String currentRestriction = activeTeamVaultRestriction(player);
+                if (currentRestriction != null) {
+                    player.sendMessage(MessageUtil.warn(currentRestriction));
+                    return;
+                }
+
                 TeamData current = teamOf(player.getUniqueId());
                 if (current == null || !current.key.equals(team.key)) {
                     player.sendMessage(MessageUtil.error("You are not in that team anymore."));
                     return;
                 }
 
-                auditTeamVault(player, session, "open");
-                syncTeamVaultLegendaryClaims(session);
                 player.openInventory(session.inventory());
             })
         ).exceptionally(ex -> {
@@ -1582,6 +1697,41 @@ public final class TeamManager implements Listener {
             });
             return null;
         });
+    }
+
+    private boolean denyRestrictedTeamVaultUse(Player player) {
+        String restriction = activeTeamVaultRestriction(player);
+        if (restriction == null) {
+            return false;
+        }
+        player.sendMessage(MessageUtil.warn(restriction));
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (player.isOnline()
+                && player.getOpenInventory().getTopInventory().getHolder() instanceof TeamVaultHolder) {
+                player.closeInventory();
+            }
+        });
+        return true;
+    }
+
+    private String activeTeamVaultRestriction(Player player) {
+        boolean bossFight = player != null
+            && ((plugin.getBossManager() != null && plugin.getBossManager().isActiveBossFight(player))
+                || (plugin.getBossDungeonManager() != null && plugin.getBossDungeonManager().blocksExternalTeleport(player)));
+        boolean duel = player != null
+            && plugin.getDuelManager() != null
+            && plugin.getDuelManager().blocksExternalTeleport(player);
+        return teamVaultRestriction(bossFight, duel);
+    }
+
+    static String teamVaultRestriction(boolean bossFight, boolean duel) {
+        if (bossFight) {
+            return "Team storage is unavailable during an active boss fight.";
+        }
+        if (duel) {
+            return "Team storage is unavailable during a duel or while spectating one.";
+        }
+        return null;
     }
 
     public void openTeamVaultInspector(Player viewer, String rawTeamName) {
@@ -1731,6 +1881,26 @@ public final class TeamManager implements Listener {
         notifyTeam(teamsByKey.get(teamKey), message);
     }
 
+    public void notifyPlayerTeamGameResult(UUID playerId, Component message) {
+        if (playerId == null || message == null || !teamsLoaded) {
+            return;
+        }
+        String teamKey = teamByPlayer.get(playerId);
+        if (teamKey == null) {
+            return;
+        }
+        TeamData team = teamsByKey.get(teamKey);
+        if (team == null) {
+            return;
+        }
+        for (UUID memberId : team.members) {
+            Player member = Bukkit.getPlayer(memberId);
+            if (member != null && member.isOnline()) {
+                BedrockCompat.sendGameMessage(member, message);
+            }
+        }
+    }
+
     public List<String> teamHelpLines() {
         return List.of(
             "<gold><bold>Team Commands</bold></gold>",
@@ -1841,7 +2011,7 @@ public final class TeamManager implements Listener {
             return existing;
         }
 
-        plugin.getDatabase().loadTeamVault(team.displayName).whenComplete((raw, ex) -> {
+        plugin.getDatabase().loadTeamVault(team.displayName).whenComplete((snapshot, ex) -> {
             if (!plugin.isEnabled()) {
                 vaultLoadingByTeamKey.remove(team.key, future);
                 future.completeExceptionally(new IllegalStateException("Plugin is disabled."));
@@ -1872,7 +2042,7 @@ public final class TeamManager implements Listener {
                         new TeamVaultSession(
                             current.key,
                             current.displayName,
-                            createTeamVaultInventory(current.key, current.displayName, raw)
+                            createTeamVaultInventory(current.key, current.displayName, snapshot)
                         )
                     );
                     syncTeamVaultLegendaryClaims(loaded);
@@ -1916,18 +2086,53 @@ public final class TeamManager implements Listener {
             });
     }
 
-    private Inventory createTeamVaultInventory(String teamKey, String displayName, byte[] rawData) {
+    private Inventory createTeamVaultInventory(
+        String teamKey,
+        String displayName,
+        DatabaseManager.TeamVaultSnapshot snapshot
+    ) {
         Inventory inventory = Bukkit.createInventory(
             new TeamVaultHolder(teamKey),
             TEAM_VAULT_SIZE,
             Component.text(displayName + " Vault")
         );
-        inventory.setContents(deserialize(rawData, TEAM_VAULT_SIZE));
+        byte[] currentData = snapshot == null ? new byte[0] : snapshot.contents();
+        byte[] backupData = snapshot == null ? new byte[0] : snapshot.backupContents();
+        try {
+            if (currentData.length == 0 && backupData.length > 0) {
+                throw new IOException("The live team vault row was missing or empty.");
+            }
+            inventory.setContents(deserializeTeamVaultData(currentData, TEAM_VAULT_SIZE));
+        } catch (IOException currentFailure) {
+            if (backupData.length == 0) {
+                throw new IllegalStateException(
+                    "Team vault data is invalid and no rollback snapshot exists; the stored row was left untouched.",
+                    currentFailure
+                );
+            }
+            try {
+                inventory.setContents(deserializeTeamVaultData(backupData, TEAM_VAULT_SIZE));
+                plugin.getLogger().severe("Recovered team vault " + displayName
+                    + " from its previous atomic snapshot because the live row was invalid: "
+                    + currentFailure.getMessage());
+            } catch (IOException backupFailure) {
+                backupFailure.addSuppressed(currentFailure);
+                throw new IllegalStateException(
+                    "Team vault data and its rollback snapshot are both invalid; neither row was modified.",
+                    backupFailure
+                );
+            }
+        }
         return inventory;
     }
 
     private CompletableFuture<Void> saveTeamVault(TeamVaultSession session) {
-        byte[] snapshot = serialize(session.inventory().getContents());
+        final byte[] snapshot;
+        try {
+            snapshot = serialize(session.inventory().getContents());
+        } catch (RuntimeException ex) {
+            return CompletableFuture.failedFuture(ex);
+        }
         CompletableFuture<Void> save = vaultSaveChainsByTeamKey.compute(session.teamKey(), (teamKey, previous) -> {
             CompletableFuture<Void> base = previous == null
                 ? CompletableFuture.completedFuture(null)
@@ -2043,7 +2248,7 @@ public final class TeamManager implements Listener {
         if (player == null || plugin.getLegendaryListener() == null) {
             return;
         }
-        plugin.getLegendaryListener().resyncLegendaryOwnership(player);
+        plugin.getLegendaryListener().syncPlayerLegendaryOwnership(player);
     }
 
     private CompletableFuture<Void> saveAndDiscardVaultForRename(TeamData team) {
@@ -2140,6 +2345,9 @@ public final class TeamManager implements Listener {
         }
         if (plugin.getPlayerVisualListener() != null) {
             plugin.getPlayerVisualListener().requestTeamGlowRefresh();
+        }
+        if (plugin.getBlackMarketManager() != null) {
+            plugin.getBlackMarketManager().requestTrophyGlowRefresh();
         }
     }
 
@@ -2456,6 +2664,9 @@ public final class TeamManager implements Listener {
     }
 
     private byte[] serialize(ItemStack[] contents) {
+        if (contents == null || contents.length > TEAM_VAULT_SIZE) {
+            throw new IllegalStateException("Team vault slot count is outside the safe range.");
+        }
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
              DataOutputStream out = new DataOutputStream(baos)) {
             out.writeInt(contents.length);
@@ -2465,28 +2676,40 @@ public final class TeamManager implements Listener {
                     continue;
                 }
                 byte[] raw = item.serializeAsBytes();
+                if (!isSafeTeamVaultItemLength(raw.length)) {
+                    throw new IOException("A team vault item exceeded the safe serialized size.");
+                }
+                long projectedSize = (long) baos.size() + Integer.BYTES + raw.length;
+                if (!isSafeTeamVaultDataLength(projectedSize)) {
+                    throw new IOException("Team vault contents exceeded the safe serialized size.");
+                }
                 out.writeInt(raw.length);
                 out.write(raw);
             }
             out.flush();
             return baos.toByteArray();
-        } catch (IOException ex) {
-            plugin.getLogger().severe("Failed to serialize team vault data: " + ex.getMessage());
-            return new byte[0];
+        } catch (Exception ex) {
+            throw new IllegalStateException("Failed to serialize team vault data safely: " + ex.getMessage(), ex);
         }
     }
 
-    private ItemStack[] deserialize(byte[] data, int size) {
+    static ItemStack[] deserializeTeamVaultData(byte[] data, int size) throws IOException {
         ItemStack[] out = new ItemStack[size];
         if (data == null || data.length == 0) return out;
+        if (!isSafeTeamVaultDataLength(data.length)) {
+            throw new IOException("Team vault data exceeded the safe serialized size.");
+        }
 
         try (ByteArrayInputStream bais = new ByteArrayInputStream(data);
              DataInputStream in = new DataInputStream(bais)) {
             int stored = in.readInt();
+            if (!isSafeTeamVaultSlotCount(stored, size)) {
+                throw new IOException("Invalid team vault slot count: " + stored);
+            }
             for (int i = 0; i < stored; i++) {
                 int length = in.readInt();
-                if (length < 0) {
-                    throw new IOException("Negative team vault item length");
+                if (!isSafeTeamVaultItemLength(length)) {
+                    throw new IOException("Team vault item data length is outside the safe range.");
                 }
                 if (length == 0) {
                     continue;
@@ -2497,14 +2720,30 @@ public final class TeamManager implements Listener {
                     throw new IOException("Unexpected end of team vault data");
                 }
 
-                if (i < size) {
-                    out[i] = ItemStack.deserializeBytes(raw);
-                }
+                out[i] = ItemStack.deserializeBytes(raw);
+            }
+            if (bais.available() != 0) {
+                throw new IOException("Trailing bytes were found after the team vault contents.");
             }
         } catch (Exception ex) {
-            plugin.getLogger().warning("Team vault data was invalid and has been reset: " + ex.getMessage());
+            if (ex instanceof IOException ioException) {
+                throw ioException;
+            }
+            throw new IOException("Team vault item data could not be decoded.", ex);
         }
         return out;
+    }
+
+    static boolean isSafeTeamVaultSlotCount(int stored, int capacity) {
+        return capacity >= 0 && capacity <= TEAM_VAULT_SIZE && stored >= 0 && stored <= capacity;
+    }
+
+    static boolean isSafeTeamVaultItemLength(int length) {
+        return length >= 0 && length <= MAX_TEAM_VAULT_ITEM_BYTES;
+    }
+
+    static boolean isSafeTeamVaultDataLength(long length) {
+        return length >= 0L && length <= MAX_TEAM_VAULT_DATA_BYTES;
     }
 
     private ItemStack[] cloneContents(ItemStack[] contents) {
@@ -2634,7 +2873,13 @@ public final class TeamManager implements Listener {
         }
     }
 
-    private record TeamVaultHolder(String teamKey) implements InventoryHolder, MenuDupeGuardListener.MutableMenuHolder {
+    private record TeamVaultHolder(String teamKey) implements InventoryHolder, MenuDupeGuardListener.RecoveryTrackedMenuHolder {
+        @Override public String recoverySurface() { return "Team Vault"; }
+        @Override public int[] recoverySlots() {
+            int[] slots = new int[TEAM_VAULT_SIZE];
+            for (int slot = 0; slot < slots.length; slot++) slots[slot] = slot;
+            return slots;
+        }
         @Override
         public Inventory getInventory() {
             return null;

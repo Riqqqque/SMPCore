@@ -40,6 +40,10 @@ Hold it and use `/backpack label <text>`. Labels are 1-24 characters. Use `/back
 
 Open `/settings`. Spawn Music and Boss Music are separate toggles, and warnings or ordinary ambience remain audible.
 
+## How do waystones work?
+
+Build a Lodestone, Stone Brick Wall, and Glowstone vertically, then attach a named sign to the center. Right-click once to discover it and right-click a known waystone again to open your travel menu. Every player unlocks destinations separately. Read [Waystones](Waystones) for the structure, landing controls, and travel restrictions.
+
 ## Why is a custom texture missing?
 
 On Java, accept the server resource pack and reconnect after an update. On Bedrock, the server needs the separately built pack and Geyser mapping for that specific item. The item name, lore, stats, and abilities remain valid even when its vanilla fallback model is shown. See [Bedrock and Geyser](Bedrock-And-Geyser).

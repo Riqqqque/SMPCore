@@ -47,7 +47,6 @@ import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerExpChangeEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
-import org.bukkit.event.vehicle.VehicleMoveEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
@@ -58,6 +57,7 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -77,6 +77,9 @@ public final class BeastwardenManager implements Listener {
     private static final double ARMOR_MOB_DAMAGE_TAKEN_MULTIPLIER = 0.65D;
     private static final long SECOND_WIND_COOLDOWN_MS = 90_000L;
     private static final long EVOLUTION_ESSENCE_COST = 2_000L;
+    private static final long RIDE_PROGRESS_SAMPLE_TICKS = 5L;
+    private static final double MAX_RIDE_SAMPLE_DISTANCE = 12.0D;
+    private static final int RIDE_PROGRESS_REPORT_INTERVAL = 25;
     private static final List<String> FAMILIAR_IDS = List.of("veil_wisp", "miner", "tiller", "morrow");
 
     private static final List<QuestStage> QUESTS = List.of(
@@ -117,8 +120,10 @@ public final class BeastwardenManager implements Listener {
     private final Map<String, NamespacedKey> treeKeys = new LinkedHashMap<>();
     private final Map<String, NamespacedKey> evolutionKeys = new LinkedHashMap<>();
     private final Set<UUID> pendingMenuActions = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, RideProgressSample> rideProgressSamples = new HashMap<>();
     private final BeastMountManager mounts;
     private BukkitTask effectsTask;
+    private BukkitTask rideProgressTask;
 
     public BeastwardenManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -143,6 +148,12 @@ public final class BeastwardenManager implements Listener {
         Bukkit.getPluginManager().registerEvents(mounts, plugin);
         mounts.start();
         effectsTask = Bukkit.getScheduler().runTaskTimer(plugin, this::refreshPassiveEffects, 20L, 20L);
+        rideProgressTask = Bukkit.getScheduler().runTaskTimer(
+            plugin,
+            this::sampleMountedQuestProgress,
+            RIDE_PROGRESS_SAMPLE_TICKS,
+            RIDE_PROGRESS_SAMPLE_TICKS
+        );
     }
 
     public void shutdown() {
@@ -150,11 +161,16 @@ public final class BeastwardenManager implements Listener {
             effectsTask.cancel();
             effectsTask = null;
         }
+        if (rideProgressTask != null) {
+            rideProgressTask.cancel();
+            rideProgressTask = null;
+        }
         for (Player player : Bukkit.getOnlinePlayers()) {
             removeSpeedModifier(player);
         }
         mounts.shutdown();
         pendingMenuActions.clear();
+        rideProgressSamples.clear();
     }
 
     public void openFromNpc(Player player) {
@@ -249,6 +265,7 @@ public final class BeastwardenManager implements Listener {
 
     public void completeForAdmin(Player player, CommandSender actor) {
         if (player == null) return;
+        rideProgressSamples.remove(player.getUniqueId());
         player.getPersistentDataContainer().set(stageKey, PersistentDataType.INTEGER, QUESTS.size());
         player.getPersistentDataContainer().set(trainingUnlockedKey, PersistentDataType.BYTE, (byte) 1);
         player.getPersistentDataContainer().remove(progressKey);
@@ -260,6 +277,7 @@ public final class BeastwardenManager implements Listener {
     public void resetForAdmin(Player player, CommandSender actor) {
         if (player == null) return;
         mounts.recall(player, false);
+        rideProgressSamples.remove(player.getUniqueId());
         player.getPersistentDataContainer().remove(stageKey);
         player.getPersistentDataContainer().remove(progressKey);
         player.getPersistentDataContainer().remove(introKey);
@@ -597,21 +615,6 @@ public final class BeastwardenManager implements Listener {
         if (event.getEntityType() == org.bukkit.entity.EntityType.RAVAGER) recordProgress(killer, QuestKind.RAVAGER, 1.0D);
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
-    public void onMountedTravel(VehicleMoveEvent event) {
-        if (!(event.getVehicle() instanceof AbstractHorse) || event.getFrom().getWorld() != event.getTo().getWorld()) {
-            return;
-        }
-        Player rider = event.getVehicle().getPassengers().stream().filter(Player.class::isInstance).map(Player.class::cast).findFirst().orElse(null);
-        if (rider == null || currentQuestKind(rider) != QuestKind.RIDE) {
-            return;
-        }
-        double dx = event.getTo().getX() - event.getFrom().getX();
-        double dz = event.getTo().getZ() - event.getFrom().getZ();
-        double distance = Math.sqrt(dx * dx + dz * dz);
-        if (distance > 0.01D && distance <= 12.0D) recordProgress(rider, QuestKind.RIDE, distance);
-    }
-
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onGuaranteedTame(PlayerInteractEntityEvent event) {
         if (event.getHand() != EquipmentSlot.HAND && event.getHand() != EquipmentSlot.OFF_HAND) return;
@@ -668,6 +671,7 @@ public final class BeastwardenManager implements Listener {
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         pendingMenuActions.remove(event.getPlayer().getUniqueId());
+        rideProgressSamples.remove(event.getPlayer().getUniqueId());
         removeSpeedModifier(event.getPlayer());
     }
 
@@ -770,6 +774,7 @@ public final class BeastwardenManager implements Listener {
             return;
         }
         int next = stage + 1;
+        rideProgressSamples.remove(player.getUniqueId());
         player.getPersistentDataContainer().set(stageKey, PersistentDataType.INTEGER, next);
         player.getPersistentDataContainer().remove(progressKey);
         player.playSound(player.getLocation(), next == QUESTS.size() ? Sound.UI_TOAST_CHALLENGE_COMPLETE : Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 0.9F, next == QUESTS.size() ? 0.85F : 1.25F);
@@ -916,10 +921,91 @@ public final class BeastwardenManager implements Listener {
         double after = Math.min(quest.target, before + amount);
         if (after <= before) return;
         player.getPersistentDataContainer().set(progressKey, PersistentDataType.DOUBLE, after);
+        if (kind == QuestKind.RIDE && shouldReportRideProgress(before, after, quest.target)) {
+            player.sendActionBar(MM.deserialize(
+                "<gold>The Long Road:</gold> <white>" + (int) Math.floor(after) + "/" + quest.target + " blocks</white>"
+            ));
+        }
         if (before < quest.target && after >= quest.target) {
             player.sendMessage(MessageUtil.success("Kael's lesson is ready to turn in: <white>" + quest.title + "</white>."));
             player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 0.7F, 1.35F);
         }
+    }
+
+    private void sampleMountedQuestProgress() {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            UUID playerId = player.getUniqueId();
+            if (currentQuestKind(player) != QuestKind.RIDE || !(player.getVehicle() instanceof AbstractHorse mount)) {
+                rideProgressSamples.remove(playerId);
+                continue;
+            }
+
+            var currentLocation = mount.getLocation();
+            RideProgressSample current = new RideProgressSample(
+                currentLocation.getWorld().getUID(),
+                mount.getUniqueId(),
+                currentLocation.getX(),
+                currentLocation.getZ()
+            );
+            RideProgressSample previous = rideProgressSamples.put(playerId, current);
+            if (previous == null) {
+                QuestStage quest = QUESTS.get(questStage(player));
+                player.sendActionBar(MM.deserialize(
+                    "<gold>Mounted travel tracking:</gold> <white>" + progressText(player, quest) + "/" + quest.target + " blocks</white>"
+                ));
+                continue;
+            }
+
+            double distance = acceptedRideSampleDistance(
+                previous.worldId.equals(current.worldId),
+                previous.mountId.equals(current.mountId),
+                current.x - previous.x,
+                current.z - previous.z
+            );
+            if (distance > 0.0D) {
+                recordProgress(player, QuestKind.RIDE, distance);
+            }
+        }
+    }
+
+    static double acceptedRideSampleDistance(boolean sameWorld, boolean sameMount, double dx, double dz) {
+        if (!sameWorld || !sameMount || !Double.isFinite(dx) || !Double.isFinite(dz)) {
+            return 0.0D;
+        }
+        double distance = Math.hypot(dx, dz);
+        return distance > 0.01D && distance <= MAX_RIDE_SAMPLE_DISTANCE ? distance : 0.0D;
+    }
+
+    static boolean shouldReportRideProgress(double before, double after, double target) {
+        if (!Double.isFinite(before) || !Double.isFinite(after) || after <= before || after >= target) {
+            return false;
+        }
+        return (int) Math.floor(after / RIDE_PROGRESS_REPORT_INTERVAL)
+            > (int) Math.floor(Math.max(0.0D, before) / RIDE_PROGRESS_REPORT_INTERVAL);
+    }
+
+    public void sendQuestProgress(Player player, CommandSender recipient) {
+        if (player == null || recipient == null) return;
+        int stage = questStage(player);
+        if (stage >= QUESTS.size()) {
+            recipient.sendMessage(MessageUtil.success("<white>" + player.getName() + "</white> completed all Beastwarden lessons."));
+            return;
+        }
+        QuestStage quest = QUESTS.get(stage);
+        recipient.sendMessage(MessageUtil.info(
+            "<white>" + player.getName() + "</white> - lesson <white>" + (stage + 1) + "/" + QUESTS.size()
+                + "</white>: <gold>" + quest.title + "</gold>."
+        ));
+        if (quest.kind == QuestKind.MATERIALS) {
+            quest.materials.forEach((material, amount) -> recipient.sendMessage(MessageUtil.info(
+                pretty(material) + ": <white>" + Math.min(amount, countPlain(player, material)) + "/" + amount + "</white>."
+            )));
+            return;
+        }
+        String unit = quest.kind == QuestKind.RIDE ? " blocks" : "";
+        recipient.sendMessage(MessageUtil.info(
+            "Progress: <white>" + progressText(player, quest) + "/" + quest.target + unit + "</white>."
+        ));
     }
 
     private void refreshPassiveEffects() {
@@ -1018,7 +1104,13 @@ public final class BeastwardenManager implements Listener {
     }
 
     private double questProgress(Player player) {
-        return Math.max(0.0D, player.getPersistentDataContainer().getOrDefault(progressKey, PersistentDataType.DOUBLE, 0.0D));
+        return sanitizedQuestProgress(
+            player.getPersistentDataContainer().getOrDefault(progressKey, PersistentDataType.DOUBLE, 0.0D)
+        );
+    }
+
+    static double sanitizedQuestProgress(double progress) {
+        return Double.isFinite(progress) ? Math.max(0.0D, progress) : 0.0D;
     }
 
     private QuestKind currentQuestKind(Player player) {
@@ -1144,6 +1236,8 @@ public final class BeastwardenManager implements Listener {
     }
 
     private record FamiliarDefinition(String id, String displayName, Material icon, Material material, int materialAmount) { }
+
+    private record RideProgressSample(UUID worldId, UUID mountId, double x, double z) { }
 
     private sealed interface BeastMenuMarker extends InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder permits BeastMenuHolder, FamiliarSelectHolder, FamiliarTreeHolder, ConfirmHolder, AdminPreviewHolder {
         UUID playerId();

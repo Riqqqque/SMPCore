@@ -3,6 +3,7 @@ package me.rique.smpcore.boss;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashSet;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -40,10 +41,29 @@ class BossMechanicsTest {
     }
 
     @Test
-    void stackDamageSplitsAndUsesASoloSafetyCap() {
-        assertEquals(14.0, BossMechanics.splitDamage(24.0, 1, 14.0));
-        assertEquals(12.0, BossMechanics.splitDamage(24.0, 2, 14.0));
-        assertEquals(6.0, BossMechanics.splitDamage(24.0, 4, 14.0));
+    void markedPlayersNeverDamageThemselvesButNearbyAlliesAreHit() {
+        UUID marked = UUID.randomUUID();
+        UUID ally = UUID.randomUUID();
+
+        assertFalse(BossMechanics.isOtherPlayerInsideMarker(marked, marked, 0.0, 3.25));
+        assertTrue(BossMechanics.isOtherPlayerInsideMarker(marked, ally, 3.25 * 3.25, 3.25));
+        assertFalse(BossMechanics.isOtherPlayerInsideMarker(marked, ally, 3.26 * 3.26, 3.25));
+        assertFalse(BossMechanics.isOtherPlayerInsideMarker(null, ally, 0.0, 3.25));
+    }
+
+    @Test
+    void newWidowTrailPointsTelegraphBeforeBecomingHazardous() {
+        assertEquals(2, BossMechanics.settledTrailPointCount(3, true));
+        assertEquals(3, BossMechanics.settledTrailPointCount(3, false));
+        assertEquals(0, BossMechanics.settledTrailPointCount(0, true));
+    }
+
+    @Test
+    void marshalInstructionsMatchIsolationBehavior() {
+        BossMechanics.Signature marshal = BossMechanics.signature("yule_the_minion");
+        assertEquals("Blue Isolation", marshal.displayName());
+        assertTrue(marshal.counterplay().toLowerCase().contains("alone"));
+        assertFalse(marshal.counterplay().toLowerCase().contains("stack"));
     }
 
     @Test

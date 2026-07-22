@@ -25,7 +25,15 @@ class PluginCommandRootsTest {
             "bossdungeon", "bdungeon", "bossjoin", "bossqueue", "bossloadout", "bossgear", "testgear",
             "deathinventory", "deathinv", "invrestore", "familiar", "familiars", "veilfamiliar",
             "familiaradmin", "famadmin", "goblins", "goblinhunt", "veil", "veiljournal",
-            "blackmarket", "blackmarketnpc", "fisher", "fishernpc", "miner", "minernpc"
+            "blackmarket", "blackmarketnpc", "fisher", "fishernpc", "miner", "minernpc",
+            "warp", "warps", "wild", "rtp", "randomtp", "bounties", "bountylist", "wanted",
+            "itemrecovery", "invrecovery", "guirecovery"
         ).forEach(root -> assertTrue(PluginCommandRoots.contains(root), "Missing command root: " + root));
+    }
+
+    @Test
+    void rouletteAndCroupierRoutesCannotBypassManagedCommandPhases() {
+        Set.of("roulette", "roul", "croupier", "roulettecroupier", "roulettedealer")
+            .forEach(root -> assertTrue(PluginCommandRoots.contains(root), "Missing command root: " + root));
     }
 }

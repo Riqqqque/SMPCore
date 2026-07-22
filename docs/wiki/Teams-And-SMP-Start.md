@@ -18,8 +18,10 @@ Default intent:
 - Default one-hour post-start grace period.
 - PvP is blocked during grace.
 - The PvP grace period shows a countdown bossbar.
-- The Nether opens at the beginning of real-life Day 3, exactly 48 hours after `/startsmp`.
-- The End opens at the beginning of real-life Day 5, exactly 96 hours after `/startsmp`.
+- The Nether normally opens at the beginning of real-life Day 3, exactly 48 hours after `/startsmp`.
+- The End normally opens at the beginning of real-life Day 5, exactly 96 hours after `/startsmp`.
+- Staff can configure an exact UTC epoch-millisecond unlock time with `smp-start.nether-unlock-at` or `smp-start.end-unlock-at`. A positive timestamp overrides that dimension's day-based time.
+- The current End schedule is July 21, 2026 at 7:00 PM Mountain time. It opens and announces automatically even if nobody is attempting to enter at that moment.
 - Portal and plugin teleports into a locked dimension are blocked, so homes or other commands cannot bypass the schedule.
 - `/startsmp status` shows the live PvP, Nether, and End countdowns.
 - OPs bypass the lockdown tools.

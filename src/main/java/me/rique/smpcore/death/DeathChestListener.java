@@ -2,6 +2,7 @@ package me.rique.smpcore.death;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.power.SuperpowerManager;
+import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
@@ -97,12 +98,6 @@ public final class DeathChestListener implements Listener {
             return;
         }
         if (event.getKeepInventory()) {
-            return;
-        }
-
-        if (plugin.getConfigManager().deathChestDisableInPlayerCombat
-            && plugin.getCombatLogListener() != null
-            && plugin.getCombatLogListener().isInPlayerCombat(player)) {
             return;
         }
 
@@ -440,7 +435,7 @@ public final class DeathChestListener implements Listener {
         for (String line : plugin.getConfigManager().deathChestNoteLore) {
             lore.add(MM.deserialize(applyPlaceholders(line, playerName, location, lifetimeMinutes)));
         }
-        meta.lore(lore);
+        meta.lore(CustomLoreUtil.wrapLoreLines(lore));
         note.setItemMeta(meta);
         return note;
     }

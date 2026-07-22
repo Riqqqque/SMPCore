@@ -98,7 +98,7 @@ public final class AgriculturalPylonListener implements Listener {
             }
             syncLoadedPylons();
         });
-        maintenanceTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncLoadedPylons, 100L, 400L);
+        maintenanceTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncLoadedPylons, 100L, 20L * 60L * 5L);
     }
 
     public void shutdown() {
@@ -297,7 +297,7 @@ public final class AgriculturalPylonListener implements Listener {
         syncChunkPylons(event.getChunk());
     }
 
-    @EventHandler
+    @EventHandler(ignoreCancelled = true)
     public void onChunkUnload(ChunkUnloadEvent event) {
         removeChunkPylonCache(event.getChunk());
         removeChunkHolograms(event.getChunk());

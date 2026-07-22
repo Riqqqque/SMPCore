@@ -28,7 +28,10 @@ import me.rique.smpcore.command.BossPotionCommands;
 import me.rique.smpcore.command.BossTestLoadoutCommand;
 import me.rique.smpcore.command.ChangelogCommand;
 import me.rique.smpcore.command.CorruptionCommand;
+import me.rique.smpcore.command.BountyCommand;
 import me.rique.smpcore.command.DeathInventoryCommand;
+import me.rique.smpcore.command.BackpackAdminCommand;
+import me.rique.smpcore.command.InventoryRecoveryCommand;
 import me.rique.smpcore.command.DuelCommand;
 import me.rique.smpcore.command.EssenceCommand;
 import me.rique.smpcore.command.FamiliarAdminCommand;
@@ -57,6 +60,8 @@ import me.rique.smpcore.command.SmpStartCommand;
 import me.rique.smpcore.command.StoryCommand;
 import me.rique.smpcore.command.TeamCommands;
 import me.rique.smpcore.command.TavernCommand;
+import me.rique.smpcore.command.WarpCommand;
+import me.rique.smpcore.command.WildCommand;
 import me.rique.smpcore.command.WikiCommand;
 import me.rique.smpcore.config.ConfigManager;
 import me.rique.smpcore.database.DatabaseManager;
@@ -69,11 +74,14 @@ import me.rique.smpcore.game.BlackjackManager;
 import me.rique.smpcore.game.RouletteManager;
 import me.rique.smpcore.game.SpinBetManager;
 import me.rique.smpcore.home.HomeManager;
+import me.rique.smpcore.warp.WarpManager;
+import me.rique.smpcore.wild.WildTeleportManager;
 import me.rique.smpcore.item.BossPotionListener;
 import me.rique.smpcore.item.AgriculturalPylonListener;
 import me.rique.smpcore.item.CorruptionManager;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.CustomToolListener;
+import me.rique.smpcore.item.FirstDragonSigilListener;
 import me.rique.smpcore.item.RareDropVisualListener;
 import me.rique.smpcore.item.ReforgeManager;
 import me.rique.smpcore.item.ReplenishListener;
@@ -112,6 +120,7 @@ import me.rique.smpcore.quest.BossMasteryManager;
 import me.rique.smpcore.quest.MinerManager;
 import me.rique.smpcore.quest.OverseerManager;
 import me.rique.smpcore.quest.WitchManager;
+import me.rique.smpcore.recovery.RiskyInventoryRecoveryManager;
 import me.rique.smpcore.motd.MotdListener;
 import me.rique.smpcore.season.SeasonRelicManager;
 import me.rique.smpcore.shop.PlayerShopListener;
@@ -144,12 +153,15 @@ public final class SMPCore extends JavaPlugin {
     private DatabaseManager databaseManager;
     private SpawnerManager spawnerManager;
     private HomeManager homeManager;
+    private WarpManager warpManager;
+    private WildTeleportManager wildTeleportManager;
     private PlayerManager playerManager;
     private TeamManager teamManager;
     private PlayerVisualListener playerVisualListener;
     private TabListManager tabListManager;
     private WaystoneManager waystoneManager;
     private BackpackListener backpackListener;
+    private RiskyInventoryRecoveryManager riskyInventoryRecoveryManager;
     private CombatLogListener combatLogListener;
     private DamageNumberListener damageNumberListener;
     private DeathChestListener deathChestListener;
@@ -171,6 +183,7 @@ public final class SMPCore extends JavaPlugin {
     private ItemAuditManager itemAuditManager;
     private RareDropVisualListener rareDropVisualListener;
     private RewardLanternListener rewardLanternListener;
+    private FirstDragonSigilListener firstDragonSigilListener;
     private AgriculturalPylonListener agriculturalPylonListener;
     private SalvagingDepotListener salvagingDepotListener;
     private XpLecternListener xpLecternListener;
@@ -238,6 +251,7 @@ public final class SMPCore extends JavaPlugin {
         playerManager = new PlayerManager(this);
         spawnerManager = new SpawnerManager(this);
         homeManager = new HomeManager(this);
+        warpManager = new WarpManager(this);
         teamManager = new TeamManager(this);
         waystoneManager = new WaystoneManager(this);
 
@@ -250,16 +264,28 @@ public final class SMPCore extends JavaPlugin {
             return;
         }
         teamManager.loadFromDatabaseBlocking();
-        waystoneManager.loadAll();
+        try {
+            waystoneManager.loadAll().join();
+        } catch (Exception e) {
+            Throwable cause = e.getCause() == null ? e : e.getCause();
+            getLogger().severe("Failed to load waystone data: " + cause.getMessage());
+            getLogger().severe("Disabling SMPCore to prevent waystone data loss.");
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
 
         registerListeners();
         registerCommands();
+        warpManager.start();
 
         getLogger().info("SMPCore enabled! Authored by Rique.");
     }
 
     @Override
     public void onDisable() {
+        if (wildTeleportManager != null) wildTeleportManager.shutdown();
+        if (warpManager != null) warpManager.shutdown();
+        if (homeManager != null) homeManager.shutdown();
         if (deathChestListener != null) deathChestListener.shutdown();
         if (sustenanceTalismanListener != null) sustenanceTalismanListener.shutdown();
         if (dragonEggListener != null) {
@@ -329,6 +355,8 @@ public final class SMPCore extends JavaPlugin {
         if (duelManager != null) duelManager.shutdown();
         if (essenceManager != null) essenceManager.shutdown();
         if (teamManager != null) teamManager.shutdown();
+        // Close tracked inventories before draining the recovery writer.
+        if (riskyInventoryRecoveryManager != null) riskyInventoryRecoveryManager.shutdown();
         getServer().getScheduler().cancelTasks(this);
         if (databaseManager != null) databaseManager.close();
         getLogger().info("SMPCore disabled.");
@@ -371,6 +399,8 @@ public final class SMPCore extends JavaPlugin {
         smpStartManager = new SmpStartManager(this);
         pm.registerEvents(smpStartManager, this);
         smpStartManager.applyConfiguredState();
+        wildTeleportManager = new WildTeleportManager(this);
+        pm.registerEvents(wildTeleportManager, this);
         leaderboardManager = new LeaderboardManager(this);
         pm.registerEvents(leaderboardManager, this);
         leaderboardManager.start();
@@ -386,6 +416,8 @@ public final class SMPCore extends JavaPlugin {
         rewardLanternListener = new RewardLanternListener(this);
         pm.registerEvents(rewardLanternListener, this);
         rewardLanternListener.start();
+        firstDragonSigilListener = new FirstDragonSigilListener(this);
+        pm.registerEvents(firstDragonSigilListener, this);
         superpowerManager = new SuperpowerManager(this);
         pm.registerEvents(superpowerManager, this);
         superpowerManager.start();
@@ -445,7 +477,7 @@ public final class SMPCore extends JavaPlugin {
         playerVisualListener = new PlayerVisualListener(this);
         pm.registerEvents(playerVisualListener, this);
         playerVisualListener.start();
-        pm.registerEvents(new ItemModelMigrationListener(), this);
+        pm.registerEvents(new ItemModelMigrationListener(this), this);
         pm.registerEvents(new JoinListener(this), this);
         blackjackManager = new BlackjackManager(this);
         pm.registerEvents(blackjackManager, this);
@@ -533,6 +565,9 @@ public final class SMPCore extends JavaPlugin {
         pm.registerEvents(bedrockHologramVisibilityManager, this);
         bedrockHologramVisibilityManager.start();
         pm.registerEvents(new MenuDupeGuardListener(this), this);
+        riskyInventoryRecoveryManager = new RiskyInventoryRecoveryManager(this);
+        pm.registerEvents(riskyInventoryRecoveryManager, this);
+        riskyInventoryRecoveryManager.start();
         restartDragonEggListener();
     }
 
@@ -551,6 +586,9 @@ public final class SMPCore extends JavaPlugin {
             var commands = event.registrar();
 
             HomeCommands.register(commands, this);
+            WarpCommand.register(commands, this);
+            WildCommand.register(commands, this);
+            BountyCommand.register(commands, this);
             PlayerCommands.register(commands, this);
             TeamCommands.register(commands, this);
             SmpStartCommand.register(commands, this);
@@ -579,6 +617,8 @@ public final class SMPCore extends JavaPlugin {
             ReforgeCommand.register(commands, this);
             CorruptionCommand.register(commands, this);
             DeathInventoryCommand.register(commands, this);
+            BackpackAdminCommand.register(commands, this);
+            InventoryRecoveryCommand.register(commands, this);
             DuelCommand.register(commands, this);
             EssenceCommand.register(commands, this);
             PriestCommand.register(commands, this);
@@ -602,12 +642,15 @@ public final class SMPCore extends JavaPlugin {
     public DatabaseManager getDatabase() { return databaseManager; }
     public SpawnerManager getSpawnerManager() { return spawnerManager; }
     public HomeManager getHomeManager() { return homeManager; }
+    public WarpManager getWarpManager() { return warpManager; }
+    public WildTeleportManager getWildTeleportManager() { return wildTeleportManager; }
     public PlayerManager getPlayerManager() { return playerManager; }
     public TeamManager getTeamManager() { return teamManager; }
     public PlayerVisualListener getPlayerVisualListener() { return playerVisualListener; }
     public TabListManager getTabListManager() { return tabListManager; }
     public WaystoneManager getWaystoneManager() { return waystoneManager; }
     public BackpackListener getBackpackListener() { return backpackListener; }
+    public RiskyInventoryRecoveryManager getRiskyInventoryRecoveryManager() { return riskyInventoryRecoveryManager; }
     public TavernManager getTavernManager() { return tavernManager; }
     public GoblinHuntManager getGoblinHuntManager() { return goblinHuntManager; }
     public MinerManager getMinerManager() { return minerManager; }
@@ -640,6 +683,7 @@ public final class SMPCore extends JavaPlugin {
     public ItemAuditManager getItemAuditManager() { return itemAuditManager; }
     public RareDropVisualListener getRareDropVisualListener() { return rareDropVisualListener; }
     public RewardLanternListener getRewardLanternListener() { return rewardLanternListener; }
+    public FirstDragonSigilListener getFirstDragonSigilListener() { return firstDragonSigilListener; }
     public AgriculturalPylonListener getAgriculturalPylonListener() { return agriculturalPylonListener; }
     public SalvagingDepotListener getSalvagingDepotListener() { return salvagingDepotListener; }
     public XpLecternListener getXpLecternListener() { return xpLecternListener; }

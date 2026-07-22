@@ -8,6 +8,8 @@ import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.ItemEscrowService;
+import me.rique.smpcore.util.ItemEscrowService.EscrowedItem;
+import me.rique.smpcore.util.ItemEscrowService.EscrowPayout;
 import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MessageUtil;
@@ -38,7 +40,9 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.player.PlayerBedEnterEvent;
+import org.bukkit.event.player.PlayerBedLeaveEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerItemConsumeEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -52,6 +56,7 @@ import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.inventory.meta.BundleMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
@@ -64,6 +69,7 @@ import java.io.IOException;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.EnumMap;
 import java.util.Collections;
 import java.util.HashMap;
@@ -93,6 +99,7 @@ public final class TavernManager implements Listener {
     private static final int[] DART_LANE = {9, 10, 11, 12, 13, 14, 15, 16, 17};
     private static final int[] DART_START_POSITIONS = {0, 1, 2, 6, 7, 8};
     private static final int DART_RAPID_CLICK_LIMIT = 3;
+    static final long DARTS_PERFECT_REWARD = 10L;
     private static final int[] CARD_SLOTS = {20, 22, 24};
     private static final List<Material> SLOT_SYMBOLS = List.of(
         Material.SWEET_BERRIES, Material.GOLD_NUGGET, Material.EMERALD,
@@ -288,6 +295,12 @@ public final class TavernManager implements Listener {
         return tavernLeaderboards.size();
     }
 
+    public void openActiveBounties(Player player) {
+        if (player != null && player.isOnline()) {
+            bountyManager.openActiveBounties(player);
+        }
+    }
+
     public boolean isStation(Location location) {
         return location != null && location.getWorld() != null && stationAt(BlockKey.of(location)) != null;
     }
@@ -419,10 +432,21 @@ public final class TavernManager implements Listener {
         boolean storageClick = event.getClickedInventory() != null && !(event.getClickedInventory() instanceof PlayerInventory);
         boolean shiftToStorage = event.isShiftClick() && event.getClickedInventory() instanceof PlayerInventory
             && !(event.getView().getTopInventory().getHolder(false) instanceof TavernMenuHolder);
-        if (storageClick || shiftToStorage || event.getClick() == ClickType.DROP || event.getClick() == ClickType.CONTROL_DROP) {
+        boolean bundleInsert = isBundle(current) && isGamblingDrink(cursor)
+            || isGamblingDrink(current) && isBundle(cursor);
+        if (storageClick || shiftToStorage || bundleInsert
+            || event.getClick() == ClickType.DROP || event.getClick() == ClickType.CONTROL_DROP) {
             event.setCancelled(true);
             if (event.getWhoClicked() instanceof Player player) player.sendMessage(MessageUtil.warn("Bram's bottomless drink cannot be stored or shared."));
         }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onGamblingDrinkEntityInteract(PlayerInteractEntityEvent event) {
+        ItemStack held = event.getPlayer().getInventory().getItem(event.getHand());
+        if (!isGamblingDrink(held)) return;
+        event.setCancelled(true);
+        sipGamblingDrink(event.getPlayer());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -448,9 +472,24 @@ public final class TavernManager implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onNightSkip(TimeSkipEvent event) {
         if (event.getSkipReason() != TimeSkipEvent.SkipReason.NIGHT_SKIP) return;
-        for (Player player : event.getWorld().getPlayers()) {
-            if (player.isSleeping() && sleepingIntoxicated.remove(player.getUniqueId())) clearIntoxication(player);
+        for (UUID playerId : new ArrayList<>(sleepingIntoxicated)) {
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null && player.isOnline() && player.getWorld().equals(event.getWorld())
+                && sleepingIntoxicated.remove(playerId)) {
+                clearIntoxication(player);
+            }
         }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBedLeave(PlayerBedLeaveEvent event) {
+        UUID playerId = event.getPlayer().getUniqueId();
+        if (!sleepingIntoxicated.contains(playerId)) return;
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null && player.isOnline() && player.isSleeping()) return;
+            sleepingIntoxicated.remove(playerId);
+        }, 5L);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -681,8 +720,7 @@ public final class TavernManager implements Listener {
             player.sendMessage(MessageUtil.warn("You need <white>" + drink.cost + " Essence</white>."));
             return;
         }
-        Map<Integer, ItemStack> overflow = player.getInventory().addItem(item);
-        overflow.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
+        InventoryRecipeUtil.giveOrDrop(player, item);
         recordAcquisition(player, item, "tavern_drink", "Bought " + drink.displayName + ".");
         player.sendMessage(MessageUtil.success("Bought <white>" + drink.displayName + "</white>."));
     }
@@ -740,7 +778,7 @@ public final class TavernManager implements Listener {
             player.sendMessage(MessageUtil.warn("You need <white>15 Essence</white>."));
             return;
         }
-        player.getInventory().addItem(item);
+        InventoryRecipeUtil.giveOrDrop(player, item);
         recordAcquisition(player, item, "tavern_luck_drink", "Bought Bottomless Lucky Draught.");
         player.sendMessage(MessageUtil.success("Bought Bram's <white>Bottomless Lucky Draught</white>. Right-click to sip."));
         openGamblingLuckMenu(player);
@@ -758,7 +796,7 @@ public final class TavernManager implements Listener {
             player.sendMessage(MessageUtil.warn("You need <white>" + food.cost + " Essence</white>."));
             return;
         }
-        player.getInventory().addItem(item);
+        InventoryRecipeUtil.giveOrDrop(player, item);
         recordAcquisition(player, item, "tavern_luck_food", "Bought " + food.displayName + ".");
         player.sendMessage(MessageUtil.success("Bought <white>" + food.displayName + "</white>."));
         openGamblingLuckMenu(player);
@@ -865,6 +903,24 @@ public final class TavernManager implements Listener {
         player.playSound(player.getLocation(), Sound.BLOCK_AMETHYST_BLOCK_CHIME, 0.8f, 1.4f);
     }
 
+    public boolean clearIntoxicationByAdmin(Player player) {
+        if (player == null) return false;
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        boolean changed = intoxicationLevel(player) > 0
+            || temporaryGamblingNausea(player)
+            || player.hasPotionEffect(PotionEffectType.NAUSEA);
+        UUID playerId = player.getUniqueId();
+        clearingIntoxication.add(playerId);
+        sleepingIntoxicated.remove(playerId);
+        pdc.remove(intoxicationKey);
+        pdc.remove(morningDrinkKey);
+        pdc.remove(gamblingDrinkSipsKey);
+        pdc.remove(gamblingDrinkExpiryKey);
+        player.removePotionEffect(PotionEffectType.NAUSEA);
+        Bukkit.getScheduler().runTask(plugin, () -> clearingIntoxication.remove(playerId));
+        return changed;
+    }
+
     private void maintainGamblingLuck(Player player, List<Location> brewmasters) {
         long now = System.currentTimeMillis();
         PersistentDataContainer pdc = player.getPersistentDataContainer();
@@ -910,6 +966,10 @@ public final class TavernManager implements Listener {
         return meta != null && meta.getPersistentDataContainer().has(gamblingDrinkKey, PersistentDataType.BYTE);
     }
 
+    private boolean isBundle(ItemStack item) {
+        return item != null && item.getItemMeta() instanceof BundleMeta;
+    }
+
     private void removeGamblingDrinks(Player player) {
         Inventory inventory = player.getInventory();
         for (int slot = 0; slot < inventory.getSize(); slot++) {
@@ -938,9 +998,16 @@ public final class TavernManager implements Listener {
             return;
         }
         Material material = null;
+        List<EscrowedItem> materialEscrows = List.of();
         int wager;
         if (currency.equals("essence")) {
             wager = Integer.parseInt(amountRaw);
+            long maximumProfit = 24L * wager;
+            if (plugin.getEssenceManager() == null || !plugin.getEssenceManager().isLoaded(player)
+                || !plugin.getEssenceManager().canCreditFully(player, maximumProfit)) {
+                player.sendMessage(MessageUtil.warn("Make room below the Essence cap before spinning."));
+                return;
+            }
             if (!spend(player, wager, "tavern_slots")) {
                 player.sendMessage(MessageUtil.warn("You need <white>" + wager + " Essence</white>."));
                 return;
@@ -948,7 +1015,8 @@ public final class TavernManager implements Listener {
         } else {
             material = switch (currency) { case "iron" -> Material.IRON_INGOT; case "gold" -> Material.GOLD_INGOT; case "diamond" -> Material.DIAMOND; default -> null; };
             wager = Integer.parseInt(amountRaw);
-            if (material == null || !removePlain(player, material, wager)) {
+            materialEscrows = material == null ? null : capturePlainWager(player, material, wager, UUID.randomUUID());
+            if (materialEscrows == null) {
                 player.sendMessage(MessageUtil.warn("You need <white>" + wager + " plain " + prettyMaterialName(currency) + "</white>."));
                 return;
             }
@@ -961,7 +1029,7 @@ public final class TavernManager implements Listener {
         int multiplier = slotMultiplier(luckySlotRoll(primaryRoll, bonusRoll, luckTrigger, luck));
         Inventory inv = Bukkit.createInventory(new TavernMenuHolder(player.getUniqueId()), 27,
             BedrockCompat.menuTitle(player, MM.deserialize("<gold><bold>Spinning...</bold></gold>"), "Spinning Slots"));
-        SlotSession session = new SlotSession(player.getUniqueId(), inv, material, wager, multiplier);
+        SlotSession session = new SlotSession(player.getUniqueId(), inv, material, wager, multiplier, materialEscrows);
         slotSessions.put(player.getUniqueId(), session);
         lastSlotWagers.put(player.getUniqueId(), new SlotWager(currency, amountRaw));
         startGameTimer(player, TavernGame.SLOTS);
@@ -1005,7 +1073,7 @@ public final class TavernManager implements Listener {
         Component component = MM.deserialize(message);
         for (Player nearby : location.getWorld().getPlayers()) {
             if (nearby.getLocation().distanceSquared(location) > 256.0D) continue;
-            nearby.sendMessage(component);
+            BedrockCompat.sendGameMessage(nearby, component);
             if (!soundExclusions.contains(nearby.getUniqueId())) nearby.playSound(location, sound, 0.7f, pitch);
         }
     }
@@ -1088,32 +1156,66 @@ public final class TavernManager implements Listener {
         Player player = Bukkit.getPlayer(session.playerId);
         if (player == null) { stopGameTimer(session.playerId, false); return; }
         if (session.multiplier > 1) {
-            if (session.material == null) credit(player, (long) session.wager * session.multiplier, "tavern_slots_win");
-            else deliverPlainPayout(player, player.getUniqueId(), player.getName(), session.material, session.wager * session.multiplier, "SLOTS_WIN");
+            boolean paid = session.material == null
+                ? credit(player, (long) session.wager * session.multiplier, "tavern_slots_win")
+                : settlePlainEscrows(player, session.materialEscrows, session.material,
+                    session.wager * session.multiplier, "SLOTS_WIN");
+            if (!paid) {
+                refundSlotWager(session, player);
+                session.inventory.setItem(22, button(Material.YELLOW_STAINED_GLASS_PANE,
+                    "<yellow><bold>WAGER RETURNED</bold></yellow>",
+                    List.of("<gray>The payout could not be journaled safely.</gray>"), null));
+                BedrockCompat.sendGameMessage(player, MessageUtil.warn("That spin could not settle safely, so your wager was returned."));
+                stopGameTimer(player.getUniqueId(), false);
+                session.inventory.setItem(26, button(Material.EMERALD, "<green><bold>SPIN AGAIN</bold></green>", List.of("<gray>Uses the same wager and charges it once.</gray>", "<yellow>Click to spin without leaving.</yellow>"), "slot:repeat"));
+                BedrockCompat.syncGameInventory(player);
+                return;
+            }
             session.inventory.setItem(22, button(Material.LIME_STAINED_GLASS_PANE, "<green><bold>" + session.multiplier + "x PAYOUT</bold></green>", List.of("<gray>Your winnings were delivered.</gray>"), null));
-            player.sendMessage(MessageUtil.success(session.multiplier == 25 ? "Crown jackpot! You won <white>25x</white>." : "The reels pay <white>" + session.multiplier + "x</white>."));
+            BedrockCompat.sendGameMessage(player, MessageUtil.success(session.multiplier == 25 ? "Crown jackpot! You won <white>25x</white>." : "The reels pay <white>" + session.multiplier + "x</white>."));
             playResultSound(player, Sound.ENTITY_PLAYER_LEVELUP, 0.8f, session.multiplier == 25 ? 1.7f : 1.25f);
             announceGameResult(playerGameStations.get(player.getUniqueId()), "<gold><bold>" + escapeMini(player.getName()) + " won " + session.multiplier + "x at Tavern Slots!</bold></gold>", Sound.ENTITY_FIREWORK_ROCKET_TWINKLE, session.multiplier == 25 ? 1.6f : 1.25f, Set.of(player.getUniqueId()));
             incrementCardsharpProgress(player, 0);
             stopGameTimer(player.getUniqueId(), true);
         } else {
+            if (session.material != null && !payoutEscrow.consumeAll(session.materialEscrows)) {
+                returnPlainEscrows(player, session.materialEscrows);
+                session.inventory.setItem(22, button(Material.YELLOW_STAINED_GLASS_PANE,
+                    "<yellow><bold>WAGER RETURNED</bold></yellow>",
+                    List.of("<gray>The loss could not be recorded safely.</gray>"), null));
+                BedrockCompat.sendGameMessage(player, MessageUtil.warn("That spin could not settle safely, so your wager was returned."));
+                stopGameTimer(player.getUniqueId(), false);
+                session.inventory.setItem(26, button(Material.EMERALD, "<green><bold>SPIN AGAIN</bold></green>", List.of("<gray>Uses the same wager and charges it once.</gray>", "<yellow>Click to spin without leaving.</yellow>"), "slot:repeat"));
+                BedrockCompat.syncGameInventory(player);
+                return;
+            }
             session.inventory.setItem(22, button(Material.RED_STAINED_GLASS_PANE, "<red><bold>NO PAYOUT</bold></red>", List.of("<gray>The house takes this spin.</gray>"), null));
-            player.sendMessage(MessageUtil.warn("The reels come up empty."));
+            BedrockCompat.sendGameMessage(player, MessageUtil.warn("The reels come up empty."));
             playResultSound(player, Sound.BLOCK_NOTE_BLOCK_BASS, 0.8f, 0.65f);
             stopGameTimer(player.getUniqueId(), false);
         }
         session.inventory.setItem(26, button(Material.EMERALD, "<green><bold>SPIN AGAIN</bold></green>", List.of("<gray>Uses the same wager and charges it once.</gray>", "<yellow>Click to spin without leaving.</yellow>"), "slot:repeat"));
+        BedrockCompat.syncGameInventory(player);
     }
 
     private void refundSlot(SlotSession session) {
         if (!slotSessions.remove(session.playerId, session)) return;
         if (session.task != null) session.task.cancel();
         Player player = Bukkit.getPlayer(session.playerId);
-        if (player == null) { stopGameTimer(session.playerId, false); return; }
-        if (session.material == null) credit(player, session.wager, "tavern_slots_refund");
-        else deliverPlainPayout(player, player.getUniqueId(), player.getName(), session.material, session.wager, "SLOTS_REFUND");
+        refundSlotWager(session, player);
         stopGameTimer(session.playerId, false);
-        player.sendMessage(MessageUtil.warn("Your unfinished slot wager was refunded."));
+        if (player != null) player.sendMessage(MessageUtil.warn("Your unfinished slot wager was refunded."));
+    }
+
+    private void refundSlotWager(SlotSession session, Player player) {
+        if (session.material != null) {
+            returnPlainEscrows(player, session.materialEscrows);
+            return;
+        }
+        if (player == null || plugin.getEssenceManager() == null
+            || plugin.getEssenceManager().refund(player, session.wager, "tavern_slots_refund") != session.wager) {
+            plugin.getLogger().severe("Could not refund an interrupted Essence slot wager for " + session.playerId + ".");
+        }
     }
 
     private void openCardBetMenu(Player player, BlockKey key) {
@@ -1248,23 +1350,50 @@ public final class TavernManager implements Listener {
             renderTableLobby(lobby);
             return;
         }
+        if (lobby.wager.currency.equals("essence")) {
+            long maximumProfit = (long) Integer.parseInt(lobby.wager.amount) * (players.size() - 1L);
+            Player capped = players.stream()
+                .filter(player -> !plugin.getEssenceManager().canCreditFully(player, maximumProfit))
+                .findFirst().orElse(null);
+            if (capped != null) {
+                players.forEach(p -> p.sendMessage(MessageUtil.warn("<white>" + capped.getName()
+                    + "</white> needs room below the Essence cap before this round.")));
+                return;
+            }
+        }
         if (!tableLobbies.remove(key, lobby)) return;
         for (UUID id : lobby.players) {
             playerTableLobbies.remove(id, key);
             playerLobbyInventories.remove(id);
         }
         List<Player> charged = new ArrayList<>();
+        Map<UUID, List<EscrowedItem>> materialEscrows = new HashMap<>();
+        UUID matchId = UUID.randomUUID();
         for (Player player : players) {
-            if (!takeCardWager(player, lobby.wager)) {
-                for (Player paid : charged) refundCardWager(paid, lobby.wager, 1);
+            List<EscrowedItem> captured = List.of();
+            boolean chargedSuccessfully;
+            if (lobby.wager.currency.equals("essence")) {
+                chargedSuccessfully = takeCardWager(player, lobby.wager);
+            } else {
+                Material material = cardWagerMaterial(lobby.wager);
+                captured = material == null ? null : capturePlainWager(
+                    player, material, Integer.parseInt(lobby.wager.amount), matchId);
+                chargedSuccessfully = captured != null;
+            }
+            if (!chargedSuccessfully) {
+                for (Player paid : charged) {
+                    if (lobby.wager.currency.equals("essence")) refundCardWager(paid, lobby.wager, 1);
+                    else returnPlainEscrows(paid, materialEscrows.get(paid.getUniqueId()));
+                }
                 players.forEach(p -> p.sendMessage(MessageUtil.warn("The card round was cancelled because a player could not cover the wager.")));
                 players.forEach(p -> stopGameTimer(p.getUniqueId(), false));
                 updateStationHologram(key);
                 return;
             }
+            if (captured != null && !captured.isEmpty()) materialEscrows.put(player.getUniqueId(), captured);
             charged.add(player);
         }
-        startCardMatch(key, players, lobby.wager);
+        startCardMatch(key, players, lobby.wager, matchId, materialEscrows);
     }
 
     private void openTableLobbyMenu(Player player, TableLobby lobby) {
@@ -1336,12 +1465,18 @@ public final class TavernManager implements Listener {
         }
     }
 
-    private void startCardMatch(BlockKey key, List<Player> players, SlotWager wager) {
+    private void startCardMatch(
+        BlockKey key,
+        List<Player> players,
+        SlotWager wager,
+        UUID matchId,
+        Map<UUID, List<EscrowedItem>> materialEscrows
+    ) {
         List<Integer> deck = new ArrayList<>();
         for (int suit = 0; suit < 4; suit++) for (int rank = 2; rank <= 14; rank++) deck.add(rank);
         Collections.shuffle(deck);
-        UUID matchId = UUID.randomUUID();
         CardMatch match = new CardMatch(matchId, key, wager);
+        match.materialEscrows.putAll(materialEscrows);
         int cursor = 0;
         for (Player player : players) {
             List<Integer> hand = new ArrayList<>(List.of(deck.get(cursor++), deck.get(cursor++), deck.get(cursor++)));
@@ -1432,33 +1567,33 @@ public final class TavernManager implements Listener {
         activeTableMatches.remove(match.table, match.id);
         int best = match.selections.values().stream().mapToInt(Integer::intValue).max().orElse(0);
         List<UUID> winners = match.selections.entrySet().stream().filter(e -> e.getValue() == best).map(Map.Entry::getKey).toList();
+        Player winner = winners.size() == 1 ? Bukkit.getPlayer(winners.getFirst()) : null;
+        boolean winnerPaid = winner != null && payCardPot(winner, match);
+        boolean settledAsWin = winners.size() == 1 && winnerPaid;
+        if (settledAsWin) match.potSettled = true;
+        else refundCardContributors(match);
         for (UUID id : match.hands.keySet()) {
             playerCardMatches.remove(id, match.id);
             Player player = Bukkit.getPlayer(id);
-            stopGameTimer(id, winners.size() == 1 && winners.contains(id));
+            stopGameTimer(id, settledAsWin && winners.contains(id));
             if (player == null) continue;
             recentCardTables.put(id, match.table);
-            if (winners.size() == 1) {
-                Player winner = Bukkit.getPlayer(winners.getFirst());
-                player.sendMessage(MessageUtil.success("<white>" + (winner == null ? "A player" : winner.getName()) + "</white> wins with " + cardName(best) + "."));
+            if (settledAsWin) {
+                BedrockCompat.sendGameMessage(player, MessageUtil.success("<white>" + winner.getName() + "</white> wins with " + cardName(best) + "."));
                 player.playSound(player.getLocation(), winners.contains(id) ? Sound.UI_TOAST_CHALLENGE_COMPLETE : Sound.BLOCK_NOTE_BLOCK_BASS, 0.8f, winners.contains(id) ? 1.25f : 0.65f);
+            } else if (winners.size() == 1) {
+                BedrockCompat.sendGameMessage(player, MessageUtil.warn("The pot could not be settled safely, so every wager was returned."));
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_BASS, 0.65f, 0.8f);
             } else {
-                player.sendMessage(MessageUtil.info("The top cards tie at <white>" + cardName(best) + "</white>."));
+                BedrockCompat.sendGameMessage(player, MessageUtil.info("The top cards tie at <white>" + cardName(best) + "</white>."));
                 player.playSound(player.getLocation(), Sound.BLOCK_AMETHYST_BLOCK_CHIME, 0.65f, 1.0f);
             }
-            openCardResult(player, winners.size() == 1 && winners.contains(id), best, winners.size() != 1);
+            openCardResult(player, settledAsWin && winners.contains(id), best, !settledAsWin);
         }
-        if (winners.size() == 1) {
-            Player winner = Bukkit.getPlayer(winners.getFirst());
-            if (winner != null) {
-                refundCardWager(winner, match.wager, match.contributors.size());
-                incrementCardsharpProgress(winner, 1);
-                winner.sendMessage(MessageUtil.success("Winner takes the pot: <white>" + (Integer.parseInt(match.wager.amount) * match.contributors.size()) + " " + prettyMaterialName(match.wager.currency) + "</white>."));
-                announceGameResult(match.table, "<gold><bold>" + escapeMini(winner.getName()) + " won the Crown & Casks pot!</bold></gold>", Sound.ENTITY_FIREWORK_ROCKET_LARGE_BLAST, 1.2f, Set.copyOf(match.hands.keySet()));
-            }
-            match.potSettled = true;
-        } else {
-            refundCardContributors(match);
+        if (settledAsWin) {
+            incrementCardsharpProgress(winner, 1);
+            BedrockCompat.sendGameMessage(winner, MessageUtil.success("Winner takes the pot: <white>" + (Integer.parseInt(match.wager.amount) * match.contributors.size()) + " " + prettyMaterialName(match.wager.currency) + "</white>."));
+            announceGameResult(match.table, "<gold><bold>" + escapeMini(winner.getName()) + " won the Crown & Casks pot!</bold></gold>", Sound.ENTITY_FIREWORK_ROCKET_LARGE_BLAST, 1.2f, Set.copyOf(match.hands.keySet()));
         }
         updateStationHologram(match.table);
     }
@@ -1491,16 +1626,22 @@ public final class TavernManager implements Listener {
         activeTableMatches.remove(match.table, match.id);
         playerCardMatches.remove(winnerId, match.id);
         Player winner = Bukkit.getPlayer(winnerId);
-        if (winner != null) {
+        if (winner != null && payCardPot(winner, match)) {
             stopGameTimer(winnerId, true);
-            refundCardWager(winner, match.wager, match.contributors.size());
             match.potSettled = true;
             recentCardTables.put(winnerId, match.table);
-            winner.sendMessage(MessageUtil.success("The other players left. You take the full pot."));
+            BedrockCompat.sendGameMessage(winner, MessageUtil.success("The other players left. You take the full pot."));
             winner.playSound(winner.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 0.8f, 1.2f);
             announceGameResult(match.table, "<gold><bold>" + escapeMini(winner.getName()) + " won Crown & Casks by forfeit!</bold></gold>", Sound.ENTITY_FIREWORK_ROCKET_LARGE_BLAST, 1.1f, Set.of(winnerId));
             openCardResult(winner, true, 0, false);
-        } else refundCardContributors(match);
+        } else {
+            refundCardContributors(match);
+            if (winner != null) {
+                stopGameTimer(winnerId, false);
+                BedrockCompat.sendGameMessage(winner, MessageUtil.warn("The pot could not be settled safely, so every wager was returned."));
+                openCardCancelled(winner);
+            }
+        }
         updateStationHologram(match.table);
     }
 
@@ -1523,26 +1664,43 @@ public final class TavernManager implements Listener {
 
     private boolean takeCardWager(Player player, SlotWager wager) {
         int amount = Integer.parseInt(wager.amount);
-        if (wager.currency.equals("essence")) return spend(player, amount, "tavern_cards_wager");
-        Material material = switch (wager.currency) { case "iron" -> Material.IRON_INGOT; case "gold" -> Material.GOLD_INGOT; case "diamond" -> Material.DIAMOND; default -> null; };
-        return material != null && removePlain(player, material, amount);
+        return wager.currency.equals("essence") && spend(player, amount, "tavern_cards_wager");
     }
 
     private boolean canCoverCardWager(Player player, SlotWager wager) {
         int amount = Integer.parseInt(wager.amount);
-        if (wager.currency.equals("essence")) return plugin.getEssenceManager() != null && plugin.getEssenceManager().balance(player) >= amount;
-        Material material = switch (wager.currency) { case "iron" -> Material.IRON_INGOT; case "gold" -> Material.GOLD_INGOT; case "diamond" -> Material.DIAMOND; default -> null; };
+        if (wager.currency.equals("essence")) return plugin.getEssenceManager() != null
+            && plugin.getEssenceManager().isLoaded(player) && plugin.getEssenceManager().balance(player) >= amount;
+        Material material = cardWagerMaterial(wager);
         return material != null && hasPlain(player, material, amount);
     }
 
     private void refundCardWager(Player player, SlotWager wager, int shares) {
         if (player == null || shares <= 0) return;
         int amount = Integer.parseInt(wager.amount) * shares;
-        if (wager.currency.equals("essence")) credit(player, amount, "tavern_cards_payout");
-        else {
-            Material material = switch (wager.currency) { case "iron" -> Material.IRON_INGOT; case "gold" -> Material.GOLD_INGOT; case "diamond" -> Material.DIAMOND; default -> null; };
-            if (material != null) deliverPlainPayout(player, player.getUniqueId(), player.getName(), material, amount, "CARDS_PAYOUT");
+        if (wager.currency.equals("essence") && (plugin.getEssenceManager() == null
+            || plugin.getEssenceManager().refund(player, amount, "tavern_cards_refund") != amount)) {
+            plugin.getLogger().severe("Could not refund an Essence card wager for " + player.getName() + ".");
         }
+    }
+
+    private boolean payCardPot(Player winner, CardMatch match) {
+        int amount = Integer.parseInt(match.wager.amount) * match.contributors.size();
+        if (match.wager.currency.equals("essence")) {
+            return credit(winner, amount, "tavern_cards_payout");
+        }
+        Material material = cardWagerMaterial(match.wager);
+        List<EscrowedItem> consumed = match.materialEscrows.values().stream().flatMap(Collection::stream).toList();
+        return settlePlainEscrows(winner, consumed, material, amount, "CARDS_PAYOUT");
+    }
+
+    private Material cardWagerMaterial(SlotWager wager) {
+        return switch (wager.currency) {
+            case "iron" -> Material.IRON_INGOT;
+            case "gold" -> Material.GOLD_INGOT;
+            case "diamond" -> Material.DIAMOND;
+            default -> null;
+        };
     }
 
     private void refundCardContributors(CardMatch match) {
@@ -1550,11 +1708,12 @@ public final class TavernManager implements Listener {
         match.potSettled = true;
         for (UUID id : match.contributors.keySet()) {
             Player player = Bukkit.getPlayer(id);
-            if (player != null) refundCardWager(player, match.wager, 1);
-            else if (!match.wager.currency.equals("essence")) {
-                Material material = switch (match.wager.currency) { case "iron" -> Material.IRON_INGOT; case "gold" -> Material.GOLD_INGOT; case "diamond" -> Material.DIAMOND; default -> null; };
-                if (material != null) deliverPlainPayout(null, id, match.contributors.get(id), material, Integer.parseInt(match.wager.amount), "CARDS_OFFLINE_REFUND");
-            } else plugin.getLogger().warning("Could not immediately return an offline Essence card wager to " + match.contributors.get(id) + ".");
+            if (match.wager.currency.equals("essence")) {
+                if (player != null) refundCardWager(player, match.wager, 1);
+                else plugin.getLogger().warning("Could not immediately return an offline Essence card wager to " + match.contributors.get(id) + ".");
+            } else {
+                returnPlainEscrows(player, match.materialEscrows.get(id));
+            }
         }
     }
 
@@ -1636,7 +1795,7 @@ public final class TavernManager implements Listener {
             "<gray>The pace and direction can shift.</gray>",
             "<gray>Rapid clicks delay your next throw.</gray>",
             "<gray>Center hits score 50.</gray>",
-            "<green>Perfect 150: 5 Essence</green>"
+            "<green>Perfect 150: " + DARTS_PERFECT_REWARD + " Essence</green>"
         ), "close"));
     }
 
@@ -1694,9 +1853,10 @@ public final class TavernManager implements Listener {
         }
         if (session.throwsMade >= 3) {
             if (session.total == 150) {
-                credit(player, 5L, "tavern_darts_perfect");
+                credit(player, DARTS_PERFECT_REWARD, "tavern_darts_perfect");
                 recordTavernStat(player, TavernGame.DARTS, 1, 0L);
-                player.sendMessage(MessageUtil.success("Perfect round! You earned <white>5 Essence</white>."));
+                BedrockCompat.sendGameMessage(player, MessageUtil.success("Perfect round! You earned <white>"
+                    + DARTS_PERFECT_REWARD + " Essence</white>."));
                 announceGameResult(playerGameStations.get(player.getUniqueId()), "<gold><bold>" + escapeMini(player.getName()) + " threw a perfect 150 at Tavern Darts!</bold></gold>", Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.25f, Set.of(player.getUniqueId()));
             }
             finishDarts(session, player);
@@ -1901,8 +2061,7 @@ public final class TavernManager implements Listener {
     }
 
     private void giveQuestReward(Player player, ItemStack reward) {
-        Map<Integer, ItemStack> overflow = player.getInventory().addItem(reward);
-        overflow.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
+        InventoryRecipeUtil.giveOrDrop(player, reward);
         recordAcquisition(player, reward, "tavern_quest", "Completed a tavern NPC quest.");
     }
 
@@ -1914,8 +2073,8 @@ public final class TavernManager implements Listener {
         return plugin.getEssenceManager() != null && plugin.getEssenceManager().spend(player, amount, reason);
     }
 
-    private void credit(Player player, long amount, String reason) {
-        if (plugin.getEssenceManager() != null) plugin.getEssenceManager().credit(player, amount, reason);
+    private boolean credit(Player player, long amount, String reason) {
+        return plugin.getEssenceManager() != null && plugin.getEssenceManager().credit(player, amount, reason);
     }
 
     private boolean hasPlain(Player player, Material material, int amount) {
@@ -1942,6 +2101,64 @@ public final class TavernManager implements Listener {
         }
         player.getInventory().setStorageContents(contents);
         return true;
+    }
+
+    private List<EscrowedItem> capturePlainWager(Player player, Material material, int amount, UUID transactionId) {
+        if (player == null || material == null || amount <= 0 || !hasPlain(player, material, amount)) {
+            return null;
+        }
+        List<EscrowedItem> captured = new ArrayList<>();
+        int remaining = amount;
+        ItemStack[] storage = player.getInventory().getStorageContents();
+        for (int slot = 0; slot < storage.length && remaining > 0; slot++) {
+            ItemStack item = player.getInventory().getItem(slot);
+            if (!InventoryRecipeUtil.isPlainMaterial(plugin, item, material)) continue;
+            int take = Math.min(remaining, item.getAmount());
+            EscrowedItem escrowed = payoutEscrow.capturePartial(transactionId, player, slot, item.clone(), take);
+            if (escrowed == null) {
+                returnPlainEscrows(player, captured);
+                return null;
+            }
+            payoutEscrow.retain(escrowed);
+            captured.add(escrowed);
+            remaining -= take;
+        }
+        if (remaining > 0) {
+            returnPlainEscrows(player, captured);
+            return null;
+        }
+        return List.copyOf(captured);
+    }
+
+    private boolean settlePlainEscrows(
+        Player player,
+        Collection<EscrowedItem> consumed,
+        Material material,
+        int amount,
+        String state
+    ) {
+        if (player == null || consumed == null || consumed.isEmpty() || material == null || amount <= 0) {
+            return false;
+        }
+        List<EscrowPayout> payouts = splitPlainPayoutAmounts(amount, material.getMaxStackSize()).stream()
+            .map(stack -> new EscrowPayout(player.getUniqueId(), player.getName(), new ItemStack(material, stack)))
+            .toList();
+        if (!payoutEscrow.replaceEscrowsWithRecoveries(consumed, payouts, state)) {
+            return false;
+        }
+        restoreTavernPayouts(player, false);
+        return true;
+    }
+
+    private void returnPlainEscrows(Player player, Collection<EscrowedItem> escrows) {
+        if (escrows == null || escrows.isEmpty()) return;
+        for (EscrowedItem escrowed : escrows) {
+            if (escrowed == null) continue;
+            payoutEscrow.retarget(escrowed, escrowed.ownerId(), escrowed.ownerName(), "RETURNING");
+            if (player != null && player.isOnline() && player.getUniqueId().equals(escrowed.ownerId())
+                && payoutEscrow.give(player, escrowed)) continue;
+            payoutEscrow.queueRecovery(escrowed.ownerId(), escrowed.ownerName(), escrowed);
+        }
     }
 
     private void deliverPlainPayout(Player player, UUID ownerId, String ownerName, Material material, int amount, String state) {
@@ -2360,9 +2577,9 @@ public final class TavernManager implements Listener {
         private TableLobby(SlotWager wager, UUID hostId) { this.wager = wager; this.hostId = hostId; }
     }
     private static final class SlotSession {
-        private final UUID playerId; private final Inventory inventory; private final Material material; private final int wager; private final int multiplier;
+        private final UUID playerId; private final Inventory inventory; private final Material material; private final int wager; private final int multiplier; private final List<EscrowedItem> materialEscrows;
         private final int lossOffset; private int step; private int lastStopped; private BukkitTask task;
-        private SlotSession(UUID playerId, Inventory inventory, Material material, int wager, int multiplier) { this.playerId=playerId; this.inventory=inventory; this.material=material; this.wager=wager; this.multiplier=multiplier; this.lossOffset=ThreadLocalRandom.current().nextInt(SLOT_SYMBOLS.size()); }
+        private SlotSession(UUID playerId, Inventory inventory, Material material, int wager, int multiplier, List<EscrowedItem> materialEscrows) { this.playerId=playerId; this.inventory=inventory; this.material=material; this.wager=wager; this.multiplier=multiplier; this.materialEscrows=materialEscrows == null ? List.of() : List.copyOf(materialEscrows); this.lossOffset=ThreadLocalRandom.current().nextInt(SLOT_SYMBOLS.size()); }
     }
     private static final class DartSession {
         private final UUID playerId; private final Inventory inventory; private int cursor; private int direction=1; private int throwsMade; private int total; private BukkitTask task;
@@ -2371,7 +2588,7 @@ public final class TavernManager implements Listener {
         private DartSession(UUID playerId, Inventory inventory) { this.playerId=playerId; this.inventory=inventory; }
     }
     private static final class CardMatch {
-        private final UUID id; private final BlockKey table; private final SlotWager wager; private final Map<UUID,List<Integer>> hands = new HashMap<>(); private final Map<UUID,Integer> selections = new ConcurrentHashMap<>(); private final Map<UUID,String> contributors = new HashMap<>(); private boolean potSettled; private BukkitTask task;
+        private final UUID id; private final BlockKey table; private final SlotWager wager; private final Map<UUID,List<Integer>> hands = new HashMap<>(); private final Map<UUID,Integer> selections = new ConcurrentHashMap<>(); private final Map<UUID,String> contributors = new HashMap<>(); private final Map<UUID,List<EscrowedItem>> materialEscrows = new HashMap<>(); private boolean potSettled; private BukkitTask task;
         private CardMatch(UUID id, BlockKey table, SlotWager wager) { this.id=id; this.table=table; this.wager=wager; }
     }
     private record GameTimer(TavernGame game, String playerName, long startedAt) {}

@@ -96,6 +96,12 @@ public final class MenuDupeGuardListener implements Listener {
     public interface MutableMenuHolder {
     }
 
+    public interface RecoveryTrackedMenuHolder extends MutableMenuHolder {
+        String recoverySurface();
+
+        int[] recoverySlots();
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onInventoryOpen(InventoryOpenEvent event) {
         Inventory top = event.getView().getTopInventory();

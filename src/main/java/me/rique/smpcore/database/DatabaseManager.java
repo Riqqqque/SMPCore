@@ -65,38 +65,6 @@ public final class DatabaseManager {
         }
     }
 
-    public CompletableFuture<Void> initAsync() {
-        return CompletableFuture.runAsync(() -> {
-            plugin.getDataFolder().mkdirs();
-            File dbFile = new File(plugin.getDataFolder(), "data.db");
-
-            HikariConfig cfg = new HikariConfig();
-            cfg.setJdbcUrl("jdbc:sqlite:" + dbFile.getAbsolutePath());
-            // Do NOT set driverClassName here — the string literal "org.sqlite.JDBC" would
-            // be wrong after Shadow relocates the package. JDBC 4.0 SPI auto-discovers the
-            // driver via META-INF/services/java.sql.Driver (merged by mergeServiceFiles()).
-            cfg.setMaximumPoolSize(2);
-            cfg.setMinimumIdle(1);
-            cfg.setConnectionTimeout(20_000);
-            cfg.setIdleTimeout(300_000);
-            cfg.setMaxLifetime(600_000);
-            // WAL mode for concurrent read+write; NORMAL sync is safe & fast enough
-            cfg.setConnectionInitSql(
-                "PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; " +
-                "PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; " +
-                "PRAGMA cache_size=2000; PRAGMA temp_store=MEMORY;"
-            );
-
-            dataSource = new HikariDataSource(cfg);
-            try {
-                createTables();
-            } catch (SQLException e) {
-                if (dataSource != null && !dataSource.isClosed()) dataSource.close();
-                throw new RuntimeException("Failed to create database tables", e);
-            }
-        }, executor);
-    }
-
     public void close() {
         executor.shutdown();
         boolean terminated = false;
@@ -199,6 +167,13 @@ public final class DatabaseManager {
             CREATE TABLE IF NOT EXISTS team_vaults (
                 team_name TEXT PRIMARY KEY COLLATE NOCASE,
                 contents  BLOB NOT NULL
+            )""";
+
+        String teamVaultBackups = """
+            CREATE TABLE IF NOT EXISTS team_vault_backups (
+                team_name TEXT PRIMARY KEY COLLATE NOCASE,
+                contents  BLOB NOT NULL,
+                saved_at  INTEGER NOT NULL
             )""";
 
         String waystones = """
@@ -505,6 +480,12 @@ public final class DatabaseManager {
             stmt.executeUpdate(teamAllies);
             stmt.executeUpdate(teamAlliesByAlly);
             stmt.executeUpdate(teamVaults);
+            stmt.executeUpdate(teamVaultBackups);
+            stmt.executeUpdate("""
+                INSERT OR IGNORE INTO team_vault_backups (team_name, contents, saved_at)
+                SELECT team_name, contents, CAST(strftime('%s', 'now') AS INTEGER) * 1000
+                FROM team_vaults
+                """);
             migrateTeamMemberships(conn);
             stmt.executeUpdate("DROP INDEX IF EXISTS idx_team_members_player");
             stmt.executeUpdate(teamMembersByPlayer);
@@ -643,6 +624,17 @@ public final class DatabaseManager {
             stmt.executeUpdate("""
                 DELETE FROM team_vaults
                 WHERE team_name IN (
+                    SELECT teams.name FROM teams
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM team_members
+                        WHERE team_members.team_name = teams.name COLLATE NOCASE
+                    )
+                )
+                """);
+            stmt.executeUpdate("""
+                DELETE FROM team_vault_backups
+                WHERE team_name NOT IN (SELECT name FROM teams)
+                   OR team_name IN (
                     SELECT teams.name FROM teams
                     WHERE NOT EXISTS (
                         SELECT 1 FROM team_members
@@ -1134,6 +1126,7 @@ public final class DatabaseManager {
                 try (PreparedStatement psMembers = conn.prepareStatement("DELETE FROM team_members WHERE team_name=?");
                      PreparedStatement psAllies = conn.prepareStatement("DELETE FROM team_allies WHERE team_name=? OR ally_name=?");
                      PreparedStatement psVault = conn.prepareStatement("DELETE FROM team_vaults WHERE team_name=?");
+                     PreparedStatement psVaultBackup = conn.prepareStatement("DELETE FROM team_vault_backups WHERE team_name=?");
                      PreparedStatement psTeam = conn.prepareStatement("DELETE FROM teams WHERE name=?")) {
                     psMembers.setString(1, name);
                     psMembers.executeUpdate();
@@ -1142,6 +1135,8 @@ public final class DatabaseManager {
                     psAllies.executeUpdate();
                     psVault.setString(1, name);
                     psVault.executeUpdate();
+                    psVaultBackup.setString(1, name);
+                    psVaultBackup.executeUpdate();
                     psTeam.setString(1, name);
                     psTeam.executeUpdate();
                     conn.commit();
@@ -1269,6 +1264,7 @@ public final class DatabaseManager {
         try (PreparedStatement psMembers = conn.prepareStatement("DELETE FROM team_members WHERE team_name=?");
              PreparedStatement psAllies = conn.prepareStatement("DELETE FROM team_allies WHERE team_name=? OR ally_name=?");
              PreparedStatement psVault = conn.prepareStatement("DELETE FROM team_vaults WHERE team_name=?");
+             PreparedStatement psVaultBackup = conn.prepareStatement("DELETE FROM team_vault_backups WHERE team_name=?");
              PreparedStatement psTeam = conn.prepareStatement("DELETE FROM teams WHERE name=?")) {
             psMembers.setString(1, teamName);
             psMembers.executeUpdate();
@@ -1277,6 +1273,8 @@ public final class DatabaseManager {
             psAllies.executeUpdate();
             psVault.setString(1, teamName);
             psVault.executeUpdate();
+            psVaultBackup.setString(1, teamName);
+            psVaultBackup.executeUpdate();
             psTeam.setString(1, teamName);
             psTeam.executeUpdate();
         }
@@ -1354,6 +1352,7 @@ public final class DatabaseManager {
                 try (PreparedStatement psTeam = conn.prepareStatement("UPDATE teams SET name=? WHERE name=?");
                      PreparedStatement psMembers = conn.prepareStatement("UPDATE team_members SET team_name=? WHERE team_name=?");
                      PreparedStatement psVault = conn.prepareStatement("UPDATE team_vaults SET team_name=? WHERE team_name=?");
+                     PreparedStatement psVaultBackup = conn.prepareStatement("UPDATE team_vault_backups SET team_name=? WHERE team_name=?");
                      PreparedStatement psAlliesTeam = conn.prepareStatement("UPDATE team_allies SET team_name=? WHERE team_name=?");
                      PreparedStatement psAlliesAlly = conn.prepareStatement("UPDATE team_allies SET ally_name=? WHERE ally_name=?")) {
                     psTeam.setString(1, newName);
@@ -1371,6 +1370,10 @@ public final class DatabaseManager {
                     psVault.setString(1, newName);
                     psVault.setString(2, oldName);
                     psVault.executeUpdate();
+
+                    psVaultBackup.setString(1, newName);
+                    psVaultBackup.setString(2, oldName);
+                    psVaultBackup.executeUpdate();
 
                     psAlliesTeam.setString(1, newName);
                     psAlliesTeam.setString(2, oldName);
@@ -1400,18 +1403,27 @@ public final class DatabaseManager {
 
     // ── Player Queries ────────────────────────────────────────────────────────
 
-    public CompletableFuture<byte[]> loadTeamVault(String teamName) {
+    public CompletableFuture<TeamVaultSnapshot> loadTeamVault(String teamName) {
         return CompletableFuture.supplyAsync(() -> {
-            String sql = "SELECT contents FROM team_vaults WHERE team_name=?";
+            String sql = """
+                SELECT
+                    (SELECT contents FROM team_vaults WHERE team_name=?) AS contents,
+                    (SELECT contents FROM team_vault_backups WHERE team_name=?) AS backup_contents
+                """;
             try (Connection conn = connection();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, teamName);
+                ps.setString(2, teamName);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) {
-                        return new byte[0];
+                        return new TeamVaultSnapshot(new byte[0], new byte[0]);
                     }
                     byte[] raw = rs.getBytes("contents");
-                    return raw == null ? new byte[0] : raw;
+                    byte[] backup = rs.getBytes("backup_contents");
+                    return new TeamVaultSnapshot(
+                        raw == null ? new byte[0] : raw,
+                        backup == null ? new byte[0] : backup
+                    );
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe("loadTeamVault: " + e.getMessage());
@@ -1422,22 +1434,67 @@ public final class DatabaseManager {
 
     public CompletableFuture<Void> saveTeamVault(String teamName, byte[] contents) {
         return CompletableFuture.runAsync(() -> {
-            String sql = """
+            byte[] safeContents = contents == null ? new byte[0] : contents;
+            String saveSql = """
                 INSERT INTO team_vaults (team_name, contents)
                 VALUES (?, ?)
                 ON CONFLICT(team_name) DO UPDATE SET
                     contents = excluded.contents
+                WHERE team_vaults.contents <> excluded.contents
                 """;
-            try (Connection conn = connection();
-                 PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, teamName);
-                ps.setBytes(2, contents == null ? new byte[0] : contents);
-                ps.executeUpdate();
+            String backupSql = """
+                INSERT INTO team_vault_backups (team_name, contents, saved_at)
+                SELECT team_name, contents, ?
+                FROM team_vaults
+                WHERE team_name=? AND contents <> ?
+                ON CONFLICT(team_name) DO UPDATE SET
+                    contents = excluded.contents,
+                    saved_at = excluded.saved_at
+                """;
+            String seedBackupSql = """
+                INSERT OR IGNORE INTO team_vault_backups (team_name, contents, saved_at)
+                SELECT team_name, contents, ?
+                FROM team_vaults
+                WHERE team_name=?
+                """;
+            try (Connection conn = connection()) {
+                boolean oldAutoCommit = conn.getAutoCommit();
+                conn.setAutoCommit(false);
+                try (PreparedStatement seedBackup = conn.prepareStatement(seedBackupSql);
+                     PreparedStatement backup = conn.prepareStatement(backupSql);
+                     PreparedStatement save = conn.prepareStatement(saveSql)) {
+                    long now = System.currentTimeMillis();
+                    seedBackup.setLong(1, now);
+                    seedBackup.setString(2, teamName);
+                    seedBackup.executeUpdate();
+
+                    backup.setLong(1, now);
+                    backup.setString(2, teamName);
+                    backup.setBytes(3, safeContents);
+                    backup.executeUpdate();
+
+                    save.setString(1, teamName);
+                    save.setBytes(2, safeContents);
+                    save.executeUpdate();
+                    conn.commit();
+                } catch (SQLException | RuntimeException e) {
+                    conn.rollback();
+                    throw e;
+                } finally {
+                    conn.setAutoCommit(oldAutoCommit);
+                }
             } catch (SQLException e) {
                 plugin.getLogger().severe("saveTeamVault: " + e.getMessage());
                 throw new RuntimeException("saveTeamVault failed", e);
             }
         }, executor);
+    }
+
+    public record TeamVaultSnapshot(byte[] contents, byte[] backupContents) {
+        public TeamVaultSnapshot {
+            contents = contents == null ? new byte[0] : contents;
+            backupContents = backupContents == null ? new byte[0] : backupContents;
+        }
     }
 
     public CompletableFuture<Void> deleteTeamVault(String teamName) {
@@ -1863,6 +1920,33 @@ public final class DatabaseManager {
                 throw new RuntimeException("loadManagedItemInstances failed", e);
             }
             return records;
+        }, executor);
+    }
+
+    public CompletableFuture<Set<String>> loadConsumedManagedItemInstanceIds() {
+        return CompletableFuture.supplyAsync(() -> {
+            Set<String> instanceIds = new HashSet<>();
+            String sql = """
+                SELECT DISTINCT instance_id
+                FROM managed_item_events
+                WHERE event_type IN ('consumed', 'consumed_again')
+                  AND instance_id IS NOT NULL
+                  AND instance_id <> ''
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql);
+                 ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String instanceId = rs.getString("instance_id");
+                    if (instanceId != null && !instanceId.isBlank()) {
+                        instanceIds.add(instanceId);
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadConsumedManagedItemInstanceIds: " + e.getMessage());
+                throw new RuntimeException("loadConsumedManagedItemInstanceIds failed", e);
+            }
+            return instanceIds;
         }, executor);
     }
 

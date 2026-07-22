@@ -12,6 +12,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class BlackjackManagerTest {
 
     @Test
+    void duplicateClientTapsCannotQueueMultipleActionsInOneTick() {
+        assertTrue(BlackjackManager.acceptsGameAction(true, false));
+        assertFalse(BlackjackManager.acceptsGameAction(true, true));
+        assertFalse(BlackjackManager.acceptsGameAction(false, false));
+    }
+
+    @Test
     void splitPayoutStacksNeverExceedsMaterialStackSize() {
         List<Integer> amounts = BlackjackManager.splitStackAmounts(130, 64);
 

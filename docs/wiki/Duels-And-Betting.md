@@ -2,6 +2,10 @@
 
 Veilward duels are low-risk arena fights. The plugin saves each fighter's exact inventory, armor, durability, effects, XP, game mode, and return location before entry. Consumables and temporary arena damage are reset between rounds, and the saved state returns when the match ends.
 
+Every fighter starts every round at exactly 20 health. Max-health bonuses are temporarily normalized so extra hearts cannot decide a duel, then the player's original health, max-health behavior, and absorption return after the match.
+
+Rounds also start at 20 hunger, 5 saturation, and zero carried exhaustion. After the countdown, sprinting, fighting, natural regeneration, and eating use normal vanilla hunger rules. The player's original hunger, saturation, and exhaustion return after the duel.
+
 ## Playing
 
 - Use `/duel` or talk to Cassian the Fightmaster.
@@ -12,7 +16,7 @@ Veilward duels are low-risk arena fights. The plugin saves each fighter's exact 
 - No Healing blocks healing during active rounds.
 - Melee Only accepts direct melee damage only.
 - Every round lasts 2 minutes 30 seconds. A knocked-out teammate spectates until the next round. Eliminating the whole opposing team wins the round; a timeout compares team damage dealt, then average remaining team health.
-- Use `/duel spectate` to watch the active match and `/duel leave` to return.
+- Use `/duel spectate` to watch the active match and `/duel leave` to return. Spectators can move up to 29 blocks from the configured viewing point, but cannot fly underground or leave the viewing area.
 
 Elytras, external storage, item dropping, arena escapes, and unrelated commands are disabled during a match. TNT, wind charges, cobwebs, crystals, anchors, buckets, and ordinary temporary PvP blocks can be used. TNT still hurts fighters but never damages the arena. Water, lava, temporary blocks, projectiles, and explosives are cleared after every round.
 

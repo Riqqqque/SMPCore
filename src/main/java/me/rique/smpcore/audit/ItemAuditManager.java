@@ -9,6 +9,7 @@ import me.rique.smpcore.item.AgriculturalPylonListener;
 import me.rique.smpcore.item.CorruptionManager;
 import me.rique.smpcore.item.CustomEnchantListener;
 import me.rique.smpcore.item.CustomToolListener;
+import me.rique.smpcore.item.FirstDragonSigilListener;
 import me.rique.smpcore.item.ReforgeManager;
 import me.rique.smpcore.item.RewardLanternListener;
 import me.rique.smpcore.item.SalvagingDepotListener;
@@ -28,6 +29,8 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.inventory.CraftItemEvent;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.Inventory;
@@ -64,6 +67,7 @@ public final class ItemAuditManager implements Listener {
     private static final String STAFF_PERMISSION = "smpcore.staff";
     private static final int DEFAULT_SCAN_INTERVAL_SECONDS = 180;
     private static final long ANOMALY_COOLDOWN_MS = 5L * 60L * 1000L;
+    private static final long DUPLICATE_INSTANCE_COOLDOWN_MS = 24L * 60L * 60L * 1000L;
     private static final long PENDING_ACQUISITION_TTL_MS = 5L * 60L * 1000L;
     private static final int MAX_PENDING_ACQUISITIONS_PER_PLAYER = 96;
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
@@ -73,8 +77,10 @@ public final class ItemAuditManager implements Listener {
     private final NamespacedKey keyInstanceId;
     private final NamespacedKey keyItemKey;
     private final Map<String, KnownInstanceState> knownInstances = new ConcurrentHashMap<>();
+    private final Set<String> consumedInstanceIds = ConcurrentHashMap.newKeySet();
     private final Map<String, Long> anomalyCooldowns = new ConcurrentHashMap<>();
     private final Map<UUID, Deque<PendingAcquisition>> pendingAcquisitions = new ConcurrentHashMap<>();
+    private final Set<UUID> scheduledAudits = ConcurrentHashMap.newKeySet();
     private BukkitTask scanTask;
     private volatile boolean auditStateLoaded;
 
@@ -85,15 +91,20 @@ public final class ItemAuditManager implements Listener {
     }
 
     public void start() {
-        plugin.getDatabase().loadManagedItemInstances().whenComplete((records, throwable) -> {
+        plugin.getDatabase().loadManagedItemInstances()
+            .thenCombine(
+                plugin.getDatabase().loadConsumedManagedItemInstanceIds(),
+                InitialAuditState::new
+            )
+            .whenComplete((state, throwable) -> {
             if (!plugin.isEnabled()) {
                 return;
             }
-            Bukkit.getScheduler().runTask(plugin, () -> finishInitialLoad(records, throwable));
+            Bukkit.getScheduler().runTask(plugin, () -> finishInitialLoad(state, throwable));
         });
     }
 
-    private void finishInitialLoad(List<DatabaseManager.ManagedItemInstanceRecord> records, Throwable throwable) {
+    private void finishInitialLoad(InitialAuditState state, Throwable throwable) {
         if (throwable != null) {
             Throwable root = throwable instanceof CompletionException && throwable.getCause() != null
                 ? throwable.getCause()
@@ -103,10 +114,13 @@ public final class ItemAuditManager implements Listener {
             return;
         }
 
-        if (records != null) {
-            for (var record : records) {
+        if (state != null && state.instances() != null) {
+            for (var record : state.instances()) {
                 knownInstances.putIfAbsent(record.instanceId(), KnownInstanceState.from(record));
             }
+        }
+        if (state != null && state.consumedInstanceIds() != null) {
+            consumedInstanceIds.addAll(state.consumedInstanceIds());
         }
 
         auditStateLoaded = true;
@@ -122,16 +136,18 @@ public final class ItemAuditManager implements Listener {
         }
         auditStateLoaded = false;
         pendingAcquisitions.clear();
+        scheduledAudits.clear();
         anomalyCooldowns.clear();
     }
 
     public void scheduleAudit(Player player) {
-        if (player == null) {
+        if (player == null || !scheduledAudits.add(player.getUniqueId())) {
             return;
         }
         Bukkit.getScheduler().runTask(plugin, () -> {
-            if (auditStateLoaded) {
-                auditPlayer(player, "scheduled");
+            scheduledAudits.remove(player.getUniqueId());
+            if (auditStateLoaded && player.isOnline()) {
+                auditPlayer(player, "inventory_change");
             }
         });
     }
@@ -162,6 +178,112 @@ public final class ItemAuditManager implements Listener {
             return;
         }
         recordKnownAcquisition(subject, item, subject.getUniqueId(), subject.getName(), method, details);
+    }
+
+    public void recordGeneratedItem(ItemStack item, String method, String details) {
+        ManagedItemDescriptor descriptor = describe(item);
+        if (descriptor == null) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        String instanceId = descriptor.instanceTracked() ? ensureTrackedIdentity(item, descriptor) : "";
+        if (descriptor.instanceTracked()) {
+            KnownInstanceState state = new KnownInstanceState(
+                instanceId,
+                descriptor.itemKey(),
+                now,
+                safeMethod(method),
+                null,
+                "World Generation",
+                null,
+                "World Generation",
+                now,
+                now
+            );
+            knownInstances.put(instanceId, state);
+            persistState(state);
+        }
+        persistEvent(new DatabaseManager.ManagedItemEventRecord(
+            0L,
+            now,
+            instanceId,
+            descriptor.itemKey(),
+            null,
+            "World Generation",
+            null,
+            "World Generation",
+            "generated",
+            safeMethod(method),
+            details
+        ));
+    }
+
+    public void clearTrackedIdentity(ItemStack item, String expectedItemKeyPrefix) {
+        if (item == null || expectedItemKeyPrefix == null || expectedItemKeyPrefix.isBlank()) {
+            return;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return;
+        }
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        String storedItemKey = pdc.get(keyItemKey, PersistentDataType.STRING);
+        if (storedItemKey == null || !storedItemKey.startsWith(expectedItemKeyPrefix)) {
+            return;
+        }
+        pdc.remove(keyInstanceId);
+        pdc.remove(keyItemKey);
+        item.setItemMeta(meta);
+    }
+
+    public void recordConsumption(Player subject, ItemStack item, String method, String details) {
+        ManagedItemDescriptor descriptor = describe(item);
+        if (subject == null || descriptor == null || !descriptor.instanceTracked()) {
+            return;
+        }
+
+        String instanceId = ensureTrackedIdentity(item, descriptor);
+        long now = System.currentTimeMillis();
+        KnownInstanceState state = knownInstances.computeIfAbsent(instanceId, ignored -> new KnownInstanceState(
+            instanceId,
+            descriptor.itemKey(),
+            now,
+            "consumption_first_seen",
+            subject.getUniqueId(),
+            subject.getName(),
+            subject.getUniqueId(),
+            subject.getName(),
+            now,
+            now
+        ));
+        boolean alreadyConsumed = !consumedInstanceIds.add(instanceId);
+        state.currentOwnerUuid = null;
+        state.currentOwnerName = "Consumed";
+        state.lastSeenAt = now;
+        persistState(state);
+        persistEvent(new DatabaseManager.ManagedItemEventRecord(
+            0L,
+            now,
+            instanceId,
+            descriptor.itemKey(),
+            subject.getUniqueId(),
+            subject.getName(),
+            subject.getUniqueId(),
+            subject.getName(),
+            alreadyConsumed ? "consumed_again" : "consumed",
+            safeMethod(method),
+            details
+        ));
+        if (alreadyConsumed) {
+            notifyStaffAnomaly(
+                subject,
+                descriptor.itemKey(),
+                "consumed_instance_reused",
+                "Tracked ID was consumed more than once during " + safeMethod(method) + ".",
+                instanceId
+            );
+        }
     }
 
     public List<String> itemAuditOptions() {
@@ -308,6 +430,32 @@ public final class ItemAuditManager implements Listener {
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onInventoryClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+        boolean touchesTrackedItem = isInstanceTrackedItem(event.getCurrentItem())
+            || isInstanceTrackedItem(event.getCursor());
+        if (!touchesTrackedItem && event.getHotbarButton() >= 0) {
+            touchesTrackedItem = isInstanceTrackedItem(player.getInventory().getItem(event.getHotbarButton()));
+        }
+        if (touchesTrackedItem) {
+            scheduleAudit(player);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onInventoryDrag(InventoryDragEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+        if (isInstanceTrackedItem(event.getOldCursor())
+            || event.getNewItems().values().stream().anyMatch(this::isInstanceTrackedItem)) {
+            scheduleAudit(player);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onDrop(PlayerDropItemEvent event) {
         Item dropped = event.getItemDrop();
         if (dropped == null) {
@@ -446,7 +594,7 @@ public final class ItemAuditManager implements Listener {
 
     private void pruneTransientState() {
         long now = System.currentTimeMillis();
-        anomalyCooldowns.entrySet().removeIf(entry -> entry.getValue() < now - ANOMALY_COOLDOWN_MS);
+        anomalyCooldowns.entrySet().removeIf(entry -> entry.getValue() < now - DUPLICATE_INSTANCE_COOLDOWN_MS);
         pendingAcquisitions.entrySet().removeIf(entry -> {
             Deque<PendingAcquisition> queue = entry.getValue();
             prunePending(queue);
@@ -469,11 +617,11 @@ public final class ItemAuditManager implements Listener {
         Map<String, SeenInstance> seenInstances = new LinkedHashMap<>();
         Map<String, Integer> legendaryCounts = new LinkedHashMap<>();
 
-        scanInventory(player, player.getInventory(), "inventory", seenInstances, legendaryCounts, new LinkedHashSet<>(), true, true);
-        scanInventory(player, player.getEnderChest(), "ender_chest", seenInstances, legendaryCounts, new LinkedHashSet<>(), true, true);
+        Set<String> scannedBackpacks = new LinkedHashSet<>();
+        scanInventory(player, player.getInventory(), "inventory", seenInstances, legendaryCounts, scannedBackpacks, true, true);
+        scanInventory(player, player.getEnderChest(), "ender_chest", seenInstances, legendaryCounts, scannedBackpacks, true, true);
         ItemStack cursor = player.getItemOnCursor();
-        scanItem(player, cursor, "cursor", seenInstances, legendaryCounts, new LinkedHashSet<>(), true, true);
-        if (shouldWriteBackScannedItem(cursor)) {
+        if (scanItem(player, cursor, "cursor", seenInstances, legendaryCounts, scannedBackpacks, true, true)) {
             player.setItemOnCursor(cursor);
         }
         finishAudit(player, reason, seenInstances, legendaryCounts);
@@ -520,7 +668,7 @@ public final class ItemAuditManager implements Listener {
         String scope,
         Map<String, SeenInstance> seenInstances,
         Map<String, Integer> legendaryCounts,
-        Set<String> backpackTrail,
+        Set<String> scannedBackpacks,
         boolean canMutateIdentity,
         boolean updateOwner
     ) {
@@ -530,31 +678,35 @@ public final class ItemAuditManager implements Listener {
         ItemStack[] contents = inventory.getContents();
         for (int slot = 0; slot < contents.length; slot++) {
             ItemStack item = contents[slot];
-            scanItem(owner, item, scope + "[" + slot + "]", seenInstances, legendaryCounts, backpackTrail, canMutateIdentity, updateOwner);
-            if (canMutateIdentity && shouldWriteBackScannedItem(item)) {
+            boolean changed = scanItem(
+                owner,
+                item,
+                scope + "[" + slot + "]",
+                seenInstances,
+                legendaryCounts,
+                scannedBackpacks,
+                canMutateIdentity,
+                updateOwner
+            );
+            if (canMutateIdentity && changed) {
                 inventory.setItem(slot, item);
             }
         }
     }
 
-    private boolean shouldWriteBackScannedItem(ItemStack item) {
-        ManagedItemDescriptor descriptor = describe(item);
-        return descriptor != null && descriptor.instanceTracked() && currentInstanceId(item) != null;
-    }
-
-    private void scanItem(
+    private boolean scanItem(
         Player owner,
         ItemStack item,
         String location,
         Map<String, SeenInstance> seenInstances,
         Map<String, Integer> legendaryCounts,
-        Set<String> backpackTrail,
+        Set<String> scannedBackpacks,
         boolean canMutateIdentity,
         boolean updateOwner
     ) {
         ManagedItemDescriptor descriptor = describe(item);
         if (descriptor == null) {
-            return;
+            return false;
         }
 
         if (descriptor.itemKey().startsWith("legendary:")) {
@@ -562,7 +714,7 @@ public final class ItemAuditManager implements Listener {
         }
 
         if (!descriptor.instanceTracked()) {
-            return;
+            return false;
         }
 
         String instanceId = currentInstanceId(item);
@@ -591,11 +743,25 @@ public final class ItemAuditManager implements Listener {
                     "Untracked item seen inside stored backpack data at " + location
                 );
             }
-            return;
+            return false;
         }
 
+        boolean identityChanged = instanceId == null
+            || instanceId.isBlank()
+            || !descriptor.itemKey().equals(currentTrackedItemKey(item));
         instanceId = ensureTrackedIdentity(item, descriptor);
         rememberSeenInstance(seenInstances, instanceId, descriptor, location);
+
+        if (consumedInstanceIds.contains(instanceId)) {
+            logAnomaly(
+                owner,
+                descriptor.itemKey(),
+                "consumed_instance_reappeared",
+                "scan",
+                "Consumed tracked ID " + shortInstanceId(instanceId) + " reappeared at " + location + ".",
+                instanceId
+            );
+        }
 
         if (item != null && item.getAmount() > 1) {
             logAnomaly(
@@ -666,25 +832,30 @@ public final class ItemAuditManager implements Listener {
                 );
             }
         } else if (updateOwner && !Objects.equals(state.currentOwnerUuid, owner.getUniqueId())) {
+            boolean firstGeneratedOwner = state.currentOwnerUuid == null && isGeneratedMethod(state.createdMethod);
             String previousOwnerName = state.currentOwnerName;
             state.currentOwnerUuid = owner.getUniqueId();
             state.currentOwnerName = owner.getName();
             state.lastSeenAt = now;
             persistState(state);
-            boolean notifyTransfer = shouldNotifyOwnerTransfer(descriptor);
-            persistEvent(new DatabaseManager.ManagedItemEventRecord(
-                0L,
-                now,
-                instanceId,
-                descriptor.itemKey(),
-                owner.getUniqueId(),
-                owner.getName(),
-                owner.getUniqueId(),
-                owner.getName(),
-                notifyTransfer ? "owner_changed_unknown" : "owner_changed",
-                notifyTransfer ? "unknown_transfer" : "inventory_transfer",
-                "Seen in " + location + " after belonging to " + safeName(previousOwnerName)
-            ));
+            boolean notifyTransfer = !firstGeneratedOwner && shouldNotifyOwnerTransfer(descriptor);
+            if (firstGeneratedOwner || shouldRecordOwnerChange(descriptor.itemKey())) {
+                persistEvent(new DatabaseManager.ManagedItemEventRecord(
+                    0L,
+                    now,
+                    instanceId,
+                    descriptor.itemKey(),
+                    owner.getUniqueId(),
+                    owner.getName(),
+                    owner.getUniqueId(),
+                    owner.getName(),
+                    firstGeneratedOwner ? "acquired" : notifyTransfer ? "owner_changed_unknown" : "owner_changed",
+                    firstGeneratedOwner ? state.createdMethod : notifyTransfer ? "unknown_transfer" : "inventory_transfer",
+                    firstGeneratedOwner
+                        ? "First player possession of generated loot at " + location
+                        : "Seen in " + location + " after belonging to " + safeName(previousOwnerName)
+                ));
+            }
             if (notifyTransfer) {
                 notifyStaffAnomaly(
                     owner,
@@ -699,25 +870,37 @@ public final class ItemAuditManager implements Listener {
         }
 
         if (!"custom:backpack".equals(descriptor.itemKey()) || item == null) {
-            return;
+            return identityChanged;
         }
 
         BackpackListener backpacks = plugin.getBackpackListener();
         if (backpacks == null) {
-            return;
+            return identityChanged;
         }
         String backpackId = instanceId;
-        if (!backpackTrail.add(backpackId)) {
-            return;
+        if (!scannedBackpacks.add(backpackId)) {
+            return identityChanged;
         }
-        try {
-            List<ItemStack> contents = backpacks.auditContents(owner, item);
-            for (int i = 0; i < contents.size(); i++) {
-                scanItem(owner, contents.get(i), location + "/backpack[" + i + "]", seenInstances, legendaryCounts, backpackTrail, false, updateOwner);
-            }
-        } finally {
-            backpackTrail.remove(backpackId);
+        List<ItemStack> contents = backpacks.auditContents(owner, item);
+        ItemStack[] rewrittenContents = contents.toArray(ItemStack[]::new);
+        boolean contentsChanged = false;
+        for (int i = 0; i < rewrittenContents.length; i++) {
+            ItemStack nested = rewrittenContents[i];
+            contentsChanged |= scanItem(
+                owner,
+                nested,
+                location + "/backpack[" + i + "]",
+                seenInstances,
+                legendaryCounts,
+                scannedBackpacks,
+                canMutateIdentity,
+                updateOwner
+            );
         }
+        if (canMutateIdentity && contentsChanged && !backpacks.rewriteAuditContents(owner, item, rewrittenContents)) {
+            plugin.getLogger().warning("Could not persist repaired audit identities inside backpack " + shortInstanceId(backpackId) + ".");
+        }
+        return identityChanged || contentsChanged;
     }
 
     private void rememberSeenInstance(
@@ -800,6 +983,11 @@ public final class ItemAuditManager implements Listener {
             return new ManagedItemDescriptor("custom:reward_soul_lantern", "Reward Soul Lantern", true);
         }
 
+        FirstDragonSigilListener dragonSigils = plugin.getFirstDragonSigilListener();
+        if (dragonSigils != null && dragonSigils.isSigil(item)) {
+            return new ManagedItemDescriptor("custom:" + FirstDragonSigilListener.ITEM_ID, "The First Dragon's Sigil", true);
+        }
+
         SustenanceTalismanListener talismans = plugin.getSustenanceTalismanListener();
         if (talismans != null && talismans.isTalisman(item)) {
             return new ManagedItemDescriptor("custom:talisman_of_sustenance", "Talisman of Sustenance", true);
@@ -877,6 +1065,11 @@ public final class ItemAuditManager implements Listener {
         return null;
     }
 
+    private boolean isInstanceTrackedItem(ItemStack item) {
+        ManagedItemDescriptor descriptor = describe(item);
+        return descriptor != null && descriptor.instanceTracked();
+    }
+
     private void logAnomaly(Player subject, String itemKey, String eventType, String method, String details) {
         logAnomaly(subject, itemKey, eventType, method, details, "");
     }
@@ -886,10 +1079,10 @@ public final class ItemAuditManager implements Listener {
             return;
         }
         String safeInstanceId = instanceId == null ? "" : instanceId;
-        String dedupeKey = subject.getUniqueId() + "|" + itemKey + "|" + safeInstanceId + "|" + eventType + "|" + details;
+        String dedupeKey = anomalyDedupeKey(subject.getUniqueId(), itemKey, safeInstanceId, eventType, details);
         long now = System.currentTimeMillis();
         Long previous = anomalyCooldowns.get(dedupeKey);
-        if (previous != null && now - previous < ANOMALY_COOLDOWN_MS) {
+        if (previous != null && now - previous < anomalyCooldownMillis(eventType)) {
             return;
         }
         anomalyCooldowns.put(dedupeKey, now);
@@ -918,8 +1111,8 @@ public final class ItemAuditManager implements Listener {
             return false;
         }
         String itemKey = descriptor.itemKey();
-        return itemKey.startsWith("custom_tool:")
-            || itemKey.startsWith("custom_enchant:")
+        return isQuietCraftableItemKey(itemKey)
+            || itemKey.startsWith("custom_tool:")
             || "custom:backpack".equals(itemKey)
             || "custom:mythic_forge".equals(itemKey)
             || "custom:talisman_of_sustenance".equals(itemKey)
@@ -927,6 +1120,20 @@ public final class ItemAuditManager implements Listener {
             || "custom:agricultural_pylon".equals(itemKey)
             || "custom:xp_lectern".equals(itemKey)
             || ("power:" + SuperpowerManager.ANCIENT_SCROLL_ITEM_ID).equals(itemKey);
+    }
+
+    static boolean isQuietCraftableItemKey(String itemKey) {
+        return itemKey != null
+            && itemKey.startsWith("custom_enchant:")
+            && !"custom_enchant:double_jump".equals(itemKey);
+    }
+
+    static boolean isGeneratedMethod(String method) {
+        return "ancient_city_loot".equalsIgnoreCase(method);
+    }
+
+    private static String safeMethod(String method) {
+        return method == null || method.isBlank() ? "unknown" : method;
     }
 
     private boolean shouldNotifyOwnerTransfer(ManagedItemDescriptor descriptor) {
@@ -940,6 +1147,23 @@ public final class ItemAuditManager implements Listener {
             || itemKey.startsWith("season:")
             || "custom:awakening_table".equals(itemKey)
             || "custom:reward_soul_lantern".equals(itemKey);
+    }
+
+    static boolean shouldRecordOwnerChange(String itemKey) {
+        return itemKey != null && !itemKey.startsWith("custom_enchant:");
+    }
+
+    static String anomalyDedupeKey(UUID subjectId, String itemKey, String instanceId, String eventType, String details) {
+        if ("duplicate_instance".equalsIgnoreCase(eventType) && instanceId != null && !instanceId.isBlank()) {
+            return itemKey + "|" + instanceId + "|duplicate_instance";
+        }
+        return subjectId + "|" + itemKey + "|" + instanceId + "|" + eventType + "|" + details;
+    }
+
+    static long anomalyCooldownMillis(String eventType) {
+        return "duplicate_instance".equalsIgnoreCase(eventType)
+            ? DUPLICATE_INSTANCE_COOLDOWN_MS
+            : ANOMALY_COOLDOWN_MS;
     }
 
     private void notifyStaffAnomaly(Player subject, String itemKey, String eventType, String details) {
@@ -1054,17 +1278,28 @@ public final class ItemAuditManager implements Listener {
             return UUID.randomUUID().toString();
         }
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        boolean changed = false;
         String instanceId = pdc.get(keyInstanceId, PersistentDataType.STRING);
         if (instanceId == null || instanceId.isBlank()) {
             instanceId = UUID.randomUUID().toString();
             pdc.set(keyInstanceId, PersistentDataType.STRING, instanceId);
+            changed = true;
         }
         String storedKey = pdc.get(keyItemKey, PersistentDataType.STRING);
         if (!descriptor.itemKey().equals(storedKey)) {
             pdc.set(keyItemKey, PersistentDataType.STRING, descriptor.itemKey());
+            changed = true;
         }
-        item.setItemMeta(meta);
+        if (changed) {
+            item.setItemMeta(meta);
+        }
         return instanceId;
+    }
+
+    private String currentTrackedItemKey(ItemStack item) {
+        if (item == null) return null;
+        ItemMeta meta = item.getItemMeta();
+        return meta == null ? null : meta.getPersistentDataContainer().get(keyItemKey, PersistentDataType.STRING);
     }
 
     private String currentInstanceId(ItemStack item) {
@@ -1188,12 +1423,16 @@ public final class ItemAuditManager implements Listener {
             case "duplicate_instance" -> "Duplicate tracked item";
             case "multiple_copies_held" -> "Too many copies";
             case "stacked_item" -> "Tracked item was stacked";
+            case "consumed_instance_reappeared", "consumed_instance_reused" -> "Consumed item reappeared";
             case "unknown_origin" -> "Unknown origin";
             case "owner_changed_unknown", "unknown_transfer" -> "Moved without a known handoff";
             case "owner_changed" -> "Owner updated";
             case "acquired" -> "Acquired";
             case "picked_up" -> "Picked up";
             case "dropped" -> "Dropped";
+            case "generated" -> "Generated";
+            case "consumed" -> "Consumed";
+            case "consumed_again" -> "Consumed twice";
             case "staff_seeded" -> "First seen with staff";
             case "first_seen_craftable" -> "First seen";
             default -> defaultDisplay(null, eventType);
@@ -1209,6 +1448,8 @@ public final class ItemAuditManager implements Listener {
             case "unknown_transfer", "inventory_transfer" -> "owner scan";
             case "ground_drop" -> "item drop";
             case "ground_pickup" -> "item pickup";
+            case "ancient_city_loot" -> "Ancient City chest loot";
+            case "custom_enchant_anvil", "crossplay_anvil" -> "custom anvil";
             case "craft" -> "crafting";
             case "backpack_scan" -> "backpack scan";
             case "staff_inventory_seed" -> "staff inventory scan";
@@ -1433,6 +1674,12 @@ public final class ItemAuditManager implements Listener {
     }
 
     private record PendingAcquisition(String itemKey, String method, String details, long createdAt) {
+    }
+
+    private record InitialAuditState(
+        List<DatabaseManager.ManagedItemInstanceRecord> instances,
+        Set<String> consumedInstanceIds
+    ) {
     }
 
     private static final class KnownInstanceState {

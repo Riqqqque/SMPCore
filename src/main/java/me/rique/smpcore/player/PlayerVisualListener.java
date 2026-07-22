@@ -28,6 +28,9 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.util.Transformation;
+import org.joml.AxisAngle4f;
+import org.joml.Vector3f;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -44,11 +47,14 @@ public final class PlayerVisualListener implements Listener {
     private static final long PLAYER_FINDER_PERIOD_TICKS = 20L;
     private static final int GLOW_REFRESH_TICKS = 80;
     private static final int FOLLOWER_TELEPORT_DURATION_TICKS = smoothTeleportDuration(SYNC_PERIOD_TICKS);
+    private static final float NAMEPLATE_PASSENGER_Y_OFFSET = 0.42F;
 
     private final SMPCore plugin;
     private final NamespacedKey keyNameHologram;
     private final NamespacedKey keyNameHologramOwner;
     private final NamespacedKey keyTeamGlowMarker;
+    private final NamespacedKey keyTeamGlowEnabled;
+    private final PrivateGlowPacketSender privateGlowPackets;
     private final Map<UUID, UUID> nameDisplaysByPlayer = new ConcurrentHashMap<>();
     private final Set<UUID> teamGlowViewers = ConcurrentHashMap.newKeySet();
     private final Map<UUID, Set<UUID>> glowingTargetsByViewer = new ConcurrentHashMap<>();
@@ -64,6 +70,8 @@ public final class PlayerVisualListener implements Listener {
         this.keyNameHologram = new NamespacedKey(plugin, "player_name_hologram");
         this.keyNameHologramOwner = new NamespacedKey(plugin, "player_name_hologram_owner");
         this.keyTeamGlowMarker = new NamespacedKey(plugin, "team_glow_marker");
+        this.keyTeamGlowEnabled = new NamespacedKey(plugin, "team_glow_enabled");
+        this.privateGlowPackets = new PrivateGlowPacketSender(plugin);
     }
 
     public void start() {
@@ -109,6 +117,7 @@ public final class PlayerVisualListener implements Listener {
                 return;
             }
             teamGlowViewers.add(playerId);
+            player.getPersistentDataContainer().set(keyTeamGlowEnabled, PersistentDataType.BYTE, (byte) 1);
             int highlighted = syncTeamGlow(player);
             player.sendMessage(MessageUtil.success("Teammate outlines enabled. Only you can see them."));
             if (highlighted == 0) {
@@ -120,6 +129,7 @@ public final class PlayerVisualListener implements Listener {
         }
 
         teamGlowViewers.remove(playerId);
+        player.getPersistentDataContainer().set(keyTeamGlowEnabled, PersistentDataType.BYTE, (byte) 0);
         clearViewerGlow(player);
         player.sendMessage(MessageUtil.info("Teammate outlines disabled."));
     }
@@ -216,7 +226,7 @@ public final class PlayerVisualListener implements Listener {
         ArrayList<Player> players = new ArrayList<>(Bukkit.getOnlinePlayers());
         if (plugin.getConfigManager() == null || !plugin.getConfigManager().playerFinderDefenseEnabled) {
             clearPlayerFinderDefense();
-            syncTabListVisibility(players);
+            syncTabListEntries(players);
             return;
         }
 
@@ -235,10 +245,10 @@ public final class PlayerVisualListener implements Listener {
         for (Player viewer : players) {
             syncPlayerFinderDefense(viewer, players, teams);
         }
-        syncTabListVisibility(players);
+        syncTabListEntries(players);
     }
 
-    private void syncTabListVisibility(ArrayList<Player> players) {
+    private void syncTabListEntries(ArrayList<Player> players) {
         for (Player viewer : players) {
             if (viewer == null || !viewer.isOnline()) {
                 continue;
@@ -247,7 +257,19 @@ public final class PlayerVisualListener implements Listener {
                 if (target == null || viewer.equals(target) || !target.isOnline()) {
                     continue;
                 }
-                syncPlayerEntityVisibility(viewer, target);
+                if (isVanishedFromViewer(viewer, target)) {
+                    continue;
+                }
+                if (isVeilAssassinFullyConcealed(target)) {
+                    viewer.hideEntity(plugin, target);
+                }
+                if (!viewer.isListed(target)) {
+                    try {
+                        viewer.listPlayer(target);
+                    } catch (IllegalStateException ignored) {
+                        // Visibility changed between checks; the next sync retries.
+                    }
+                }
             }
         }
     }
@@ -516,6 +538,7 @@ public final class PlayerVisualListener implements Listener {
 
     private void followNameDisplay(Player player, TextDisplay display, Location fallbackLocation) {
         if (display.getVehicle() == player) {
+            applyNameplateTransform(display, NAMEPLATE_PASSENGER_Y_OFFSET);
             return;
         }
         if (display.getVehicle() != null) {
@@ -524,11 +547,29 @@ public final class PlayerVisualListener implements Listener {
         if (display.getWorld() == player.getWorld()) {
             display.setTeleportDuration(0);
             if (display.teleport(player.getLocation()) && player.addPassenger(display)) {
+                applyNameplateTransform(display, NAMEPLATE_PASSENGER_Y_OFFSET);
                 return;
             }
         }
+        applyNameplateTransform(display, 0.0F);
         display.setTeleportDuration(FOLLOWER_TELEPORT_DURATION_TICKS);
         display.teleport(fallbackLocation);
+    }
+
+    private void applyNameplateTransform(TextDisplay display, float yOffset) {
+        Transformation current = display.getTransformation();
+        Vector3f translation = current.getTranslation();
+        if (Math.abs(translation.x()) < 0.001F
+            && Math.abs(translation.y() - yOffset) < 0.001F
+            && Math.abs(translation.z()) < 0.001F) {
+            return;
+        }
+        display.setTransformation(new Transformation(
+            new Vector3f(0.0F, yOffset, 0.0F),
+            new AxisAngle4f(),
+            new Vector3f(1.0F, 1.0F, 1.0F),
+            new AxisAngle4f()
+        ));
     }
 
     static int smoothTeleportDuration(long updatePeriodTicks) {
@@ -564,8 +605,12 @@ public final class PlayerVisualListener implements Listener {
     }
 
     private Location nameLocation(Player player) {
-        double yOffset = Math.max(1.85, player.getHeight() + 0.45);
+        double yOffset = nameplateWorldOffset(player.getHeight());
         return player.getLocation().clone().add(0.0, yOffset, 0.0);
+    }
+
+    static double nameplateWorldOffset(double playerHeight) {
+        return Math.max(2.05D, playerHeight + 0.65D);
     }
 
     private void clearTransientPlayerVisuals(Player player, UUID playerId) {
@@ -633,7 +678,6 @@ public final class PlayerVisualListener implements Listener {
 
         TeamManager teams = plugin.getTeamManager();
         if (teams == null || !teams.inTeam(viewer.getUniqueId())) {
-            teamGlowViewers.remove(viewer.getUniqueId());
             clearViewerGlow(viewer);
             return 0;
         }
@@ -644,10 +688,12 @@ public final class PlayerVisualListener implements Listener {
                 continue;
             }
             desired.add(target.getUniqueId());
-            viewer.sendPotionEffectChange(
-                target,
-                new PotionEffect(PotionEffectType.GLOWING, GLOW_REFRESH_TICKS, 0, false, false, false)
-            );
+            if (!privateGlowPackets.send(viewer, target, true)) {
+                viewer.sendPotionEffectChange(
+                    target,
+                    new PotionEffect(PotionEffectType.GLOWING, GLOW_REFRESH_TICKS, 0, false, false, false)
+                );
+            }
         }
 
         Set<UUID> current = glowingTargetsByViewer.computeIfAbsent(viewer.getUniqueId(), ignored -> ConcurrentHashMap.newKeySet());
@@ -701,10 +747,15 @@ public final class PlayerVisualListener implements Listener {
         if (viewer == null || target == null || !viewer.isOnline()) {
             return;
         }
-        if (target.isGlowing() || target.hasPotionEffect(PotionEffectType.GLOWING)) {
+        if (privateGlowPackets.send(viewer, target, false)) {
+            if (!target.isGlowing() && !target.hasPotionEffect(PotionEffectType.GLOWING)) {
+                viewer.sendPotionEffectChangeRemove(target, PotionEffectType.GLOWING);
+            }
             return;
         }
-        viewer.sendPotionEffectChangeRemove(target, PotionEffectType.GLOWING);
+        if (!target.isGlowing() && !target.hasPotionEffect(PotionEffectType.GLOWING)) {
+            viewer.sendPotionEffectChangeRemove(target, PotionEffectType.GLOWING);
+        }
     }
 
     private void removeLegacyTeamGlowMarkers() {
@@ -719,9 +770,15 @@ public final class PlayerVisualListener implements Listener {
 
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
+        Byte enabled = event.getPlayer().getPersistentDataContainer().get(keyTeamGlowEnabled, PersistentDataType.BYTE);
+        if (enabled != null && enabled == (byte) 1) {
+            teamGlowViewers.add(event.getPlayer().getUniqueId());
+        }
         Bukkit.getScheduler().runTask(plugin, () -> {
             syncNameDisplay(event.getPlayer());
-            syncTeamGlow(event.getPlayer());
+            for (Player viewer : Bukkit.getOnlinePlayers()) {
+                syncTeamGlow(viewer);
+            }
             syncPlayerFinderDefense();
         });
     }
@@ -759,6 +816,9 @@ public final class PlayerVisualListener implements Listener {
     public void onRespawn(PlayerRespawnEvent event) {
         Bukkit.getScheduler().runTask(plugin, () -> {
             syncNameDisplay(event.getPlayer());
+            for (Player viewer : Bukkit.getOnlinePlayers()) {
+                syncTeamGlow(viewer);
+            }
             syncPlayerFinderDefense();
         });
     }
@@ -791,6 +851,9 @@ public final class PlayerVisualListener implements Listener {
         }
         Bukkit.getScheduler().runTask(plugin, () -> {
             syncNameDisplay(event.getPlayer());
+            for (Player viewer : Bukkit.getOnlinePlayers()) {
+                syncTeamGlow(viewer);
+            }
             syncPlayerFinderDefense();
         });
     }

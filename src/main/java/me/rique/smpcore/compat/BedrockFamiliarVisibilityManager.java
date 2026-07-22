@@ -10,6 +10,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.persistence.PersistentDataType;
 
@@ -64,11 +65,20 @@ public final class BedrockFamiliarVisibilityManager implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onJoin(PlayerJoinEvent event) {
-        UUID playerId = event.getPlayer().getUniqueId();
+        scheduleViewerSync(event.getPlayer(), 5L);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onWorldChange(PlayerChangedWorldEvent event) {
+        scheduleViewerSync(event.getPlayer(), 1L);
+    }
+
+    private void scheduleViewerSync(Player joiningPlayer, long delayTicks) {
+        UUID playerId = joiningPlayer.getUniqueId();
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             Player player = Bukkit.getPlayer(playerId);
             if (player != null && player.isOnline()) syncViewer(player);
-        }, 5L);
+        }, delayTicks);
     }
 
     static boolean shouldShow(boolean bedrockViewer, boolean bedrockVisual) {

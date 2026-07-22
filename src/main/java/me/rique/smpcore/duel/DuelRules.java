@@ -8,6 +8,11 @@ import java.util.UUID;
 
 public final class DuelRules {
 
+    public static final double NORMALIZED_MAX_HEALTH = 20.0D;
+    public static final int ROUND_START_FOOD_LEVEL = 20;
+    public static final float ROUND_START_SATURATION = 5.0F;
+    public static final float ROUND_START_EXHAUSTION = 0.0F;
+
     private DuelRules() {
     }
 
@@ -17,6 +22,13 @@ public final class DuelRules {
 
     public static int normalizeTeamSize(int requested) {
         return requested >= 1 && requested <= 3 ? requested : -1;
+    }
+
+    public static double healthNormalizationModifier(double unnormalizedMaxHealth) {
+        double safeMaximum = Double.isFinite(unnormalizedMaxHealth) && unnormalizedMaxHealth > 0.0D
+            ? unnormalizedMaxHealth
+            : NORMALIZED_MAX_HEALTH;
+        return NORMALIZED_MAX_HEALTH / safeMaximum - 1.0D;
     }
 
     public static TimeoutResult timeoutWinner(double firstDamage, double secondDamage, double firstHealthRatio, double secondHealthRatio) {

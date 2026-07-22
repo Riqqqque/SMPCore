@@ -10,6 +10,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class TavernManagerTest {
 
     @Test
+    void perfectDartsRoundPaysTenEssence() {
+        assertEquals(10L, TavernManager.DARTS_PERFECT_REWARD);
+    }
+
+    @Test
     void slotBoundariesMatchPublishedPayouts() {
         assertEquals(25, TavernManager.slotMultiplier(0));
         assertEquals(25, TavernManager.slotMultiplier(9));

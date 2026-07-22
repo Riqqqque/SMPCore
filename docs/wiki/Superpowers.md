@@ -13,7 +13,7 @@ The `/powerinfo` menu is sorted from most common to rarest.
 - `Juggernaut` - 7.41%. Tank identity with extra health, crouch knockback resistance, `/unstoppableforce`, fall slams, and 80% less fall damage.
 - `Verdant` - 7.41%. Crop, wood, healing, and Wand of Mother Nature gameplay.
 - `Titan` - 6.17%. Larger body, extra hearts, heavy melee damage, and lower knockback.
-- `Veil Assassin` - 5.76%. Eight-heart assassin with complete crouch concealment, full-speed crouching and Speed IV while veiled, backstabs, no netherite armor, and `/smokebomb`. Complete concealment hides the player model, equipment, nameplate, and ally marker while leaving them listed in Tab.
+- `Veil Assassin` - 5.76%. Eight-heart assassin with complete crouch concealment, full-speed crouching and Speed IV while veiled, backstabs, no netherite armor, and `/smokebomb`. Complete concealment hides the player model, equipment, nameplate, and ally marker while leaving them listed in Tab. A successful melee or projectile hit immediately breaks both veil and Smoke Bomb concealment.
 - `Berserker` - 5.76%. Strength fighter with low-health speed and regeneration.
 - `Prospector` - 5.35%. Mining class with haste, underground night vision, 25% extra ore chances, and extra health.
 - `Nightshade` - 4.53%. `/shadow toggle`, toggleable night vision, poison hits, invisible gear hiding, and speed while hidden.
@@ -24,12 +24,12 @@ The `/powerinfo` menu is sorted from most common to rarest.
 - `Arcanist` - 3.29%. XP, enchanting, luck, durability, and `/arcanebook` book upgrades.
 - `Oathbound` - 3.29%. Keeps solo speed, buffs near teammates, and can be summoned by teammates with `/oathsummon`.
 - `Runesmith` - 3.29%. Haste II, better durability protection, and stronger boss-kill repairs.
-- `Shadow Monarch` - 3.29%. Stores killed hostile mobs only. `/msummon` summons 1 stored hostile mob, `/msummon <amount>` summons more, and `/msummon despawn` unsummons active mobs. Summons have 40 HP, boosted damage, armor, resistance, and knockback defense.
+- `Shadow Monarch` - 3.29%. Stores killed hostile mobs only. `/msummon` summons 1 stored hostile mob, `/msummon <amount>` summons more, and `/msummon despawn` unsummons active mobs. Summons have 40 HP, boosted damage, armor, resistance, and knockback defense. They never target boss encounter enemies, and undead-shaped bosses still target the Monarch normally.
 - `The World` - 3.29%. Bound clock that stops time in a radius.
 - `Graveborn` - 2.88%. Undead resistance, undead-fueled second chances, and stronger buffs around player deaths.
 - `Riftwarden` - 2.88%. Stronger boss-hunter with Slow Falling near custom bosses, plus Resistance near bosses or in the End.
 - `Stormcaller` - 2.88%. Faster storm and lightning combat identity, with extra axe and mace PvP buffs. Use `/stormcaller off` if you want to disable strike procs.
-- `Voidwalker` - 2.88%. `/voidstep` and `/voidvision`, with a shorter blink cooldown and toggleable night vision.
+- `Voidwalker` - 2.88%. Sneak-right-click with an empty main hand to Voidstep. `/voidstep` remains a Bedrock/accessibility fallback, and `/voidvision` toggles night vision.
 - `Bloodmender` - 2.47%. Stronger sustain fighter with `/bloodsacrifice` team healing and `/curse` armor pressure.
 - `Oracle Eye` - 2.47%. `/xray` highlights players, entities, and ores for 2.5 minutes and warns near diamonds or ancient debris.
 - `Skybound` - 2.06%. Creative-style flight burst with a cooldown.
@@ -49,6 +49,6 @@ Bound class items are preserved through death and stay tied to their owner. The 
 
 ## Boss Encounter Rules
 
-Classes keep their normal PvP and world behavior, but boss fights resist shortcuts that erase mechanics. Bosses resist Veil Assassin's health-based backstab, hard Chill effects, summon swarm damage, Infinity projectile blocking, and Time Stop. Boss-specific damage bonuses remain, but use lower encounter values shown in `/powerinfo`.
+Classes keep their normal PvP and world behavior, but custom bosses and their encounter enemies ignore direct class damage bonuses, backstabs, debuffs, crowd control, summon attacks, and class projectile effects. Class-based mob avoidance does not hide a fighter from a boss, including Shadow Monarch, Graveborn, Voidwalker, Nightshade, and Veil Assassin behavior.
 
-Domain Expansion, Voidstep, Wayfarer portals, Oath Summon, and Skybound flight cannot move fighters around an active encounter. Phoenix Rebirth and Graveborn's second chance still work against normal lethal damage, but not a failed boss mechanic. Blood Sacrifice does not consume health when a healing seal blocks every target. Druid is unchanged; its healing blessings simply obey the same healing seals as every other heal.
+All class command abilities and their aliases are sealed while a player is in an active boss fight. Toggles such as Infinity, Stormcaller lightning, and Deadeye arrow preservation remain dormant until the fight ends. Phoenix Rebirth and Graveborn's second chance still work against normal lethal damage, but not a failed boss mechanic. Defensive class traits may still protect their owner, and Druid healing obeys the same boss healing seals as every other heal.

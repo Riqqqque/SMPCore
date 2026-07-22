@@ -44,6 +44,20 @@
           "minecraft:max_stack_size": 1
         }
       }
+    ],
+    "minecraft:echo_shard": [
+      {
+        "type": "definition",
+        "model": "smpcore:first_dragon_sigil",
+        "bedrock_identifier": "smpcore:first_dragon_sigil",
+        "display_name": "The First Dragon's Sigil",
+        "bedrock_options": {
+          "icon": "smpcore:first_dragon_sigil"
+        },
+        "components": {
+          "minecraft:max_stack_size": 1
+        }
+      }
     ]
   }
 }

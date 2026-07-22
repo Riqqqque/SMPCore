@@ -83,6 +83,14 @@ class BossDungeonManagerTest {
         assertEquals(0, BossDungeonManager.countdownSecondsRemaining(endsAt, endsAt + 5_000L));
     }
 
+    @Test
+    void allowedCrossWorldDungeonExitsRestoreThePlayersNormalState() {
+        assertTrue(BossDungeonManager.shouldRestoreDungeonExitState(true, false, false));
+        assertTrue(!BossDungeonManager.shouldRestoreDungeonExitState(true, false, true));
+        assertTrue(!BossDungeonManager.shouldRestoreDungeonExitState(false, false, false));
+        assertTrue(!BossDungeonManager.shouldRestoreDungeonExitState(false, true, false));
+    }
+
     private void assertCost(String bossId, Material focus, Material catalyst, Object... entries) {
         Map<Material, Integer> actual = BossDungeonManager.summonCosts(bossId, focus, catalyst);
         assertEquals(entries.length / 2, actual.size());

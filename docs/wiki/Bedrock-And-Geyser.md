@@ -21,7 +21,8 @@ Official references: [Geyser supported versions](https://geysermc.org/wiki/geyse
 - `/ability alt` runs its alternate, sneak, or secondary action.
 - Crouch and press Drop to use the primary held ability without dropping the item.
 - Crouch and punch to use the held item's alternate ability.
-- Tap a placed anvil to open SMPCore's Bedrock-safe custom crafting. Crouch and tap it for the normal vanilla anvil.
+- Tap a placed anvil to open SMPCore's Bedrock-safe custom crafting. Tap either the result preview or **Combine Items** to finish a custom recipe.
+- Crouch-tap the placed anvil for the normal anvil. The custom menu also has an **Open Normal Anvil** fallback that safely transfers its input slots for vanilla books, repairs, same-item combining, and renaming.
 - `/customanvil` only reminds players how to reach the physical anvil now; it no longer opens one anywhere.
 
 These are fallbacks. Normal item use still works when the Bedrock client sends the expected interaction.
@@ -48,8 +49,9 @@ After installing the bridge:
 2. Check `/menu`, every section, and `/bedrock`.
 3. Test a waystone in both landing modes.
 4. Test crouch + Drop, crouch + punch, `/ability`, and `/ability alt` with an active relic.
-5. Tap a placed anvil and apply a custom enchant book. Crouch-tap the same block and confirm the vanilla anvil opens.
-6. Confirm a Salvaging Depot or spawner hologram cannot be seen through a solid floor.
-7. Confirm team markers, boss bars, shops, backpacks, and death chests are readable from Bedrock.
+5. Tap a placed anvil, apply and combine custom enchant books, and confirm that both the result preview and Combine button work.
+6. Put an ordinary enchanted book, damaged item pair, or single rename item in the custom menu. Use the normal-anvil fallback and confirm the inputs transfer with the vanilla result and XP cost intact.
+7. Confirm a Salvaging Depot or spawner hologram cannot be seen through a solid floor.
+8. Confirm team markers, boss bars, shops, backpacks, and death chests are readable from Bedrock.
 
 If a supported item still shows its vanilla model, reconnect once, verify the Bedrock client accepted the server pack, and ask staff to check the installed `.mcpack` and mappings. Geyser does not generate either file from SMPCore's Java pack automatically.

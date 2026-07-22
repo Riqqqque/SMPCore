@@ -29,6 +29,26 @@ public final class MarketStallCommand {
                 .executes(context -> status(plugin, context.getSource().getSender()))
                 .then(Commands.literal("sell")
                     .executes(context -> sell(plugin, context.getSource().getSender())))
+                .then(Commands.literal("manager")
+                    .executes(context -> managers(plugin, context.getSource().getSender()))
+                    .then(Commands.argument("player", StringArgumentType.word())
+                        .suggests((context, builder) -> {
+                            if (context.getSource().getSender() instanceof Player player
+                                && plugin.getMarketStallManager() != null) {
+                                String remaining = builder.getRemainingLowerCase();
+                                for (String name : plugin.getMarketStallManager().managerSuggestions(player)) {
+                                    if (name.toLowerCase(java.util.Locale.ROOT).startsWith(remaining)) builder.suggest(name);
+                                }
+                            }
+                            return builder.buildFuture();
+                        })
+                        .executes(context -> toggleManager(
+                            plugin,
+                            context.getSource().getSender(),
+                            StringArgumentType.getString(context, "player")
+                        ))))
+                .then(Commands.literal("managers")
+                    .executes(context -> managers(plugin, context.getSource().getSender())))
                 .then(Commands.literal("transfer")
                     .then(Commands.argument("player", ArgumentTypes.player())
                         .executes(context -> transfer(
@@ -98,6 +118,22 @@ public final class MarketStallCommand {
         MarketStallManager manager = manager(plugin, sender);
         if (player == null || manager == null) return 0;
         manager.sellBack(player);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int managers(SMPCore plugin, CommandSender sender) {
+        Player player = player(sender);
+        MarketStallManager manager = manager(plugin, sender);
+        if (player == null || manager == null) return 0;
+        manager.sendManagers(player);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int toggleManager(SMPCore plugin, CommandSender sender, String targetName) {
+        Player player = player(sender);
+        MarketStallManager manager = manager(plugin, sender);
+        if (player == null || manager == null) return 0;
+        manager.toggleManager(player, targetName);
         return Command.SINGLE_SUCCESS;
     }
 

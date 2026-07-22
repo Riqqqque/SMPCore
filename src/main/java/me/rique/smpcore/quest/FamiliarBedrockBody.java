@@ -1,6 +1,5 @@
 package me.rique.smpcore.quest;
 
-import net.kyori.adventure.text.Component;
 import org.bukkit.Location;
 import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
@@ -19,7 +18,6 @@ final class FamiliarBedrockBody {
     static ArmorStand spawn(
         Location visualLocation,
         ItemStack head,
-        Component name,
         Consumer<ArmorStand> configure
     ) {
         Location bodyLocation = entityLocation(visualLocation);
@@ -45,8 +43,8 @@ final class FamiliarBedrockBody {
                 EquipmentSlot.CHEST,
                 EquipmentSlot.HEAD
             );
-            stand.customName(name);
-            stand.setCustomNameVisible(true);
+            stand.customName(null);
+            stand.setCustomNameVisible(false);
             configure.accept(stand);
         });
     }

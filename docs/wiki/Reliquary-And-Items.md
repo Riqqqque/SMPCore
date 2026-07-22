@@ -1,5 +1,22 @@
 # Reliquary and Items
 
+## The First Dragon's Sigil
+
+The first player to claim the season's Dragon Egg may receive **The First Dragon's Sigil** from staff. It is a bound Mythic Relic with a unique Java and Bedrock texture.
+
+Right-clicking activates **Firstflight**:
+
+- Launches the champion forward and upward.
+- Grants Slow Falling for 12 seconds, Fire Resistance for 20 seconds, and one protected landing for 15 seconds.
+- Deals 6 hearts of damage and strong knockback to ordinary hostile mobs within eight blocks.
+- Never damages or moves players, passive mobs, boss entities, or boss minions.
+- Cannot activate during a boss fight, dungeon encounter, or duel.
+- Cooldown: 3 minutes.
+
+Staff grant it with `/customitem give first_dragon_sigil <player>`. Revoke it with `/customitem revoke first_dragon_sigil <player>` or `/customitem take first_dragon_sigil <player>`. Revocation disables stored copies bound to that player as well as removing visible copies from their inventory and ender chest.
+
+Staff command: `/customitem give first_dragon_sigil <player>`
+
 The Reliquary is the central player-facing menu for custom items.
 
 Open it with:
@@ -43,8 +60,8 @@ This section is for normal craftable gear, not Veil boss weapons.
 
 - `Backpack` - portable 27-slot storage.
 - `Expanded Backpack` - upgrades a Backpack into 54-slot storage through the Reliquary trade button or a crafting table. Recipe: 1 Backpack, 16 leather, and 8 diamonds. The upgrade keeps the same backpack data, so existing contents stay inside when the old backpack is upgraded.
-- Hold a backpack and use `/backpack label <text>` to add a 1-24 character organization suffix without changing its identity. `/backpack clear` removes the suffix. A backpack cannot contain another backpack.
-- `Salvaging Depot` - placeable chest station that recycles armor, tools, and weapons, including leather, chainmail, gold, iron, copper, diamond, netherite, bows, shields, tridents, maces, elytra, horse armor, wolf armor, carrot-on-a-stick, warped-fungus-on-a-stick, and ordinary custom tools. Items queue for 10 seconds first, so you can pull out an accidental item before it locks; once locked, salvaging takes 6 seconds. Recipe: 1 iron ingot, 2 redstone, 1 chest, and 1 hopper. It returns about 66% of the base materials, reduced by item damage, and even last-hit durable gear still returns at least one scrap material. Unique relics, legendaries, backpacks, stations, and class items are protected from salvage. Its hologram is capped to nearby viewing distance and should not render through solid blocks. Hoppers can insert gear, but salvageable inputs stay in the depot until they are queued or processed; raw output materials can still be pulled out normally.
+- Hold a backpack and use `/backpack label <text>` to add a 1-24 character organization suffix without changing its identity. `/backpack clear` removes the suffix. Each backpack has independent saved contents, and a backpack cannot contain another backpack.
+- `Salvaging Depot` - placeable chest station that recycles armor, tools, and weapons, including leather, chainmail, gold, iron, copper, diamond, netherite, bows, shields, tridents, maces, elytra, horse armor, wolf armor, carrot-on-a-stick, warped-fungus-on-a-stick, and ordinary custom tools. Place two depots together to make one protected 54-slot Large Salvaging Depot; normal chests and a third depot cannot connect. Items queue for 10 seconds first, so you can pull out an accidental item before it locks; once locked, salvaging takes 6 seconds. Recipe: 1 iron ingot, 2 redstone, 1 chest, and 1 hopper. It returns about 66% of the base materials, reduced by item damage, and even last-hit durable gear still returns at least one scrap material. Unique relics, legendaries, backpacks, stations, and class items are protected from salvage. Its hologram is capped to nearby viewing distance and should not render through solid blocks. Hoppers can insert gear, but salvageable inputs stay in the depot until they are queued or processed; raw output materials can still be pulled out normally.
 - `Agricultural Pylon` - placeable farm station that protects nearby farmland from player, mob, and jump trampling. Recipe: 4 bone meal, 2 wheat, 2 copper ingots, and 1 lantern. By default it protects roughly a 10x10x10 area around the pylon, and the radius can be changed in `config.yml`.
 - `XP Lectern` - placeable utility station that stores player XP and lets players withdraw it later. Recipe: 1 experience bottle, 2 books, 1 lectern, and 1 redstone. The menu supports 1, 5, 10, and all-level deposit/withdraw buttons. It can also consume 10 stored XP and 1 plain glass bottle for each Experience Bottle, with buttons for batches of 1 or 8. Bottled XP does not receive class or enchant XP multipliers, so it cannot be cycled for free XP. Stored XP stays inside if the lectern is broken and moved.
 - `Prospector's Pick` - lucky ore mining.
@@ -106,6 +123,7 @@ Custom items are allowed to feel powerful, but the plugin tries to avoid one-cli
 ## Legendary Relic Notes
 
 - `Mjolnir` - every hit calls lightning and adds bonus mace damage. When Thunder Strike is off cooldown, the hit also deals configurable true damage that ignores armor. By default this is 3 hearts of true damage every 12 seconds.
+- `Warden Blade` - its listed 8 damage is the unmodified base hit. Sharpness, Strength, reforges, Veilshift Orbs, awakening, and corruption stack normally. Sound Wave remains a separate 4.5-heart true-damage ability.
 
 ## Legendary Limits
 
