@@ -193,7 +193,7 @@ public final class InventoryRecipeUtil {
 
     private static boolean canFit(ItemStack[] storage, ItemStack reward) {
         int remaining = reward.getAmount();
-        int maxStack = Math.max(1, reward.getType().getMaxStackSize());
+        int maxStack = Math.max(1, reward.getMaxStackSize());
         for (ItemStack item : storage) {
             if (remaining <= 0) {
                 return true;

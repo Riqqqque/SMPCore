@@ -29,3 +29,13 @@ Open them with:
 - Boss kills and failures post a server-wide damage report.
 - Boss kills are announced publicly so big progression moments feel visible.
 - OPs bypass the pre-start lockdown, but regular players cannot use leaderboard commands before `/startsmp`.
+
+## Physical Boards
+
+Some activities use in-world holograms instead of adding more pages to the main leaderboard menu:
+
+- Each tavern game has its own champions board with wins and time played.
+- The duel arena has a match-wins board and a separate successful-bets board.
+- Boards persist through restarts and refresh from saved data.
+
+The server tab list is different from a leaderboard. It shows all online, non-vanished players across every world, with readable rank, team, and player-name formatting. Authority rank changes update there without affecting combat power.

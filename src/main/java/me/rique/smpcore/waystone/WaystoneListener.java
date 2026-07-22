@@ -87,7 +87,9 @@ public final class WaystoneListener implements Listener {
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof org.bukkit.entity.Player player)) return;
         if (event.getClickedInventory() != event.getView().getTopInventory()) return;
-        plugin.getWaystoneManager().handleWaystoneMenuClick(player, event.getCurrentItem(), event.isRightClick());
+        if (event.getClick() != org.bukkit.event.inventory.ClickType.LEFT
+            && event.getClick() != org.bukkit.event.inventory.ClickType.RIGHT) return;
+        plugin.getWaystoneManager().handleWaystoneMenuClick(player, event.getView().getTopInventory(), event.getCurrentItem());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -100,23 +102,35 @@ public final class WaystoneListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
         if (!canAffectWaystone(event.getBlock().getType())) return;
-        plugin.getWaystoneManager().handlePotentialStructureChange(event.getBlock().getLocation());
+        recheckAfterBlockChange(event.getBlock().getLocation());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onBlockExplode(BlockExplodeEvent event) {
-        for (Block block : event.blockList()) {
-            if (!canAffectWaystone(block.getType())) continue;
-            plugin.getWaystoneManager().handlePotentialStructureChange(block.getLocation());
-        }
+        recheckAfterBlockChanges(event.blockList());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onEntityExplode(EntityExplodeEvent event) {
-        for (Block block : event.blockList()) {
-            if (!canAffectWaystone(block.getType())) continue;
-            plugin.getWaystoneManager().handlePotentialStructureChange(block.getLocation());
+        recheckAfterBlockChanges(event.blockList());
+    }
+
+    private void recheckAfterBlockChange(Location location) {
+        // Break and explosion events fire before Bukkit replaces the affected blocks.
+        // Validate on the following tick so destroyed structures cannot remain usable.
+        Location snapshot = location.clone();
+        org.bukkit.Bukkit.getScheduler().runTask(plugin,
+            () -> plugin.getWaystoneManager().handlePotentialStructureChange(snapshot));
+    }
+
+    private void recheckAfterBlockChanges(Iterable<Block> blocks) {
+        java.util.List<Location> affected = new java.util.ArrayList<>();
+        for (Block block : blocks) {
+            if (canAffectWaystone(block.getType())) affected.add(block.getLocation());
         }
+        if (affected.isEmpty()) return;
+        org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> affected.forEach(
+            plugin.getWaystoneManager()::handlePotentialStructureChange));
     }
 
     private static String extractName(Sign sign) {

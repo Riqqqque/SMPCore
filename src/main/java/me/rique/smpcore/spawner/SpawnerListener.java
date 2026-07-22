@@ -2,9 +2,12 @@ package me.rique.smpcore.spawner;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.BedrockCompat;
+import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
+import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -13,10 +16,12 @@ import org.bukkit.block.Block;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.CreatureSpawner;
 import org.bukkit.enchantments.Enchantment;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.ExperienceOrb;
 import org.bukkit.entity.Mob;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Projectile;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -25,8 +30,10 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.block.BlockRedstoneEvent;
-import org.bukkit.event.entity.SpawnerSpawnEvent;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
+import org.bukkit.event.entity.EntityTargetEvent;
+import org.bukkit.event.entity.SpawnerSpawnEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
@@ -44,8 +51,11 @@ import org.bukkit.scheduler.BukkitScheduler;
 import io.papermc.paper.event.player.PlayerPickBlockEvent;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.UUID;
 
 /**
  * Handles block/entity events for custom spawners.
@@ -61,6 +71,8 @@ public final class SpawnerListener implements Listener {
     private final SMPCore plugin;
     private final SpawnerManager manager;
     private final BukkitScheduler scheduler;
+    private final Set<UUID> pendingAiEnforcement = new HashSet<>();
+    private boolean aiEnforcementScheduled;
 
     public SpawnerListener(SMPCore plugin) {
         this.plugin = plugin;
@@ -95,12 +107,11 @@ public final class SpawnerListener implements Listener {
             Byte ai = meta.getPersistentDataContainer().get(AI_NERFED_KEY, PersistentDataType.BYTE);
             if (ai != null) aiNerfed = ai == (byte) 1;
         }
-        stackCount = Math.max(1, Math.min(stackCount, plugin.getConfigManager().spawnerMaxStack));
-        sugarCount = Math.max(0, Math.min(sugarCount, plugin.getConfigManager().spawnerMaxSugar));
+        entityType = SpawnerManager.normalizeEntityType(entityType);
+        stackCount = SpawnerManager.clampStackCount(stackCount, plugin.getConfigManager().spawnerMaxStack);
+        sugarCount = SpawnerManager.clampSugarCount(sugarCount, plugin.getConfigManager().spawnerMaxSugar);
 
         Location loc = event.getBlock().getLocation();
-        if (manager.isTracked(loc)) return;
-
         if (loc.getBlock().getState() instanceof CreatureSpawner cs) {
             try {
                 cs.setSpawnedType(EntityType.valueOf(entityType));
@@ -146,6 +157,9 @@ public final class SpawnerListener implements Listener {
             Byte aiPdc = cs.getPersistentDataContainer().get(AI_NERFED_KEY, PersistentDataType.BYTE);
             if (aiPdc != null) aiNerfed = aiPdc == (byte) 1;
         }
+        entityType = SpawnerManager.normalizeEntityType(entityType);
+        stackCount = SpawnerManager.clampStackCount(stackCount, plugin.getConfigManager().spawnerMaxStack);
+        sugarCount = SpawnerManager.clampSugarCount(sugarCount, plugin.getConfigManager().spawnerMaxSugar);
 
         ItemStack tool = player.getInventory().getItemInMainHand();
         boolean hasSilk = tool.containsEnchantment(Enchantment.SILK_TOUCH);
@@ -183,7 +197,10 @@ public final class SpawnerListener implements Listener {
                 return;
             }
 
-            final int xp = 15 + (finalStackCount - 1) * 5;
+            final int xp = SpawnerManager.breakExperience(
+                finalStackCount,
+                plugin.getConfigManager().spawnerMaxStack
+            );
             block.getWorld().spawn(loc.clone().add(0.5, 0.5, 0.5), ExperienceOrb.class, orb -> orb.setExperience(xp));
         });
     }
@@ -256,12 +273,35 @@ public final class SpawnerListener implements Listener {
         }
 
         if (plugin.getConfigManager().spawnerAiNerfEnabled && data.aiNerfed() && event.getEntity() instanceof Mob mob) {
-            scheduler.runTask(plugin, () -> {
-                if (mob.isValid()) {
-                    // Disable pathfinding/targeting but keep normal physics interactions for farms.
-                    mob.setAware(false);
-                }
-            });
+            markAiNerfedMob(mob);
+            enforceAiNerfedMob(mob);
+            queueAiEnforcement(mob);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onAiNerfedTarget(EntityTargetEvent event) {
+        if (!plugin.getConfigManager().spawnerAiNerfEnabled) return;
+        if (!(event.getEntity() instanceof Mob mob) || !isAiNerfedMob(mob)) return;
+
+        event.setCancelled(true);
+        event.setTarget(null);
+        enforceAiNerfedMob(mob);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onAiNerfedDamage(EntityDamageByEntityEvent event) {
+        if (!plugin.getConfigManager().spawnerAiNerfEnabled) return;
+
+        Mob attacker = aiNerfedMobFromDamageSource(event.getDamager());
+        if (attacker != null) {
+            event.setCancelled(true);
+            enforceAiNerfedMob(attacker);
+            return;
+        }
+
+        if (event.getEntity() instanceof Mob mob && isAiNerfedMob(mob)) {
+            queueAiEnforcement(mob);
         }
     }
 
@@ -274,21 +314,26 @@ public final class SpawnerListener implements Listener {
     @EventHandler
     public void onChunkLoad(ChunkLoadEvent event) {
         manager.onChunkLoad(event.getChunk());
+        for (Entity entity : event.getChunk().getEntities()) {
+            if (entity instanceof Mob mob && isAiNerfedMob(mob)) {
+                enforceAiNerfedMob(mob);
+            }
+        }
     }
 
-    @EventHandler
+    @EventHandler(ignoreCancelled = true)
     public void onChunkUnload(ChunkUnloadEvent event) {
         manager.onChunkUnload(event.getChunk());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onBlockExplode(BlockExplodeEvent event) {
-        cleanupDestroyedSpawners(event.blockList());
+        scheduleDestroyedSpawnerCleanup(event.blockList());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onEntityExplode(EntityExplodeEvent event) {
-        cleanupDestroyedSpawners(event.blockList());
+        scheduleDestroyedSpawnerCleanup(event.blockList());
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -366,7 +411,7 @@ public final class SpawnerListener implements Listener {
         if (added <= 0) return;
 
         consumeOne(player, hand);
-        double mult = data.speedMultiplier(maxSugar, plugin.getConfigManager().spawnerMaxMultiplier);
+        double mult = manager.effectiveSpeedMultiplier(data);
         player.sendMessage(MessageUtil.success(
             "Speed increased to <white>" + String.format(Locale.US, "%.2f", mult) + "x</white> "
                 + "(<yellow>" + data.sugarCount() + "/" + maxSugar + "</yellow> sugar)."));
@@ -441,18 +486,41 @@ public final class SpawnerListener implements Listener {
         }
 
         int itemStack = 1;
+        int itemSugar = 0;
+        boolean itemRedstoneControlled = false;
+        boolean itemAiNerfed = false;
         if (meta != null) {
             Integer pdc = meta.getPersistentDataContainer().get(STACK_COUNT_KEY, PersistentDataType.INTEGER);
             if (pdc != null) itemStack = pdc;
+            Integer sugar = meta.getPersistentDataContainer().get(SUGAR_COUNT_KEY, PersistentDataType.INTEGER);
+            if (sugar != null) itemSugar = Math.max(0, Math.min(sugar, plugin.getConfigManager().spawnerMaxSugar));
+            Byte redstone = meta.getPersistentDataContainer().get(REDSTONE_CONTROLLED_KEY, PersistentDataType.BYTE);
+            if (redstone != null) itemRedstoneControlled = redstone == (byte) 1;
+            Byte ai = meta.getPersistentDataContainer().get(AI_NERFED_KEY, PersistentDataType.BYTE);
+            if (ai != null) itemAiNerfed = ai == (byte) 1;
         }
         if (itemStack <= 0) {
             player.sendMessage(MessageUtil.error("Invalid spawner stack item."));
             return;
         }
 
+        boolean consumedItemHasModifiers = itemSugar > 0 || itemRedstoneControlled || itemAiNerfed;
+        if (consumedItemHasModifiers
+            && (tracked.sugarCount() != itemSugar
+                || tracked.redstoneControlled() != itemRedstoneControlled
+                || tracked.aiNerfed() != itemAiNerfed)) {
+            player.sendMessage(MessageUtil.error(
+                "Modified spawners can only stack with spawners that have the same modifiers."));
+            return;
+        }
+
         SpawnerManager.MergeResult merged = manager.mergeStack(loc, entityType, itemStack);
         if (merged == SpawnerManager.MergeResult.TYPE_MISMATCH) {
             player.sendMessage(MessageUtil.error("Spawner types must match to stack!"));
+            return;
+        }
+        if (merged == SpawnerManager.MergeResult.INVALID_AMOUNT) {
+            player.sendMessage(MessageUtil.error("Invalid spawner stack item."));
             return;
         }
         if (merged == SpawnerManager.MergeResult.WOULD_EXCEED_MAX) {
@@ -562,7 +630,7 @@ public final class SpawnerListener implements Listener {
                 lore.add(MM.deserialize("<gray>AI nerf: <light_purple>ON</light_purple></gray>"));
             }
             if (!lore.isEmpty()) {
-                meta.lore(lore);
+                meta.lore(CustomLoreUtil.wrapLoreLines(lore));
             }
             item.setItemMeta(meta);
         }
@@ -601,7 +669,7 @@ public final class SpawnerListener implements Listener {
         }
 
         int maxSugar = plugin.getConfigManager().spawnerMaxSugar;
-        double speed = data.speedMultiplier(maxSugar, plugin.getConfigManager().spawnerMaxMultiplier);
+        double speed = manager.effectiveSpeedMultiplier(data);
         boolean powered = isPowered(loc.getBlock());
         boolean running = !data.redstoneControlled()
             || (powered != plugin.getConfigManager().spawnerRedstoneDisables);
@@ -689,7 +757,7 @@ public final class SpawnerListener implements Listener {
             for (String line : loreLines) {
                 lore.add(MM.deserialize(line));
             }
-            meta.lore(lore);
+            meta.lore(CustomLoreUtil.wrapLoreLines(lore));
         }
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         item.setItemMeta(meta);
@@ -722,31 +790,95 @@ public final class SpawnerListener implements Listener {
         return block.isBlockPowered() || block.isBlockIndirectlyPowered() || block.getBlockPower() > 0;
     }
 
+    private void markAiNerfedMob(Mob mob) {
+        mob.getPersistentDataContainer().set(AI_NERFED_KEY, PersistentDataType.BYTE, (byte) 1);
+    }
+
+    private boolean isAiNerfedMob(Mob mob) {
+        Byte tagged = mob.getPersistentDataContainer().get(AI_NERFED_KEY, PersistentDataType.BYTE);
+        return tagged != null && tagged == (byte) 1;
+    }
+
+    private Mob aiNerfedMobFromDamageSource(Entity damager) {
+        if (damager instanceof Mob mob && isAiNerfedMob(mob)) {
+            return mob;
+        }
+        if (damager instanceof Projectile projectile && projectile.getShooter() instanceof Mob mob && isAiNerfedMob(mob)) {
+            return mob;
+        }
+        return null;
+    }
+
+    private void enforceAiNerfedMob(Mob mob) {
+        if (!plugin.getConfigManager().spawnerAiNerfEnabled) return;
+        if (!mob.isValid() || mob.isDead()) return;
+
+        mob.setTarget(null);
+        // Disable pathfinding/targeting while keeping normal physics interactions for farms.
+        mob.setAware(false);
+    }
+
+    private void queueAiEnforcement(Mob mob) {
+        if (!mob.isValid() || mob.isDead()) return;
+        pendingAiEnforcement.add(mob.getUniqueId());
+        if (aiEnforcementScheduled) return;
+        aiEnforcementScheduled = true;
+        scheduler.runTask(plugin, () -> {
+            aiEnforcementScheduled = false;
+            if (!plugin.isEnabled()) {
+                pendingAiEnforcement.clear();
+                return;
+            }
+            Set<UUID> batch = Set.copyOf(pendingAiEnforcement);
+            pendingAiEnforcement.removeAll(batch);
+            for (UUID entityId : batch) {
+                Entity entity = Bukkit.getEntity(entityId);
+                if (entity instanceof Mob queued && isAiNerfedMob(queued)) {
+                    enforceAiNerfedMob(queued);
+                }
+            }
+        });
+    }
+
     private void updateNearbyRedstoneHolograms(Block source) {
         final int horizontalRadius = 2;
+        int sourceX = source.getX();
+        int sourceY = source.getY();
+        int sourceZ = source.getZ();
         for (int dx = -horizontalRadius; dx <= horizontalRadius; dx++) {
             for (int dy = -1; dy <= 1; dy++) {
                 for (int dz = -horizontalRadius; dz <= horizontalRadius; dz++) {
-                    Block nearby = source.getRelative(dx, dy, dz);
-                    if (nearby.getType() != Material.SPAWNER) continue;
-                    Location spawnerLoc = nearby.getLocation();
-                    SpawnerData data = manager.getData(spawnerLoc);
+                    int x = sourceX + dx;
+                    int y = sourceY + dy;
+                    int z = sourceZ + dz;
+                    SpawnerData data = manager.getData(source.getWorld(), x, y, z);
                     if (data == null || !data.redstoneControlled()) continue;
-                    manager.updateHologram(spawnerLoc);
+                    manager.updateHologram(new Location(source.getWorld(), x, y, z));
                 }
             }
         }
     }
 
-    private void cleanupDestroyedSpawners(List<Block> blocks) {
+    private void scheduleDestroyedSpawnerCleanup(List<Block> blocks) {
+        List<Location> candidates = new ArrayList<>();
         for (Block block : blocks) {
             if (block.getType() != Material.SPAWNER) continue;
-            if (!manager.isTracked(block.getLocation())) continue;
-            manager.unregister(block.getLocation());
+            Location location = block.getLocation();
+            if (manager.isTracked(location)) {
+                candidates.add(location);
+            }
         }
+        if (candidates.isEmpty()) return;
+        scheduler.runTask(plugin, () -> {
+            for (Location location : candidates) {
+                if (location.getBlock().getType() != Material.SPAWNER && manager.isTracked(location)) {
+                    manager.unregister(location);
+                }
+            }
+        });
     }
 
-    private record SpawnerGuideHolder() implements InventoryHolder {
+    private record SpawnerGuideHolder() implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;

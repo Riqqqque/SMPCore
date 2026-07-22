@@ -23,8 +23,10 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -34,18 +36,70 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class CombatLogListener implements Listener {
 
+    private static final long NAKED_ARMOR_REMOVAL_VULNERABLE_MILLIS = 45_000L;
+
     private final SMPCore plugin;
     private final Map<UUID, CombatTag> combatTags = new ConcurrentHashMap<>();
     private final Map<UUID, Long> notifyCooldown = new ConcurrentHashMap<>();
     private final Map<UUID, Long> restrictionNotifyCooldown = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> nakedVulnerableUntil = new ConcurrentHashMap<>();
+    private final Set<UUID> knownArmoredPlayers = ConcurrentHashMap.newKeySet();
+    private BukkitTask armorWatchTask;
 
     public CombatLogListener(SMPCore plugin) {
         this.plugin = plugin;
     }
 
+    public void start() {
+        if (armorWatchTask != null) {
+            armorWatchTask.cancel();
+        }
+        Bukkit.getOnlinePlayers().forEach(player -> updateArmorSnapshot(player, System.currentTimeMillis()));
+        armorWatchTask = Bukkit.getScheduler().runTaskTimer(plugin, this::watchArmorState, 10L, 10L);
+    }
+
+    public void shutdown() {
+        if (armorWatchTask != null) {
+            armorWatchTask.cancel();
+            armorWatchTask = null;
+        }
+        combatTags.clear();
+        notifyCooldown.clear();
+        restrictionNotifyCooldown.clear();
+        nakedVulnerableUntil.clear();
+        knownArmoredPlayers.clear();
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onNakedPvpGuard(EntityDamageByEntityEvent event) {
+        if (!(event.getEntity() instanceof Player victim)) return;
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().isDuelParticipant(victim)) return;
+
+        Player attacker = resolveAttacker(event.getDamager());
+        if (attacker == null || attacker.equals(victim)) return;
+        if (!isCombatTaggable(attacker) || !isCombatTaggable(victim)) return;
+        if (bypassesNakedPvpGuard(attacker) || bypassesNakedPvpGuard(victim)) return;
+
+        long now = System.currentTimeMillis();
+        updateArmorSnapshot(attacker, now);
+        updateArmorSnapshot(victim, now);
+
+        if (isNaked(attacker)) {
+            event.setCancelled(true);
+            maybeNotifyRestriction(attacker, "Put armor on before fighting.");
+            return;
+        }
+
+        if (isNaked(victim) && !isNakedVulnerable(victim, now)) {
+            event.setCancelled(true);
+            maybeNotifyRestriction(attacker, "They need armor before PvP.");
+        }
+    }
+
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPvpDamage(EntityDamageByEntityEvent event) {
         if (!(event.getEntity() instanceof Player victim)) return;
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().isDuelParticipant(victim)) return;
         if (event.getFinalDamage() <= 0.0) return;
 
         Player attacker = resolveAttacker(event.getDamager());
@@ -94,8 +148,20 @@ public final class CombatLogListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onQuit(PlayerQuitEvent event) {
         Player quitter = event.getPlayer();
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().isDuelParticipant(quitter)) {
+            combatTags.remove(quitter.getUniqueId());
+            knownArmoredPlayers.remove(quitter.getUniqueId());
+            notifyCooldown.remove(quitter.getUniqueId());
+            restrictionNotifyCooldown.remove(quitter.getUniqueId());
+            return;
+        }
         CombatTag tag = activeTag(quitter.getUniqueId());
-        if (tag == null) return;
+        knownArmoredPlayers.remove(quitter.getUniqueId());
+        if (tag == null) {
+            notifyCooldown.remove(quitter.getUniqueId());
+            restrictionNotifyCooldown.remove(quitter.getUniqueId());
+            return;
+        }
 
         event.quitMessage(null);
         punishCombatLog(quitter, tag.opponentUuid());
@@ -110,6 +176,8 @@ public final class CombatLogListener implements Listener {
         combatTags.remove(id);
         notifyCooldown.remove(id);
         restrictionNotifyCooldown.remove(id);
+        nakedVulnerableUntil.remove(id);
+        knownArmoredPlayers.remove(id);
     }
 
     @EventHandler
@@ -118,6 +186,7 @@ public final class CombatLogListener implements Listener {
         combatTags.remove(id);
         notifyCooldown.remove(id);
         restrictionNotifyCooldown.remove(id);
+        updateArmorSnapshot(event.getPlayer(), System.currentTimeMillis());
     }
 
     private void punishCombatLog(Player quitter, UUID opponentUuid) {
@@ -213,6 +282,46 @@ public final class CombatLogListener implements Listener {
         if (player == null || !player.isOnline() || player.isDead()) return false;
         GameMode mode = player.getGameMode();
         return mode != GameMode.CREATIVE && mode != GameMode.SPECTATOR;
+    }
+
+    private boolean bypassesNakedPvpGuard(Player player) {
+        return player.hasPermission("smpcore.pvpguard.bypass");
+    }
+
+    private void watchArmorState() {
+        long now = System.currentTimeMillis();
+        Bukkit.getOnlinePlayers().forEach(player -> updateArmorSnapshot(player, now));
+        nakedVulnerableUntil.entrySet().removeIf(entry -> entry.getValue() <= now);
+    }
+
+    private void updateArmorSnapshot(Player player, long now) {
+        UUID id = player.getUniqueId();
+        if (hasAnyArmor(player)) {
+            knownArmoredPlayers.add(id);
+            return;
+        }
+
+        if (knownArmoredPlayers.remove(id)) {
+            nakedVulnerableUntil.merge(id, now + NAKED_ARMOR_REMOVAL_VULNERABLE_MILLIS, Math::max);
+        }
+    }
+
+    private boolean isNakedVulnerable(Player player, long now) {
+        return activeTag(player.getUniqueId()) != null
+            || nakedVulnerableUntil.getOrDefault(player.getUniqueId(), 0L) > now;
+    }
+
+    private static boolean isNaked(Player player) {
+        return !hasAnyArmor(player);
+    }
+
+    private static boolean hasAnyArmor(Player player) {
+        for (ItemStack item : player.getInventory().getArmorContents()) {
+            if (item != null && item.getType() != Material.AIR && item.getAmount() > 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static Player resolveAttacker(Entity damager) {

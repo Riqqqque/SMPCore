@@ -18,6 +18,9 @@ world_the_end/
 logs/
 crash-reports/
 cache/
+node_modules/
+.codex-remote-attachments/
+tmp/
 
 # Local databases/backups
 *.db
@@ -30,6 +33,7 @@ cache/
 # Generated archives
 *.jar
 *.zip
+!src/main/resources/dungeon/*.zip
 
 # OS files
 .DS_Store

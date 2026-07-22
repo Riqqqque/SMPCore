@@ -3,6 +3,7 @@ package me.rique.smpcore.item;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.ItemModelUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -53,6 +54,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -103,8 +105,10 @@ public final class CustomToolListener implements Listener {
     private static final long ADVANCED_PICKAXE_CONTEXT_TTL_MS = 2_000L;
     private static final int SURVEYOR_SCAN_RADIUS = 24;
     private static final long SURVEYOR_SCAN_COOLDOWN_MS = 20_000L;
+    private static final int SURVEYOR_SCAN_BUDGET_PER_TICK = 2_000;
     private static final double MENDERS_KIT_REPAIR_PERCENT = 0.35;
     private static final int PASSIVE_NIGHT_VISION_TICKS = 600;
+    private static final int PASSIVE_HASTE_TICKS = 12 * 20;
 
     private final SMPCore plugin;
     private final NamespacedKey keyCustomToolId;
@@ -117,6 +121,7 @@ public final class CustomToolListener implements Listener {
     private final NamespacedKey surveyorsLensRecipeKey;
     private final NamespacedKey mendersKitRecipeKey;
     private final Map<BlockKey, AdvancedPickaxeContext> advancedPickaxeContexts = new ConcurrentHashMap<>();
+    private final Map<UUID, SurveyorScan> activeSurveyorScans = new LinkedHashMap<>();
 
     public CustomToolListener(SMPCore plugin) {
         this.plugin = plugin;
@@ -131,6 +136,7 @@ public final class CustomToolListener implements Listener {
         this.mendersKitRecipeKey = new NamespacedKey(plugin, "menders_kit_recipe");
         registerRecipes();
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickHeldGear, 40L, 20L);
+        Bukkit.getScheduler().runTaskTimer(plugin, this::tickSurveyorScans, 1L, 1L);
 
         Bukkit.getScheduler().runTask(plugin, () -> {
             for (Player player : Bukkit.getOnlinePlayers()) {
@@ -148,6 +154,11 @@ public final class CustomToolListener implements Listener {
                 refreshPlayerCustomTools(player);
             }
         });
+    }
+
+    public void shutdown() {
+        activeSurveyorScans.clear();
+        advancedPickaxeContexts.clear();
     }
 
     public boolean isCustomTool(ItemStack item) {
@@ -246,7 +257,7 @@ public final class CustomToolListener implements Listener {
         if (ADVANCED_PICKAXE_ID.equals(toolId)) {
             boolean enchanterCraft = player != null
                 && plugin.getSuperpowerManager() != null
-                && plugin.getSuperpowerManager().hasPower(player, me.rique.smpcore.power.SuperpowerType.ENCHANTER);
+                && plugin.getSuperpowerManager().hasPower(player, me.rique.smpcore.power.SuperpowerType.ARCANIST);
             return createAdvancedPickaxe(enchanterCraft);
         }
         return createCustomTool(toolId);
@@ -342,7 +353,7 @@ public final class CustomToolListener implements Listener {
                 .orElse(null);
             boolean enchanterCraft = viewer != null
                 && plugin.getSuperpowerManager() != null
-                && plugin.getSuperpowerManager().hasPower(viewer, me.rique.smpcore.power.SuperpowerType.ENCHANTER);
+                && plugin.getSuperpowerManager().hasPower(viewer, me.rique.smpcore.power.SuperpowerType.ARCANIST);
             event.getInventory().setResult(
                 plugin.getConfigManager().advancedPickaxeEnabled ? createAdvancedPickaxe(enchanterCraft) : null
             );
@@ -424,6 +435,7 @@ public final class CustomToolListener implements Listener {
         ItemStack tool = player.getInventory().getItemInMainHand();
         if (!ADVANCED_PICKAXE_ID.equals(customToolId(tool))) return;
         if (!isAdvancedPickaxeLuckySource(event.getBlock().getType())) return;
+        if (plugin.getGoblinHuntManager() != null && !plugin.getGoblinHuntManager().isEligibleOreBreak(event.getBlock(), player)) return;
         if (plugin.getConfigManager().advancedPickaxeDisableBonusWithSilkTouch
             && tool.getEnchantmentLevel(Enchantment.SILK_TOUCH) > 0) {
             return;
@@ -569,6 +581,23 @@ public final class CustomToolListener implements Listener {
             default -> {
             }
         }
+    }
+
+    public boolean activateHeldCrossplayAbility(Player player) {
+        if (player == null) {
+            return false;
+        }
+        ItemStack item = player.getInventory().getItemInMainHand();
+        String toolId = customToolId(item);
+        if (SURVEYORS_LENS_ID.equals(toolId)) {
+            scanNearbyOres(player);
+            return true;
+        }
+        if (MENDERS_KIT_ID.equals(toolId)) {
+            useMendersKit(player, EquipmentSlot.HAND, item);
+            return true;
+        }
+        return false;
     }
 
     private void registerRecipes() {
@@ -826,7 +855,7 @@ public final class CustomToolListener implements Listener {
     }
 
     private void applyCustomToolPresentation(ItemMeta meta, String toolId, Material material) {
-        meta.setItemModel(null);
+        ItemModelUtil.apply(meta, toolId);
         Component baseDisplayName = null;
         switch (toolId) {
             case ADVANCED_PICKAXE_ID -> {
@@ -1049,7 +1078,7 @@ public final class CustomToolListener implements Listener {
                 continue;
             }
             player.addPotionEffect(new PotionEffect(PotionEffectType.NIGHT_VISION, PASSIVE_NIGHT_VISION_TICKS, 0, true, false, false));
-            player.addPotionEffect(new PotionEffect(PotionEffectType.HASTE, 120, 0, true, false, false));
+            player.addPotionEffect(new PotionEffect(PotionEffectType.HASTE, PASSIVE_HASTE_TICKS, 0, true, false, false));
         }
     }
 
@@ -1073,48 +1102,86 @@ public final class CustomToolListener implements Listener {
         if (world == null) {
             return;
         }
+        UUID playerId = player.getUniqueId();
+        if (activeSurveyorScans.containsKey(playerId)) {
+            player.sendActionBar(MM.deserialize("<yellow>The Surveyor's Lens is already scanning.</yellow>"));
+            return;
+        }
+        pdc.set(keySurveyorLensCooldownUntil, PersistentDataType.LONG, now + SURVEYOR_SCAN_COOLDOWN_MS);
+        activeSurveyorScans.put(playerId, new SurveyorScan(origin.clone(), world));
+        player.sendActionBar(MM.deserialize("<aqua>The Surveyor's Lens is scanning nearby stone...</aqua>"));
+    }
 
-        Map<String, Integer> counts = new java.util.LinkedHashMap<>();
-        Block nearestValuable = null;
-        double nearestValuableDistanceSq = Double.MAX_VALUE;
-        int radiusSq = SURVEYOR_SCAN_RADIUS * SURVEYOR_SCAN_RADIUS;
-        int centerX = origin.getBlockX();
-        int centerY = origin.getBlockY();
-        int centerZ = origin.getBlockZ();
-        int minY = Math.max(world.getMinHeight(), centerY - SURVEYOR_SCAN_RADIUS);
-        int maxY = Math.min(world.getMaxHeight() - 1, centerY + SURVEYOR_SCAN_RADIUS);
+    private void tickSurveyorScans() {
+        if (activeSurveyorScans.isEmpty()) {
+            return;
+        }
+        int remainingBudget = SURVEYOR_SCAN_BUDGET_PER_TICK;
+        List<UUID> playerIds = new ArrayList<>(activeSurveyorScans.keySet());
+        for (int index = 0; index < playerIds.size() && remainingBudget > 0; index++) {
+            UUID playerId = playerIds.get(index);
+            SurveyorScan scan = activeSurveyorScans.get(playerId);
+            Player player = Bukkit.getPlayer(playerId);
+            if (scan == null || player == null || !player.isOnline()) {
+                activeSurveyorScans.remove(playerId);
+                continue;
+            }
+            int scansLeft = Math.max(1, playerIds.size() - index);
+            int budget = Math.max(1, remainingBudget / scansLeft);
+            int used = processSurveyorScan(scan, budget);
+            remainingBudget -= used;
+            if (scan.complete) {
+                activeSurveyorScans.remove(playerId);
+                finishSurveyorScan(player, scan);
+            }
+        }
+    }
 
-        for (int x = centerX - SURVEYOR_SCAN_RADIUS; x <= centerX + SURVEYOR_SCAN_RADIUS; x++) {
-            for (int z = centerZ - SURVEYOR_SCAN_RADIUS; z <= centerZ + SURVEYOR_SCAN_RADIUS; z++) {
-                if (!world.isChunkLoaded(x >> 4, z >> 4)) {
-                    continue;
-                }
-                for (int y = minY; y <= maxY; y++) {
-                    int dx = x - centerX;
-                    int dy = y - centerY;
-                    int dz = z - centerZ;
-                    if ((dx * dx) + (dy * dy) + (dz * dz) > radiusSq) {
-                        continue;
-                    }
-                    Block block = world.getBlockAt(x, y, z);
-                    Material type = block.getType();
-                    if (!SURVEYOR_ORES.contains(type)) {
-                        continue;
-                    }
-                    counts.merge(oreLabel(type), 1, Integer::sum);
-                    if (isValuableSurveyorOre(type)) {
-                        double distanceSq = block.getLocation().add(0.5, 0.5, 0.5).distanceSquared(origin);
-                        if (distanceSq < nearestValuableDistanceSq) {
-                            nearestValuableDistanceSq = distanceSq;
-                            nearestValuable = block;
-                        }
-                    }
+    private int processSurveyorScan(SurveyorScan scan, int budget) {
+        World world = Bukkit.getWorld(scan.worldId);
+        if (world == null) {
+            scan.complete = true;
+            return 0;
+        }
+        int used = 0;
+        while (!scan.complete && used < budget) {
+            int x = scan.x;
+            int y = scan.y;
+            int z = scan.z;
+            used++;
+            if (!world.isChunkLoaded(x >> 4, z >> 4)) {
+                scan.advanceColumn();
+                continue;
+            }
+            scan.advance();
+            int dx = x - scan.centerX;
+            int dy = y - scan.centerY;
+            int dz = z - scan.centerZ;
+            if ((dx * dx) + (dy * dy) + (dz * dz) > scan.radiusSquared) {
+                continue;
+            }
+            Block block = world.getBlockAt(x, y, z);
+            Material type = block.getType();
+            if (!SURVEYOR_ORES.contains(type)) {
+                continue;
+            }
+            scan.counts.merge(oreLabel(type), 1, Integer::sum);
+            if (isValuableSurveyorOre(type)) {
+                double blockDx = (x + 0.5) - scan.origin.getX();
+                double blockDy = (y + 0.5) - scan.origin.getY();
+                double blockDz = (z + 0.5) - scan.origin.getZ();
+                double distanceSquared = (blockDx * blockDx) + (blockDy * blockDy) + (blockDz * blockDz);
+                if (distanceSquared < scan.nearestValuableDistanceSquared) {
+                    scan.nearestValuableDistanceSquared = distanceSquared;
+                    scan.nearestValuable = block;
                 }
             }
         }
+        return used;
+    }
 
-        pdc.set(keySurveyorLensCooldownUntil, PersistentDataType.LONG, now + SURVEYOR_SCAN_COOLDOWN_MS);
-        int total = counts.values().stream().mapToInt(Integer::intValue).sum();
+    private void finishSurveyorScan(Player player, SurveyorScan scan) {
+        int total = scan.counts.values().stream().mapToInt(Integer::intValue).sum();
         if (total <= 0) {
             player.sendMessage(MessageUtil.warn("The lens found no ore echoes nearby."));
             player.playSound(player.getLocation(), Sound.BLOCK_AMETHYST_BLOCK_CHIME, 0.7f, 0.7f);
@@ -1124,9 +1191,9 @@ public final class CustomToolListener implements Listener {
         player.sendMessage(MessageUtil.success(
             "Surveyor's Lens found <white>" + total + "</white> ore blocks within <white>" + SURVEYOR_SCAN_RADIUS + "</white> blocks."
         ));
-        player.sendMessage(MessageUtil.info(formatOreBreakdown(counts)));
-        if (nearestValuable != null) {
-            player.sendMessage(MessageUtil.info(describeNearestValuable(origin, nearestValuable)));
+        player.sendMessage(MessageUtil.info(formatOreBreakdown(scan.counts)));
+        if (scan.nearestValuable != null) {
+            player.sendMessage(MessageUtil.info(describeNearestValuable(scan.origin, scan.nearestValuable)));
         } else {
             player.sendMessage(MessageUtil.info("<gray>No diamond, emerald, or ancient debris echoes were close enough.</gray>"));
         }
@@ -1309,7 +1376,7 @@ public final class CustomToolListener implements Listener {
     private double bonusWeight(AdvancedPickaxeBonusFamily family, Player player) {
         boolean enchanter = player != null
             && plugin.getSuperpowerManager() != null
-            && plugin.getSuperpowerManager().hasPower(player, me.rique.smpcore.power.SuperpowerType.ENCHANTER);
+            && plugin.getSuperpowerManager().hasPower(player, me.rique.smpcore.power.SuperpowerType.ARCANIST);
         return switch (family) {
             case COAL -> plugin.getConfigManager().advancedPickaxeCoalChance;
             case IRON -> plugin.getConfigManager().advancedPickaxeIronChance;
@@ -1356,6 +1423,66 @@ public final class CustomToolListener implements Listener {
 
     private record BlockKey(UUID worldId, int x, int y, int z) {}
     private record RepairTarget(ItemStack item, int storageSlot, EquipmentSlot equipmentSlot, String label, double damageRatio) {}
+
+    private static final class SurveyorScan {
+        private final UUID worldId;
+        private final Location origin;
+        private final int centerX;
+        private final int centerY;
+        private final int centerZ;
+        private final int minX;
+        private final int minY;
+        private final int minZ;
+        private final int maxX;
+        private final int maxY;
+        private final int maxZ;
+        private final int radiusSquared;
+        private final Map<String, Integer> counts = new LinkedHashMap<>();
+        private int x;
+        private int y;
+        private int z;
+        private Block nearestValuable;
+        private double nearestValuableDistanceSquared = Double.MAX_VALUE;
+        private boolean complete;
+
+        private SurveyorScan(Location origin, World world) {
+            this.worldId = world.getUID();
+            this.origin = origin;
+            this.centerX = origin.getBlockX();
+            this.centerY = origin.getBlockY();
+            this.centerZ = origin.getBlockZ();
+            this.minX = centerX - SURVEYOR_SCAN_RADIUS;
+            this.minY = Math.max(world.getMinHeight(), centerY - SURVEYOR_SCAN_RADIUS);
+            this.minZ = centerZ - SURVEYOR_SCAN_RADIUS;
+            this.maxX = centerX + SURVEYOR_SCAN_RADIUS;
+            this.maxY = Math.min(world.getMaxHeight() - 1, centerY + SURVEYOR_SCAN_RADIUS);
+            this.maxZ = centerZ + SURVEYOR_SCAN_RADIUS;
+            this.radiusSquared = SURVEYOR_SCAN_RADIUS * SURVEYOR_SCAN_RADIUS;
+            this.x = minX;
+            this.y = minY;
+            this.z = minZ;
+        }
+
+        private void advance() {
+            if (++y <= maxY) {
+                return;
+            }
+            y = minY;
+            advanceColumn();
+        }
+
+        private void advanceColumn() {
+            y = minY;
+            if (++z <= maxZ) {
+                return;
+            }
+            z = minZ;
+            if (++x > maxX) {
+                complete = true;
+            }
+        }
+    }
+
     private enum AdvancedPickaxeBonusFamily {
         COAL(Material.COAL),
         IRON(Material.RAW_IRON),

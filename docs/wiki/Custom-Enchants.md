@@ -1,6 +1,6 @@
 # Custom Enchants
 
-Open the enchant guide with `/enchants` or from `/menu`.
+Open the enchant guide with `/enchants` or from `/menu`. Bedrock players can tap a placed anvil when Geyser cannot display a custom result in the normal interface. Crouch-tap the block, or use **Open Normal Anvil** in the custom menu, for vanilla books, repairs, same-item combining, and renaming.
 
 Custom enchants use normal gameplay surfaces where possible: enchant table rolls, enchanted books, anvils, grindstones, loot chests, and recipes. The lore is intentionally simple so they read close to vanilla enchants.
 
@@ -9,26 +9,28 @@ Custom enchants use normal gameplay surfaces where possible: enchant table rolls
 - Enchant table enchants can appear from normal enchanting on valid gear.
 - Custom enchant books can be applied in an anvil and consume XP levels.
 - Matching custom enchant books can be combined in an anvil. Two books of the same level upgrade by one level, up to that enchant's max level.
+- Each custom book carries exactly one verified SMPCore enchant. Mixed, stacked, or vanilla-contaminated custom books cannot be used; legacy books with one clear identity repair to that single enchant when loaded.
 - A matching custom enchant book can also upgrade an item that already has the same level, up to that enchant's max level.
 - Same-type tools and armor can be combined in an anvil to merge their SMPCore custom enchants when the right-hand item adds something new.
 - Grindstones remove custom enchants safely.
 - Double Jump is loot-only from Ancient City chests by default.
-- Boss-crafted books are made with Covenant boss materials and are shown in `/enchants`.
+- Boss-crafted books are made with Veil boss materials and are shown in `/enchants`.
 - Boss-crafted book recipe pages can craft from the player's inventory directly. This keeps the recipe reliable for Bedrock/Geyser players while still allowing Java players to use the shown crafting table layout.
+- Tapping a placed anvil opens custom-book application and combining through a Bedrock-safe chest menu. Tap the result preview or **Combine Items**. Ordinary anvil work and same-item merges transfer safely into Paper's real anvil so Minecraft calculates durability, prior-work cost, and vanilla enchants correctly. `/customanvil` explains this access path.
 
 ## Enchant Table Enchants
 
-- Replenish I: hoe enchant. Replants supported crops when harvested.
+- Replenish I: hoe enchant. Replants supported crops when harvested. Any successful enchant-table use on a hoe grants it.
 - Delicate I: tool and weapon enchant. Protects immature crops and harvests stacked plants without destroying the root.
 - Telekinesis I: tool and weapon enchant. Mining and mob drops go straight into your inventory when space is available. Overflow drops normally.
-- Smelting Touch I: pickaxe enchant. Smelts mined drops when a real furnace or blast recipe exists. Netherrack is intentionally ignored.
+- Smelting Touch I: pickaxe enchant. Smelts mined drops when a real cooking recipe exists. Netherrack is intentionally ignored.
 - Wise I-III: pickaxe, sword, and hoe enchant. Gives +15%, +30%, or +40% XP from all sources while held. Breaking or right-click harvesting crops with it drops at least 2 XP.
 - Dash I: sword and axe enchant. Right-click to dash forward. Sneak while right-clicking interactable blocks if you want Dash to trigger instead of opening the block. Current cooldown is 15 seconds and shows above the hotbar.
-- Frostbite I-II: melee enchant. Hits can briefly slow enemies. Higher levels improve the chance and chill strength.
+- Frostbite I-II: melee enchant. Hits can briefly slow ordinary enemies. Boss-encounter enemies ignore the control effect.
 - Harvesting I-III: hoe enchant. Mature crops can produce one extra crop drop.
 - Bulwark I-III: armor enchant. Worn pieces reduce incoming damage, capped at 30% total reduction.
 - Reinforced I-III: gear enchant. Items can ignore durability damage.
-- Essence Capture I-III: tool and weapon enchant. Eligible mob kills can drop that mob's spawn egg: level I is 1%, level II is 3%, and level III is 5%.
+- Essence Capture I-III: tool and weapon enchant. Eligible mob kills can drop that mob's spawn egg: level I is 0.5%, level II is 1.5%, and level III is 2.5%.
 
 Essence Capture exclusions:
 
@@ -42,12 +44,12 @@ Essence Capture exclusions:
 ## Loot-Only Enchant
 
 - Double Jump I: boot enchant. Found in Ancient City loot with a 23% chest chance by default.
-- Double jumping costs 4 hunger by default and does not rely on saturation.
-- The jump launches the player upward and forward.
+- Double-tap jump while airborne to launch upward and steer forward. It stays available until used or until you land.
+- Each use costs 2 hunger by default. If you are too hungry, a message explains why it did not activate.
 
 ## Boss-Crafted Enchant Books
 
-These books do not appear from the enchant table. They are stronger because they require Covenant boss materials.
+These books do not appear from the enchant table. They are stronger because they require Veil boss materials.
 
 Click the enchant in `/enchants` to view the exact recipe in-game.
 
@@ -58,9 +60,9 @@ Effect: melee weapons deal 18% more damage to tracked custom bosses.
 Recipe:
 
 ```text
-Crimson Rib  | Blaze Rod | Crimson Rib
+Nocturne Rib  | Blaze Rod | Nocturne Rib
 Blaze Rod    | Book      | Blaze Rod
-Sculk Heart  | Nether Star | Sculk Heart
+Veil Heart  | Nether Star | Veil Heart
 ```
 
 ### Soul Siphon I
@@ -70,21 +72,21 @@ Effect: melee hits heal a small capped amount based on damage dealt. The cap kee
 Recipe:
 
 ```text
-Verdant Heart | Ghast Tear   | Verdant Heart
-Crimson Rib   | Book         | Crimson Rib
+Briarheart | Ghast Tear   | Briarheart
+Nocturne Rib   | Book         | Nocturne Rib
 Soul Sand     | Golden Apple | Soul Sand
 ```
 
 ### Echoing I
 
-Effect: melee hits can mark the target with Glowing, apply Weakness, and lightly knock them back with a sonic burst.
+Effect: melee hits can mark ordinary targets with Glowing, apply Weakness, and lightly knock them back with a sonic burst. Boss-encounter enemies ignore the control effect.
 
 Recipe:
 
 ```text
-Titan Gear     | Echo Shard | Titan Gear
+Argent Gear     | Echo Shard | Argent Gear
 Amethyst Shard | Echo Shard | Amethyst Shard
-Sculk Heart    | Book       | Sculk Heart
+Veil Heart    | Book       | Veil Heart
 ```
 
 ## Admin Book Commands
@@ -100,8 +102,12 @@ Sculk Heart    | Book       | Sculk Heart
 ## Safety Rules
 
 - Custom enchant books apply through anvils and consume XP levels.
-- Custom-enchanted vanilla tools and armor, including Replenish hoes, keep their SMPCore enchants when upgraded in a smithing table. Actual custom relics are still blocked from vanilla crafting and smithing.
-- Custom enchants can be removed safely in a grindstone.
+- Java anvils and the Bedrock-safe custom path use the same validation, level caps, compatibility checks, and one-book consumption rules. Ordinary Bedrock operations use a real server-created anvil rather than an approximate custom calculation.
+- Custom-enchanted vanilla tools and armor, including Replenish hoes, keep their SMPCore enchants when upgraded in a smithing table. Actual custom relics are still blocked from vanilla crafting and smithing, except Veil armor can use normal armor trims.
+- Custom enchants can be removed safely in a grindstone. Custom books must be ground by themselves so a second item cannot be consumed accidentally.
+- Canceled enchant-table attempts do not grant Replenish or another custom enchant afterward.
+- Smelting Touch and Silk Touch cannot coexist. The anvil rejects the combination, while legacy conflicts keep Smelting Touch and remove Silk Touch.
+- The Runic Loom refuses conflicted gear before consuming a Runebloom Orb.
 - Dash cooldowns are stored on the player, so relogging does not bypass them.
-- Boss-crafted enchant books require real Covenant boss materials.
+- Boss-crafted enchant books require real Veil boss materials.
 - Boss-crafted enchant books are tracked by the item audit system.

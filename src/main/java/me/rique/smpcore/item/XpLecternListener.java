@@ -1,8 +1,15 @@
 package me.rique.smpcore.item;
 
+import com.destroystokyo.paper.event.entity.ExperienceOrbMergeEvent;
+import com.destroystokyo.paper.event.player.PlayerLaunchProjectileEvent;
+import com.destroystokyo.paper.event.player.PlayerPickupExperienceEvent;
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.InventoryRecipeUtil;
+import me.rique.smpcore.util.ItemModelUtil;
+import me.rique.smpcore.util.MenuDupeGuardListener;
+import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
@@ -22,22 +29,28 @@ import org.bukkit.block.BlockState;
 import org.bukkit.block.TileState;
 import org.bukkit.entity.Display;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.ExperienceOrb;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.ThrownExpBottle;
 import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockDispenseEvent;
 import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
+import org.bukkit.event.entity.ExpBottleEvent;
+import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.CraftItemEvent;
 import org.bukkit.event.inventory.PrepareItemCraftEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerExpChangeEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.ChunkUnloadEvent;
@@ -56,6 +69,7 @@ import org.bukkit.scheduler.BukkitTask;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -66,6 +80,7 @@ public final class XpLecternListener implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final long MAX_STORED_XP = Integer.MAX_VALUE;
     private static final int MENU_SIZE = 27;
+    static final int XP_PER_BOTTLE = 10;
 
     private final SMPCore plugin;
     private final NamespacedKey keyLecternItem;
@@ -75,8 +90,12 @@ public final class XpLecternListener implements Listener {
     private final NamespacedKey keyMenuAmount;
     private final NamespacedKey keyHologram;
     private final NamespacedKey keyHologramBlock;
+    private final NamespacedKey keyFilledBottle;
+    private final NamespacedKey keyFilledBottleProjectile;
+    private final NamespacedKey keyFilledBottleOrb;
     private final NamespacedKey recipeKey;
     private final Map<String, UUID> hologramsByBlock = new ConcurrentHashMap<>();
+    private final Set<UUID> lecternBottleXpPickups = ConcurrentHashMap.newKeySet();
     private BukkitTask maintenanceTask;
 
     public XpLecternListener(SMPCore plugin) {
@@ -88,6 +107,9 @@ public final class XpLecternListener implements Listener {
         this.keyMenuAmount = new NamespacedKey(plugin, "xp_lectern_menu_amount");
         this.keyHologram = new NamespacedKey(plugin, "xp_lectern_hologram");
         this.keyHologramBlock = new NamespacedKey(plugin, "xp_lectern_hologram_block");
+        this.keyFilledBottle = new NamespacedKey("smpcore_runtime", "lectern_filled_bottle");
+        this.keyFilledBottleProjectile = new NamespacedKey(plugin, "lectern_filled_bottle_projectile");
+        this.keyFilledBottleOrb = new NamespacedKey(plugin, "lectern_filled_bottle_orb");
         this.recipeKey = new NamespacedKey(plugin, ITEM_ID);
     }
 
@@ -99,7 +121,7 @@ public final class XpLecternListener implements Listener {
             }
             syncLoadedLecterns();
         });
-        maintenanceTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncLoadedLecterns, 100L, 200L);
+        maintenanceTask = Bukkit.getScheduler().runTaskTimer(plugin, this::syncLoadedLecterns, 100L, 20L * 60L * 5L);
     }
 
     public void shutdown() {
@@ -114,6 +136,7 @@ public final class XpLecternListener implements Listener {
             }
         }
         hologramsByBlock.clear();
+        lecternBottleXpPickups.clear();
     }
 
     public ItemStack createLecternItem() {
@@ -136,6 +159,7 @@ public final class XpLecternListener implements Listener {
         }
 
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.RARE, "XP Lectern"));
+        ItemModelUtil.apply(meta, ITEM_ID);
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.LECTERN,
@@ -148,7 +172,8 @@ public final class XpLecternListener implements Listener {
                     "Level Banking",
                     "<gray>Place it, then right-click to open the XP menu.</gray>",
                     "<gray>Deposit <white>1</white>, <white>5</white>, <white>10</white>, or all levels.</gray>",
-                    "<gray>Withdraw the same way whenever you need the XP back.</gray>"
+                    "<gray>Withdraw the same way whenever you need the XP back.</gray>",
+                    "<gray>Stored XP can also fill plain glass bottles.</gray>"
                 ),
                 CustomLoreUtil.section(
                     "Safety",
@@ -248,6 +273,64 @@ public final class XpLecternListener implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onFilledBottleDispense(BlockDispenseEvent event) {
+        if (isLecternFilledBottle(event.getItem())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onFilledBottleLaunch(PlayerLaunchProjectileEvent event) {
+        if (event.getProjectile() instanceof ThrownExpBottle && isLecternFilledBottle(event.getItemStack())) {
+            event.getProjectile().getPersistentDataContainer().set(keyFilledBottleProjectile, PersistentDataType.BYTE, (byte) 1);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onFilledBottleBreak(ExpBottleEvent event) {
+        if (!event.getEntity().getPersistentDataContainer().has(keyFilledBottleProjectile, PersistentDataType.BYTE)) {
+            return;
+        }
+        int experience = Math.max(0, event.getExperience());
+        event.setExperience(0);
+        if (experience <= 0) {
+            return;
+        }
+        event.getEntity().getWorld().spawn(event.getEntity().getLocation(), ExperienceOrb.class, orb -> {
+            orb.setExperience(experience);
+            orb.getPersistentDataContainer().set(keyFilledBottleOrb, PersistentDataType.BYTE, (byte) 1);
+        });
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onFilledBottleOrbMerge(ExperienceOrbMergeEvent event) {
+        if (isFilledBottleOrb(event.getMergeSource()) || isFilledBottleOrb(event.getMergeTarget())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void onFilledBottleXpPickup(PlayerPickupExperienceEvent event) {
+        if (!isFilledBottleOrb(event.getExperienceOrb())) {
+            return;
+        }
+        UUID playerId = event.getPlayer().getUniqueId();
+        lecternBottleXpPickups.add(playerId);
+        Bukkit.getScheduler().runTask(plugin, () -> lecternBottleXpPickups.remove(playerId));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onFilledBottleXpApplied(PlayerExpChangeEvent event) {
+        if (event.getAmount() > 0) {
+            lecternBottleXpPickups.remove(event.getPlayer().getUniqueId());
+        }
+    }
+
+    public boolean isLecternBottleXpPickup(Player player) {
+        return player != null && lecternBottleXpPickups.contains(player.getUniqueId());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onInteract(PlayerInteractEvent event) {
         if (event.getHand() != EquipmentSlot.HAND || event.getAction() != Action.RIGHT_CLICK_BLOCK) {
             return;
@@ -273,6 +356,9 @@ public final class XpLecternListener implements Listener {
         if (event.getClickedInventory() == null || event.getClickedInventory().getType() == InventoryType.PLAYER) {
             return;
         }
+        if (event.getClick() != ClickType.LEFT && event.getClick() != ClickType.RIGHT) {
+            return;
+        }
 
         Block block = blockFromKey(holder.blockKey());
         if (block == null || !isLecternBlock(block)) {
@@ -282,6 +368,9 @@ public final class XpLecternListener implements Listener {
         }
 
         ItemStack clicked = event.getCurrentItem();
+        if (!MenuItemUtil.isVisibleItem(clicked)) {
+            return;
+        }
         String action = menuAction(clicked);
         if (action == null) {
             return;
@@ -292,6 +381,7 @@ public final class XpLecternListener implements Listener {
             case "deposit_all" -> depositLevels(player, block, 0, true);
             case "withdraw" -> withdrawLevels(player, block, menuAmount(clicked), false);
             case "withdraw_all" -> withdrawLevels(player, block, 0, true);
+            case "bottle" -> bottleExperience(player, block, menuAmount(clicked));
             case "close" -> {
                 player.closeInventory();
                 return;
@@ -315,7 +405,7 @@ public final class XpLecternListener implements Listener {
         syncChunkLecterns(event.getChunk());
     }
 
-    @EventHandler
+    @EventHandler(ignoreCancelled = true)
     public void onChunkUnload(ChunkUnloadEvent event) {
         removeChunkHolograms(event.getChunk());
     }
@@ -380,7 +470,7 @@ public final class XpLecternListener implements Listener {
         Inventory inventory = Bukkit.createInventory(
             new XpLecternMenuHolder(blockKey(block)),
             MENU_SIZE,
-            MM.deserialize("<gradient:#38bdf8:#a78bfa><bold>XP Lectern</bold></gradient>")
+            BedrockCompat.menuTitle(player, MM.deserialize("<gradient:#38bdf8:#a78bfa><bold>XP Lectern</bold></gradient>"), "XP Lectern")
         );
         renderMenu(inventory, block, player);
         player.openInventory(inventory);
@@ -416,7 +506,27 @@ public final class XpLecternListener implements Listener {
         inventory.setItem(16, item(Material.LIGHT_BLUE_DYE, "<aqua><bold>Withdraw 10 Levels</bold></aqua>", withdrawLore(player, storedXp, 10), "withdraw", 10));
         inventory.setItem(25, item(Material.DIAMOND, "<aqua><bold>Withdraw All XP</bold></aqua>", List.of("<gray>Takes every stored XP point from this lectern.</gray>"), "withdraw_all", 0));
 
+        inventory.setItem(21, item(Material.GLASS_BOTTLE, "<light_purple><bold>Fill 1 XP Bottle</bold></light_purple>", bottleLore(player, storedXp, 1), "bottle", 1));
+        inventory.setItem(23, item(Material.EXPERIENCE_BOTTLE, "<light_purple><bold>Fill 8 XP Bottles</bold></light_purple>", bottleLore(player, storedXp, 8), "bottle", 8));
         inventory.setItem(22, item(Material.BARRIER, "<red><bold>Close</bold></red>", List.of("<gray>Leave the lectern menu.</gray>"), "close", 0));
+    }
+
+    private List<String> bottleLore(Player player, long storedXp, int bottles) {
+        long xpCost = bottlingXpCost(bottles);
+        InventoryRecipeUtil.Ingredient glass = InventoryRecipeUtil.plainMaterial(plugin, Material.GLASS_BOTTLE, bottles);
+        int availableGlass = InventoryRecipeUtil.countIngredient(player, glass);
+        List<String> lore = new ArrayList<>(List.of(
+            "<gray>Uses <white>" + xpCost + " stored XP</white> and <white>" + bottles + " plain glass bottle" + (bottles == 1 ? "" : "s") + "</white>.</gray>",
+            "<dark_gray>Bottling is intentionally lossy when bottles are thrown.</dark_gray>"
+        ));
+        if (storedXp < xpCost) {
+            lore.add("<red>Not enough XP is stored.</red>");
+        } else if (availableGlass < bottles) {
+            lore.add("<red>You need " + bottles + " plain glass bottle" + (bottles == 1 ? "" : "s") + ".</red>");
+        } else {
+            lore.add("<yellow>Click to fill.</yellow>");
+        }
+        return lore;
     }
 
     private List<String> depositLore(Player player, int levels) {
@@ -490,6 +600,99 @@ public final class XpLecternListener implements Listener {
         player.spawnParticle(Particle.HAPPY_VILLAGER, player.getLocation().add(0, 1.0, 0), 12, 0.35, 0.35, 0.35, 0.02);
         player.sendActionBar(MM.deserialize("<aqua>Withdrew <white>" + levelSummary(amount) + "</white> from the XP Lectern.</aqua>"));
         ensureHologram(block);
+    }
+
+    private void bottleExperience(Player player, Block block, int requestedBottles) {
+        int bottles = normalizedBottleCount(requestedBottles);
+        long xpCost = bottlingXpCost(bottles);
+        long stored = storedXp(block);
+        if (bottles <= 0 || xpCost <= 0L) {
+            player.sendMessage(MessageUtil.error("That XP bottle amount is invalid."));
+            return;
+        }
+        if (stored < xpCost) {
+            player.sendMessage(MessageUtil.warn("This XP Lectern needs <white>" + xpCost + " stored XP</white> for that."));
+            return;
+        }
+
+        List<InventoryRecipeUtil.Ingredient> ingredients = List.of(
+            InventoryRecipeUtil.plainMaterial(plugin, Material.GLASS_BOTTLE, bottles)
+        );
+        ItemStack reward = createFilledBottle(bottles);
+        if (!InventoryRecipeUtil.hasIngredients(player, ingredients)) {
+            player.sendMessage(MessageUtil.warn("You need <white>" + bottles + " plain glass bottle" + (bottles == 1 ? "" : "s") + "</white>."));
+            return;
+        }
+        if (!InventoryRecipeUtil.canFitRewardAfterRemovingIngredients(player, ingredients, reward)) {
+            player.sendMessage(MessageUtil.warn("Clear inventory space for the filled XP bottles."));
+            return;
+        }
+
+        ItemStack[] storageBefore = cloneContents(player.getInventory().getStorageContents());
+        ItemStack offhandBefore = cloneItem(player.getInventory().getItemInOffHand());
+        if (!InventoryRecipeUtil.removeIngredients(player, ingredients)) {
+            player.sendMessage(MessageUtil.error("The glass bottles changed before they could be filled."));
+            return;
+        }
+
+        setStoredXp(block, stored - xpCost);
+        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(reward);
+        if (!leftovers.isEmpty()) {
+            player.getInventory().setStorageContents(storageBefore);
+            player.getInventory().setItemInOffHand(offhandBefore);
+            setStoredXp(block, stored);
+            player.updateInventory();
+            player.sendMessage(MessageUtil.error("The XP bottles could not be stored, so nothing was consumed."));
+            return;
+        }
+
+        player.playSound(player.getLocation(), Sound.ITEM_BOTTLE_FILL, 0.8f, 1.35f);
+        player.spawnParticle(Particle.ENCHANT, player.getLocation().add(0, 1.0, 0), 14, 0.3, 0.3, 0.3, 0.02);
+        player.sendActionBar(MM.deserialize("<light_purple>Filled <white>" + bottles + " XP bottle" + (bottles == 1 ? "" : "s") + "</white> for <white>" + xpCost + " XP</white>.</light_purple>"));
+        player.updateInventory();
+        ensureHologram(block);
+    }
+
+    static int normalizedBottleCount(int requested) {
+        return requested == 1 || requested == 8 ? requested : 0;
+    }
+
+    static long bottlingXpCost(int bottles) {
+        return bottles <= 0 ? 0L : Math.multiplyExact((long) bottles, XP_PER_BOTTLE);
+    }
+
+    private ItemStack[] cloneContents(ItemStack[] contents) {
+        ItemStack[] clone = new ItemStack[contents.length];
+        for (int i = 0; i < contents.length; i++) {
+            clone[i] = cloneItem(contents[i]);
+        }
+        return clone;
+    }
+
+    private ItemStack cloneItem(ItemStack item) {
+        return item == null || item.getType().isAir() ? null : item.clone();
+    }
+
+    private ItemStack createFilledBottle(int amount) {
+        ItemStack bottle = new ItemStack(Material.EXPERIENCE_BOTTLE, Math.max(1, amount));
+        ItemMeta meta = bottle.getItemMeta();
+        if (meta != null) {
+            meta.getPersistentDataContainer().set(keyFilledBottle, PersistentDataType.BYTE, (byte) 1);
+            bottle.setItemMeta(meta);
+        }
+        return bottle;
+    }
+
+    private boolean isLecternFilledBottle(ItemStack item) {
+        if (item == null || item.getType() != Material.EXPERIENCE_BOTTLE) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        return meta != null && meta.getPersistentDataContainer().has(keyFilledBottle, PersistentDataType.BYTE);
+    }
+
+    private boolean isFilledBottleOrb(ExperienceOrb orb) {
+        return orb != null && orb.getPersistentDataContainer().has(keyFilledBottleOrb, PersistentDataType.BYTE);
     }
 
     private void syncLoadedLecterns() {
@@ -770,8 +973,8 @@ public final class XpLecternListener implements Listener {
         ItemStack item = new ItemStack(material);
         ItemMeta meta = item.getItemMeta();
         if (meta != null) {
-            meta.displayName(MM.deserialize(name));
-            meta.lore(lore.stream().map(MM::deserialize).toList());
+            meta.displayName(MM.deserialize(MenuItemUtil.visibleMiniName(name)));
+            meta.lore(MenuItemUtil.visibleMiniLore(name, lore).stream().map(MM::deserialize).toList());
             meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
             if (action != null) {
                 meta.getPersistentDataContainer().set(keyMenuAction, PersistentDataType.STRING, action);
@@ -809,7 +1012,7 @@ public final class XpLecternListener implements Listener {
         }
     }
 
-    private record XpLecternMenuHolder(String blockKey) implements InventoryHolder {
+    private record XpLecternMenuHolder(String blockKey) implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;

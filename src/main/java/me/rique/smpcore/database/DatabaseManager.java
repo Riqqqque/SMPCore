@@ -45,13 +45,14 @@ public final class DatabaseManager {
 
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl("jdbc:sqlite:" + dbFile.getAbsolutePath());
-        cfg.setMaximumPoolSize(4);
+        cfg.setMaximumPoolSize(2);
         cfg.setMinimumIdle(1);
         cfg.setConnectionTimeout(20_000);
         cfg.setIdleTimeout(300_000);
         cfg.setMaxLifetime(600_000);
         cfg.setConnectionInitSql(
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; " +
+            "PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; " +
+            "PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; " +
             "PRAGMA cache_size=2000; PRAGMA temp_store=MEMORY;"
         );
 
@@ -64,43 +65,25 @@ public final class DatabaseManager {
         }
     }
 
-    public CompletableFuture<Void> initAsync() {
-        return CompletableFuture.runAsync(() -> {
-            plugin.getDataFolder().mkdirs();
-            File dbFile = new File(plugin.getDataFolder(), "data.db");
-
-            HikariConfig cfg = new HikariConfig();
-            cfg.setJdbcUrl("jdbc:sqlite:" + dbFile.getAbsolutePath());
-            // Do NOT set driverClassName here — the string literal "org.sqlite.JDBC" would
-            // be wrong after Shadow relocates the package. JDBC 4.0 SPI auto-discovers the
-            // driver via META-INF/services/java.sql.Driver (merged by mergeServiceFiles()).
-            cfg.setMaximumPoolSize(4);
-            cfg.setMinimumIdle(1);
-            cfg.setConnectionTimeout(20_000);
-            cfg.setIdleTimeout(300_000);
-            cfg.setMaxLifetime(600_000);
-            // WAL mode for concurrent read+write; NORMAL sync is safe & fast enough
-            cfg.setConnectionInitSql(
-                "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; " +
-                "PRAGMA cache_size=2000; PRAGMA temp_store=MEMORY;"
-            );
-
-            dataSource = new HikariDataSource(cfg);
-            try {
-                createTables();
-            } catch (SQLException e) {
-                if (dataSource != null && !dataSource.isClosed()) dataSource.close();
-                throw new RuntimeException("Failed to create database tables", e);
-            }
-        }, executor);
-    }
-
     public void close() {
         executor.shutdown();
+        boolean terminated = false;
         try {
-            executor.awaitTermination(5, TimeUnit.SECONDS);
+            terminated = executor.awaitTermination(10, TimeUnit.SECONDS);
+            if (!terminated) {
+                List<Runnable> cancelled = executor.shutdownNow();
+                plugin.getLogger().warning("Database executor did not stop within 10 seconds; cancelled "
+                    + cancelled.size() + " queued task(s).");
+                terminated = executor.awaitTermination(5, TimeUnit.SECONDS);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            List<Runnable> cancelled = executor.shutdownNow();
+            plugin.getLogger().warning("Interrupted while stopping the database executor; cancelled "
+                + cancelled.size() + " queued task(s).");
+        }
+        if (!terminated && !executor.isTerminated()) {
+            plugin.getLogger().severe("Database executor is still running while the connection pool is closing; pending writes may have failed.");
         }
         if (dataSource != null && !dataSource.isClosed()) dataSource.close();
     }
@@ -163,7 +146,7 @@ public final class DatabaseManager {
             )""";
 
         String teamMembersByPlayer = """
-            CREATE INDEX IF NOT EXISTS idx_team_members_player
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_team_members_player
             ON team_members(player_uuid)
             """;
 
@@ -184,6 +167,13 @@ public final class DatabaseManager {
             CREATE TABLE IF NOT EXISTS team_vaults (
                 team_name TEXT PRIMARY KEY COLLATE NOCASE,
                 contents  BLOB NOT NULL
+            )""";
+
+        String teamVaultBackups = """
+            CREATE TABLE IF NOT EXISTS team_vault_backups (
+                team_name TEXT PRIMARY KEY COLLATE NOCASE,
+                contents  BLOB NOT NULL,
+                saved_at  INTEGER NOT NULL
             )""";
 
         String waystones = """
@@ -326,6 +316,8 @@ public final class DatabaseManager {
                 boss_fights  INTEGER NOT NULL DEFAULT 0,
                 mob_kills    INTEGER NOT NULL DEFAULT 0,
                 playtime_seconds INTEGER NOT NULL DEFAULT 0,
+                duel_wins    INTEGER NOT NULL DEFAULT 0,
+                duel_bet_wins INTEGER NOT NULL DEFAULT 0,
                 updated_at   INTEGER NOT NULL DEFAULT 0
             )""";
 
@@ -364,6 +356,32 @@ public final class DatabaseManager {
             ON leaderboard_stats(playtime_seconds DESC)
             """;
 
+        String leaderboardDuelWins = """
+            CREATE INDEX IF NOT EXISTS idx_leaderboard_duel_wins
+            ON leaderboard_stats(duel_wins DESC)
+            """;
+
+        String leaderboardDuelBetWins = """
+            CREATE INDEX IF NOT EXISTS idx_leaderboard_duel_bet_wins
+            ON leaderboard_stats(duel_bet_wins DESC)
+            """;
+
+        String tavernStats = """
+            CREATE TABLE IF NOT EXISTS tavern_game_stats (
+                player_uuid TEXT NOT NULL,
+                player_name TEXT NOT NULL,
+                game        TEXT NOT NULL,
+                wins        INTEGER NOT NULL DEFAULT 0,
+                playtime_seconds INTEGER NOT NULL DEFAULT 0,
+                updated_at  INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (player_uuid, game)
+            )""";
+
+        String tavernStatsRanking = """
+            CREATE INDEX IF NOT EXISTS idx_tavern_game_stats_ranking
+            ON tavern_game_stats(game, wins DESC, playtime_seconds DESC)
+            """;
+
         String bossFights = """
             CREATE TABLE IF NOT EXISTS boss_fights (
                 fight_id     TEXT PRIMARY KEY,
@@ -398,16 +416,79 @@ public final class DatabaseManager {
             ON boss_fights(ended_at DESC)
             """;
 
+        String normalEssenceAccounts = """
+            CREATE TABLE IF NOT EXISTS normal_essence_accounts (
+                player_uuid     TEXT PRIMARY KEY,
+                player_name     TEXT NOT NULL,
+                balance         INTEGER NOT NULL DEFAULT 0,
+                lifetime_earned INTEGER NOT NULL DEFAULT 0,
+                mining_progress INTEGER NOT NULL DEFAULT 0,
+                mob_progress    INTEGER NOT NULL DEFAULT 0,
+                xp_progress     INTEGER NOT NULL DEFAULT 0,
+                updated_at      INTEGER NOT NULL DEFAULT 0
+            )""";
+
+        String normalEssenceTransactions = """
+            CREATE TABLE IF NOT EXISTS normal_essence_transactions (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                player_uuid   TEXT NOT NULL,
+                player_name   TEXT NOT NULL,
+                amount        INTEGER NOT NULL,
+                reason        TEXT NOT NULL,
+                balance_after INTEGER NOT NULL,
+                created_at    INTEGER NOT NULL
+            )""";
+
+        String normalEssenceTransactionsByPlayer = """
+            CREATE INDEX IF NOT EXISTS idx_normal_essence_transactions_player
+            ON normal_essence_transactions(player_uuid, created_at DESC)
+            """;
+
+        String normalEssencePvpCooldowns = """
+            CREATE TABLE IF NOT EXISTS normal_essence_pvp_cooldowns (
+                killer_uuid      TEXT NOT NULL,
+                victim_uuid      TEXT NOT NULL,
+                last_rewarded_at INTEGER NOT NULL,
+                PRIMARY KEY (killer_uuid, victim_uuid)
+            )""";
+
+        String storyProfiles = """
+            CREATE TABLE IF NOT EXISTS story_profiles (
+                player_uuid        TEXT PRIMARY KEY,
+                story_version      INTEGER NOT NULL DEFAULT 1,
+                chapter            TEXT NOT NULL DEFAULT 'PROLOGUE',
+                main_stage         TEXT NOT NULL DEFAULT 'PROLOGUE_FIND_MIRA',
+                boss_memories      TEXT NOT NULL DEFAULT '',
+                codex_entries      TEXT NOT NULL DEFAULT '',
+                seen_dialogue      TEXT NOT NULL DEFAULT '',
+                processed_events   TEXT NOT NULL DEFAULT '',
+                story_flags        TEXT NOT NULL DEFAULT '',
+                last_dialogue      TEXT NOT NULL DEFAULT '',
+                awakening_uses     INTEGER NOT NULL DEFAULT 0,
+                corruption_uses    INTEGER NOT NULL DEFAULT 0,
+                corruption_failures INTEGER NOT NULL DEFAULT 0,
+                alignment          TEXT NOT NULL DEFAULT 'UNDECIDED',
+                updated_at         INTEGER NOT NULL DEFAULT 0
+            )""";
+
         try (Connection conn = connection(); Statement stmt = conn.createStatement()) {
             stmt.executeUpdate(spawners);
             stmt.executeUpdate(homes);
             stmt.executeUpdate(players);
             stmt.executeUpdate(teams);
             stmt.executeUpdate(teamMembers);
-            stmt.executeUpdate(teamMembersByPlayer);
             stmt.executeUpdate(teamAllies);
             stmt.executeUpdate(teamAlliesByAlly);
             stmt.executeUpdate(teamVaults);
+            stmt.executeUpdate(teamVaultBackups);
+            stmt.executeUpdate("""
+                INSERT OR IGNORE INTO team_vault_backups (team_name, contents, saved_at)
+                SELECT team_name, contents, CAST(strftime('%s', 'now') AS INTEGER) * 1000
+                FROM team_vaults
+                """);
+            migrateTeamMemberships(conn);
+            stmt.executeUpdate("DROP INDEX IF EXISTS idx_team_members_player");
+            stmt.executeUpdate(teamMembersByPlayer);
             stmt.executeUpdate(waystones);
             stmt.executeUpdate(waystoneNames);
             stmt.executeUpdate(waystoneKnown);
@@ -424,6 +505,8 @@ public final class DatabaseManager {
             stmt.executeUpdate(managedItemEventsBySubject);
             stmt.executeUpdate(managedItemEventsByInstance);
             stmt.executeUpdate(leaderboardStats);
+            stmt.executeUpdate(tavernStats);
+            stmt.executeUpdate(tavernStatsRanking);
             stmt.executeUpdate(leaderboardPlayerKills);
             stmt.executeUpdate(leaderboardDeaths);
             stmt.executeUpdate(leaderboardBossKills);
@@ -432,14 +515,152 @@ public final class DatabaseManager {
             stmt.executeUpdate(bossFightParticipants);
             stmt.executeUpdate(bossFightParticipantsByPlayer);
             stmt.executeUpdate(bossFightsByEndedAt);
+            stmt.executeUpdate(normalEssenceAccounts);
+            stmt.executeUpdate(normalEssenceTransactions);
+            stmt.executeUpdate(normalEssenceTransactionsByPlayer);
+            stmt.executeUpdate(normalEssencePvpCooldowns);
+            stmt.executeUpdate(storyProfiles);
             ensureColumn(conn, "teams", "color", "TEXT NOT NULL DEFAULT 'gold'");
             ensureColumn(conn, "legendary_instances", "source_key", "TEXT");
             ensureColumn(conn, "leaderboard_stats", "boss_damage", "INTEGER NOT NULL DEFAULT 0");
             ensureColumn(conn, "leaderboard_stats", "boss_fights", "INTEGER NOT NULL DEFAULT 0");
             ensureColumn(conn, "leaderboard_stats", "playtime_seconds", "INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(conn, "leaderboard_stats", "duel_wins", "INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(conn, "leaderboard_stats", "duel_bet_wins", "INTEGER NOT NULL DEFAULT 0");
             stmt.executeUpdate(leaderboardBossDamage);
             stmt.executeUpdate(leaderboardBossFights);
             stmt.executeUpdate(leaderboardPlaytime);
+            stmt.executeUpdate(leaderboardDuelWins);
+            stmt.executeUpdate(leaderboardDuelBetWins);
+        }
+    }
+
+    private void migrateTeamMemberships(Connection conn) throws SQLException {
+        boolean oldAutoCommit = conn.getAutoCommit();
+        conn.setAutoCommit(false);
+        try (Statement stmt = conn.createStatement()) {
+            stmt.executeUpdate("""
+                DELETE FROM team_members
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM teams
+                    WHERE teams.name = team_members.team_name COLLATE NOCASE
+                )
+                """);
+
+            stmt.executeUpdate("""
+                INSERT OR IGNORE INTO team_members (team_name, player_uuid)
+                SELECT teams.name, teams.owner_uuid
+                FROM teams
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM team_members
+                    WHERE team_members.team_name = teams.name COLLATE NOCASE
+                      AND team_members.player_uuid = teams.owner_uuid
+                )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM team_members
+                    WHERE team_members.player_uuid = teams.owner_uuid
+                )
+                ORDER BY teams.created_at ASC, lower(teams.name) ASC, teams.name ASC
+                """);
+
+            int duplicateMemberships = stmt.executeUpdate("""
+                DELETE FROM team_members
+                WHERE rowid IN (
+                    SELECT rowid
+                    FROM (
+                        SELECT team_members.rowid AS rowid,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY team_members.player_uuid
+                                   ORDER BY
+                                       CASE WHEN teams.owner_uuid = team_members.player_uuid THEN 0 ELSE 1 END,
+                                       teams.created_at ASC,
+                                       lower(team_members.team_name) ASC,
+                                       team_members.team_name ASC
+                               ) AS membership_rank
+                        FROM team_members
+                        JOIN teams ON teams.name = team_members.team_name COLLATE NOCASE
+                    ) ranked_memberships
+                    WHERE membership_rank > 1
+                )
+                """);
+
+            int reassignedOwners = stmt.executeUpdate("""
+                UPDATE teams
+                SET owner_uuid = (
+                    SELECT team_members.player_uuid
+                    FROM team_members
+                    WHERE team_members.team_name = teams.name COLLATE NOCASE
+                    ORDER BY team_members.player_uuid ASC
+                    LIMIT 1
+                )
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM team_members
+                    WHERE team_members.team_name = teams.name COLLATE NOCASE
+                      AND team_members.player_uuid = teams.owner_uuid
+                )
+                  AND EXISTS (
+                    SELECT 1 FROM team_members
+                    WHERE team_members.team_name = teams.name COLLATE NOCASE
+                )
+                """);
+
+            stmt.executeUpdate("""
+                DELETE FROM team_allies
+                WHERE team_name IN (
+                    SELECT teams.name FROM teams
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM team_members
+                        WHERE team_members.team_name = teams.name COLLATE NOCASE
+                    )
+                )
+                   OR ally_name IN (
+                    SELECT teams.name FROM teams
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM team_members
+                        WHERE team_members.team_name = teams.name COLLATE NOCASE
+                    )
+                )
+                """);
+            stmt.executeUpdate("""
+                DELETE FROM team_vaults
+                WHERE team_name IN (
+                    SELECT teams.name FROM teams
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM team_members
+                        WHERE team_members.team_name = teams.name COLLATE NOCASE
+                    )
+                )
+                """);
+            stmt.executeUpdate("""
+                DELETE FROM team_vault_backups
+                WHERE team_name NOT IN (SELECT name FROM teams)
+                   OR team_name IN (
+                    SELECT teams.name FROM teams
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM team_members
+                        WHERE team_members.team_name = teams.name COLLATE NOCASE
+                    )
+                )
+                """);
+            int emptyTeams = stmt.executeUpdate("""
+                DELETE FROM teams
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM team_members
+                    WHERE team_members.team_name = teams.name COLLATE NOCASE
+                )
+                """);
+
+            conn.commit();
+            if (duplicateMemberships > 0 || reassignedOwners > 0 || emptyTeams > 0) {
+                plugin.getLogger().warning("Repaired team persistence: removed " + duplicateMemberships
+                    + " duplicate membership(s), reassigned " + reassignedOwners
+                    + " owner(s), and removed " + emptyTeams + " empty team(s).");
+            }
+        } catch (SQLException e) {
+            conn.rollback();
+            throw e;
+        } finally {
+            conn.setAutoCommit(oldAutoCommit);
         }
     }
 
@@ -838,23 +1059,64 @@ public final class DatabaseManager {
         }, executor);
     }
 
-    public CompletableFuture<Boolean> createTeam(String name, UUID ownerUuid, String color) {
+    public CompletableFuture<TeamCreateResult> createTeam(String name, UUID ownerUuid, String color) {
         return CompletableFuture.supplyAsync(() -> {
-            String sql = "INSERT INTO teams (name, owner_uuid, color, created_at) VALUES (?, ?, ?, ?)";
-            try (Connection conn = connection();
-                 PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, name);
-                ps.setString(2, ownerUuid.toString());
-                ps.setString(3, color == null || color.isBlank() ? "gold" : color);
-                ps.setLong(4, System.currentTimeMillis());
-                ps.executeUpdate();
-                return true;
+            String insertTeam = "INSERT INTO teams (name, owner_uuid, color, created_at) VALUES (?, ?, ?, ?)";
+            String insertOwner = "INSERT INTO team_members (team_name, player_uuid) VALUES (?, ?)";
+            try (Connection conn = connection()) {
+                boolean oldAutoCommit = conn.getAutoCommit();
+                conn.setAutoCommit(false);
+                try (PreparedStatement psTeam = conn.prepareStatement(insertTeam);
+                     PreparedStatement psOwner = conn.prepareStatement(insertOwner)) {
+                    psTeam.setString(1, name);
+                    psTeam.setString(2, ownerUuid.toString());
+                    psTeam.setString(3, color == null || color.isBlank() ? "gold" : color);
+                    psTeam.setLong(4, System.currentTimeMillis());
+                    psTeam.executeUpdate();
+
+                    psOwner.setString(1, name);
+                    psOwner.setString(2, ownerUuid.toString());
+                    psOwner.executeUpdate();
+                    conn.commit();
+                    return TeamCreateResult.CREATED;
+                } catch (SQLException e) {
+                    conn.rollback();
+                    if (isConstraintViolation(e)) {
+                        if (teamMembershipExists(conn, ownerUuid)) {
+                            return TeamCreateResult.PLAYER_ALREADY_MEMBER;
+                        }
+                        if (teamExists(conn, name)) {
+                            return TeamCreateResult.NAME_EXISTS;
+                        }
+                        return TeamCreateResult.CONFLICT;
+                    }
+                    throw e;
+                } finally {
+                    conn.setAutoCommit(oldAutoCommit);
+                }
             } catch (SQLException e) {
-                if (isConstraintViolation(e)) return false;
                 plugin.getLogger().severe("createTeam: " + e.getMessage());
                 throw new RuntimeException("createTeam failed", e);
             }
         }, executor);
+    }
+
+    private static boolean teamExists(Connection conn, String teamName) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT 1 FROM teams WHERE name=?")) {
+            ps.setString(1, teamName);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    private static boolean teamMembershipExists(Connection conn, UUID playerUuid) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT 1 FROM team_members WHERE player_uuid=? LIMIT 1")) {
+            ps.setString(1, playerUuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
     }
 
     public CompletableFuture<Void> deleteTeam(String name) {
@@ -864,6 +1126,7 @@ public final class DatabaseManager {
                 try (PreparedStatement psMembers = conn.prepareStatement("DELETE FROM team_members WHERE team_name=?");
                      PreparedStatement psAllies = conn.prepareStatement("DELETE FROM team_allies WHERE team_name=? OR ally_name=?");
                      PreparedStatement psVault = conn.prepareStatement("DELETE FROM team_vaults WHERE team_name=?");
+                     PreparedStatement psVaultBackup = conn.prepareStatement("DELETE FROM team_vault_backups WHERE team_name=?");
                      PreparedStatement psTeam = conn.prepareStatement("DELETE FROM teams WHERE name=?")) {
                     psMembers.setString(1, name);
                     psMembers.executeUpdate();
@@ -872,6 +1135,8 @@ public final class DatabaseManager {
                     psAllies.executeUpdate();
                     psVault.setString(1, name);
                     psVault.executeUpdate();
+                    psVaultBackup.setString(1, name);
+                    psVaultBackup.executeUpdate();
                     psTeam.setString(1, name);
                     psTeam.executeUpdate();
                     conn.commit();
@@ -888,50 +1153,131 @@ public final class DatabaseManager {
         }, executor);
     }
 
-    public CompletableFuture<Void> addTeamMember(String teamName, UUID playerUuid) {
-        return CompletableFuture.runAsync(() -> {
-            String sql = "INSERT INTO team_members (team_name, player_uuid) VALUES (?, ?)";
+    public CompletableFuture<Boolean> addTeamMember(String teamName, UUID playerUuid) {
+        return CompletableFuture.supplyAsync(() -> {
+            String sql = """
+                INSERT INTO team_members (team_name, player_uuid)
+                SELECT name, ? FROM teams WHERE name = ?
+                ON CONFLICT DO NOTHING
+                """;
             try (Connection conn = connection();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, teamName);
-                ps.setString(2, playerUuid.toString());
-                ps.executeUpdate();
+                ps.setString(1, playerUuid.toString());
+                ps.setString(2, teamName);
+                if (ps.executeUpdate() > 0) {
+                    return true;
+                }
+                try (PreparedStatement existing = conn.prepareStatement(
+                    "SELECT 1 FROM team_members WHERE team_name=? AND player_uuid=?")) {
+                    existing.setString(1, teamName);
+                    existing.setString(2, playerUuid.toString());
+                    try (ResultSet rs = existing.executeQuery()) {
+                        return rs.next();
+                    }
+                }
             } catch (SQLException e) {
-                if (isConstraintViolation(e)) return;
                 plugin.getLogger().severe("addTeamMember: " + e.getMessage());
                 throw new RuntimeException("addTeamMember failed", e);
             }
         }, executor);
     }
 
-    public CompletableFuture<Void> removeTeamMember(String teamName, UUID playerUuid) {
-        return CompletableFuture.runAsync(() -> {
-            String sql = "DELETE FROM team_members WHERE team_name=? AND player_uuid=?";
-            try (Connection conn = connection();
-                 PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, teamName);
-                ps.setString(2, playerUuid.toString());
-                ps.executeUpdate();
+    public CompletableFuture<TeamLeaveRecord> leaveTeam(String teamName, UUID playerUuid) {
+        return CompletableFuture.supplyAsync(() -> {
+            String deleteMember = "DELETE FROM team_members WHERE team_name=? AND player_uuid=?";
+            String selectOwner = "SELECT owner_uuid FROM teams WHERE name=?";
+            String selectNextOwner = """
+                SELECT player_uuid FROM team_members
+                WHERE team_name=?
+                ORDER BY player_uuid ASC
+                LIMIT 1
+                """;
+            try (Connection conn = connection()) {
+                boolean oldAutoCommit = conn.getAutoCommit();
+                conn.setAutoCommit(false);
+                try {
+                    int removed;
+                    try (PreparedStatement ps = conn.prepareStatement(deleteMember)) {
+                        ps.setString(1, teamName);
+                        ps.setString(2, playerUuid.toString());
+                        removed = ps.executeUpdate();
+                    }
+                    if (removed == 0) {
+                        conn.rollback();
+                        return new TeamLeaveRecord(false, false, null);
+                    }
+
+                    UUID currentOwner = null;
+                    try (PreparedStatement ps = conn.prepareStatement(selectOwner)) {
+                        ps.setString(1, teamName);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            if (rs.next()) {
+                                currentOwner = UUID.fromString(rs.getString("owner_uuid"));
+                            }
+                        }
+                    }
+
+                    UUID nextOwner = null;
+                    try (PreparedStatement ps = conn.prepareStatement(selectNextOwner)) {
+                        ps.setString(1, teamName);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            if (rs.next()) {
+                                nextOwner = UUID.fromString(rs.getString("player_uuid"));
+                            }
+                        }
+                    }
+
+                    if (nextOwner == null || currentOwner == null) {
+                        deleteTeamRows(conn, teamName);
+                        conn.commit();
+                        return new TeamLeaveRecord(true, true, null);
+                    }
+
+                    if (currentOwner.equals(playerUuid)) {
+                        try (PreparedStatement ps = conn.prepareStatement("UPDATE teams SET owner_uuid=? WHERE name=?")) {
+                            ps.setString(1, nextOwner.toString());
+                            ps.setString(2, teamName);
+                            ps.executeUpdate();
+                        }
+                        currentOwner = nextOwner;
+                    }
+
+                    conn.commit();
+                    return new TeamLeaveRecord(true, false, currentOwner);
+                } catch (SQLException | RuntimeException e) {
+                    conn.rollback();
+                    throw e;
+                } finally {
+                    conn.setAutoCommit(oldAutoCommit);
+                }
             } catch (SQLException e) {
-                plugin.getLogger().severe("removeTeamMember: " + e.getMessage());
-                throw new RuntimeException("removeTeamMember failed", e);
+                plugin.getLogger().severe("leaveTeam: " + e.getMessage());
+                throw new RuntimeException("leaveTeam failed", e);
+            } catch (RuntimeException e) {
+                plugin.getLogger().severe("leaveTeam: " + e.getMessage());
+                throw e;
             }
         }, executor);
     }
 
-    public CompletableFuture<Void> setTeamOwner(String teamName, UUID ownerUuid) {
-        return CompletableFuture.runAsync(() -> {
-            String sql = "UPDATE teams SET owner_uuid=? WHERE name=?";
-            try (Connection conn = connection();
-                 PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, ownerUuid.toString());
-                ps.setString(2, teamName);
-                ps.executeUpdate();
-            } catch (SQLException e) {
-                plugin.getLogger().severe("setTeamOwner: " + e.getMessage());
-                throw new RuntimeException("setTeamOwner failed", e);
-            }
-        }, executor);
+    private static void deleteTeamRows(Connection conn, String teamName) throws SQLException {
+        try (PreparedStatement psMembers = conn.prepareStatement("DELETE FROM team_members WHERE team_name=?");
+             PreparedStatement psAllies = conn.prepareStatement("DELETE FROM team_allies WHERE team_name=? OR ally_name=?");
+             PreparedStatement psVault = conn.prepareStatement("DELETE FROM team_vaults WHERE team_name=?");
+             PreparedStatement psVaultBackup = conn.prepareStatement("DELETE FROM team_vault_backups WHERE team_name=?");
+             PreparedStatement psTeam = conn.prepareStatement("DELETE FROM teams WHERE name=?")) {
+            psMembers.setString(1, teamName);
+            psMembers.executeUpdate();
+            psAllies.setString(1, teamName);
+            psAllies.setString(2, teamName);
+            psAllies.executeUpdate();
+            psVault.setString(1, teamName);
+            psVault.executeUpdate();
+            psVaultBackup.setString(1, teamName);
+            psVaultBackup.executeUpdate();
+            psTeam.setString(1, teamName);
+            psTeam.executeUpdate();
+        }
     }
 
     public CompletableFuture<Void> setTeamColor(String teamName, String color) {
@@ -1006,6 +1352,7 @@ public final class DatabaseManager {
                 try (PreparedStatement psTeam = conn.prepareStatement("UPDATE teams SET name=? WHERE name=?");
                      PreparedStatement psMembers = conn.prepareStatement("UPDATE team_members SET team_name=? WHERE team_name=?");
                      PreparedStatement psVault = conn.prepareStatement("UPDATE team_vaults SET team_name=? WHERE team_name=?");
+                     PreparedStatement psVaultBackup = conn.prepareStatement("UPDATE team_vault_backups SET team_name=? WHERE team_name=?");
                      PreparedStatement psAlliesTeam = conn.prepareStatement("UPDATE team_allies SET team_name=? WHERE team_name=?");
                      PreparedStatement psAlliesAlly = conn.prepareStatement("UPDATE team_allies SET ally_name=? WHERE ally_name=?")) {
                     psTeam.setString(1, newName);
@@ -1023,6 +1370,10 @@ public final class DatabaseManager {
                     psVault.setString(1, newName);
                     psVault.setString(2, oldName);
                     psVault.executeUpdate();
+
+                    psVaultBackup.setString(1, newName);
+                    psVaultBackup.setString(2, oldName);
+                    psVaultBackup.executeUpdate();
 
                     psAlliesTeam.setString(1, newName);
                     psAlliesTeam.setString(2, oldName);
@@ -1052,18 +1403,27 @@ public final class DatabaseManager {
 
     // ── Player Queries ────────────────────────────────────────────────────────
 
-    public CompletableFuture<byte[]> loadTeamVault(String teamName) {
+    public CompletableFuture<TeamVaultSnapshot> loadTeamVault(String teamName) {
         return CompletableFuture.supplyAsync(() -> {
-            String sql = "SELECT contents FROM team_vaults WHERE team_name=?";
+            String sql = """
+                SELECT
+                    (SELECT contents FROM team_vaults WHERE team_name=?) AS contents,
+                    (SELECT contents FROM team_vault_backups WHERE team_name=?) AS backup_contents
+                """;
             try (Connection conn = connection();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, teamName);
+                ps.setString(2, teamName);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) {
-                        return new byte[0];
+                        return new TeamVaultSnapshot(new byte[0], new byte[0]);
                     }
                     byte[] raw = rs.getBytes("contents");
-                    return raw == null ? new byte[0] : raw;
+                    byte[] backup = rs.getBytes("backup_contents");
+                    return new TeamVaultSnapshot(
+                        raw == null ? new byte[0] : raw,
+                        backup == null ? new byte[0] : backup
+                    );
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe("loadTeamVault: " + e.getMessage());
@@ -1074,22 +1434,67 @@ public final class DatabaseManager {
 
     public CompletableFuture<Void> saveTeamVault(String teamName, byte[] contents) {
         return CompletableFuture.runAsync(() -> {
-            String sql = """
+            byte[] safeContents = contents == null ? new byte[0] : contents;
+            String saveSql = """
                 INSERT INTO team_vaults (team_name, contents)
                 VALUES (?, ?)
                 ON CONFLICT(team_name) DO UPDATE SET
                     contents = excluded.contents
+                WHERE team_vaults.contents <> excluded.contents
                 """;
-            try (Connection conn = connection();
-                 PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, teamName);
-                ps.setBytes(2, contents == null ? new byte[0] : contents);
-                ps.executeUpdate();
+            String backupSql = """
+                INSERT INTO team_vault_backups (team_name, contents, saved_at)
+                SELECT team_name, contents, ?
+                FROM team_vaults
+                WHERE team_name=? AND contents <> ?
+                ON CONFLICT(team_name) DO UPDATE SET
+                    contents = excluded.contents,
+                    saved_at = excluded.saved_at
+                """;
+            String seedBackupSql = """
+                INSERT OR IGNORE INTO team_vault_backups (team_name, contents, saved_at)
+                SELECT team_name, contents, ?
+                FROM team_vaults
+                WHERE team_name=?
+                """;
+            try (Connection conn = connection()) {
+                boolean oldAutoCommit = conn.getAutoCommit();
+                conn.setAutoCommit(false);
+                try (PreparedStatement seedBackup = conn.prepareStatement(seedBackupSql);
+                     PreparedStatement backup = conn.prepareStatement(backupSql);
+                     PreparedStatement save = conn.prepareStatement(saveSql)) {
+                    long now = System.currentTimeMillis();
+                    seedBackup.setLong(1, now);
+                    seedBackup.setString(2, teamName);
+                    seedBackup.executeUpdate();
+
+                    backup.setLong(1, now);
+                    backup.setString(2, teamName);
+                    backup.setBytes(3, safeContents);
+                    backup.executeUpdate();
+
+                    save.setString(1, teamName);
+                    save.setBytes(2, safeContents);
+                    save.executeUpdate();
+                    conn.commit();
+                } catch (SQLException | RuntimeException e) {
+                    conn.rollback();
+                    throw e;
+                } finally {
+                    conn.setAutoCommit(oldAutoCommit);
+                }
             } catch (SQLException e) {
                 plugin.getLogger().severe("saveTeamVault: " + e.getMessage());
                 throw new RuntimeException("saveTeamVault failed", e);
             }
         }, executor);
+    }
+
+    public record TeamVaultSnapshot(byte[] contents, byte[] backupContents) {
+        public TeamVaultSnapshot {
+            contents = contents == null ? new byte[0] : contents;
+            backupContents = backupContents == null ? new byte[0] : backupContents;
+        }
     }
 
     public CompletableFuture<Void> deleteTeamVault(String teamName) {
@@ -1518,6 +1923,33 @@ public final class DatabaseManager {
         }, executor);
     }
 
+    public CompletableFuture<Set<String>> loadConsumedManagedItemInstanceIds() {
+        return CompletableFuture.supplyAsync(() -> {
+            Set<String> instanceIds = new HashSet<>();
+            String sql = """
+                SELECT DISTINCT instance_id
+                FROM managed_item_events
+                WHERE event_type IN ('consumed', 'consumed_again')
+                  AND instance_id IS NOT NULL
+                  AND instance_id <> ''
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql);
+                 ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String instanceId = rs.getString("instance_id");
+                    if (instanceId != null && !instanceId.isBlank()) {
+                        instanceIds.add(instanceId);
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadConsumedManagedItemInstanceIds: " + e.getMessage());
+                throw new RuntimeException("loadConsumedManagedItemInstanceIds failed", e);
+            }
+            return instanceIds;
+        }, executor);
+    }
+
     public CompletableFuture<Void> saveManagedItemInstance(ManagedItemInstanceRecord record) {
         return CompletableFuture.runAsync(() -> {
             if (record == null || record.instanceId() == null || record.instanceId().isBlank() || record.itemKey() == null || record.itemKey().isBlank()) {
@@ -1604,21 +2036,24 @@ public final class DatabaseManager {
                        actor_uuid, actor_name, event_type, method, details
                 FROM managed_item_events
                 WHERE subject_uuid = ?
-                  AND (? IS NULL OR item_key = ?)
+                  AND (? IS NULL OR item_key = ? OR instance_id = ?)
                 ORDER BY logged_at DESC, id DESC
                 LIMIT ?
                 """;
             try (Connection conn = connection();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, subjectUuid.toString());
-                if (itemKeyFilter == null || itemKeyFilter.isBlank()) {
+                String filter = itemKeyFilter == null || itemKeyFilter.isBlank() ? null : itemKeyFilter;
+                if (filter == null) {
                     ps.setNull(2, Types.VARCHAR);
                     ps.setNull(3, Types.VARCHAR);
+                    ps.setNull(4, Types.VARCHAR);
                 } else {
-                    ps.setString(2, itemKeyFilter);
-                    ps.setString(3, itemKeyFilter);
+                    ps.setString(2, filter);
+                    ps.setString(3, filter);
+                    ps.setString(4, filter);
                 }
-                ps.setInt(4, Math.max(1, limit));
+                ps.setInt(5, Math.max(1, limit));
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         records.add(new ManagedItemEventRecord(
@@ -1671,6 +2106,119 @@ public final class DatabaseManager {
                 throw new RuntimeException("incrementLeaderboardStat failed", e);
             }
         }, executor);
+    }
+
+    public CompletableFuture<Void> incrementTavernStat(UUID playerUuid, String playerName, String game, int wins, long playtimeSeconds) {
+        return CompletableFuture.runAsync(() -> {
+            String safeGame = tavernGame(game);
+            if (playerUuid == null || safeGame == null || (wins <= 0 && playtimeSeconds <= 0)) return;
+            String safeName = playerName == null || playerName.isBlank() ? "Unknown" : playerName;
+            String sql = """
+                INSERT INTO tavern_game_stats (player_uuid, player_name, game, wins, playtime_seconds, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(player_uuid, game) DO UPDATE SET
+                    player_name = excluded.player_name,
+                    wins = tavern_game_stats.wins + excluded.wins,
+                    playtime_seconds = tavern_game_stats.playtime_seconds + excluded.playtime_seconds,
+                    updated_at = excluded.updated_at
+                """;
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, playerUuid.toString());
+                ps.setString(2, safeName);
+                ps.setString(3, safeGame);
+                ps.setInt(4, Math.max(0, wins));
+                ps.setLong(5, Math.max(0L, playtimeSeconds));
+                ps.setLong(6, System.currentTimeMillis());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("incrementTavernStat: " + e.getMessage());
+                throw new RuntimeException("incrementTavernStat failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<List<LeaderboardEntry>> loadTavernLeaderboard(String game, String statistic, int limit) {
+        return CompletableFuture.supplyAsync(() -> {
+            List<LeaderboardEntry> records = new ArrayList<>();
+            String safeGame = tavernGame(game);
+            String column = "wins".equalsIgnoreCase(statistic) ? "wins"
+                : "playtime".equalsIgnoreCase(statistic) ? "playtime_seconds" : null;
+            if (safeGame == null || column == null) return records;
+            String sql = "SELECT player_uuid, player_name, " + column + " AS value FROM tavern_game_stats "
+                + "WHERE game = ? AND " + column + " > 0 ORDER BY " + column + " DESC, updated_at ASC LIMIT ?";
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, safeGame);
+                ps.setInt(2, Math.max(1, Math.min(25, limit)));
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) records.add(new LeaderboardEntry(parseUuid(rs.getString("player_uuid")), rs.getString("player_name"), rs.getLong("value")));
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadTavernLeaderboard: " + e.getMessage());
+                throw new RuntimeException("loadTavernLeaderboard failed", e);
+            }
+            return records;
+        }, executor);
+    }
+
+    public CompletableFuture<List<TavernLeaderboardEntry>> loadOverallTavernLeaderboard(int limit) {
+        return CompletableFuture.supplyAsync(() -> {
+            List<TavernLeaderboardEntry> records = new ArrayList<>();
+            String sql = """
+                SELECT player_uuid, MAX(player_name) AS player_name, SUM(wins) AS wins,
+                       SUM(playtime_seconds) AS playtime_seconds
+                FROM tavern_game_stats
+                GROUP BY player_uuid
+                HAVING SUM(wins) > 0 OR SUM(playtime_seconds) > 0
+                ORDER BY wins DESC, playtime_seconds DESC, player_name COLLATE NOCASE ASC
+                LIMIT ?
+                """;
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setInt(1, Math.max(1, Math.min(25, limit)));
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) records.add(new TavernLeaderboardEntry(
+                        parseUuid(rs.getString("player_uuid")), rs.getString("player_name"),
+                        rs.getLong("wins"), rs.getLong("playtime_seconds")));
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadOverallTavernLeaderboard: " + e.getMessage());
+                throw new RuntimeException("loadOverallTavernLeaderboard failed", e);
+            }
+            return records;
+        }, executor);
+    }
+
+    public CompletableFuture<List<TavernLeaderboardEntry>> loadTavernGameLeaderboard(String game, int limit) {
+        return CompletableFuture.supplyAsync(() -> {
+            List<TavernLeaderboardEntry> records = new ArrayList<>();
+            String safeGame = tavernGame(game);
+            if (safeGame == null) return records;
+            String sql = """
+                SELECT player_uuid, player_name, wins, playtime_seconds
+                FROM tavern_game_stats
+                WHERE game = ? AND (wins > 0 OR playtime_seconds > 0)
+                ORDER BY wins DESC, playtime_seconds DESC, player_name COLLATE NOCASE ASC
+                LIMIT ?
+                """;
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, safeGame);
+                ps.setInt(2, Math.max(1, Math.min(25, limit)));
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) records.add(new TavernLeaderboardEntry(parseUuid(rs.getString("player_uuid")), rs.getString("player_name"), rs.getLong("wins"), rs.getLong("playtime_seconds")));
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadTavernGameLeaderboard: " + e.getMessage());
+                throw new RuntimeException("loadTavernGameLeaderboard failed", e);
+            }
+            return records;
+        }, executor);
+    }
+
+    private static String tavernGame(String game) {
+        if (game == null) return null;
+        return switch (game.toLowerCase(Locale.ROOT)) {
+            case "slots", "cards", "darts" -> game.toLowerCase(Locale.ROOT);
+            default -> null;
+        };
     }
 
     public CompletableFuture<List<LeaderboardEntry>> loadLeaderboard(String statColumn, int limit) {
@@ -1789,6 +2337,8 @@ public final class DatabaseManager {
             case "boss_fights", "bossfights", "fights" -> "boss_fights";
             case "mob_kills", "mobs" -> "mob_kills";
             case "playtime_seconds", "playtime", "time_played", "timeplayed" -> "playtime_seconds";
+            case "duel_wins", "duelwins", "duels" -> "duel_wins";
+            case "duel_bet_wins", "duelbetwins", "betwins", "bets" -> "duel_bet_wins";
             default -> null;
         };
     }
@@ -1919,6 +2469,361 @@ public final class DatabaseManager {
         }, executor);
     }
 
+    public CompletableFuture<Optional<StoryProfileRecord>> loadStoryProfile(UUID playerUuid) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (playerUuid == null) return Optional.empty();
+            String sql = """
+                SELECT player_uuid, story_version, chapter, main_stage, boss_memories, codex_entries,
+                       seen_dialogue, processed_events, story_flags, last_dialogue, awakening_uses,
+                       corruption_uses, corruption_failures, alignment, updated_at
+                FROM story_profiles
+                WHERE player_uuid = ?
+                """;
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, playerUuid.toString());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) return Optional.empty();
+                    return Optional.of(new StoryProfileRecord(
+                        playerUuid,
+                        rs.getInt("story_version"),
+                        rs.getString("chapter"),
+                        rs.getString("main_stage"),
+                        rs.getString("boss_memories"),
+                        rs.getString("codex_entries"),
+                        rs.getString("seen_dialogue"),
+                        rs.getString("processed_events"),
+                        rs.getString("story_flags"),
+                        rs.getString("last_dialogue"),
+                        rs.getInt("awakening_uses"),
+                        rs.getInt("corruption_uses"),
+                        rs.getInt("corruption_failures"),
+                        rs.getString("alignment"),
+                        rs.getLong("updated_at")
+                    ));
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadStoryProfile: " + e.getMessage());
+                throw new RuntimeException("loadStoryProfile failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Void> saveStoryProfile(StoryProfileRecord record) {
+        return CompletableFuture.runAsync(() -> {
+            if (record == null || record.playerUuid() == null) return;
+            String sql = """
+                INSERT INTO story_profiles (
+                    player_uuid, story_version, chapter, main_stage, boss_memories, codex_entries,
+                    seen_dialogue, processed_events, story_flags, last_dialogue, awakening_uses,
+                    corruption_uses, corruption_failures, alignment, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(player_uuid) DO UPDATE SET
+                    story_version = excluded.story_version,
+                    chapter = excluded.chapter,
+                    main_stage = excluded.main_stage,
+                    boss_memories = excluded.boss_memories,
+                    codex_entries = excluded.codex_entries,
+                    seen_dialogue = excluded.seen_dialogue,
+                    processed_events = excluded.processed_events,
+                    story_flags = excluded.story_flags,
+                    last_dialogue = excluded.last_dialogue,
+                    awakening_uses = excluded.awakening_uses,
+                    corruption_uses = excluded.corruption_uses,
+                    corruption_failures = excluded.corruption_failures,
+                    alignment = excluded.alignment,
+                    updated_at = excluded.updated_at
+                """;
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, record.playerUuid().toString());
+                ps.setInt(2, Math.max(0, record.storyVersion()));
+                ps.setString(3, record.chapter());
+                ps.setString(4, record.mainStage());
+                ps.setString(5, record.bossMemories());
+                ps.setString(6, record.codexEntries());
+                ps.setString(7, record.seenDialogue());
+                ps.setString(8, record.processedEvents());
+                ps.setString(9, record.storyFlags());
+                ps.setString(10, record.lastDialogue());
+                ps.setInt(11, Math.max(0, record.awakeningUses()));
+                ps.setInt(12, Math.max(0, record.corruptionUses()));
+                ps.setInt(13, Math.max(0, record.corruptionFailures()));
+                ps.setString(14, record.alignment());
+                ps.setLong(15, Math.max(0L, record.updatedAt()));
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("saveStoryProfile: " + e.getMessage());
+                throw new RuntimeException("saveStoryProfile failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Void> deleteStoryProfile(UUID playerUuid) {
+        return CompletableFuture.runAsync(() -> {
+            if (playerUuid == null) return;
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(
+                "DELETE FROM story_profiles WHERE player_uuid = ?")) {
+                ps.setString(1, playerUuid.toString());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("deleteStoryProfile: " + e.getMessage());
+                throw new RuntimeException("deleteStoryProfile failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Set<String>> loadSuccessfulBossIds(UUID playerUuid) {
+        return CompletableFuture.supplyAsync(() -> {
+            Set<String> bossIds = new LinkedHashSet<>();
+            if (playerUuid == null) return bossIds;
+            String sql = """
+                SELECT DISTINCT f.boss_id
+                FROM boss_fight_participants p
+                JOIN boss_fights f ON f.fight_id = p.fight_id
+                WHERE p.player_uuid = ? AND LOWER(f.outcome) = 'victory'
+                """;
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, playerUuid.toString());
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        String bossId = rs.getString("boss_id");
+                        if (bossId != null && !bossId.isBlank()) bossIds.add(bossId.trim().toLowerCase(Locale.ROOT));
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadSuccessfulBossIds: " + e.getMessage());
+                throw new RuntimeException("loadSuccessfulBossIds failed", e);
+            }
+            return bossIds;
+        }, executor);
+    }
+
+    public CompletableFuture<Map<UUID, Map<String, Integer>>> loadAllSuccessfulBossCounts() {
+        return CompletableFuture.supplyAsync(() -> {
+            Map<UUID, Map<String, Integer>> counts = new LinkedHashMap<>();
+            String sql = """
+                SELECT p.player_uuid, f.boss_id, COUNT(DISTINCT f.fight_id) AS victories
+                FROM boss_fight_participants p
+                JOIN boss_fights f ON f.fight_id = p.fight_id
+                WHERE LOWER(f.outcome) = 'victory'
+                GROUP BY p.player_uuid, f.boss_id
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql);
+                 ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String rawUuid = rs.getString("player_uuid");
+                    String rawBossId = rs.getString("boss_id");
+                    if (rawUuid == null || rawBossId == null || rawBossId.isBlank()) continue;
+                    try {
+                        UUID playerId = UUID.fromString(rawUuid);
+                        counts.computeIfAbsent(playerId, ignored -> new LinkedHashMap<>())
+                            .put(rawBossId.trim().toLowerCase(Locale.ROOT), Math.max(0, rs.getInt("victories")));
+                    } catch (IllegalArgumentException ignored) {
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadAllSuccessfulBossCounts: " + e.getMessage());
+                throw new RuntimeException("loadAllSuccessfulBossCounts failed", e);
+            }
+            return counts;
+        }, executor);
+    }
+
+    public CompletableFuture<EssenceAccountRecord> loadEssenceAccount(UUID playerUuid, String playerName) {
+        return CompletableFuture.supplyAsync(() -> {
+            String safeName = safePlayerName(playerName);
+            long now = System.currentTimeMillis();
+            String upsert = """
+                INSERT INTO normal_essence_accounts (player_uuid, player_name, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(player_uuid) DO UPDATE SET
+                    player_name = excluded.player_name,
+                    updated_at = CASE
+                        WHEN normal_essence_accounts.updated_at >= excluded.updated_at
+                            THEN normal_essence_accounts.updated_at + 1
+                        ELSE excluded.updated_at
+                    END
+                """;
+            String select = """
+                SELECT player_uuid, player_name, balance, lifetime_earned,
+                       mining_progress, mob_progress, xp_progress, updated_at
+                FROM normal_essence_accounts
+                WHERE player_uuid = ?
+                """;
+            try (Connection conn = connection()) {
+                try (PreparedStatement ps = conn.prepareStatement(upsert)) {
+                    ps.setString(1, playerUuid.toString());
+                    ps.setString(2, safeName);
+                    ps.setLong(3, now);
+                    ps.executeUpdate();
+                }
+                try (PreparedStatement ps = conn.prepareStatement(select)) {
+                    ps.setString(1, playerUuid.toString());
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) {
+                            return essenceAccountFromRs(rs);
+                        }
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadEssenceAccount: " + e.getMessage());
+                throw new RuntimeException("loadEssenceAccount failed", e);
+            }
+            return new EssenceAccountRecord(playerUuid, safeName, 0L, 0L, 0, 0, 0, now);
+        }, executor);
+    }
+
+    public CompletableFuture<Boolean> saveEssenceAccount(EssenceAccountRecord record) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (record == null || record.playerUuid() == null) {
+                return false;
+            }
+            String sql = """
+                INSERT INTO normal_essence_accounts (
+                    player_uuid, player_name, balance, lifetime_earned,
+                    mining_progress, mob_progress, xp_progress, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(player_uuid) DO UPDATE SET
+                    player_name = excluded.player_name,
+                    balance = excluded.balance,
+                    lifetime_earned = excluded.lifetime_earned,
+                    mining_progress = excluded.mining_progress,
+                    mob_progress = excluded.mob_progress,
+                    xp_progress = excluded.xp_progress,
+                    updated_at = excluded.updated_at
+                WHERE excluded.updated_at > normal_essence_accounts.updated_at
+                """;
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                EssenceAccountRecord normalized = normalizedEssenceRecord(record);
+                ps.setString(1, normalized.playerUuid().toString());
+                ps.setString(2, normalized.playerName());
+                ps.setLong(3, normalized.balance());
+                ps.setLong(4, normalized.lifetimeEarned());
+                ps.setInt(5, normalized.miningProgress());
+                ps.setInt(6, normalized.mobProgress());
+                ps.setInt(7, normalized.xpProgress());
+                ps.setLong(8, normalized.updatedAt());
+                return ps.executeUpdate() > 0 || essenceSnapshotMatches(conn, normalized);
+            } catch (SQLException e) {
+                plugin.getLogger().severe("saveEssenceAccount: " + e.getMessage());
+                throw new RuntimeException("saveEssenceAccount failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Optional<EssenceAccountRecord>> loadEssenceAccountByName(String playerName) {
+        return CompletableFuture.supplyAsync(() -> {
+            String safeName = playerName == null ? "" : playerName.trim();
+            if (safeName.isBlank()) {
+                return Optional.empty();
+            }
+            String sql = """
+                SELECT player_uuid, player_name, balance, lifetime_earned,
+                       mining_progress, mob_progress, xp_progress, updated_at
+                FROM normal_essence_accounts
+                WHERE lower(player_name) = lower(?)
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """;
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, safeName);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return Optional.of(essenceAccountFromRs(rs));
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadEssenceAccountByName: " + e.getMessage());
+                throw new RuntimeException("loadEssenceAccountByName failed", e);
+            }
+            return Optional.empty();
+        }, executor);
+    }
+
+    public CompletableFuture<List<String>> suggestEssenceAccountNames(String prefix, int limit) {
+        return CompletableFuture.supplyAsync(() -> {
+            String safePrefix = prefix == null ? "" : prefix.trim().toLowerCase(Locale.ROOT);
+            int safeLimit = Math.max(1, Math.min(limit, 40));
+            List<String> names = new ArrayList<>();
+            String sql = """
+                SELECT player_name
+                FROM normal_essence_accounts
+                WHERE lower(player_name) LIKE ? ESCAPE '\\'
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """;
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, escapeLikePrefix(safePrefix) + "%");
+                ps.setInt(2, safeLimit);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        String name = rs.getString("player_name");
+                        if (name != null && !name.isBlank()) {
+                            names.add(name);
+                        }
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("suggestEssenceAccountNames: " + e.getMessage());
+                throw new RuntimeException("suggestEssenceAccountNames failed", e);
+            }
+            return names;
+        }, executor);
+    }
+
+    public CompletableFuture<Void> logEssenceTransaction(UUID playerUuid, String playerName, long amount, String reason, long balanceAfter) {
+        return CompletableFuture.runAsync(() -> {
+            if (playerUuid == null || amount == 0L) {
+                return;
+            }
+            String sql = """
+                INSERT INTO normal_essence_transactions (
+                    player_uuid, player_name, amount, reason, balance_after, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """;
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, playerUuid.toString());
+                ps.setString(2, safePlayerName(playerName));
+                ps.setLong(3, amount);
+                ps.setString(4, reason == null || reason.isBlank() ? "unknown" : reason);
+                ps.setLong(5, Math.max(0L, balanceAfter));
+                ps.setLong(6, System.currentTimeMillis());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe("logEssenceTransaction: " + e.getMessage());
+                throw new RuntimeException("logEssenceTransaction failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Boolean> claimEssencePvpReward(UUID killerUuid, UUID victimUuid, long now, long cooldownMillis) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (killerUuid == null || victimUuid == null || killerUuid.equals(victimUuid)) {
+                return false;
+            }
+            String upsert = """
+                INSERT INTO normal_essence_pvp_cooldowns (killer_uuid, victim_uuid, last_rewarded_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(killer_uuid, victim_uuid) DO UPDATE SET
+                    last_rewarded_at = excluded.last_rewarded_at
+                WHERE normal_essence_pvp_cooldowns.last_rewarded_at
+                    <= excluded.last_rewarded_at - ?
+                """;
+            try (Connection conn = connection(); PreparedStatement ps = conn.prepareStatement(upsert)) {
+                ps.setString(1, killerUuid.toString());
+                ps.setString(2, victimUuid.toString());
+                ps.setLong(3, Math.max(0L, now));
+                ps.setLong(4, Math.max(0L, cooldownMillis));
+                return ps.executeUpdate() > 0;
+            } catch (SQLException e) {
+                plugin.getLogger().severe("claimEssencePvpReward: " + e.getMessage());
+                throw new RuntimeException("claimEssencePvpReward failed", e);
+            }
+        }, executor);
+    }
+
     /** Upsert a player record; returns the join count AFTER this visit. */
     public CompletableFuture<Integer> upsertPlayer(UUID uuid, String username) {
         return CompletableFuture.supplyAsync(() -> {
@@ -1999,6 +2904,62 @@ public final class DatabaseManager {
         }, executor);
     }
 
+    private static EssenceAccountRecord essenceAccountFromRs(ResultSet rs) throws SQLException {
+        return new EssenceAccountRecord(
+            UUID.fromString(rs.getString("player_uuid")),
+            rs.getString("player_name"),
+            Math.max(0L, rs.getLong("balance")),
+            Math.max(0L, rs.getLong("lifetime_earned")),
+            Math.max(0, rs.getInt("mining_progress")),
+            Math.max(0, rs.getInt("mob_progress")),
+            Math.max(0, rs.getInt("xp_progress")),
+            Math.max(0L, rs.getLong("updated_at"))
+        );
+    }
+
+    private static EssenceAccountRecord normalizedEssenceRecord(EssenceAccountRecord record) {
+        return new EssenceAccountRecord(
+            record.playerUuid(),
+            safePlayerName(record.playerName()),
+            Math.max(0L, record.balance()),
+            Math.max(0L, record.lifetimeEarned()),
+            Math.max(0, record.miningProgress()),
+            Math.max(0, record.mobProgress()),
+            Math.max(0, record.xpProgress()),
+            Math.max(0L, record.updatedAt())
+        );
+    }
+
+    private static boolean essenceSnapshotMatches(Connection conn, EssenceAccountRecord expected) throws SQLException {
+        String sql = """
+            SELECT player_name, balance, lifetime_earned,
+                   mining_progress, mob_progress, xp_progress, updated_at
+            FROM normal_essence_accounts
+            WHERE player_uuid = ?
+            """;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, expected.playerUuid().toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next()
+                    && Objects.equals(rs.getString("player_name"), expected.playerName())
+                    && rs.getLong("balance") == expected.balance()
+                    && rs.getLong("lifetime_earned") == expected.lifetimeEarned()
+                    && rs.getInt("mining_progress") == expected.miningProgress()
+                    && rs.getInt("mob_progress") == expected.mobProgress()
+                    && rs.getInt("xp_progress") == expected.xpProgress()
+                    && rs.getLong("updated_at") == expected.updatedAt();
+            }
+        }
+    }
+
+    private static String safePlayerName(String playerName) {
+        return playerName == null || playerName.isBlank() ? "Unknown" : playerName;
+    }
+
+    private static String escapeLikePrefix(String input) {
+        return input.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+    }
+
     private static void setUuid(PreparedStatement ps, int index, UUID uuid) throws SQLException {
         if (uuid == null) {
             ps.setNull(index, Types.VARCHAR);
@@ -2051,6 +3012,7 @@ public final class DatabaseManager {
         String details
     ) {}
     public record LeaderboardEntry(UUID playerUuid, String playerName, long value) {}
+    public record TavernLeaderboardEntry(UUID playerUuid, String playerName, long wins, long playtimeSeconds) {}
     public record LeaderboardStatsRecord(
         UUID playerUuid,
         String playerName,
@@ -2095,6 +3057,44 @@ public final class DatabaseManager {
         double healingReceived,
         int rank
     ) {}
+    public record StoryProfileRecord(
+        UUID playerUuid,
+        int storyVersion,
+        String chapter,
+        String mainStage,
+        String bossMemories,
+        String codexEntries,
+        String seenDialogue,
+        String processedEvents,
+        String storyFlags,
+        String lastDialogue,
+        int awakeningUses,
+        int corruptionUses,
+        int corruptionFailures,
+        String alignment,
+        long updatedAt
+    ) {}
+    public record EssenceAccountRecord(
+        UUID playerUuid,
+        String playerName,
+        long balance,
+        long lifetimeEarned,
+        int miningProgress,
+        int mobProgress,
+        int xpProgress,
+        long updatedAt
+    ) {}
+    public record TeamLeaveRecord(
+        boolean membershipRemoved,
+        boolean teamDeleted,
+        UUID ownerUuid
+    ) {}
+    public enum TeamCreateResult {
+        CREATED,
+        NAME_EXISTS,
+        PLAYER_ALREADY_MEMBER,
+        CONFLICT
+    }
     public record LegendaryAltarRecord(
         String legendaryId,
         String world,

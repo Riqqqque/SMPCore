@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "smpcore:item/first_dragon_sigil"
+  }
+}

@@ -1,5 +1,6 @@
 package me.rique.smpcore.shop;
 
+import io.papermc.paper.event.player.PlayerOpenSignEvent;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.MessageUtil;
@@ -38,13 +39,16 @@ import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.inventory.meta.EnchantmentStorageMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -54,6 +58,7 @@ public final class PlayerShopListener implements Listener {
 
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final String SHOP_HEADER = "[shop]";
+    private static final String SHOP_HEADER_ALIAS = "[shops]";
     private static final String ADMIN_SHOP_HEADER = "[adminshop]";
     private static final String ADMIN_SHOP_SHORT_HEADER = "[ashop]";
     private static final Set<Material> CHEST_TYPES = Set.of(Material.CHEST, Material.TRAPPED_CHEST);
@@ -70,6 +75,8 @@ public final class PlayerShopListener implements Listener {
     private final NamespacedKey keyPrice;
     private final NamespacedKey keyCurrency;
     private final NamespacedKey keyAdminShop;
+    private final ShopPaymentLedger paymentLedger;
+    private final Set<String> activeTransactions = new HashSet<>();
 
     public PlayerShopListener(SMPCore plugin) {
         this.plugin = plugin;
@@ -84,16 +91,48 @@ public final class PlayerShopListener implements Listener {
         this.keyPrice = new NamespacedKey(plugin, "player_shop_price");
         this.keyCurrency = new NamespacedKey(plugin, "player_shop_currency");
         this.keyAdminShop = new NamespacedKey(plugin, "player_shop_admin");
+        this.paymentLedger = new ShopPaymentLedger(plugin);
+    }
+
+    public void start() {
+        paymentLedger.start();
+    }
+
+    public void shutdown() {
+        paymentLedger.shutdown();
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
+    public void onLegacyShopInteract(PlayerInteractEvent event) {
+        if (!plugin.getConfigManager().playerShopsEnabled
+            || event.getAction() != Action.RIGHT_CLICK_BLOCK
+            || event.getHand() != EquipmentSlot.HAND
+            || event.getClickedBlock() == null
+            || isShopSign(event.getClickedBlock())
+            || isMarketPurchaseSign(event.getClickedBlock())) {
+            return;
+        }
+        MarketStallManager stalls = plugin.getMarketStallManager();
+        if (stalls != null) {
+            stalls.tryRecoverLegacyShopSign(event.getClickedBlock());
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onSignChange(SignChangeEvent event) {
+        if (isShopSign(event.getBlock()) || isMarketPurchaseSign(event.getBlock())) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage(MessageUtil.warn(isMarketPurchaseSign(event.getBlock())
+                ? "That market sign is managed by the server."
+                : "Break and recreate the shop to change its sign."));
+            return;
+        }
         if (!plugin.getConfigManager().playerShopsEnabled) {
             return;
         }
         String header = cleanLine(eventLine(event, 0));
         boolean adminShop = isAdminShopHeader(header);
-        if (!SHOP_HEADER.equalsIgnoreCase(header) && !adminShop) {
+        if (!isPlayerShopHeader(header) && !adminShop) {
             return;
         }
         Player player = event.getPlayer();
@@ -114,10 +153,29 @@ public final class PlayerShopListener implements Listener {
         }
 
         Block signBlock = event.getBlock();
+        if (isMarketPurchaseSign(signBlock)) {
+            event.setCancelled(true);
+            player.sendMessage(MessageUtil.warn("That sign is reserved for purchasing the market stall."));
+            return;
+        }
         Block chestBlock = attachedChestBlock(signBlock);
         if (chestBlock == null) {
             markSignError(event, "Attach to chest");
             player.sendMessage(MessageUtil.warn("Attach the shop sign to the front of a chest or double chest."));
+            return;
+        }
+        if (plugin.getMarketStallManager() != null
+            && !plugin.getMarketStallManager().canCreateShopAt(player, chestBlock, signBlock)) {
+            markSignError(event, "Use your chest");
+            player.sendMessage(MessageUtil.warn("Inside a stall you manage, attach a wall sign directly to a chest or trapped chest."));
+            return;
+        }
+        MarketStallManager.ShopIdentity shopOwner = plugin.getMarketStallManager() == null
+            ? new MarketStallManager.ShopIdentity(player.getUniqueId(), player.getName())
+            : plugin.getMarketStallManager().shopIdentityFor(player, chestBlock, signBlock);
+        if (shopOwner == null) {
+            markSignError(event, "No stall access");
+            player.sendMessage(MessageUtil.warn("You no longer have permission to manage this stall."));
             return;
         }
         if (isShopChest(chestBlock) || isShopSign(signBlock)) {
@@ -131,7 +189,7 @@ public final class PlayerShopListener implements Listener {
         Integer amount = parseLeadingInt(eventLine(event, 2));
         if (currency == null || price == null || price <= 0) {
             markSignError(event, "Bad price");
-            player.sendMessage(MessageUtil.warn("Line 4 must be like: 5 diamond, 8 iron, or 1 netherite."));
+            player.sendMessage(MessageUtil.warn("Line 4 must be a price and supported currency, such as 5 diamond or 25 essence."));
             return;
         }
         if (amount == null || amount <= 0) {
@@ -171,8 +229,8 @@ public final class PlayerShopListener implements Listener {
         }
 
         ShopData data = new ShopData(
-            player.getUniqueId(),
-            player.getName(),
+            adminShop ? player.getUniqueId() : shopOwner.ownerId(),
+            adminShop ? player.getName() : shopOwner.ownerName(),
             blockKey(chestBlock),
             blockKey(signBlock),
             encoded,
@@ -193,21 +251,40 @@ public final class PlayerShopListener implements Listener {
             }
             player.sendMessage(MessageUtil.success(adminShop
                 ? "Admin shop created. Buyers pay from their inventory and stock is infinite."
-                : "Shop created. Players buy by right-clicking the sign."));
+                : shopOwner.ownerId().equals(player.getUniqueId())
+                    ? "Shop created. Players buy by right-clicking the sign."
+                    : "Shop created for " + shopOwner.ownerName() + ". Players buy by right-clicking the sign."));
             signBlock.getWorld().playSound(signBlock.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 0.8f, 1.4f);
         });
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onShopSignOpen(PlayerOpenSignEvent event) {
+        Block block = event.getSign().getBlock();
+        if (!isShopSign(block)) return;
+        event.setCancelled(true);
+        event.getPlayer().sendMessage(MessageUtil.warn(canManageShop(event.getPlayer(), block)
+            ? "Break and recreate the shop to change its sign."
+            : "Only the shop owner or an admin can edit that sign."));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onInteract(PlayerInteractEvent event) {
         if (!plugin.getConfigManager().playerShopsEnabled
             || event.getAction() != Action.RIGHT_CLICK_BLOCK
+            || event.getHand() != EquipmentSlot.HAND
             || event.getClickedBlock() == null) {
             return;
         }
         Block clicked = event.getClickedBlock();
-        if (isShopSign(clicked)) {
+        if (shouldHandleShopPurchase(isShopSign(clicked), isMarketPurchaseSign(clicked))) {
             event.setCancelled(true);
+            event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
+            event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
+            if (MarketStallManager.isSignModificationItem(event.getItem() == null ? null : event.getItem().getType())) {
+                event.getPlayer().sendMessage(MessageUtil.warn("Shop signs cannot be dyed, waxed, or rewritten."));
+                return;
+            }
             buyFromShop(event.getPlayer(), clicked);
             return;
         }
@@ -254,6 +331,7 @@ public final class PlayerShopListener implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBreak(BlockBreakEvent event) {
         Block block = event.getBlock();
+        if (isMarketPurchaseSign(block)) return;
         boolean shopSign = isShopSign(block);
         Block shopChest = protectedShopChestBlock(block);
         if (!shopSign && shopChest == null) {
@@ -307,12 +385,34 @@ public final class PlayerShopListener implements Listener {
     }
 
     private void buyFromShop(Player buyer, Block signBlock) {
+        String transactionKey = blockKey(signBlock);
+        if (!activeTransactions.add(transactionKey)) {
+            buyer.sendMessage(MessageUtil.warn("That shop is finishing another purchase. Try again."));
+            return;
+        }
+        try {
+            executePurchase(buyer, signBlock);
+        } finally {
+            activeTransactions.remove(transactionKey);
+        }
+    }
+
+    private void executePurchase(Player buyer, Block signBlock) {
+        if (!shouldHandleShopPurchase(isShopSign(signBlock), isMarketPurchaseSign(signBlock))) {
+            return;
+        }
         ShopData data = readShopData(signBlock);
         if (data == null) {
             buyer.sendMessage(MessageUtil.error("That shop is missing data. Ask the owner to recreate it."));
             return;
         }
-        if (!data.adminShop() && !plugin.getConfigManager().playerShopsAllowOwnerPurchases && buyer.getUniqueId().equals(data.ownerUuid())) {
+        refreshShopSignLines(signBlock, data);
+        if (blocksOwnerPurchase(
+            data.adminShop(),
+            plugin.getConfigManager().playerShopsAllowOwnerPurchases,
+            buyer.getUniqueId(),
+            data.ownerUuid()
+        )) {
             buyer.sendMessage(MessageUtil.warn("You cannot buy from your own shop."));
             return;
         }
@@ -331,34 +431,47 @@ public final class PlayerShopListener implements Listener {
         }
 
         List<ItemStack> boughtItems = stacksOf(prototype, data.amount());
-        List<ItemStack> paymentItems = stacksOf(new ItemStack(data.currency().material()), data.price());
         if (!data.adminShop() && countSimilar(shopInventory.getStorageContents(), prototype) < data.amount()) {
             buyer.sendMessage(MessageUtil.warn("That shop is out of stock."));
             return;
         }
-        if (countMaterial(buyer.getInventory().getStorageContents(), data.currency().material()) < data.price()) {
+        if (data.currency().isEssence()) {
+            if (plugin.getEssenceManager() == null || !plugin.getEssenceManager().isLoaded(buyer)) {
+                buyer.sendMessage(MessageUtil.warn("Your Essence is still loading. Try again in a moment."));
+                return;
+            }
+            if (plugin.getEssenceManager().balance(buyer) < data.price()) {
+                buyer.sendMessage(MessageUtil.warn("You need " + data.price() + " Essence."));
+                return;
+            }
+        } else if (countMaterial(buyer.getInventory().getStorageContents(), data.currency().material()) < data.price()) {
             buyer.sendMessage(MessageUtil.warn("You need " + data.price() + " " + data.currency().display(data.price()) + "."));
             return;
         }
-        if (!canBuyerFitAfterPayment(buyer.getInventory(), data.currency().material(), data.price(), boughtItems)) {
+        if (!canBuyerFitAfterPayment(buyer.getInventory(), data.currency(), data.price(), boughtItems)) {
             buyer.sendMessage(MessageUtil.warn("Clear inventory space before buying this."));
             return;
         }
-        if (!data.adminShop() && !canShopFitAfterStockRemoval(shopInventory, prototype, data.amount(), paymentItems)) {
-            buyer.sendMessage(MessageUtil.warn("That shop's payment storage is full."));
+
+        boolean charged;
+        if (data.currency().isEssence()) {
+            charged = plugin.getEssenceManager() != null
+                && plugin.getEssenceManager().spend(buyer, data.price(), "player shop purchase");
+        } else {
+            removeMaterial(buyer.getInventory(), data.currency().material(), data.price());
+            charged = true;
+        }
+        if (!charged) {
+            buyer.sendMessage(MessageUtil.warn("The payment changed before this purchase finished. Nothing was bought."));
             return;
         }
-
+        if (!data.adminShop() && !paymentLedger.credit(data.ownerUuid(), data.ownerName(), data.currency(), data.price())) {
+            refundPayment(buyer, data.currency(), data.price());
+            buyer.sendMessage(MessageUtil.error("That shop cannot accept the payment right now. Your payment was returned."));
+            return;
+        }
         if (!data.adminShop()) {
             removeSimilar(shopInventory, prototype, data.amount());
-        }
-        removeMaterial(buyer.getInventory(), data.currency().material(), data.price());
-        if (!data.adminShop()) {
-            for (ItemStack payment : paymentItems) {
-                shopInventory.addItem(payment).values().forEach(leftover ->
-                    chestBlock.getWorld().dropItemNaturally(chestBlock.getLocation().add(0.5, 0.8, 0.5), leftover)
-                );
-            }
         }
         boughtItems.forEach(item -> buyer.getInventory().addItem(item).values().forEach(leftover ->
             buyer.getWorld().dropItemNaturally(buyer.getLocation(), leftover)
@@ -366,6 +479,29 @@ public final class PlayerShopListener implements Listener {
         buyer.updateInventory();
         buyer.sendMessage(MessageUtil.success("Bought <white>" + data.amount() + "x " + safe(data.itemName()) + "</white> for <white>" + data.price() + " " + data.currency().display(data.price()) + "</white>."));
         buyer.playSound(buyer.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 0.65f, 1.35f);
+        if (!data.adminShop()) {
+            Player owner = Bukkit.getPlayer(data.ownerUuid());
+            if (owner != null && owner.isOnline() && !owner.getUniqueId().equals(buyer.getUniqueId())) {
+                owner.sendMessage(MessageUtil.info("Your shop sold <white>" + data.amount() + "x " + safe(data.itemName())
+                    + "</white>. Use <white>/shops collect</white> for the payment."));
+            }
+        }
+    }
+
+    private void refundPayment(Player buyer, ShopCurrency currency, int amount) {
+        if (currency.isEssence()) {
+            if (plugin.getEssenceManager() == null
+                || !plugin.getEssenceManager().credit(buyer, amount, "failed player shop purchase refund")) {
+                plugin.getLogger().severe("Could not return " + amount + " Essence after a failed shop purchase for " + buyer.getName() + ".");
+            }
+            return;
+        }
+
+        for (ItemStack refund : stacksOf(new ItemStack(currency.material()), amount)) {
+            buyer.getInventory().addItem(refund).values().forEach(leftover ->
+                buyer.getWorld().dropItemNaturally(buyer.getLocation(), leftover)
+            );
+        }
     }
 
     private boolean writeShopData(Block signBlock, Block chestBlock, ShopData data) {
@@ -444,10 +580,98 @@ public final class PlayerShopListener implements Listener {
         }
     }
 
+    boolean recoverLegacyShopSign(Block signBlock, UUID ownerUuid, String ownerName) {
+        if (!plugin.getConfigManager().playerShopsEnabled || signBlock == null || ownerUuid == null || ownerName == null
+            || ownerName.isBlank() || isMarketPurchaseSign(signBlock)) {
+            return false;
+        }
+        if (isShopSign(signBlock)) {
+            return readShopData(signBlock) != null;
+        }
+        BlockState state = signBlock.getState();
+        if (!(state instanceof Sign sign) || !isPlayerShopHeader(signText(sign, 0))) {
+            return false;
+        }
+
+        Block chestBlock = attachedChestBlock(signBlock);
+        if (chestBlock == null || !chestAvailableForRecovery(chestBlock, signBlock, ownerUuid)) {
+            return false;
+        }
+        Integer amount = parseLeadingInt(signText(sign, 2));
+        Integer price = parseLeadingInt(signText(sign, 3));
+        ShopCurrency currency = ShopCurrency.parse(signText(sign, 3));
+        if (amount == null || amount <= 0 || amount > plugin.getConfigManager().playerShopsMaxAmountPerPurchase
+            || price == null || price <= 0 || price > plugin.getConfigManager().playerShopsMaxPrice
+            || currency == null) {
+            return false;
+        }
+
+        Inventory inventory = shopInventory(chestBlock);
+        ItemStack prototype = firstChestItem(inventory);
+        if (prototype == null || prototype.getType().isAir()) {
+            return false;
+        }
+        prototype = prototype.asOne();
+        String itemName = displayName(prototype);
+        if (!storedItemNameMatches(signText(sign, 1), itemName) || isLegendaryPrototype(prototype)) {
+            return false;
+        }
+        String encoded = encodeItem(prototype);
+        if (encoded == null) {
+            return false;
+        }
+
+        ShopData data = new ShopData(
+            ownerUuid,
+            ownerName,
+            blockKey(chestBlock),
+            blockKey(signBlock),
+            encoded,
+            itemName,
+            amount,
+            price,
+            currency,
+            false
+        );
+        if (!writeShopData(signBlock, chestBlock, data)) {
+            return false;
+        }
+        plugin.getLogger().info("Recovered legacy chest shop at " + blockKey(signBlock) + ".");
+        return true;
+    }
+
+    private boolean chestAvailableForRecovery(Block chestBlock, Block signBlock, UUID ownerUuid) {
+        String expectedSign = blockKey(signBlock);
+        String expectedOwner = ownerUuid.toString();
+        for (Block shopChest : shopChestBlocks(chestBlock)) {
+            BlockState state = shopChest.getState();
+            if (!(state instanceof TileState tile)) {
+                return false;
+            }
+            PersistentDataContainer pdc = tile.getPersistentDataContainer();
+            boolean hasShopData = pdc.has(keyShopChest, PersistentDataType.BYTE)
+                || pdc.has(keySignBlock, PersistentDataType.STRING)
+                || pdc.has(keyOwnerUuid, PersistentDataType.STRING)
+                || pdc.has(keyAdminShop, PersistentDataType.BYTE);
+            if (!hasShopData) {
+                continue;
+            }
+            if (!pdc.has(keyShopChest, PersistentDataType.BYTE)
+                || !expectedSign.equals(pdc.get(keySignBlock, PersistentDataType.STRING))
+                || !expectedOwner.equals(pdc.get(keyOwnerUuid, PersistentDataType.STRING))
+                || pdc.getOrDefault(keyAdminShop, PersistentDataType.BYTE, (byte) 0) != (byte) 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private void clearShop(Block block) {
         ShopData data = isShopSign(block) ? readShopData(block) : null;
         Block signBlock = isShopSign(block) ? block : shopSignBlockFromChest(block);
-        Block chestBlock = data == null ? (isShopChest(block) ? block : null) : blockFromKey(data.chestBlock());
+        Block chestBlock = data == null
+            ? (isShopChest(block) ? block : shopChestBlockFromSign(signBlock))
+            : blockFromKey(data.chestBlock());
         if (signBlock != null) {
             BlockState state = signBlock.getState();
             if (state instanceof Sign sign) {
@@ -493,7 +717,18 @@ public final class PlayerShopListener implements Listener {
             return true;
         }
         String owner = ownerUuid(block);
-        return owner != null && owner.equals(player.getUniqueId().toString());
+        if (owner == null) return false;
+        if (owner.equals(player.getUniqueId().toString())) return true;
+        try {
+            return plugin.getMarketStallManager() != null
+                && plugin.getMarketStallManager().canManageShopForOwner(player, block, UUID.fromString(owner));
+        } catch (IllegalArgumentException ignored) {
+            return false;
+        }
+    }
+
+    static boolean blocksOwnerPurchase(boolean adminShop, boolean allowOwnerPurchases, UUID buyerId, UUID ownerId) {
+        return !adminShop && !allowOwnerPurchases && buyerId != null && buyerId.equals(ownerId);
     }
 
     private String ownerUuid(Block block) {
@@ -584,6 +819,12 @@ public final class PlayerShopListener implements Listener {
         return blockFromKey(signKey);
     }
 
+    private Block shopChestBlockFromSign(Block signBlock) {
+        BlockState state = signBlock == null ? null : signBlock.getState();
+        if (!(state instanceof TileState tile)) return null;
+        return blockFromKey(tile.getPersistentDataContainer().get(keyChestBlock, PersistentDataType.STRING));
+    }
+
     private boolean isShopSign(Block block) {
         BlockState state = block == null ? null : block.getState();
         return state instanceof Sign sign
@@ -641,9 +882,9 @@ public final class PlayerShopListener implements Listener {
         return null;
     }
 
-    private boolean canBuyerFitAfterPayment(PlayerInventory inventory, Material currency, int price, List<ItemStack> boughtItems) {
+    private boolean canBuyerFitAfterPayment(PlayerInventory inventory, ShopCurrency currency, int price, List<ItemStack> boughtItems) {
         ItemStack[] storage = cloneContents(inventory.getStorageContents());
-        if (!removeMaterial(storage, currency, price)) {
+        if (!currency.isEssence() && !removeMaterial(storage, currency.material(), price)) {
             return false;
         }
         for (ItemStack item : boughtItems) {
@@ -651,20 +892,6 @@ public final class PlayerShopListener implements Listener {
                 return false;
             }
             addToCopy(storage, item);
-        }
-        return true;
-    }
-
-    private boolean canShopFitAfterStockRemoval(Inventory inventory, ItemStack prototype, int amount, List<ItemStack> payments) {
-        ItemStack[] storage = cloneContents(inventory.getStorageContents());
-        if (!removeSimilar(storage, prototype, amount)) {
-            return false;
-        }
-        for (ItemStack payment : payments) {
-            if (!canFit(storage, payment)) {
-                return false;
-            }
-            addToCopy(storage, payment);
         }
         return true;
     }
@@ -856,6 +1083,17 @@ public final class PlayerShopListener implements Listener {
         sign.getSide(Side.FRONT).line(3, Component.text(data.price() + " " + data.currency().shortName(), NamedTextColor.DARK_RED));
     }
 
+    private void refreshShopSignLines(Block signBlock, ShopData data) {
+        BlockState state = signBlock.getState();
+        if (!(state instanceof Sign sign)
+            || trimSign(data.itemName()).equals(signText(sign, 1))) {
+            return;
+        }
+        writeStoredSignLines(sign, data);
+        sign.setWaxed(true);
+        sign.update(true, false);
+    }
+
     private void markSignError(SignChangeEvent event, String error) {
         event.line(0, Component.text("[Shop]", NamedTextColor.DARK_RED));
         event.line(1, Component.text("Invalid", NamedTextColor.RED));
@@ -913,11 +1151,46 @@ public final class PlayerShopListener implements Listener {
         if (item.hasItemMeta() && item.getItemMeta() != null && item.getItemMeta().hasDisplayName()) {
             return PLAIN.serialize(item.getItemMeta().displayName());
         }
+        if (item.getItemMeta() instanceof EnchantmentStorageMeta bookMeta
+            && !bookMeta.getStoredEnchants().isEmpty()) {
+            List<String> enchantments = bookMeta.getStoredEnchants().entrySet().stream()
+                .map(entry -> compactVanillaEnchantName(entry.getKey().getKey().getKey(), entry.getValue()))
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
+            return enchantments.size() == 1
+                ? enchantments.getFirst()
+                : enchantments.getFirst() + " +" + (enchantments.size() - 1);
+        }
         return prettyMaterial(item.getType());
     }
 
+    static String compactVanillaEnchantName(String key, int level) {
+        String normalized = key == null ? "enchant" : key.trim().toLowerCase(Locale.ROOT);
+        String name = switch (normalized) {
+            case "bane_of_arthropods" -> "Bane Arth.";
+            case "binding_curse" -> "Binding Curse";
+            case "blast_protection" -> "Blast Prot";
+            case "depth_strider" -> "Depth Str.";
+            case "feather_falling" -> "Feather Fall";
+            case "fire_protection" -> "Fire Prot";
+            case "luck_of_the_sea" -> "Luck Sea";
+            case "projectile_protection" -> "Proj. Prot";
+            case "sweeping_edge" -> "Sweeping";
+            case "vanishing_curse" -> "Vanishing Curse";
+            default -> prettyWords(normalized);
+        };
+        if ("vanishing_curse".equals(normalized)) {
+            return name;
+        }
+        return name + " " + romanNumeral(Math.max(1, level));
+    }
+
     private String prettyMaterial(Material material) {
-        String[] words = material.name().toLowerCase(Locale.ROOT).split("_");
+        return prettyWords(material.name().toLowerCase(Locale.ROOT));
+    }
+
+    private static String prettyWords(String raw) {
+        String[] words = raw.split("_");
         StringBuilder builder = new StringBuilder();
         for (String word : words) {
             if (word.isBlank()) {
@@ -931,12 +1204,33 @@ public final class PlayerShopListener implements Listener {
         return builder.toString();
     }
 
-    private String trimSign(String text) {
-        String safe = safe(text);
-        return safe.length() <= 15 ? safe : safe.substring(0, 15);
+    private static String romanNumeral(int value) {
+        return switch (value) {
+            case 1 -> "I";
+            case 2 -> "II";
+            case 3 -> "III";
+            case 4 -> "IV";
+            case 5 -> "V";
+            default -> Integer.toString(value);
+        };
     }
 
-    private String safe(String text) {
+    static String trimSign(String text) {
+        String safe = safe(text);
+        if (safe.length() <= 15) {
+            return safe;
+        }
+        int suffixStart = safe.lastIndexOf(" +");
+        if (suffixStart > 0) {
+            String suffix = safe.substring(suffixStart);
+            if (suffix.length() < 15) {
+                return safe.substring(0, 15 - suffix.length()).stripTrailing() + suffix;
+            }
+        }
+        return safe.substring(0, 15).stripTrailing();
+    }
+
+    private static String safe(String text) {
         return text == null ? "" : text.replace("<", "").replace(">", "");
     }
 
@@ -947,6 +1241,21 @@ public final class PlayerShopListener implements Listener {
     private boolean isAdminShopHeader(String header) {
         String clean = cleanLine(header).toLowerCase(Locale.ROOT);
         return ADMIN_SHOP_HEADER.equals(clean) || ADMIN_SHOP_SHORT_HEADER.equals(clean);
+    }
+
+    static boolean isPlayerShopHeader(String header) {
+        String clean = header == null ? "" : header.trim();
+        return SHOP_HEADER.equalsIgnoreCase(clean) || SHOP_HEADER_ALIAS.equalsIgnoreCase(clean);
+    }
+
+    static boolean storedItemNameMatches(String signName, String itemName) {
+        String visible = signName == null ? "" : signName.trim();
+        return !visible.isBlank() && visible.equalsIgnoreCase(trimSign(itemName));
+    }
+
+    private String signText(Sign sign, int line) {
+        Component component = sign.getSide(Side.FRONT).line(line);
+        return component == null ? "" : PLAIN.serialize(component);
     }
 
     private boolean isLegendaryPrototype(ItemStack item) {
@@ -984,16 +1293,143 @@ public final class PlayerShopListener implements Listener {
     public List<Component> helpLines(boolean includeAdminHelp) {
         List<Component> lines = new ArrayList<>(List.of(
             MessageUtil.info("Player shops use a wall sign attached to a chest or double chest."),
-            MessageUtil.info("Line 1: <white>[shop]</white>"),
+            MessageUtil.info("In a market stall, signs can only be placed directly onto your chest or trapped chest."),
+            MessageUtil.info("Line 1: <white>[shop]</white> (the <white>[shops]</white> alias also works)."),
             MessageUtil.info("Line 2: <white>chest</white> for the first item in the chest, or a vanilla item id."),
             MessageUtil.info("Line 3: amount sold per purchase, like <white>4</white>."),
-            MessageUtil.info("Line 4: price and currency, like <white>5 diamond</white>, <white>12 iron</white>, or <white>1 netherite</white>.")
+            MessageUtil.info("Line 4: price and currency, such as <white>5 diamond</white>, <white>12 iron</white>, or <white>25 essence</white>."),
+            MessageUtil.info("Payments are stored safely outside the stock chest. Use <white>/shops collect</white> to claim them."),
+            MessageUtil.info("Trusted stall managers can maintain shops, but sales always pay the stall owner and managers purchase normally."),
+            MessageUtil.info("Currencies: coal, copper, iron, gold, redstone, lapis, emerald, diamond, netherite, and Essence.")
         ));
         if (includeAdminHelp) {
             lines.add(MessageUtil.info("Admin shops: use <white>[adminshop]</white> or <white>[ashop]</white> on line 1. They have infinite stock, remove buyer payment, and do not store stock or payment."));
             lines.add(MessageUtil.info("Admin shops support custom item samples from the chest, but legendary items are blocked."));
         }
         return lines;
+    }
+
+    public void collectPayments(Player player) {
+        paymentLedger.collect(player);
+    }
+
+    public List<String> paymentSummary(Player player) {
+        return player == null ? List.of() : paymentLedger.summary(player.getUniqueId());
+    }
+
+    public boolean isShopPurchaseSign(Block block) {
+        return shouldHandleShopPurchase(isShopSign(block), isMarketPurchaseSign(block));
+    }
+
+    public void releaseMarketPurchaseSign(Block block) {
+        if (block != null && isShopSign(block)) clearShop(block);
+    }
+
+    private boolean isMarketPurchaseSign(Block block) {
+        return plugin.getMarketStallManager() != null && plugin.getMarketStallManager().isPurchaseSign(block);
+    }
+
+    static boolean shouldHandleShopPurchase(boolean playerShopSign, boolean marketPurchaseSign) {
+        return playerShopSign && !marketPurchaseSign;
+    }
+
+    public int transferOwnershipInArea(
+        UUID worldId,
+        int minX,
+        int maxX,
+        int minY,
+        int maxY,
+        int minZ,
+        int maxZ,
+        UUID oldOwner,
+        UUID newOwner,
+        String newOwnerName
+    ) {
+        if (worldId == null || oldOwner == null || newOwner == null) return 0;
+        var world = Bukkit.getWorld(worldId);
+        if (world == null) return 0;
+        int transferred = 0;
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    Block signBlock = world.getBlockAt(x, y, z);
+                    if (!isShopSign(signBlock)) continue;
+                    ShopData data = readShopData(signBlock);
+                    if (data == null || data.adminShop() || !data.ownerUuid().equals(oldOwner)) continue;
+                    Block chestBlock = blockFromKey(data.chestBlock());
+                    if (chestBlock == null) continue;
+                    ShopData updated = new ShopData(
+                        newOwner,
+                        newOwnerName,
+                        data.chestBlock(),
+                        data.signBlock(),
+                        data.encodedItem(),
+                        data.itemName(),
+                        data.amount(),
+                        data.price(),
+                        data.currency(),
+                        false
+                    );
+                    if (writeShopData(signBlock, chestBlock, updated)) transferred++;
+                }
+            }
+        }
+        return transferred;
+    }
+
+    public int countShopsInArea(
+        UUID worldId,
+        int minX,
+        int maxX,
+        int minY,
+        int maxY,
+        int minZ,
+        int maxZ
+    ) {
+        return visitShopsInArea(worldId, minX, maxX, minY, maxY, minZ, maxZ, false);
+    }
+
+    public int clearShopsInArea(
+        UUID worldId,
+        int minX,
+        int maxX,
+        int minY,
+        int maxY,
+        int minZ,
+        int maxZ
+    ) {
+        return visitShopsInArea(worldId, minX, maxX, minY, maxY, minZ, maxZ, true);
+    }
+
+    private int visitShopsInArea(
+        UUID worldId,
+        int minX,
+        int maxX,
+        int minY,
+        int maxY,
+        int minZ,
+        int maxZ,
+        boolean clear
+    ) {
+        if (worldId == null || minX > maxX || minY > maxY || minZ > maxZ) return 0;
+        var world = Bukkit.getWorld(worldId);
+        if (world == null) return 0;
+        int count = 0;
+        Set<String> visited = new HashSet<>();
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    Block block = world.getBlockAt(x, y, z);
+                    if (!isShopSign(block) && !isShopChest(block)) continue;
+                    Block sign = isShopSign(block) ? block : shopSignBlockFromChest(block);
+                    String identity = sign == null ? blockKey(block) : blockKey(sign);
+                    if (!visited.add(identity)) continue;
+                    count++;
+                    if (clear) clearShop(block);
+                }
+            }
+        }
+        return count;
     }
 
     private record ShopData(
@@ -1009,48 +1445,4 @@ public final class PlayerShopListener implements Listener {
         boolean adminShop
     ) {}
 
-    private enum ShopCurrency {
-        DIAMOND(Material.DIAMOND, "diamond"),
-        IRON(Material.IRON_INGOT, "iron"),
-        NETHERITE(Material.NETHERITE_INGOT, "netherite");
-
-        private final Material material;
-        private final String shortName;
-
-        ShopCurrency(Material material, String shortName) {
-            this.material = material;
-            this.shortName = shortName;
-        }
-
-        private Material material() {
-            return material;
-        }
-
-        private String shortName() {
-            return shortName;
-        }
-
-        private String display(int amount) {
-            String suffix = amount == 1 ? "" : "s";
-            return switch (this) {
-                case DIAMOND -> "diamond" + suffix;
-                case IRON -> "iron ingot" + suffix;
-                case NETHERITE -> "netherite ingot" + suffix;
-            };
-        }
-
-        private static ShopCurrency parse(String line) {
-            String clean = line == null ? "" : line.toLowerCase(Locale.ROOT);
-            if (clean.contains("netherite")) {
-                return NETHERITE;
-            }
-            if (clean.contains("diamond")) {
-                return DIAMOND;
-            }
-            if (clean.contains("iron")) {
-                return IRON;
-            }
-            return null;
-        }
-    }
 }

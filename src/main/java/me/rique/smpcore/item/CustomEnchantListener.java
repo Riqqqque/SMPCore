@@ -1,13 +1,18 @@
 package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.combat.AbilityDamageContext;
+import me.rique.smpcore.compat.CrossplayManager.AnvilRecipe;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.InventoryRecipeUtil;
+import me.rique.smpcore.util.ItemModelUtil;
+import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.minimessage.MiniMessage;
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Keyed;
@@ -30,6 +35,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
 import org.bukkit.entity.AbstractArrow;
 import org.bukkit.entity.ThrowableProjectile;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -43,6 +49,7 @@ import org.bukkit.event.entity.EntityShootBowEvent;
 import org.bukkit.event.entity.ProjectileLaunchEvent;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.CraftItemEvent;
+import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryType;
@@ -68,6 +75,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.RecipeChoice;
 import org.bukkit.inventory.ShapedRecipe;
+import org.bukkit.inventory.meta.EnchantmentStorageMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.loot.LootTable;
 import org.bukkit.loot.LootTables;
@@ -76,10 +84,12 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.util.Vector;
+import com.destroystokyo.paper.event.entity.EntityRemoveFromWorldEvent;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -90,7 +100,6 @@ import java.util.concurrent.ThreadLocalRandom;
 public final class CustomEnchantListener implements Listener {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
-    private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final Component ENCHANTS_MENU_TITLE = MM.deserialize("<dark_aqua><bold>Custom Enchants</bold></dark_aqua>");
     private static final String DELICATE_LORE_LINE = "Delicate I";
     private static final String TELEKINESIS_LORE_LINE = "Telekinesis I";
@@ -106,15 +115,32 @@ public final class CustomEnchantListener implements Listener {
     private static final String SOUL_SIPHON_LORE_LINE = "Soul Siphon I";
     private static final String ECHOING_LORE_LINE = "Echoing I";
     private static final String ESSENCE_CAPTURE_LORE_PREFIX = "Essence Capture ";
-    private static final double ESSENCE_CAPTURE_LEVEL_ONE_CHANCE = 0.01D;
-    private static final double ESSENCE_CAPTURE_LEVEL_TWO_CHANCE = 0.03D;
-    private static final double ESSENCE_CAPTURE_LEVEL_THREE_CHANCE = 0.05D;
+    private static final double ESSENCE_CAPTURE_LEVEL_ONE_CHANCE = 0.005D;
+    private static final double ESSENCE_CAPTURE_LEVEL_TWO_CHANCE = 0.015D;
+    private static final double ESSENCE_CAPTURE_LEVEL_THREE_CHANCE = 0.025D;
     private static final long TELEKINESIS_MINING_CONTEXT_TTL_MS = 1000L;
     private static final int CUSTOM_ENCHANT_ANVIL_BASE_COST = 6;
     private static final int CUSTOM_ENCHANT_ANVIL_LEVEL_COST = 3;
+    private static final Map<String, Integer> CUSTOM_ENCHANT_MAX_LEVELS = Map.ofEntries(
+        Map.entry("delicate", 1),
+        Map.entry("telekinesis", 1),
+        Map.entry("smelting_touch", 1),
+        Map.entry("wise", 3),
+        Map.entry("double_jump", 1),
+        Map.entry("dash", 1),
+        Map.entry("frostbite", 2),
+        Map.entry("harvesting", 3),
+        Map.entry("bulwark", 3),
+        Map.entry("reinforced", 3),
+        Map.entry("kingslayer", 1),
+        Map.entry("soul_siphon", 1),
+        Map.entry("echoing", 1),
+        Map.entry("essence_capture", 3)
+    );
 
     private final SMPCore plugin;
     private final NamespacedKey keyCustomEnchantBook;
+    private final NamespacedKey keyReplenishBook;
     private final NamespacedKey keyEnchantMenuId;
     private final NamespacedKey keyDelicate;
     private final NamespacedKey keyTelekinesis;
@@ -143,11 +169,12 @@ public final class CustomEnchantListener implements Listener {
     private final Map<UUID, Double> wiseXpRemainders = new ConcurrentHashMap<>();
     private final Map<Material, ItemStack> smeltingResults = new ConcurrentHashMap<>();
     private final java.util.Set<Material> nonSmeltableDrops = ConcurrentHashMap.newKeySet();
-    private final java.util.Set<UUID> doubleJumpFlightPlayers = ConcurrentHashMap.newKeySet();
+    private final java.util.Set<UUID> doubleJumpArmedPlayers = ConcurrentHashMap.newKeySet();
 
     public CustomEnchantListener(SMPCore plugin) {
         this.plugin = plugin;
         this.keyCustomEnchantBook = new NamespacedKey(plugin, "custom_enchant_book");
+        this.keyReplenishBook = new NamespacedKey(plugin, "replenish_book");
         this.keyEnchantMenuId = new NamespacedKey(plugin, "custom_enchant_menu_id");
         this.keyDelicate = new NamespacedKey(plugin, "delicate_enchant");
         this.keyTelekinesis = new NamespacedKey(plugin, "telekinesis_enchant");
@@ -170,7 +197,18 @@ public final class CustomEnchantListener implements Listener {
         this.keyKingslayerRecipe = new NamespacedKey(plugin, "kingslayer_book");
         this.keySoulSiphonRecipe = new NamespacedKey(plugin, "soul_siphon_book");
         this.keyEchoingRecipe = new NamespacedKey(plugin, "echoing_book");
-        Bukkit.getScheduler().runTaskTimer(plugin, this::tickDoubleJumpFlightPlayers, 1L, 2L);
+        Bukkit.getScheduler().runTaskTimer(plugin, this::tickDoubleJumpFlightPlayers, 1L, 1L);
+    }
+
+    public void shutdown() {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            clearDoubleJumpFlight(player);
+        }
+        doubleJumpArmedPlayers.clear();
+        wiseXpRemainders.clear();
+        telekinesisLootOwners.clear();
+        essenceCaptureLootOwners.clear();
+        telekinesisMiningContexts.clear();
     }
 
     public ItemStack createDelicateBook() {
@@ -304,6 +342,40 @@ public final class CustomEnchantListener implements Listener {
         return enchant == null ? null : enchant.enchant().plainDisplay(enchant.level()) + " Book";
     }
 
+    public boolean isCustomEnchantBook(ItemStack item) {
+        return bookEnchant(item) != null;
+    }
+
+    /**
+     * Returns true for every enchanted book carrying any SMPCore custom-enchant
+     * payload, including malformed legacy books. Callers that handle vanilla
+     * stored enchantments must use this to avoid treating custom books as
+     * ordinary enchanted books.
+     */
+    public boolean hasCustomEnchantBookData(ItemStack item) {
+        if (item == null || item.getType() != Material.ENCHANTED_BOOK) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        if (pdc.getKeys().contains(keyCustomEnchantBook)) {
+            return true;
+        }
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            if (pdc.getKeys().contains(keyFor(enchant))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean isUnsafeCustomEnchantBook(ItemStack item) {
+        return hasCustomEnchantBookData(item) && customBookPayloadState(item) != CustomBookPayloadState.VALID;
+    }
+
     public List<String> managedEnchantIds() {
         return CustomEnchantEntry.MANAGED.stream()
             .map(enchant -> enchant.id)
@@ -319,17 +391,9 @@ public final class CustomEnchantListener implements Listener {
             return;
         }
 
-        List<Component> baseLore = meta.lore() == null ? new ArrayList<>() : new ArrayList<>(meta.lore());
-        baseLore.removeIf(line -> isManagedEnchantLoreLine(PLAIN.serialize(line).trim()));
+        List<Component> baseLore = CustomLoreUtil.stripCustomEnchantLore(meta.lore());
 
-        List<Component> managedLore = new ArrayList<>();
-        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
-            int level = storedEnchantLevel(meta, enchant);
-            if (level <= 0) {
-                continue;
-            }
-            managedLore.add(MM.deserialize("<gray>" + enchant.loreLine(level) + "</gray>"));
-        }
+        List<Component> managedLore = new ArrayList<>(CustomLoreUtil.customEnchantLore(meta));
 
         if (managedLore.isEmpty() && baseLore.isEmpty()) {
             meta.lore(null);
@@ -337,7 +401,8 @@ public final class CustomEnchantListener implements Listener {
         }
 
         managedLore.addAll(baseLore);
-        meta.lore(managedLore);
+        meta.lore(CustomLoreUtil.normalizeLore(managedLore));
+        CustomLoreUtil.applyStyledItemFlags(meta);
     }
 
     public List<ItemStack> smeltMiningDrops(ItemStack stack) {
@@ -375,7 +440,9 @@ public final class CustomEnchantListener implements Listener {
         );
         ItemStack filler = createMenuItem(Material.BLACK_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
         for (int slot = 0; slot < inventory.getSize(); slot++) {
-            inventory.setItem(slot, filler);
+            if (isFrameSlot(slot, inventory.getSize())) {
+                inventory.setItem(slot, filler);
+            }
         }
         inventory.setItem(4, createMenuItem(
             Material.ENCHANTED_BOOK,
@@ -394,8 +461,50 @@ public final class CustomEnchantListener implements Listener {
         for (int i = 0; i < slots.length && i < entries.size(); i++) {
             inventory.setItem(slots[i], createMenuIcon(entries.get(i)));
         }
+        inventory.setItem(36, createMenuItem(Material.ANVIL, "<light_purple><bold>Use A Placed Anvil</bold></light_purple>", List.of(
+            "<gray>Bedrock players can tap a placed anvil for custom recipes.</gray>",
+            "<gray>Crouch and tap it for normal vanilla anvil use.</gray>"
+        )));
         inventory.setItem(40, createMenuItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to /menu.</gray>")));
         player.openInventory(inventory);
+    }
+
+    public AnvilRecipe crossplayAnvilRecipe(ItemStack left, ItemStack right) {
+        if (isUnsafeCustomEnchantBook(left) || isUnsafeCustomEnchantBook(right)) {
+            return null;
+        }
+        BookEnchantData leftBook = bookEnchant(left);
+        BookEnchantData rightBook = bookEnchant(right);
+        if (leftBook == null && rightBook == null) {
+            // Same-item merges need Minecraft's native durability, prior-work, and
+            // vanilla-enchant calculation. CrossplayManager transfers these inputs
+            // to a real server-created anvil rather than approximating that result.
+            return null;
+        }
+        CustomEnchantAnvilResult result = customEnchantAnvilResult(left, right);
+        if (result == null) {
+            return null;
+        }
+        boolean createsBook = bookEnchant(result.result()) != null;
+        return new AnvilRecipe(
+            result.result(),
+            result.cost(),
+            result.action() + " <white>" + result.description() + "</white>.",
+            result.action() + " " + result.description() + " through the crossplay custom anvil.",
+            createsBook
+        );
+    }
+
+    public boolean activateHeldCrossplayAbility(Player player) {
+        if (player == null || !hasDash(player.getInventory().getItemInMainHand())) {
+            return false;
+        }
+        useDash(player);
+        return true;
+    }
+
+    public boolean hasDashEnchant(ItemStack item) {
+        return hasDash(item);
     }
 
     @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
@@ -405,6 +514,9 @@ public final class CustomEnchantListener implements Listener {
             return;
         }
         List<CustomEnchantEntry> candidates = enchantTableCandidates(item, event.getExpLevelCost());
+        if (event.getEnchantsToAdd().containsKey(Enchantment.SILK_TOUCH)) {
+            candidates.remove(CustomEnchantEntry.SMELTING_TOUCH);
+        }
         if (candidates.isEmpty()) return;
 
         CustomEnchantEntry selected = pickEnchantTableEntry(candidates);
@@ -413,6 +525,9 @@ public final class CustomEnchantListener implements Listener {
         int level = enchantTableLevel(selected, event.getExpLevelCost());
         Player enchanter = event.getEnchanter();
         Bukkit.getScheduler().runTask(plugin, () -> {
+            if (event.isCancelled()) {
+                return;
+            }
             if (!canApply(item, selected, level)) {
                 return;
             }
@@ -425,13 +540,46 @@ public final class CustomEnchantListener implements Listener {
         });
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onEnchantItemConflict(EnchantItemEvent event) {
+        if (!hasSmeltingTouch(event.getItem())
+            || !event.getEnchantsToAdd().containsKey(Enchantment.SILK_TOUCH)) {
+            return;
+        }
+        event.getEnchantsToAdd().remove(Enchantment.SILK_TOUCH);
+        if (event.getEnchantsToAdd().isEmpty()) {
+            event.setCancelled(true);
+        }
+        event.getEnchanter().sendMessage(MessageUtil.warn(
+            "Smelting Touch cannot be combined with Silk Touch. Your Smelting Touch was kept."
+        ));
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPrepareAnvil(PrepareAnvilEvent event) {
         ItemStack left = event.getInventory().getFirstItem();
         ItemStack right = event.getInventory().getSecondItem();
-        if (bookEnchant(right) == null) {
+        if (isUnsafeCustomEnchantBook(left) || isUnsafeCustomEnchantBook(right)) {
+            event.setResult(null);
+            return;
+        }
+        BookEnchantData leftBook = bookEnchant(left);
+        BookEnchantData rightBook = bookEnchant(right);
+        if (leftBook == null && rightBook == null) {
             CustomEnchantAnvilResult mergeResult = customEnchantItemMergeResult(left, right, event.getResult());
             if (mergeResult == null) {
+                ItemStack vanillaResult = event.getResult();
+                if (vanillaResult != null && !vanillaResult.getType().isAir()) {
+                    ItemStack refreshed = vanillaResult.clone();
+                    normalizeManagedEnchantData(refreshed);
+                    if (CustomLoreUtil.hasSmeltingSilkConflict(refreshed)) {
+                        event.setResult(null);
+                        return;
+                    }
+                    if (CustomLoreUtil.normalizeItemLore(refreshed)) {
+                        event.setResult(refreshed);
+                    }
+                }
                 return;
             }
             event.setResult(mergeResult.result().clone());
@@ -458,9 +606,18 @@ public final class CustomEnchantListener implements Listener {
 
         ItemStack left = anvil.getFirstItem();
         ItemStack right = anvil.getSecondItem();
-        CustomEnchantAnvilResult customResult = bookEnchant(right) == null
-            ? customEnchantItemMergeResult(left, right, event.getCurrentItem())
-            : customEnchantAnvilResult(left, right);
+        if (isUnsafeCustomEnchantBook(left) || isUnsafeCustomEnchantBook(right)) {
+            event.setCancelled(true);
+            player.sendMessage(MessageUtil.warn(
+                "That custom enchant book has invalid or mixed enchant data. Ask staff to replace it."
+            ));
+            return;
+        }
+        BookEnchantData leftBook = bookEnchant(left);
+        BookEnchantData rightBook = bookEnchant(right);
+        CustomEnchantAnvilResult customResult = leftBook != null || rightBook != null
+            ? customEnchantAnvilResult(left, right)
+            : customEnchantItemMergeResult(left, right, event.getCurrentItem());
         if (customResult == null) return;
 
         ItemStack result = customResult.result().clone();
@@ -475,17 +632,28 @@ public final class CustomEnchantListener implements Listener {
             return;
         }
 
+        ItemStack consumedLeftBook = bookEnchant(left) == null ? null : left.clone();
+        ItemStack consumedRightBook = bookEnchant(right) == null ? null : right.clone();
         anvil.setItem(0, null);
         anvil.setItem(1, consumeOne(right));
         anvil.setItem(2, null);
         chargeAnvilCost(player, xpCost);
-        if (bookEnchant(result) != null && plugin.getItemAuditManager() != null) {
-            plugin.getItemAuditManager().recordKnownAcquisition(
-                player,
-                result,
-                "custom_enchant_anvil",
-                customResult.action() + " " + customResult.description() + " in an anvil."
-            );
+        if (plugin.getItemAuditManager() != null) {
+            String auditDetails = customResult.action() + " " + customResult.description() + " in an anvil.";
+            if (consumedLeftBook != null) {
+                plugin.getItemAuditManager().recordConsumption(player, consumedLeftBook, "custom_enchant_anvil", auditDetails);
+            }
+            if (consumedRightBook != null) {
+                plugin.getItemAuditManager().recordConsumption(player, consumedRightBook, "custom_enchant_anvil", auditDetails);
+            }
+            if (bookEnchant(result) != null) {
+                plugin.getItemAuditManager().recordKnownAcquisition(
+                    player,
+                    result,
+                    "custom_enchant_anvil",
+                    auditDetails
+                );
+            }
         }
         giveAnvilResult(player, event, result);
         String action = customResult.action();
@@ -500,7 +668,23 @@ public final class CustomEnchantListener implements Listener {
 
         ItemStack top = grindstone.getUpperItem();
         ItemStack bottom = grindstone.getLowerItem();
-        if (!hasManagedEnchant(top) && !hasManagedEnchant(bottom)) return;
+        if (isUnsafeCustomEnchantBook(top) || isUnsafeCustomEnchantBook(bottom)) {
+            event.setResult(null);
+            return;
+        }
+        boolean topBook = isCustomEnchantBook(top);
+        boolean bottomBook = isCustomEnchantBook(bottom);
+        if (topBook || bottomBook) {
+            if (!isEmptyItem(top) && !isEmptyItem(bottom)) {
+                event.setResult(null);
+                return;
+            }
+            event.setResult(new ItemStack(Material.BOOK));
+            return;
+        }
+        boolean topHasManagedData = hasManagedEnchant(top) || hasAnyManagedEnchantData(top);
+        boolean bottomHasManagedData = hasManagedEnchant(bottom) || hasAnyManagedEnchantData(bottom);
+        if (!topHasManagedData && !bottomHasManagedData) return;
 
         ItemStack result = event.getResult();
         if (result != null && result.getType() != Material.AIR) {
@@ -508,9 +692,57 @@ public final class CustomEnchantListener implements Listener {
             return;
         }
 
-        ItemStack source = hasManagedEnchant(top) ? top : bottom;
+        ItemStack source = topHasManagedData ? top : bottom;
+        if (!isEmptyItem(top) && !isEmptyItem(bottom)) {
+            event.setResult(null);
+            return;
+        }
         if (source == null || source.getType() == Material.AIR) return;
         event.setResult(stripManagedEnchants(source.clone()));
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onGrindstoneCustomBookStackClick(InventoryClickEvent event) {
+        if (!isGrindstoneResultSlot(event)) {
+            return;
+        }
+        GrindstoneInventory grindstone = (GrindstoneInventory) event.getView().getTopInventory();
+        if (!isUnsafeCustomEnchantBook(grindstone.getUpperItem())
+            && !isUnsafeCustomEnchantBook(grindstone.getLowerItem())) {
+            return;
+        }
+        event.setCancelled(true);
+        if (event.getWhoClicked() instanceof Player player) {
+            player.sendMessage(MessageUtil.warn(
+                "That custom enchant book has invalid or mixed enchant data. Ask staff to replace it."
+            ));
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onGrindstoneCustomBookConsumed(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)
+            || !isGrindstoneResultSlot(event)
+            || event.getAction() == InventoryAction.NOTHING
+            || event.getCurrentItem() == null
+            || event.getCurrentItem().getType().isAir()) {
+            return;
+        }
+        GrindstoneInventory grindstone = (GrindstoneInventory) event.getView().getTopInventory();
+        recordGroundBookConsumption(player, grindstone.getUpperItem());
+        recordGroundBookConsumption(player, grindstone.getLowerItem());
+    }
+
+    private void recordGroundBookConsumption(Player player, ItemStack item) {
+        if (plugin.getItemAuditManager() == null || !isCustomEnchantBook(item)) {
+            return;
+        }
+        plugin.getItemAuditManager().recordConsumption(
+            player,
+            item.clone(),
+            "custom_enchant_grindstone",
+            "Removed a custom enchant book in a grindstone."
+        );
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -637,9 +869,17 @@ public final class CustomEnchantListener implements Listener {
     public void onDamageByEntity(EntityDamageByEntityEvent event) {
         if (!(event.getEntity() instanceof LivingEntity victim) || victim instanceof Player) return;
 
+        if (event.getDamager() instanceof Player attacker && AbilityDamageContext.isActive(attacker)) {
+            telekinesisLootOwners.remove(victim.getUniqueId());
+            essenceCaptureLootOwners.remove(victim.getUniqueId());
+            return;
+        }
+
         UUID telekinesisOwnerId = telekinesisOwner(event.getDamager());
         if (telekinesisOwnerId != null) {
             telekinesisLootOwners.put(victim.getUniqueId(), telekinesisOwnerId);
+        } else {
+            telekinesisLootOwners.remove(victim.getUniqueId());
         }
 
         EssenceCaptureHit essenceCaptureHit = essenceCaptureHit(event.getDamager());
@@ -706,12 +946,16 @@ public final class CustomEnchantListener implements Listener {
         if (!(event.getEntity() instanceof LivingEntity victim)) return;
 
         if (!(event.getDamager() instanceof Player attacker)) return;
+        if (AbilityDamageContext.isActive(attacker)) return;
         if (attacker.equals(victim)) return;
         if (victim instanceof Player target && sameTeam(attacker, target)) return;
 
         ItemStack weapon = attacker.getInventory().getItemInMainHand();
+        boolean bossEncounterVictim = isBossEncounterEntity(victim);
         int frostbiteLevel = storedEnchantLevel(weapon, CustomEnchantEntry.FROSTBITE);
-        if (frostbiteLevel > 0 && ThreadLocalRandom.current().nextDouble() < 0.12D + (frostbiteLevel * 0.08D)) {
+        if (!bossEncounterVictim
+            && frostbiteLevel > 0
+            && ThreadLocalRandom.current().nextDouble() < 0.12D + (frostbiteLevel * 0.08D)) {
             victim.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 60, Math.min(1, frostbiteLevel - 1), false, true, true));
             victim.getWorld().spawnParticle(Particle.SNOWFLAKE, victim.getLocation().add(0.0, 1.0, 0.0), 14, 0.35, 0.45, 0.35, 0.02);
         }
@@ -721,7 +965,9 @@ public final class CustomEnchantListener implements Listener {
             victim.getWorld().spawnParticle(Particle.CRIT, victim.getLocation().add(0.0, 1.0, 0.0), 18, 0.35, 0.35, 0.35, 0.1);
         }
 
-        if (storedEnchantLevel(weapon, CustomEnchantEntry.ECHOING) > 0 && ThreadLocalRandom.current().nextDouble() < 0.25D) {
+        if (!bossEncounterVictim
+            && storedEnchantLevel(weapon, CustomEnchantEntry.ECHOING) > 0
+            && ThreadLocalRandom.current().nextDouble() < 0.25D) {
             victim.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING, 80, 0, false, true, true));
             victim.addPotionEffect(new PotionEffect(PotionEffectType.WEAKNESS, 50, 0, false, true, true));
             Vector push = victim.getLocation().toVector().subtract(attacker.getLocation().toVector());
@@ -739,6 +985,7 @@ public final class CustomEnchantListener implements Listener {
         if (!(event.getEntity() instanceof LivingEntity victim)) return;
 
         if (!(event.getDamager() instanceof Player attacker)) return;
+        if (AbilityDamageContext.isActive(attacker)) return;
         if (attacker.equals(victim) || attacker.isDead()) return;
         if (victim instanceof Player target && sameTeam(attacker, target)) return;
 
@@ -747,6 +994,7 @@ public final class CustomEnchantListener implements Listener {
 
         double heal = Math.min(victim instanceof Player ? 1.2D : 2.0D, event.getFinalDamage() * 0.10D);
         if (heal <= 0.0D) return;
+        if (plugin.getBossManager() != null && plugin.getBossManager().blockHealingIfSuppressed(attacker, heal)) return;
 
         attacker.setHealth(Math.min(maxHealth(attacker), attacker.getHealth() + heal));
         attacker.getWorld().spawnParticle(Particle.DAMAGE_INDICATOR, attacker.getLocation().add(0.0, 1.0, 0.0), 6, 0.25, 0.35, 0.25, 0.02);
@@ -791,15 +1039,71 @@ public final class CustomEnchantListener implements Listener {
         double chance = Math.min(0.60D, 0.16D * level);
         if (ThreadLocalRandom.current().nextDouble() >= chance) return;
 
+        boolean granted = false;
         for (Item item : event.getItems()) {
             ItemStack stack = item.getItemStack();
             if (stack == null || stack.getType().isAir()) continue;
             if (!isCropDrop(stack.getType())) continue;
-            ItemStack next = stack.clone();
-            next.setAmount(Math.min(stack.getMaxStackSize(), stack.getAmount() + 1));
-            item.setItemStack(next);
+            if (stack.getAmount() < stack.getMaxStackSize()) {
+                ItemStack next = stack.clone();
+                next.setAmount(stack.getAmount() + 1);
+                item.setItemStack(next);
+            } else {
+                ItemStack bonus = stack.clone();
+                bonus.setAmount(1);
+                Location origin = event.getBlock().getLocation().add(0.5, 0.5, 0.5);
+                if (hasTelekinesis(tool)) {
+                    giveDrops(player, List.of(bonus), origin);
+                } else {
+                    event.getBlock().getWorld().dropItemNaturally(origin, bonus);
+                }
+            }
+            granted = true;
+            break;
         }
-        event.getBlock().getWorld().spawnParticle(Particle.HAPPY_VILLAGER, event.getBlock().getLocation().add(0.5, 0.8, 0.5), 5, 0.25, 0.25, 0.25, 0.01);
+        if (granted) {
+            event.getBlock().getWorld().spawnParticle(Particle.HAPPY_VILLAGER, event.getBlock().getLocation().add(0.5, 0.8, 0.5), 5, 0.25, 0.25, 0.25, 0.01);
+        }
+    }
+
+    public boolean applyHarvestingBonus(Player player, ItemStack tool, List<ItemStack> drops) {
+        if (player == null || player.getGameMode() == GameMode.CREATIVE || drops == null || drops.isEmpty()) return false;
+        int level = storedEnchantLevel(tool, CustomEnchantEntry.HARVESTING);
+        if (level <= 0 || ThreadLocalRandom.current().nextDouble() >= Math.min(0.60D, 0.16D * level)) return false;
+        return addSingleCropDropBonus(drops);
+    }
+
+    static boolean addSingleCropDropBonus(List<ItemStack> drops) {
+        if (drops == null || drops.isEmpty()) {
+            return false;
+        }
+        int targetIndex = firstCropDropIndex(drops.stream()
+            .map(stack -> stack == null || stack.getType().isAir() ? null : stack.getType().name())
+            .toList());
+        if (targetIndex < 0) {
+            return false;
+        }
+        ItemStack stack = drops.get(targetIndex);
+        if (stack.getAmount() < stack.getMaxStackSize()) {
+            stack.setAmount(stack.getAmount() + 1);
+        } else {
+            ItemStack bonus = stack.clone();
+            bonus.setAmount(1);
+            drops.add(bonus);
+        }
+        return true;
+    }
+
+    static int firstCropDropIndex(List<String> materialNames) {
+        if (materialNames == null) {
+            return -1;
+        }
+        for (int index = 0; index < materialNames.size(); index++) {
+            if (isCropDropName(materialNames.get(index))) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -830,6 +1134,7 @@ public final class CustomEnchantListener implements Listener {
     public void onWiseXpGain(PlayerExpChangeEvent event) {
         int amount = event.getAmount();
         if (amount <= 0) return;
+        if (plugin.getXpLecternListener() != null && plugin.getXpLecternListener().isLecternBottleXpPickup(event.getPlayer())) return;
 
         int wiseLevel = wiseLevel(event.getPlayer().getInventory().getItemInMainHand());
         if (wiseLevel <= 0) return;
@@ -877,23 +1182,23 @@ public final class CustomEnchantListener implements Listener {
         useDash(player);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onDoubleJumpFlight(PlayerToggleFlightEvent event) {
         Player player = event.getPlayer();
         if (!event.isFlying()) return;
-        if (!doubleJumpFlightPlayers.contains(player.getUniqueId())) return;
+        if (!doubleJumpArmedPlayers.contains(player.getUniqueId())) return;
+
+        if (!canUseDoubleJump(player)) {
+            clearDoubleJumpFlight(player);
+            return;
+        }
 
         event.setCancelled(true);
         player.setFlying(false);
-        if (!shouldKeepExternalFlight(player)) {
-            player.setAllowFlight(false);
-        }
-        doubleJumpFlightPlayers.remove(player.getUniqueId());
-
-        if (!canUseDoubleJump(player)) {
-            return;
-        }
+        clearDoubleJumpFlight(player);
         if (!consumeDoubleJumpCost(player)) {
+            player.sendActionBar(MM.deserialize("<red>Too hungry to double jump.</red>"));
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_BASS, 0.55f, 0.75f);
             return;
         }
 
@@ -909,8 +1214,18 @@ public final class CustomEnchantListener implements Listener {
             return;
         }
 
+        ItemStack book = createDoubleJumpBook();
+        if (plugin.getItemAuditManager() != null) {
+            Location origin = event.getLootContext().getLocation();
+            plugin.getItemAuditManager().recordGeneratedItem(
+                book,
+                "ancient_city_loot",
+                "Generated in " + origin.getWorld().getName() + " at "
+                    + origin.getBlockX() + "," + origin.getBlockY() + "," + origin.getBlockZ() + "."
+            );
+        }
         List<ItemStack> loot = new ArrayList<>(event.getLoot());
-        loot.add(createDoubleJumpBook());
+        loot.add(book);
         event.setLoot(loot);
     }
 
@@ -925,55 +1240,99 @@ public final class CustomEnchantListener implements Listener {
     public void onQuit(PlayerQuitEvent event) {
         UUID playerId = event.getPlayer().getUniqueId();
         wiseXpRemainders.remove(playerId);
+        telekinesisLootOwners.entrySet().removeIf(entry -> playerId.equals(entry.getValue()));
         essenceCaptureLootOwners.entrySet().removeIf(entry -> playerId.equals(entry.getValue().ownerId()));
         clearDoubleJumpFlight(event.getPlayer());
     }
 
+    @EventHandler
+    public void onEntityRemoved(EntityRemoveFromWorldEvent event) {
+        UUID entityId = event.getEntity().getUniqueId();
+        telekinesisLootOwners.remove(entityId);
+        essenceCaptureLootOwners.remove(entityId);
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onMenuClick(InventoryClickEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof EnchantRecipeMenuHolder) {
+        Inventory top = event.getView().getTopInventory();
+        InventoryHolder rawHolder = top.getHolder(false);
+        if (rawHolder instanceof EnchantRecipeMenuHolder recipeHolder) {
             event.setCancelled(true);
             if (!(event.getWhoClicked() instanceof Player player)) {
                 return;
             }
-            if (event.getClickedInventory() == null || event.getClickedInventory().getType() == InventoryType.PLAYER) {
+            if (event.getClick() != ClickType.LEFT && event.getClick() != ClickType.RIGHT) {
                 return;
             }
-            if (event.getRawSlot() == 40) {
-                openEnchantMenu(player);
+            int rawSlot = event.getRawSlot();
+            if (rawSlot < 0 || rawSlot >= top.getSize()) {
                 return;
             }
-            if (event.getRawSlot() == 23 || event.getRawSlot() == 25) {
-                CustomEnchantEntry enchant = ((EnchantRecipeMenuHolder) event.getView().getTopInventory().getHolder()).enchant();
-                craftEnchantBookFromInventory(player, enchant);
-                Bukkit.getScheduler().runTask(plugin, () -> openEnchantRecipeMenu(player, enchant));
+            if (rawSlot == 40) {
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (player.isOnline()) {
+                        openEnchantMenu(player);
+                    }
+                });
+                return;
+            }
+            if (rawSlot == 23 || rawSlot == 25) {
+                CustomEnchantEntry enchant = recipeHolder.enchant();
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (!player.isOnline()) {
+                        return;
+                    }
+                    craftEnchantBookFromInventory(player, enchant);
+                    openEnchantRecipeMenu(player, enchant);
+                });
             }
             return;
         }
-        if (!(event.getView().getTopInventory().getHolder() instanceof EnchantMenuHolder)) return;
+        if (!(rawHolder instanceof EnchantMenuHolder)) return;
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
-        if (event.getClickedInventory() == null || event.getClickedInventory().getType() == InventoryType.PLAYER) {
+        if (event.getClick() != ClickType.LEFT && event.getClick() != ClickType.RIGHT) {
             return;
         }
-        if (event.getRawSlot() == 40) {
-            player.closeInventory();
-            Bukkit.getScheduler().runTask(plugin, () -> player.performCommand("menu"));
+        int rawSlot = event.getRawSlot();
+        if (rawSlot < 0 || rawSlot >= top.getSize()) {
+            return;
+        }
+        if (rawSlot == 40) {
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) {
+                    return;
+                }
+                player.closeInventory();
+                player.performCommand("menu");
+            });
+            return;
+        }
+        if (rawSlot == 36) {
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (player.isOnline() && plugin.getCrossplayManager() != null) {
+                    plugin.getCrossplayManager().sendAnvilAccessHint(player);
+                }
+            });
             return;
         }
 
         CustomEnchantEntry enchant = menuEnchant(event.getCurrentItem());
         if (enchant != null && hasCraftingRecipe(enchant)) {
-            openEnchantRecipeMenu(player, enchant);
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (player.isOnline()) {
+                    openEnchantRecipeMenu(player, enchant);
+                }
+            });
         }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onMenuDrag(InventoryDragEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof EnchantMenuHolder
-            || event.getView().getTopInventory().getHolder() instanceof EnchantRecipeMenuHolder) {
+        InventoryHolder holder = event.getView().getTopInventory().getHolder(false);
+        if (holder instanceof EnchantMenuHolder || holder instanceof EnchantRecipeMenuHolder) {
             event.setCancelled(true);
         }
     }
@@ -988,9 +1347,11 @@ public final class CustomEnchantListener implements Listener {
             CustomLoreUtil.Rarity.RARE,
             enchant.plainDisplay(appliedLevel) + " Book"
         ));
-        meta.lore(buildBookLore(enchant, appliedLevel));
+        ItemModelUtil.apply(meta, enchant.id + "_book");
+        meta.setMaxStackSize(1);
         meta.getPersistentDataContainer().set(keyCustomEnchantBook, PersistentDataType.STRING, enchant.id);
         meta.getPersistentDataContainer().set(keyFor(enchant), PersistentDataType.INTEGER, appliedLevel);
+        meta.lore(buildBookLore(meta, enchant, appliedLevel));
         book.setItemMeta(meta);
         return book;
     }
@@ -1017,7 +1378,7 @@ public final class CustomEnchantListener implements Listener {
             for (String line : loreLines) {
                 lore.add(MM.deserialize(line));
             }
-            meta.lore(lore);
+            meta.lore(CustomLoreUtil.wrapLoreLines(lore));
         }
         item.setItemMeta(meta);
         return item;
@@ -1099,10 +1460,11 @@ public final class CustomEnchantListener implements Listener {
         return new RecipeChoice.ExactChoice(relic);
     }
 
-    private List<Component> buildBookLore(CustomEnchantEntry enchant, int level) {
+    private List<Component> buildBookLore(ItemMeta meta, CustomEnchantEntry enchant, int level) {
         List<String> topLines = new ArrayList<>();
         topLines.add("<gray>Levels: <white>" + enchant.levelDisplay(level) + "</white></gray>");
         return CustomLoreUtil.buildStyledLore(
+            meta,
             Material.ENCHANTED_BOOK,
             CustomLoreUtil.Rarity.RARE.label(),
             "BOOK",
@@ -1159,12 +1521,10 @@ public final class CustomEnchantListener implements Listener {
             )
         );
         ItemStack filler = createMenuItem(Material.BLACK_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
-        ItemStack accent = createMenuItem(Material.CYAN_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
         for (int slot = 0; slot < inventory.getSize(); slot++) {
-            inventory.setItem(slot, filler);
-        }
-        for (int slot : List.of(0, 1, 7, 8, 9, 17, 27, 35, 36, 37, 43, 44)) {
-            inventory.setItem(slot, accent);
+            if (isFrameSlot(slot, inventory.getSize())) {
+                inventory.setItem(slot, filler);
+            }
         }
 
         inventory.setItem(4, createMenuItem(
@@ -1187,12 +1547,16 @@ public final class CustomEnchantListener implements Listener {
             "<gray>Click to craft server-side using your inventory.</gray>",
             "<gray>Java players can still use the exact layout shown.</gray>",
             "<gray>The book ingredient is a normal <white>Book</white>.</gray>",
-            "<gray>Boss materials must be real Covenant drops.</gray>"
+            "<gray>Boss materials must be real Veil drops.</gray>"
         )));
         inventory.setItem(25, createBook(enchant, 1));
         inventory.setItem(40, createMenuItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to custom enchants.</gray>")));
         player.openInventory(inventory);
         player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 0.6f, 1.2f);
+    }
+
+    private static boolean isFrameSlot(int slot, int size) {
+        return slot < 9 || slot >= size - 9 || slot % 9 == 0 || slot % 9 == 8;
     }
 
     private ItemStack[] craftOnlyRecipeMatrix(CustomEnchantEntry enchant) {
@@ -1382,7 +1746,7 @@ public final class CustomEnchantListener implements Listener {
     }
 
     private BookEnchantData bookEnchant(ItemStack item) {
-        if (item == null || item.getType() != Material.ENCHANTED_BOOK) return null;
+        if (customBookPayloadState(item) != CustomBookPayloadState.VALID) return null;
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return null;
 
@@ -1392,16 +1756,121 @@ public final class CustomEnchantListener implements Listener {
         for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
             if (enchant.id.equalsIgnoreCase(id)) {
                 int level = storedEnchantLevel(meta, enchant);
-                return new BookEnchantData(enchant, level <= 0 ? 1 : enchant.clampLevel(level));
+                return new BookEnchantData(enchant, level);
             }
         }
         return null;
+    }
+
+    private CustomBookPayloadState customBookPayloadState(ItemStack item) {
+        if (item == null || item.getType() != Material.ENCHANTED_BOOK) {
+            return CustomBookPayloadState.NONE;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return CustomBookPayloadState.NONE;
+        }
+
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        boolean markerPresent = pdc.getKeys().contains(keyCustomEnchantBook);
+        String marker = pdc.get(keyCustomEnchantBook, PersistentDataType.STRING);
+        Map<String, Integer> levels = new LinkedHashMap<>();
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            NamespacedKey key = keyFor(enchant);
+            if (pdc.getKeys().contains(key)) {
+                levels.put(enchant.id, pdc.get(key, PersistentDataType.INTEGER));
+            }
+        }
+        if (!markerPresent && levels.isEmpty()) {
+            return CustomBookPayloadState.NONE;
+        }
+
+        boolean hasVanillaEnchantData = !meta.getEnchants().isEmpty()
+            || meta instanceof EnchantmentStorageMeta storageMeta && storageMeta.hasStoredEnchants();
+        boolean hasCompetingBookMarker = pdc.getKeys().contains(keyReplenishBook);
+        return classifyCustomBookPayload(
+            markerPresent ? (marker == null ? "\u0000" : marker) : null,
+            levels,
+            item.getAmount(),
+            hasVanillaEnchantData,
+            hasCompetingBookMarker
+        );
+    }
+
+    static boolean isValidCustomBookAmount(int amount) {
+        return amount == 1;
+    }
+
+    static CustomBookPayloadState classifyCustomBookPayload(
+        String marker,
+        Map<String, Integer> levels,
+        int amount,
+        boolean hasVanillaEnchantData,
+        boolean hasCompetingBookMarker
+    ) {
+        Map<String, Integer> safeLevels = levels == null ? Map.of() : levels;
+        boolean hasMarker = marker != null && !marker.isBlank();
+        if (!hasMarker && safeLevels.isEmpty()) {
+            return CustomBookPayloadState.NONE;
+        }
+        if (!isValidCustomBookAmount(amount)
+            || !hasMarker
+            || hasVanillaEnchantData
+            || hasCompetingBookMarker
+            || safeLevels.size() != 1) {
+            return CustomBookPayloadState.INVALID;
+        }
+
+        String selectedId = marker.toLowerCase(Locale.ROOT);
+        Integer maximumLevel = CUSTOM_ENCHANT_MAX_LEVELS.get(selectedId);
+        if (maximumLevel == null || !safeLevels.containsKey(selectedId)) {
+            return CustomBookPayloadState.INVALID;
+        }
+        Integer level = safeLevels.get(selectedId);
+        if (level == null || level <= 0 || level > maximumLevel) {
+            return CustomBookPayloadState.INVALID;
+        }
+        return CustomBookPayloadState.VALID;
+    }
+
+    private static CustomEnchantEntry customEnchantById(String id) {
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            if (enchant.id.equalsIgnoreCase(id)) {
+                return enchant;
+            }
+        }
+        return null;
+    }
+
+    private boolean hasCustomEnchantBookMarker(ItemStack item) {
+        if (item == null || item.getType() != Material.ENCHANTED_BOOK) return false;
+        ItemMeta meta = item.getItemMeta();
+        return meta != null
+            && meta.getPersistentDataContainer().getKeys().contains(keyCustomEnchantBook);
+    }
+
+    private boolean hasAnyManagedEnchantData(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) return false;
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) return false;
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            if (pdc.getKeys().contains(keyFor(enchant))) {
+                return true;
+            }
+        }
+        return pdc.getKeys().contains(keyCustomEnchantBook);
     }
 
     private boolean canApply(ItemStack item, CustomEnchantEntry enchant, int level) {
         return item != null
             && item.getType() != Material.AIR
             && enchant.applicable.test(item.getType())
+            && (enchant != CustomEnchantEntry.SMELTING_TOUCH
+                || item.getEnchantmentLevel(Enchantment.SILK_TOUCH) <= 0)
             && storedEnchantLevel(item, enchant) < enchant.clampLevel(level);
     }
 
@@ -1438,12 +1907,25 @@ public final class CustomEnchantListener implements Listener {
 
     private ItemStack applyEnchant(ItemStack item, CustomEnchantEntry enchant, int level) {
         ItemMeta meta = item.getItemMeta();
-        if (meta == null) return item;
+        if (meta == null || !canApply(item, enchant, level)) return item;
 
+        removeInvalidManagedEnchantData(meta, item.getType());
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
         pdc.set(keyFor(enchant), PersistentDataType.INTEGER, enchant.clampLevel(level));
         applyManagedEnchantLore(meta);
         item.setItemMeta(meta);
+        return item;
+    }
+
+    public ItemStack applyManagedEnchant(ItemStack item, String enchantId, int level) {
+        if (item == null || item.getType().isAir() || enchantId == null || enchantId.isBlank()) {
+            return item;
+        }
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            if (enchant.id.equalsIgnoreCase(enchantId) && enchant.applicable.test(item.getType())) {
+                return applyEnchant(item, enchant, level);
+            }
+        }
         return item;
     }
 
@@ -1458,7 +1940,14 @@ public final class CustomEnchantListener implements Listener {
         }
 
         PersistentDataContainer resultPdc = resultMeta.getPersistentDataContainer();
+        resultPdc.remove(keyCustomEnchantBook);
         for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            resultPdc.remove(keyFor(enchant));
+        }
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            if (!enchant.applicable.test(result.getType())) {
+                continue;
+            }
             int level = storedEnchantLevel(sourceMeta, enchant);
             if (level > 0) {
                 resultPdc.set(keyFor(enchant), PersistentDataType.INTEGER, level);
@@ -1474,11 +1963,16 @@ public final class CustomEnchantListener implements Listener {
         if (meta == null) return item;
 
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        boolean wasCustomEnchantBook = pdc.has(keyCustomEnchantBook, PersistentDataType.STRING);
         for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
             pdc.remove(keyFor(enchant));
         }
+        pdc.remove(keyCustomEnchantBook);
         applyManagedEnchantLore(meta);
         item.setItemMeta(meta);
+        if (wasCustomEnchantBook && plugin.getItemAuditManager() != null) {
+            plugin.getItemAuditManager().clearTrackedIdentity(item, "custom_enchant:");
+        }
         return item;
     }
 
@@ -1488,7 +1982,7 @@ public final class CustomEnchantListener implements Listener {
                 player.sendMessage(MessageUtil.warn("You need at least one empty inventory slot."));
                 return false;
             }
-            player.getInventory().addItem(result);
+            InventoryRecipeUtil.giveOrDrop(player, result);
             return true;
         }
 
@@ -1536,6 +2030,11 @@ public final class CustomEnchantListener implements Listener {
             && (event.getSlotType() == InventoryType.SlotType.RESULT || event.getRawSlot() == 2);
     }
 
+    private boolean isGrindstoneResultSlot(InventoryClickEvent event) {
+        return event.getView().getTopInventory().getType() == InventoryType.GRINDSTONE
+            && event.getRawSlot() == 2;
+    }
+
     private CustomEnchantAnvilResult customEnchantAnvilResult(ItemStack left, ItemStack right) {
         BookEnchantData rightEnchant = bookEnchant(right);
         if (rightEnchant == null) {
@@ -1568,7 +2067,7 @@ public final class CustomEnchantListener implements Listener {
 
         int currentLevel = storedEnchantLevel(left, rightEnchant.enchant());
         int level = targetItemEnchantLevel(currentLevel, rightEnchant);
-        if (level <= currentLevel) {
+        if (level <= currentLevel || !canApply(left, rightEnchant.enchant(), level)) {
             return null;
         }
 
@@ -1587,13 +2086,14 @@ public final class CustomEnchantListener implements Listener {
         if (left == null || right == null || left.getType().isAir() || right.getType().isAir()) {
             return null;
         }
-        if (left.getType() != right.getType() || bookEnchant(left) != null || bookEnchant(right) != null) {
+        if (left.getType() != right.getType() || hasCustomEnchantBookMarker(left) || hasCustomEnchantBookMarker(right)) {
             return null;
         }
 
         ItemStack result = vanillaResult == null || vanillaResult.getType().isAir()
             ? left.clone()
             : vanillaResult.clone();
+        result = stripManagedEnchants(result);
         if (result.getType().isAir()) {
             return null;
         }
@@ -1636,6 +2136,10 @@ public final class CustomEnchantListener implements Listener {
             result = replenish.preserveReplenish(leftReplenish ? left : right, result);
         }
 
+        if (CustomLoreUtil.hasSmeltingSilkConflict(result)) {
+            return null;
+        }
+
         if (!changedByRightItem) {
             return null;
         }
@@ -1652,33 +2156,31 @@ public final class CustomEnchantListener implements Listener {
     }
 
     private int combinedItemEnchantLevel(CustomEnchantEntry enchant, int leftLevel, int rightLevel) {
-        if (leftLevel <= 0) {
-            return enchant.clampLevel(rightLevel);
-        }
-        if (rightLevel <= 0) {
-            return enchant.clampLevel(leftLevel);
-        }
-        if (leftLevel == rightLevel && leftLevel < enchant.maxLevel()) {
-            return enchant.clampLevel(leftLevel + 1);
-        }
-        return enchant.clampLevel(Math.max(leftLevel, rightLevel));
+        return combinedEnchantLevel(leftLevel, rightLevel, enchant.maxLevel());
     }
 
     private int combinedBookLevel(BookEnchantData left, BookEnchantData right) {
-        int max = left.enchant().maxLevel();
-        if (left.level() == right.level() && left.level() < max) {
-            return left.level() + 1;
-        }
-        return left.enchant().clampLevel(Math.max(left.level(), right.level()));
+        return combinedEnchantLevel(left.level(), right.level(), left.enchant().maxLevel());
     }
 
     private int targetItemEnchantLevel(int currentLevel, BookEnchantData book) {
-        int bookLevel = book.level();
-        int max = book.enchant().maxLevel();
-        if (currentLevel == bookLevel && currentLevel < max) {
-            return currentLevel + 1;
+        return combinedEnchantLevel(currentLevel, book.level(), book.enchant().maxLevel());
+    }
+
+    static int combinedEnchantLevel(int leftLevel, int rightLevel, int maximumLevel) {
+        int max = Math.max(1, maximumLevel);
+        int left = Math.max(0, Math.min(max, leftLevel));
+        int right = Math.max(0, Math.min(max, rightLevel));
+        if (left == 0) {
+            return right;
         }
-        return book.enchant().clampLevel(Math.max(currentLevel, bookLevel));
+        if (right == 0) {
+            return left;
+        }
+        if (left == right && left < max) {
+            return left + 1;
+        }
+        return Math.max(left, right);
     }
 
     private void configureCustomEnchantAnvil(PrepareAnvilEvent event, CustomEnchantAnvilResult result) {
@@ -1747,6 +2249,135 @@ public final class CustomEnchantListener implements Listener {
         return false;
     }
 
+    public boolean normalizeManagedEnchantData(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return false;
+        }
+        if (item.getType() == Material.ENCHANTED_BOOK) {
+            return normalizeLegacyCustomEnchantBook(item);
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        boolean changed = false;
+        if (pdc.getKeys().contains(keyCustomEnchantBook)) {
+            pdc.remove(keyCustomEnchantBook);
+            changed = true;
+        }
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            NamespacedKey key = keyFor(enchant);
+            if (!pdc.getKeys().contains(key)) {
+                continue;
+            }
+            Integer raw = pdc.get(key, PersistentDataType.INTEGER);
+            if (raw == null || raw <= 0 || !enchant.applicable.test(item.getType())) {
+                pdc.remove(key);
+                changed = true;
+                continue;
+            }
+            int clamped = enchant.clampLevel(raw);
+            if (raw != clamped) {
+                pdc.set(key, PersistentDataType.INTEGER, clamped);
+                changed = true;
+            }
+        }
+        if (changed) {
+            item.setItemMeta(meta);
+        }
+        return changed;
+    }
+
+    private boolean normalizeLegacyCustomEnchantBook(ItemStack item) {
+        if (item == null || item.getType() != Material.ENCHANTED_BOOK || item.getAmount() != 1) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        boolean markerPresent = pdc.getKeys().contains(keyCustomEnchantBook);
+        String marker = pdc.get(keyCustomEnchantBook, PersistentDataType.STRING);
+        Map<String, Integer> levels = new LinkedHashMap<>();
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            NamespacedKey key = keyFor(enchant);
+            if (pdc.getKeys().contains(key)) {
+                levels.put(enchant.id, pdc.get(key, PersistentDataType.INTEGER));
+            }
+        }
+        String canonicalId = canonicalCustomBookId(
+            markerPresent ? marker : null,
+            levels,
+            pdc.getKeys().contains(keyReplenishBook)
+        );
+        CustomEnchantEntry selected = customEnchantById(canonicalId);
+        if (selected == null) {
+            return false;
+        }
+
+        Integer rawLevel = levels.get(selected.id);
+        if (rawLevel == null || rawLevel <= 0) {
+            return false;
+        }
+        int level = selected.clampLevel(rawLevel);
+        boolean changed = !selected.id.equals(marker) || rawLevel != level || levels.size() != 1;
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            NamespacedKey key = keyFor(enchant);
+            if (enchant != selected && pdc.getKeys().contains(key)) {
+                pdc.remove(key);
+                changed = true;
+            }
+        }
+        pdc.set(keyCustomEnchantBook, PersistentDataType.STRING, selected.id);
+        pdc.set(keyFor(selected), PersistentDataType.INTEGER, level);
+
+        for (Enchantment enchantment : new ArrayList<>(meta.getEnchants().keySet())) {
+            changed |= meta.removeEnchant(enchantment);
+        }
+        if (meta instanceof EnchantmentStorageMeta storageMeta) {
+            for (Enchantment enchantment : new ArrayList<>(storageMeta.getStoredEnchants().keySet())) {
+                changed |= storageMeta.removeStoredEnchant(enchantment);
+            }
+        }
+        if (!meta.hasMaxStackSize() || meta.getMaxStackSize() != 1) {
+            meta.setMaxStackSize(1);
+            changed = true;
+        }
+        if (!changed) {
+            return false;
+        }
+        meta.displayName(CustomLoreUtil.displayName(
+            CustomLoreUtil.Rarity.RARE,
+            selected.plainDisplay(level) + " Book"
+        ));
+        ItemModelUtil.apply(meta, selected.id + "_book");
+        applyManagedEnchantLore(meta);
+        item.setItemMeta(meta);
+        return true;
+    }
+
+    static String canonicalCustomBookId(String marker, Map<String, Integer> levels, boolean hasCompetingBookMarker) {
+        if (hasCompetingBookMarker || levels == null || levels.isEmpty()) {
+            return null;
+        }
+        if (marker != null && !marker.isBlank()) {
+            String normalized = marker.toLowerCase(Locale.ROOT);
+            Integer maximum = CUSTOM_ENCHANT_MAX_LEVELS.get(normalized);
+            Integer level = levels.get(normalized);
+            return maximum != null && level != null && level > 0 ? normalized : null;
+        }
+        if (levels.size() != 1) {
+            return null;
+        }
+        Map.Entry<String, Integer> only = levels.entrySet().iterator().next();
+        Integer maximum = CUSTOM_ENCHANT_MAX_LEVELS.get(only.getKey());
+        Integer level = only.getValue();
+        return maximum != null && level != null && level > 0 ? only.getKey() : null;
+    }
+
     public boolean hasOnlyManagedEnchantData(ItemStack item) {
         if (item == null || item.getType() == Material.AIR) {
             return false;
@@ -1778,6 +2409,52 @@ public final class CustomEnchantListener implements Listener {
             }
         }
         return false;
+    }
+
+    public List<ManagedEnchantOption> managedEnchantOptions(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) {
+            return List.of();
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return List.of();
+        }
+        List<ManagedEnchantOption> options = new ArrayList<>();
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            int level = storedEnchantLevel(meta, enchant);
+            if (level > 0 && enchant.applicable.test(item.getType())) {
+                options.add(new ManagedEnchantOption(enchant.id, enchant.plainName(), level, enchant.maxLevel()));
+            }
+        }
+        return options;
+    }
+
+    public int upgradeManagedEnchant(ItemStack item, String enchantId, int increase) {
+        if (item == null || item.getType() == Material.AIR || enchantId == null || enchantId.isBlank()) {
+            return 0;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return 0;
+        }
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            if (!enchant.id.equalsIgnoreCase(enchantId) || !enchant.applicable.test(item.getType())) {
+                continue;
+            }
+            int current = storedEnchantLevel(meta, enchant);
+            if (current <= 0) {
+                return 0;
+            }
+            int next = Math.min(enchant.maxLevel(), current + Math.max(1, increase));
+            if (next <= current) {
+                return 0;
+            }
+            meta.getPersistentDataContainer().set(keyFor(enchant), PersistentDataType.INTEGER, next);
+            applyManagedEnchantLore(meta);
+            item.setItemMeta(meta);
+            return next - current;
+        }
+        return 0;
     }
 
     private boolean hasDelicate(ItemStack item) {
@@ -1830,10 +2507,37 @@ public final class CustomEnchantListener implements Listener {
     }
 
     private int storedEnchantLevel(ItemMeta meta, CustomEnchantEntry enchant) {
+        int stored = rawStoredEnchantLevel(meta, enchant);
+        return stored <= 0 ? 0 : enchant.clampLevel(stored);
+    }
+
+    private int rawStoredEnchantLevel(ItemMeta meta, CustomEnchantEntry enchant) {
         if (meta == null) return 0;
         Integer stored = meta.getPersistentDataContainer().get(keyFor(enchant), PersistentDataType.INTEGER);
-        if (stored == null) return 0;
-        return enchant.clampLevel(stored);
+        return stored == null ? 0 : stored;
+    }
+
+    private void removeInvalidManagedEnchantData(ItemMeta meta, Material material) {
+        if (meta == null) return;
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        if (material != Material.ENCHANTED_BOOK) {
+            pdc.remove(keyCustomEnchantBook);
+        }
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            NamespacedKey key = keyFor(enchant);
+            if (!pdc.getKeys().contains(key)) {
+                continue;
+            }
+            int level = rawStoredEnchantLevel(meta, enchant);
+            if (level <= 0 || !enchant.applicable.test(material)) {
+                pdc.remove(key);
+                continue;
+            }
+            int clamped = enchant.clampLevel(level);
+            if (level != clamped) {
+                pdc.set(key, PersistentDataType.INTEGER, clamped);
+            }
+        }
     }
 
     private int enchantTableLevel(CustomEnchantEntry enchant, int expLevelCost) {
@@ -1862,15 +2566,6 @@ public final class CustomEnchantListener implements Listener {
         };
     }
 
-    private boolean isManagedEnchantLoreLine(String plain) {
-        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
-            if (enchant.matchesLoreLine(plain)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private void tickDoubleJumpFlightPlayers() {
         for (Player player : Bukkit.getOnlinePlayers()) {
             updateDoubleJumpFlight(player);
@@ -1879,28 +2574,34 @@ public final class CustomEnchantListener implements Listener {
 
     private void updateDoubleJumpFlight(Player player) {
         UUID playerId = player.getUniqueId();
-        boolean grantedFlight = doubleJumpFlightPlayers.contains(playerId);
-        if (!canUseDoubleJump(player)) {
-            if (grantedFlight) {
-                clearDoubleJumpFlight(player);
-            }
-            return;
-        }
-
-        if (isOnGround(player)) {
-            if (!player.getAllowFlight()) {
+        boolean armed = doubleJumpArmedPlayers.contains(playerId);
+        DoubleJumpFlightAction action = doubleJumpFlightAction(
+            canUseDoubleJump(player),
+            armed,
+            player.getAllowFlight(),
+            isOnGround(player)
+        );
+        switch (action) {
+            case ARM -> {
                 player.setAllowFlight(true);
-                doubleJumpFlightPlayers.add(playerId);
+                doubleJumpArmedPlayers.add(playerId);
             }
-            return;
+            case KEEP_ARMED -> {
+                if (!player.getAllowFlight()) {
+                    player.setAllowFlight(true);
+                }
+            }
+            case DISARM -> clearDoubleJumpFlight(player);
+            case NONE -> {
+            }
         }
+    }
 
-        if (grantedFlight && !player.isFlying()) {
-            if (!shouldKeepExternalFlight(player)) {
-                player.setAllowFlight(false);
-            }
-            doubleJumpFlightPlayers.remove(playerId);
-        }
+    static DoubleJumpFlightAction doubleJumpFlightAction(boolean usable, boolean armed, boolean allowFlight, boolean onGround) {
+        if (!usable) return armed ? DoubleJumpFlightAction.DISARM : DoubleJumpFlightAction.NONE;
+        if (armed) return DoubleJumpFlightAction.KEEP_ARMED;
+        if (onGround && !allowFlight) return DoubleJumpFlightAction.ARM;
+        return DoubleJumpFlightAction.NONE;
     }
 
     private boolean canUseDoubleJump(Player player) {
@@ -1910,7 +2611,7 @@ public final class CustomEnchantListener implements Listener {
         if (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR) {
             return false;
         }
-        if (plugin.getPlayerManager().hasFlightEnabled(player.getUniqueId())) {
+        if (shouldKeepExternalFlight(player)) {
             return false;
         }
         if (player.isFlying() || player.isGliding() || player.isInWater() || player.isInsideVehicle()) {
@@ -1923,7 +2624,7 @@ public final class CustomEnchantListener implements Listener {
         if (player == null || !player.isOnline() || player.isDead()) {
             return false;
         }
-        if (doubleJumpFlightPlayers.contains(player.getUniqueId())) {
+        if (doubleJumpArmedPlayers.contains(player.getUniqueId())) {
             return true;
         }
         return isOnGround(player) && canUseDoubleJump(player);
@@ -1952,20 +2653,32 @@ public final class CustomEnchantListener implements Listener {
     }
 
     private void launchDoubleJump(Player player) {
-        Vector horizontal = player.getLocation().getDirection().setY(0.0);
-        if (horizontal.lengthSquared() > 0.0001) {
-            horizontal.normalize().multiply(plugin.getConfigManager().doubleJumpForwardBoost);
-        } else {
-            horizontal.zero();
-        }
-
-        Vector velocity = player.getVelocity().clone();
-        velocity.setX(horizontal.getX());
-        velocity.setZ(horizontal.getZ());
-        velocity.setY(plugin.getConfigManager().doubleJumpVerticalBoost);
+        Vector velocity = doubleJumpVelocity(
+            player.getVelocity(),
+            player.getLocation().getDirection(),
+            plugin.getConfigManager().doubleJumpForwardBoost,
+            plugin.getConfigManager().doubleJumpVerticalBoost
+        );
         player.setVelocity(velocity);
         player.setFallDistance(0.0f);
         player.getWorld().playSound(player.getLocation(), Sound.ENTITY_BREEZE_SHOOT, 0.9f, 1.25f);
+        player.getWorld().spawnParticle(Particle.CLOUD, player.getLocation().add(0.0, 0.2, 0.0), 14, 0.28, 0.08, 0.28, 0.035);
+    }
+
+    static Vector doubleJumpVelocity(Vector currentVelocity, Vector facingDirection, double forwardBoost, double verticalBoost) {
+        Vector current = currentVelocity == null ? new Vector() : currentVelocity.clone();
+        Vector horizontal = current.clone().setY(0.0);
+        Vector facing = facingDirection == null ? new Vector() : facingDirection.clone().setY(0.0);
+        double boost = Math.max(0.0, forwardBoost);
+        if (boost > 0.0 && facing.lengthSquared() > 0.0001) {
+            double speedLimit = Math.max(boost, horizontal.length());
+            horizontal.multiply(0.45).add(facing.normalize().multiply(boost));
+            if (horizontal.lengthSquared() > speedLimit * speedLimit) {
+                horizontal.normalize().multiply(speedLimit);
+            }
+        }
+        horizontal.setY(Math.max(Math.max(0.1, verticalBoost), current.getY()));
+        return horizontal;
     }
 
     private void useDash(Player player) {
@@ -2029,12 +2742,22 @@ public final class CustomEnchantListener implements Listener {
         if (player == null) {
             return;
         }
-        if (!doubleJumpFlightPlayers.remove(player.getUniqueId())) {
+        if (!doubleJumpArmedPlayers.remove(player.getUniqueId())) {
             return;
         }
-        if (!player.isFlying() && !shouldKeepExternalFlight(player)) {
+        if (!shouldKeepExternalFlight(player)) {
+            if (player.isFlying()) {
+                player.setFlying(false);
+            }
             player.setAllowFlight(false);
         }
+    }
+
+    enum DoubleJumpFlightAction {
+        NONE,
+        ARM,
+        KEEP_ARMED,
+        DISARM
     }
 
     private boolean isAncientCityLoot(LootTable lootTable) {
@@ -2202,12 +2925,17 @@ public final class CustomEnchantListener implements Listener {
     private boolean sameTeam(Player first, Player second) {
         return first != null
             && second != null
+            && (plugin.getDuelManager() == null || !plugin.getDuelManager().areOpponents(first.getUniqueId(), second.getUniqueId()))
             && plugin.getTeamManager() != null
             && plugin.getTeamManager().sameTeam(first.getUniqueId(), second.getUniqueId());
     }
 
     private boolean isCustomBoss(Entity entity) {
         return entity != null && plugin.getBossManager() != null && plugin.getBossManager().isCustomBoss(entity);
+    }
+
+    private boolean isBossEncounterEntity(Entity entity) {
+        return entity != null && plugin.getBossManager() != null && plugin.getBossManager().isBossEncounterEntity(entity);
     }
 
     private static boolean isBlockedEssenceCaptureType(EntityType type) {
@@ -2240,14 +2968,21 @@ public final class CustomEnchantListener implements Listener {
         return attribute == null ? 20.0D : Math.max(1.0D, attribute.getValue());
     }
 
-    private boolean isCropDrop(Material material) {
+    private static boolean isCropDrop(Material material) {
         if (material == null || material.isAir()) {
             return false;
         }
-        return switch (material) {
-            case WHEAT, WHEAT_SEEDS, BEETROOT, BEETROOT_SEEDS, CARROT, POTATO, POISONOUS_POTATO,
-                 MELON_SLICE, MELON_SEEDS, PUMPKIN, PUMPKIN_SEEDS, COCOA_BEANS, SWEET_BERRIES,
-                 GLOW_BERRIES, SUGAR_CANE, CACTUS, BAMBOO, KELP, NETHER_WART -> true;
+        return isCropDropName(material.name());
+    }
+
+    private static boolean isCropDropName(String materialName) {
+        if (materialName == null || materialName.isBlank()) {
+            return false;
+        }
+        return switch (materialName) {
+            case "WHEAT", "WHEAT_SEEDS", "BEETROOT", "BEETROOT_SEEDS", "CARROT", "POTATO", "POISONOUS_POTATO",
+                 "MELON_SLICE", "MELON_SEEDS", "PUMPKIN", "PUMPKIN_SEEDS", "COCOA_BEANS", "SWEET_BERRIES",
+                 "GLOW_BERRIES", "SUGAR_CANE", "CACTUS", "BAMBOO", "KELP", "NETHER_WART" -> true;
             default -> false;
         };
     }
@@ -2527,6 +3262,10 @@ public final class CustomEnchantListener implements Listener {
         return next;
     }
 
+    private static boolean isEmptyItem(ItemStack item) {
+        return item == null || item.getType().isAir() || item.getAmount() <= 0;
+    }
+
     private enum CustomEnchantEntry {
         REPLENISH(
             "replenish",
@@ -2537,7 +3276,8 @@ public final class CustomEnchantListener implements Listener {
             "I",
             List.of(
                 "Hoe enchant.",
-                "Breaking supported crops replants them automatically."
+                "Breaking supported crops replants them automatically.",
+                "Any successful enchant-table use on a hoe grants it."
             ),
             material -> false,
             true,
@@ -2654,7 +3394,8 @@ public final class CustomEnchantListener implements Listener {
             List.of(
                 "Weapon enchant.",
                 "Hits can briefly slow enemies.",
-                "Higher levels improve the chance and chill strength."
+                "Higher levels improve the chance and chill strength.",
+                "Does not slow boss-encounter enemies."
             ),
             CustomEnchantListener::isMeleeWeapon,
             true,
@@ -2724,7 +3465,7 @@ public final class CustomEnchantListener implements Listener {
             List.of(
                 "Boss-forged weapon enchant.",
                 "Deals 18% more damage to custom bosses.",
-                "Craft-only book made with Covenant trophy materials."
+                "Craft-only book made with Veil trophy materials."
             ),
             CustomEnchantListener::isMeleeWeapon,
             false,
@@ -2760,7 +3501,7 @@ public final class CustomEnchantListener implements Listener {
             List.of(
                 "Boss-forged melee enchant.",
                 "Hits can mark, weaken, and lightly knock enemies back.",
-                "Works especially well as boss control."
+                "Does not control boss-encounter enemies."
             ),
             CustomEnchantListener::isMeleeWeapon,
             false,
@@ -2777,7 +3518,7 @@ public final class CustomEnchantListener implements Listener {
             "I, II, III",
             List.of(
                 "Tool and weapon enchant.",
-                "Spawn egg chance: I 1%, II 3%, III 5%.",
+                "Spawn egg chance: I 0.5%, II 1.5%, III 2.5%.",
                 "Does not work on players, custom bosses, or vanilla boss mobs."
             ),
             CustomEnchantListener::isToolOrWeapon,
@@ -2875,10 +3616,11 @@ public final class CustomEnchantListener implements Listener {
         }
 
         private String levelDisplay(int level) {
-            if (maxLevel <= 1) {
+            int safeLevel = Math.max(1, Math.min(255, level));
+            if (maxLevel <= 1 && safeLevel <= 1) {
                 return "I";
             }
-            return switch (clampLevel(level)) {
+            return switch (safeLevel) {
                 case 1 -> "I";
                 case 2 -> "II";
                 case 3 -> "III";
@@ -2889,7 +3631,8 @@ public final class CustomEnchantListener implements Listener {
         }
 
         private String loreLine(int level) {
-            return plainName + " " + switch (clampLevel(level)) {
+            int safeLevel = Math.max(1, Math.min(255, level));
+            return plainName + " " + switch (safeLevel) {
                 case 1 -> "I";
                 case 2 -> "II";
                 case 3 -> "III";
@@ -2955,7 +3698,7 @@ public final class CustomEnchantListener implements Listener {
         }
 
         private String plainDisplay(int level) {
-            if (maxLevel <= 1) {
+            if (maxLevel <= 1 && level <= 1) {
                 return plainName + " I";
             }
             return loreLine(level);
@@ -2965,7 +3708,7 @@ public final class CustomEnchantListener implements Listener {
             if (this == DOUBLE_JUMP) {
                 return List.of(
                     "Boots enchant.",
-                    "Jump again in midair to launch yourself forward.",
+                    "Double-tap jump in midair to launch forward.",
                     "Each jump costs " + formatFoodCost(config.doubleJumpHungerCost) + ".",
                     "Found in Ancient City chests at " + formatConfigPercent(config.doubleJumpAncientCityChestChance) + "."
                 );
@@ -2991,9 +3734,9 @@ public final class CustomEnchantListener implements Listener {
                 }
                 return List.of(
                     "Tool and weapon enchant.",
-                    "Level I: 1% spawn egg chance.",
-                    "Level II: 3% spawn egg chance.",
-                    "Level III: 5% spawn egg chance.",
+                    "Level I: 0.5% spawn egg chance.",
+                    "Level II: 1.5% spawn egg chance.",
+                    "Level III: 2.5% spawn egg chance.",
                     "Does not work on players, custom bosses, or vanilla boss mobs."
                 );
             }
@@ -3028,9 +3771,9 @@ public final class CustomEnchantListener implements Listener {
 
         private static String essenceCaptureChanceLabel(int level) {
             return switch (level) {
-                case 1 -> "1%";
-                case 2 -> "3%";
-                case 3 -> "5%";
+                case 1 -> "0.5%";
+                case 2 -> "1.5%";
+                case 3 -> "2.5%";
                 default -> "0%";
             };
         }
@@ -3055,7 +3798,8 @@ public final class CustomEnchantListener implements Listener {
                 return "no hunger";
             }
             if ((hungerCost & 1) == 0) {
-                return (hungerCost / 2) + " hunger bars";
+                int bars = hungerCost / 2;
+                return bars + (bars == 1 ? " hunger bar" : " hunger bars");
             }
             return hungerCost + " hunger points";
         }
@@ -3075,21 +3819,29 @@ public final class CustomEnchantListener implements Listener {
             || material == Material.SHEARS;
     }
 
-    private record EnchantMenuHolder() implements InventoryHolder {
+    private record EnchantMenuHolder() implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;
         }
     }
 
-    private record EnchantRecipeMenuHolder(CustomEnchantEntry enchant) implements InventoryHolder {
+    private record EnchantRecipeMenuHolder(CustomEnchantEntry enchant) implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;
         }
+    }
+
+    enum CustomBookPayloadState {
+        NONE,
+        VALID,
+        INVALID
     }
 
     private record BookEnchantData(CustomEnchantEntry enchant, int level) {}
+
+    public record ManagedEnchantOption(String id, String displayName, int level, int maxLevel) {}
 
     private record EssenceCaptureHit(UUID ownerId, int level) {}
 

@@ -5,19 +5,26 @@ import me.rique.smpcore.config.ConfigManager;
 import me.rique.smpcore.util.MessageUtil;
 import me.rique.smpcore.util.PluginCommandRoots;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.title.Title;
 import org.bukkit.Bukkit;
+import org.bukkit.Color;
+import org.bukkit.FireworkEffect;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
 import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.WorldBorder;
 import org.bukkit.boss.BarColor;
 import org.bukkit.boss.BarStyle;
 import org.bukkit.boss.BossBar;
+import org.bukkit.block.Block;
 import org.bukkit.command.CommandSender;
 import org.bukkit.damage.DamageSource;
 import org.bukkit.entity.AreaEffectCloud;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.Firework;
 import org.bukkit.entity.Monster;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
@@ -34,57 +41,90 @@ import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.event.entity.FoodLevelChangeEvent;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.player.PlayerBucketEmptyEvent;
 import org.bukkit.event.player.PlayerBucketFillEvent;
 import org.bukkit.event.world.WorldLoadEvent;
+import org.bukkit.inventory.meta.FireworkMeta;
+import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.projectiles.ProjectileSource;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class SmpStartManager implements Listener {
 
+    private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final long MESSAGE_THROTTLE_MS = 2500L;
     private static final long HAZARD_ATTRIBUTION_MS = 30_000L;
     private static final double HAZARD_DAMAGE_RADIUS_SQUARED = 9.0;
     private static final double HAZARD_EXPLOSION_RADIUS_SQUARED = 144.0;
     private final SMPCore plugin;
+    private final NamespacedKey seasonIntroductionKey;
+    private final NamespacedKey seasonLaunchFireworkKey;
     private final Map<UUID, Long> nextGraceMessageAt = new ConcurrentHashMap<>();
     private final Map<UUID, Long> nextLockdownMessageAt = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> nextDimensionMessageAt = new ConcurrentHashMap<>();
     private final Map<BlockKey, HazardAttribution> recentGraceHazards = new ConcurrentHashMap<>();
+    private final Set<UUID> preStartBorderViewers = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> preStartBarrierPreviewers = ConcurrentHashMap.newKeySet();
     private BossBar graceBossBar;
     private BukkitTask graceBossBarTask;
+    private BukkitTask dimensionUnlockTask;
+    private boolean trackedNetherUnlocked;
+    private boolean trackedEndUnlocked;
+    private WorldBorder preStartPlayerBorder;
 
     public SmpStartManager(SMPCore plugin) {
         this.plugin = plugin;
+        this.seasonIntroductionKey = new NamespacedKey(plugin, "season_launch_introduction_at");
+        this.seasonLaunchFireworkKey = new NamespacedKey(plugin, "season_launch_firework");
     }
 
     public void applyConfiguredState() {
         if (!plugin.getConfigManager().smpStartEnabled) {
+            stopDimensionUnlockMonitor();
+            clearPreStartPlayerBorders();
             stopGraceBossBar();
             return;
         }
 
+        startDimensionUnlockMonitor();
+
         World world = configuredWorld();
         if (world == null) {
+            clearPreStartPlayerBorders();
             plugin.getLogger().warning("SMP start world '" + plugin.getConfigManager().smpStartWorld + "' is not loaded.");
             return;
         }
 
         if (!plugin.getConfigManager().smpStarted) {
             applyBorder(world, false);
+            configurePreStartPlayerBorder(world);
+        } else {
+            clearPreStartPlayerBorders();
         }
         updateGraceBossBarState();
     }
 
     public void shutdown() {
+        stopDimensionUnlockMonitor();
+        clearPreStartPlayerBorders();
+        preStartBarrierPreviewers.clear();
         stopGraceBossBar();
         nextGraceMessageAt.clear();
         nextLockdownMessageAt.clear();
+        nextDimensionMessageAt.clear();
         recentGraceHazards.clear();
     }
 
@@ -109,6 +149,7 @@ public final class SmpStartManager implements Listener {
         long now = System.currentTimeMillis();
         config.smpStarted = true;
         config.smpStartedAt = now;
+        resetEarlyDimensionUnlocks();
         if (graceMinutesOverride != null) {
             int graceMinutes = Math.max(0, Math.min(7 * 24 * 60, graceMinutesOverride));
             config.smpPostStartGraceMinutes = graceMinutes;
@@ -119,8 +160,13 @@ public final class SmpStartManager implements Listener {
         plugin.saveConfig();
 
         applyBorder(world, true);
+        clearPreStartPlayerBorders();
         Bukkit.broadcast(startBroadcast());
-        world.playSound(world.getSpawnLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 1.0f);
+        Bukkit.broadcast(MessageUtil.info(
+            "The Nether opens on real-life Day <white>" + config.smpNetherUnlockDay
+                + "</white>. The End opens on Day <white>" + config.smpEndUnlockDay + "</white>."
+        ));
+        presentSeasonOpeningToOnlinePlayers(world.getSpawnLocation());
         startGraceBossBar();
         return new StartResult(true, "SMP started by " + sender.getName() + ".");
     }
@@ -152,6 +198,37 @@ public final class SmpStartManager implements Listener {
         return new StartResult(true, "SMP start area locked around world spawn.");
     }
 
+    public StartResult unlockDimensionEarly(CommandSender sender, World.Environment environment) {
+        ConfigManager config = plugin.getConfigManager();
+        if (!config.smpStartEnabled) {
+            return new StartResult(true, "Dimension scheduling is disabled, so every dimension is already open.");
+        }
+        if (!config.smpStarted || config.smpStartedAt <= 0L) {
+            return new StartResult(false, "Start the SMP before opening a scheduled dimension early.");
+        }
+        if (environment != World.Environment.NETHER && environment != World.Environment.THE_END) {
+            return new StartResult(false, "Only the Nether and End use scheduled unlocks.");
+        }
+
+        String dimension = dimensionName(environment);
+        if (isDimensionUnlocked(environment)) {
+            return new StartResult(true, "The " + dimension + " is already unlocked. No duplicate announcement was sent.");
+        }
+
+        setEarlyDimensionUnlock(environment, true);
+        plugin.saveConfig();
+        trackDimensionAsUnlocked(environment);
+        nextDimensionMessageAt.clear();
+        Bukkit.broadcast(dimensionUnlockBroadcast(environment, true));
+        Sound sound = environment == World.Environment.NETHER ? Sound.BLOCK_PORTAL_TRIGGER : Sound.BLOCK_END_PORTAL_SPAWN;
+        float pitch = environment == World.Environment.NETHER ? 0.8f : 1.15f;
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            player.playSound(player.getLocation(), sound, 0.85f, pitch);
+        }
+        plugin.getLogger().info(dimension + " unlocked early by " + sender.getName() + ".");
+        return new StartResult(true, dimension + " unlocked early and announced to the server.");
+    }
+
     public Component statusMessage() {
         ConfigManager config = plugin.getConfigManager();
         if (!config.smpStartEnabled) {
@@ -163,17 +240,41 @@ public final class SmpStartManager implements Listener {
             ? formatNumber(world.getWorldBorder().getSize())
             : formatNumber(config.smpPreStartBorderDiameter);
         if (!config.smpStarted) {
-            return MessageUtil.info("SMP has not started. Border: <white>" + border + "</white>. PvP is blocked.");
-        }
-
-        if (isGraceActive()) {
             return MessageUtil.info(
-                "SMP is started. Border: <white>" + border + "</white>. PvP unlocks in <white>"
-                    + formatDuration(graceMillisRemaining()) + "</white>."
+                "SMP has not started. Spawn barrier: <white>" + formatNumber(config.smpPreStartBorderDiameter / 2.0)
+                    + " blocks</white>. PvP and dimensions are locked."
             );
         }
 
-        return MessageUtil.info("SMP is started. Border: <white>" + border + "</white>. PvP is unlocked.");
+        String dimensions = "Nether: <white>" + dimensionStatus(World.Environment.NETHER)
+            + "</white>. End: <white>" + dimensionStatus(World.Environment.THE_END) + "</white>.";
+        if (isGraceActive()) {
+            return MessageUtil.info(
+                "SMP is started. Border: <white>" + border + "</white>. PvP unlocks in <white>"
+                    + formatDuration(graceMillisRemaining()) + "</white>. " + dimensions
+            );
+        }
+
+        return MessageUtil.info("SMP is started. Border: <white>" + border + "</white>. PvP is unlocked. " + dimensions);
+    }
+
+    public StartResult toggleBarrierPreview(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            return new StartResult(false, "Only a player can preview the spawn barrier.");
+        }
+        if (!isPreStartLocked()) {
+            return new StartResult(false, "The pre-SMP spawn barrier is not active.");
+        }
+
+        UUID playerId = player.getUniqueId();
+        if (preStartBarrierPreviewers.remove(playerId)) {
+            clearPreStartPlayerBorder(player);
+            return new StartResult(true, "Spawn barrier preview disabled.");
+        }
+
+        preStartBarrierPreviewers.add(playerId);
+        syncPreStartPlayer(player);
+        return new StartResult(true, "Spawn barrier preview enabled for you. Run /startsmp preview again to leave it.");
     }
 
     public boolean isGraceActive() {
@@ -188,12 +289,122 @@ public final class SmpStartManager implements Listener {
         return config.smpStartEnabled && !config.smpStarted;
     }
 
+    public boolean shouldDeferSeasonIntroduction() {
+        return isPreStartLocked();
+    }
+
+    public void presentSeasonIntroductionIfPending(Player player) {
+        if (player == null || !player.isOnline() || !isSeasonIntroductionPending(player)) {
+            return;
+        }
+        markSeasonIntroductionSeen(player);
+        playSeasonIntroduction(List.of(player), player.getLocation(), 2);
+    }
+
+    static boolean shouldDeliverSeasonIntroduction(
+        boolean smpStartEnabled,
+        boolean smpStarted,
+        long smpStartedAt,
+        Long introductionSeenAt
+    ) {
+        if (smpStartEnabled && !smpStarted) {
+            return false;
+        }
+        long launchToken = smpStartEnabled ? Math.max(1L, smpStartedAt) : 1L;
+        return introductionSeenAt == null || introductionSeenAt.longValue() != launchToken;
+    }
+
     @EventHandler
     public void onWorldLoad(WorldLoadEvent event) {
         if (!event.getWorld().getName().equalsIgnoreCase(plugin.getConfigManager().smpStartWorld)) {
             return;
         }
         applyConfiguredState();
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        Bukkit.getScheduler().runTask(plugin, () -> syncPreStartPlayer(event.getPlayer()));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerChangedWorld(PlayerChangedWorldEvent event) {
+        Bukkit.getScheduler().runTask(plugin, () -> syncPreStartPlayer(event.getPlayer()));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        UUID playerId = event.getPlayer().getUniqueId();
+        nextGraceMessageAt.remove(playerId);
+        nextLockdownMessageAt.remove(playerId);
+        nextDimensionMessageAt.remove(playerId);
+        preStartBorderViewers.remove(playerId);
+        preStartBarrierPreviewers.remove(playerId);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPreStartBarrierTeleport(PlayerTeleportEvent event) {
+        Player player = event.getPlayer();
+        Location to = event.getTo();
+        if (!isPreStartBarrierSubject(player) || !isPreStartLocked() || to == null || to.getWorld() == null) {
+            return;
+        }
+        if (!isPreStartProtectedWorld(to.getWorld()) || isInsidePreStartBarrier(to, 0.0D)) {
+            return;
+        }
+
+        event.setCancelled(true);
+        maybeSendLockdownMessage(player);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPreStartBarrierMove(PlayerMoveEvent event) {
+        Player player = event.getPlayer();
+        Location to = event.getTo();
+        if (!isPreStartLocked() || !isPreStartBarrierSubject(player) || to == null) {
+            return;
+        }
+        if (!isPreStartProtectedWorld(to.getWorld()) || isInsidePreStartBarrier(to, 0.0D)) {
+            return;
+        }
+
+        Location from = event.getFrom();
+        if (isInsidePreStartBarrier(from, 0.0D)) {
+            event.setCancelled(true);
+        } else {
+            World world = configuredWorld();
+            if (world != null) {
+                Location spawn = world.getSpawnLocation().clone();
+                spawn.setYaw(from.getYaw());
+                spawn.setPitch(from.getPitch());
+                event.setTo(spawn);
+            } else {
+                event.setCancelled(true);
+            }
+        }
+        maybeSendLockdownMessage(player);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onLockedDimensionTravel(PlayerTeleportEvent event) {
+        Location from = event.getFrom();
+        Location to = event.getTo();
+        if (to == null || to.getWorld() == null || from.getWorld() == null) {
+            return;
+        }
+        World.Environment destination = to.getWorld().getEnvironment();
+        if (destination == from.getWorld().getEnvironment()
+            || (destination != World.Environment.NETHER && destination != World.Environment.THE_END)) {
+            return;
+        }
+
+        Player player = event.getPlayer();
+        if (player.hasPermission("smpcore.startsmp.bypass-dimension-lock") || isDimensionUnlocked(destination)) {
+            return;
+        }
+
+        event.setCancelled(true);
+        maybeSendDimensionMessage(player, destination);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -204,7 +415,8 @@ public final class SmpStartManager implements Listener {
         }
 
         String root = commandRoot(event.getMessage());
-        if (!PluginCommandRoots.contains(root)) {
+        boolean publicWarp = plugin.getWarpManager() != null && plugin.getWarpManager().isWarpCommand(root);
+        if (!PluginCommandRoots.contains(root) && !publicWarp) {
             return;
         }
 
@@ -230,6 +442,9 @@ public final class SmpStartManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPreStartFoodChange(FoodLevelChangeEvent event) {
         if (!(event.getEntity() instanceof Player player)) {
+            return;
+        }
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().isDuelParticipant(player)) {
             return;
         }
         if (!isProtectedPreStartMember(player)) {
@@ -260,6 +475,7 @@ public final class SmpStartManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPreStartBlockBreak(BlockBreakEvent event) {
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().allowsArenaBlockBreak(event.getPlayer(), event.getBlock())) return;
         if (!shouldBlockPreStartBlockEdit(event.getPlayer(), event.getBlock().getWorld())) {
             return;
         }
@@ -270,6 +486,7 @@ public final class SmpStartManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPreStartBlockPlace(BlockPlaceEvent event) {
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().allowsArenaBlockPlacement(event.getPlayer(), event.getBlockPlaced())) return;
         if (!shouldBlockPreStartBlockEdit(event.getPlayer(), event.getBlockPlaced().getWorld())) {
             return;
         }
@@ -280,6 +497,8 @@ public final class SmpStartManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPreStartBucketEmpty(PlayerBucketEmptyEvent event) {
+        Block target = event.getBlock().getRelative(event.getBlockFace());
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().allowsArenaBucket(event.getPlayer(), target)) return;
         if (!shouldBlockPreStartBlockEdit(event.getPlayer(), event.getBlock().getWorld())) {
             return;
         }
@@ -290,6 +509,7 @@ public final class SmpStartManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPreStartBucketFill(PlayerBucketFillEvent event) {
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().allowsArenaBucket(event.getPlayer(), event.getBlock())) return;
         if (!shouldBlockPreStartBlockEdit(event.getPlayer(), event.getBlock().getWorld())) {
             return;
         }
@@ -301,6 +521,9 @@ public final class SmpStartManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPreStartBlockIgnite(BlockIgniteEvent event) {
         Player player = event.getPlayer();
+        if (player != null && plugin.getDuelManager() != null
+            && plugin.getDuelManager().isActiveArena(event.getBlock().getLocation())
+            && plugin.getDuelManager().isDuelParticipant(player)) return;
         if (player == null || !shouldBlockPreStartBlockEdit(player, event.getBlock().getWorld())) {
             return;
         }
@@ -339,6 +562,7 @@ public final class SmpStartManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onGracePlayerDamage(EntityDamageEvent event) {
         if (!isGraceActive()) return;
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().shouldBypassSpawnDamage(event)) return;
         if (!(event.getEntity() instanceof Player victim)) return;
 
         Player attacker = graceAttacker(event, victim);
@@ -348,15 +572,23 @@ public final class SmpStartManager implements Listener {
         maybeSendGraceMessage(attacker);
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onSeasonLaunchFireworkDamage(EntityDamageByEntityEvent event) {
+        if (!(event.getDamager() instanceof Firework firework)) {
+            return;
+        }
+        if (firework.getPersistentDataContainer().has(seasonLaunchFireworkKey, PersistentDataType.BYTE)) {
+            event.setCancelled(true);
+        }
+    }
+
     private void applyBorder(World world, boolean fromStartCommand) {
         ConfigManager config = plugin.getConfigManager();
         WorldBorder border = world.getWorldBorder();
         Location center = world.getSpawnLocation();
         border.setCenter(center.getX(), center.getZ());
 
-        double targetSize = config.smpStarted
-            ? config.smpStartedBorderDiameter
-            : config.smpPreStartBorderDiameter;
+        double targetSize = config.smpStartedBorderDiameter;
         if (fromStartCommand && config.smpBorderExpandSeconds > 0) {
             border.changeSize(targetSize, config.smpBorderExpandSeconds);
         } else {
@@ -364,10 +596,84 @@ public final class SmpStartManager implements Listener {
         }
     }
 
+    private void configurePreStartPlayerBorder(World world) {
+        if (preStartPlayerBorder == null) {
+            preStartPlayerBorder = Bukkit.createWorldBorder();
+        }
+        Location center = world.getSpawnLocation();
+        preStartPlayerBorder.setCenter(center.getX(), center.getZ());
+        preStartPlayerBorder.setSize(plugin.getConfigManager().smpPreStartBorderDiameter);
+        preStartPlayerBorder.setDamageBuffer(0.0D);
+        preStartPlayerBorder.setDamageAmount(0.0D);
+        preStartPlayerBorder.setWarningDistance(0);
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            syncPreStartPlayer(player);
+        }
+    }
+
+    private void syncPreStartPlayer(Player player) {
+        if (player == null || !player.isOnline() || !isPreStartLocked() || !isPreStartBarrierSubject(player)) {
+            clearPreStartPlayerBorder(player);
+            return;
+        }
+
+        World world = configuredWorld();
+        if (world == null || preStartPlayerBorder == null) {
+            clearPreStartPlayerBorder(player);
+            return;
+        }
+
+        if (!world.getUID().equals(player.getWorld().getUID())) {
+            clearPreStartPlayerBorder(player);
+            prepareManagedTeleport(player);
+            player.teleportAsync(world.getSpawnLocation(), PlayerTeleportEvent.TeleportCause.PLUGIN);
+            return;
+        }
+
+        player.setWorldBorder(preStartPlayerBorder);
+        preStartBorderViewers.add(player.getUniqueId());
+        if (!isInsidePreStartBarrier(player.getLocation(), 0.0D)) {
+            prepareManagedTeleport(player);
+            player.teleportAsync(world.getSpawnLocation(), PlayerTeleportEvent.TeleportCause.PLUGIN);
+        }
+    }
+
+    private static void prepareManagedTeleport(Player player) {
+        if (player.isInsideVehicle()) {
+            player.leaveVehicle();
+        }
+        if (!player.getPassengers().isEmpty()) {
+            player.eject();
+        }
+    }
+
+    private boolean isPreStartBarrierSubject(Player player) {
+        return player != null
+            && (preStartBarrierPreviewers.contains(player.getUniqueId())
+                || (!player.isOp() && !player.hasPermission("smpcore.startsmp.bypass-dimension-lock")));
+    }
+
+    private void clearPreStartPlayerBorder(Player player) {
+        if (player == null || !preStartBorderViewers.remove(player.getUniqueId())) {
+            return;
+        }
+        if (player.getWorldBorder() == preStartPlayerBorder) {
+            player.setWorldBorder(null);
+        }
+    }
+
+    private void clearPreStartPlayerBorders() {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            clearPreStartPlayerBorder(player);
+        }
+        preStartBorderViewers.clear();
+    }
+
     private void setPreStartLockedState() {
         ConfigManager config = plugin.getConfigManager();
         config.smpStarted = false;
         config.smpStartedAt = 0L;
+        resetEarlyDimensionUnlocks();
         plugin.getConfig().set("smp-start.started", false);
         plugin.getConfig().set("smp-start.started-at", 0L);
         plugin.saveConfig();
@@ -413,8 +719,16 @@ public final class SmpStartManager implements Listener {
         graceBossBar.setProgress(Math.max(0.0, Math.min(1.0, remaining / (double) total)));
         graceBossBar.setVisible(true);
         for (Player player : Bukkit.getOnlinePlayers()) {
-            if (!graceBossBar.getPlayers().contains(player)) {
+            boolean inBossFight = plugin.getBossManager() != null && plugin.getBossManager().isActiveBossFight(player);
+            if (inBossFight) {
+                graceBossBar.removePlayer(player);
+            } else if (!graceBossBar.getPlayers().contains(player)) {
                 graceBossBar.addPlayer(player);
+            }
+        }
+        for (Player viewer : List.copyOf(graceBossBar.getPlayers())) {
+            if (!viewer.isOnline() || (plugin.getBossManager() != null && plugin.getBossManager().isActiveBossFight(viewer))) {
+                graceBossBar.removePlayer(viewer);
             }
         }
     }
@@ -439,6 +753,101 @@ public final class SmpStartManager implements Listener {
             .replace("{border}", formatNumber(config.smpStartedBorderDiameter))
             .replace("{grace}", formatDuration(graceMillisRemaining()));
         return MessageUtil.prefixedRaw(message);
+    }
+
+    private void presentSeasonOpeningToOnlinePlayers(Location origin) {
+        List<Player> recipients = new java.util.ArrayList<>();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (player.isOnline() && isSeasonIntroductionPending(player)) {
+                recipients.add(player);
+            }
+        }
+        if (recipients.isEmpty()) {
+            return;
+        }
+        recipients.forEach(this::markSeasonIntroductionSeen);
+        playSeasonIntroduction(recipients, origin, 4);
+    }
+
+    private boolean isSeasonIntroductionPending(Player player) {
+        Long seenAt = player.getPersistentDataContainer().get(seasonIntroductionKey, PersistentDataType.LONG);
+        ConfigManager config = plugin.getConfigManager();
+        return shouldDeliverSeasonIntroduction(
+            config.smpStartEnabled,
+            config.smpStarted,
+            config.smpStartedAt,
+            seenAt
+        );
+    }
+
+    private void markSeasonIntroductionSeen(Player player) {
+        player.getPersistentDataContainer().set(
+            seasonIntroductionKey,
+            PersistentDataType.LONG,
+            seasonIntroductionToken()
+        );
+    }
+
+    private long seasonIntroductionToken() {
+        ConfigManager config = plugin.getConfigManager();
+        return config.smpStartEnabled ? Math.max(1L, config.smpStartedAt) : 1L;
+    }
+
+    private void playSeasonIntroduction(List<Player> recipients, Location fireworkOrigin, int fireworkCount) {
+        Title title = Title.title(
+            MM.deserialize("<gradient:#8b5cf6:#22d3ee><bold>SEASON V</bold></gradient>"),
+            MM.deserialize("<white>Season of the Veil</white>"),
+            Title.Times.times(Duration.ofMillis(500), Duration.ofSeconds(4), Duration.ofMillis(900))
+        );
+        for (Player player : recipients) {
+            if (!player.isOnline()) {
+                continue;
+            }
+            player.showTitle(title);
+            player.playSound(player.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 0.8f);
+            player.sendMessage(MM.deserialize("<dark_gray>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</dark_gray>"));
+            player.sendMessage(MM.deserialize("<gradient:#8b5cf6:#22d3ee><bold>SEASON V • SEASON OF THE VEIL</bold></gradient>"));
+            player.sendMessage(MM.deserialize("<gray>The barrier has fallen. Your story begins now.</gray>"));
+            player.sendMessage(MM.deserialize("<gray>Meet <white>Mira the Guide</white> at spawn, then open <aqua>/menu</aqua>.</gray>"));
+            player.sendMessage(MM.deserialize("<dark_gray>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</dark_gray>"));
+            if (plugin.getSpawnAmbienceManager() != null) {
+                plugin.getSpawnAmbienceManager().playWelcomeSong(player);
+            }
+        }
+        spawnSeasonFireworks(fireworkOrigin, fireworkCount);
+    }
+
+    private void spawnSeasonFireworks(Location origin, int count) {
+        if (origin == null || origin.getWorld() == null || count <= 0) {
+            return;
+        }
+        Location base = origin.clone().add(0.0D, 1.0D, 0.0D);
+        for (int i = 0; i < count; i++) {
+            int index = i;
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                if (!plugin.isEnabled() || base.getWorld() == null) {
+                    return;
+                }
+                double angle = (Math.PI * 2.0D * index) / Math.max(1, count);
+                Location launchAt = base.clone().add(Math.cos(angle) * 2.5D, 0.0D, Math.sin(angle) * 2.5D);
+                Firework firework = base.getWorld().spawn(launchAt, Firework.class);
+                firework.getPersistentDataContainer().set(
+                    seasonLaunchFireworkKey,
+                    PersistentDataType.BYTE,
+                    (byte) 1
+                );
+                FireworkMeta meta = firework.getFireworkMeta();
+                meta.setPower(1);
+                meta.addEffect(FireworkEffect.builder()
+                    .with(FireworkEffect.Type.BALL_LARGE)
+                    .withColor(Color.fromRGB(139, 92, 246), Color.fromRGB(34, 211, 238))
+                    .withFade(Color.fromRGB(240, 171, 252))
+                    .trail(true)
+                    .flicker(true)
+                    .build());
+                firework.setFireworkMeta(meta);
+            }, i * 12L);
+        }
     }
 
     private void maybeSendGraceMessage(Player player) {
@@ -471,6 +880,24 @@ public final class SmpStartManager implements Listener {
         player.sendMessage(MessageUtil.prefixedRaw(message));
     }
 
+    private void maybeSendDimensionMessage(Player player, World.Environment environment) {
+        long now = System.currentTimeMillis();
+        Long next = nextDimensionMessageAt.get(player.getUniqueId());
+        if (next != null && next > now) {
+            return;
+        }
+        nextDimensionMessageAt.put(player.getUniqueId(), now + MESSAGE_THROTTLE_MS);
+
+        int day = dimensionUnlockDay(environment);
+        long remaining = dimensionUnlockMillisRemaining(environment, now);
+        String dimension = environment == World.Environment.NETHER ? "Nether" : "End";
+        String time = remaining == Long.MAX_VALUE ? "after /startsmp" : formatDuration(remaining);
+        player.sendMessage(MessageUtil.warn(
+            "The <white>" + dimension + "</white> opens on real-life Day <white>" + day
+                + "</white> <gray>(" + time + ")</gray>."
+        ));
+    }
+
     private boolean shouldBlockPreStartCommand(Player player) {
         return player != null
             && !player.isOp()
@@ -494,16 +921,39 @@ public final class SmpStartManager implements Listener {
     }
 
     private boolean isInsidePreStartBarrier(Location location) {
+        return isInsidePreStartBarrier(location, 1.0D);
+    }
+
+    private boolean isInsidePreStartBarrier(Location location, double padding) {
         if (location == null || location.getWorld() == null || !isPreStartProtectedWorld(location.getWorld())) {
             return false;
         }
 
         Location center = location.getWorld().getSpawnLocation();
         double radius = plugin.getConfigManager().smpPreStartBorderDiameter / 2.0;
-        double dx = location.getX() - center.getX();
-        double dz = location.getZ() - center.getZ();
-        double generousRadius = radius + 1.0;
-        return (dx * dx) + (dz * dz) <= generousRadius * generousRadius;
+        return isInsideSquareBarrier(
+            location.getX(),
+            location.getZ(),
+            center.getX(),
+            center.getZ(),
+            radius,
+            padding
+        );
+    }
+
+    static boolean isInsideSquareBarrier(
+        double x,
+        double z,
+        double centerX,
+        double centerZ,
+        double radius,
+        double padding
+    ) {
+        if (!Double.isFinite(x) || !Double.isFinite(z) || !Double.isFinite(centerX) || !Double.isFinite(centerZ)) {
+            return false;
+        }
+        double limit = Math.max(0.0D, radius) + Math.max(0.0D, padding);
+        return Math.abs(x - centerX) <= limit && Math.abs(z - centerZ) <= limit;
     }
 
     private boolean isPreStartProtectedWorld(World world) {
@@ -545,6 +995,163 @@ public final class SmpStartManager implements Listener {
         long graceMs = Duration.ofMinutes(config.smpPostStartGraceMinutes).toMillis();
         long endsAt = config.smpStartedAt + graceMs;
         return Math.max(0L, endsAt - System.currentTimeMillis());
+    }
+
+    public boolean isDimensionUnlocked(World.Environment environment) {
+        ConfigManager config = plugin.getConfigManager();
+        if (!config.smpStartEnabled) {
+            return true;
+        }
+        return dimensionUnlockMillisRemaining(environment, System.currentTimeMillis()) <= 0L;
+    }
+
+    private String dimensionStatus(World.Environment environment) {
+        if (isDimensionUnlockedEarly(environment) && plugin.getConfigManager().smpStarted) {
+            return "unlocked early";
+        }
+        long remaining = dimensionUnlockMillisRemaining(environment, System.currentTimeMillis());
+        if (remaining <= 0L) {
+            return "unlocked";
+        }
+        if (remaining == Long.MAX_VALUE) {
+            return "locked until /startsmp";
+        }
+        return "unlocks in " + formatDuration(remaining);
+    }
+
+    private int dimensionUnlockDay(World.Environment environment) {
+        ConfigManager config = plugin.getConfigManager();
+        return environment == World.Environment.NETHER ? config.smpNetherUnlockDay : config.smpEndUnlockDay;
+    }
+
+    private long dimensionUnlockMillisRemaining(World.Environment environment, long now) {
+        ConfigManager config = plugin.getConfigManager();
+        return dimensionUnlockMillisRemaining(
+            now,
+            config.smpStarted,
+            config.smpStartedAt,
+            dimensionUnlockDay(environment),
+            dimensionUnlockAt(environment),
+            isDimensionUnlockedEarly(environment)
+        );
+    }
+
+    static long dimensionUnlockMillisRemaining(long now, boolean started, long startedAt, int unlockDay, boolean unlockedEarly) {
+        return dimensionUnlockMillisRemaining(now, started, startedAt, unlockDay, 0L, unlockedEarly);
+    }
+
+    static long dimensionUnlockMillisRemaining(
+        long now,
+        boolean started,
+        long startedAt,
+        int unlockDay,
+        long configuredUnlockAt,
+        boolean unlockedEarly
+    ) {
+        if (!started || startedAt <= 0L) return Long.MAX_VALUE;
+        if (unlockedEarly) return 0L;
+        if (configuredUnlockAt > 0L) {
+            return Math.max(0L, configuredUnlockAt - Math.max(0L, now));
+        }
+        return millisUntilUnlock(now, startedAt, unlockDay);
+    }
+
+    private long dimensionUnlockAt(World.Environment environment) {
+        ConfigManager config = plugin.getConfigManager();
+        return environment == World.Environment.NETHER ? config.smpNetherUnlockAt : config.smpEndUnlockAt;
+    }
+
+    private boolean isDimensionUnlockedEarly(World.Environment environment) {
+        ConfigManager config = plugin.getConfigManager();
+        return environment == World.Environment.NETHER ? config.smpNetherUnlockedEarly : config.smpEndUnlockedEarly;
+    }
+
+    private void setEarlyDimensionUnlock(World.Environment environment, boolean unlocked) {
+        ConfigManager config = plugin.getConfigManager();
+        if (environment == World.Environment.NETHER) {
+            config.smpNetherUnlockedEarly = unlocked;
+            plugin.getConfig().set("smp-start.nether-unlocked-early", unlocked);
+        } else if (environment == World.Environment.THE_END) {
+            config.smpEndUnlockedEarly = unlocked;
+            plugin.getConfig().set("smp-start.end-unlocked-early", unlocked);
+        }
+    }
+
+    private void resetEarlyDimensionUnlocks() {
+        setEarlyDimensionUnlock(World.Environment.NETHER, false);
+        setEarlyDimensionUnlock(World.Environment.THE_END, false);
+    }
+
+    private Component dimensionUnlockBroadcast(World.Environment environment, boolean early) {
+        if (environment == World.Environment.NETHER) {
+            return MessageUtil.prefixedRaw("<gradient:#ef4444:#f97316><bold>THE NETHER IS OPEN</bold></gradient> <gray>"
+                + (early ? "It has been unlocked ahead of schedule." : "The scheduled gateway has opened.") + "</gray>");
+        }
+        return MessageUtil.prefixedRaw("<gradient:#a855f7:#22d3ee><bold>THE END IS OPEN</bold></gradient> <gray>"
+            + (early ? "It has been unlocked ahead of schedule." : "The scheduled gateway has opened.") + "</gray>");
+    }
+
+    private void startDimensionUnlockMonitor() {
+        stopDimensionUnlockMonitor();
+        trackedNetherUnlocked = isDimensionUnlocked(World.Environment.NETHER);
+        trackedEndUnlocked = isDimensionUnlocked(World.Environment.THE_END);
+        dimensionUnlockTask = Bukkit.getScheduler().runTaskTimer(plugin, this::checkScheduledDimensionUnlocks, 20L, 20L);
+    }
+
+    private void stopDimensionUnlockMonitor() {
+        if (dimensionUnlockTask != null) {
+            dimensionUnlockTask.cancel();
+            dimensionUnlockTask = null;
+        }
+    }
+
+    private void checkScheduledDimensionUnlocks() {
+        trackedNetherUnlocked = checkScheduledDimensionUnlock(World.Environment.NETHER, trackedNetherUnlocked);
+        trackedEndUnlocked = checkScheduledDimensionUnlock(World.Environment.THE_END, trackedEndUnlocked);
+    }
+
+    private boolean checkScheduledDimensionUnlock(World.Environment environment, boolean wasUnlocked) {
+        boolean unlocked = isDimensionUnlocked(environment);
+        if (!wasUnlocked && unlocked && plugin.getConfigManager().smpStarted) {
+            Bukkit.broadcast(dimensionUnlockBroadcast(environment, false));
+            Sound sound = environment == World.Environment.NETHER ? Sound.BLOCK_PORTAL_TRIGGER : Sound.BLOCK_END_PORTAL_SPAWN;
+            float pitch = environment == World.Environment.NETHER ? 0.8f : 1.15f;
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                player.playSound(player.getLocation(), sound, 0.85f, pitch);
+            }
+            nextDimensionMessageAt.clear();
+            plugin.getLogger().info(dimensionName(environment) + " unlocked automatically on schedule.");
+        }
+        return unlocked;
+    }
+
+    private void trackDimensionAsUnlocked(World.Environment environment) {
+        if (environment == World.Environment.NETHER) {
+            trackedNetherUnlocked = true;
+        } else if (environment == World.Environment.THE_END) {
+            trackedEndUnlocked = true;
+        }
+    }
+
+    private String dimensionName(World.Environment environment) {
+        return environment == World.Environment.NETHER ? "Nether" : "End";
+    }
+
+    static long millisUntilUnlock(long now, long startedAt, int unlockDay) {
+        if (startedAt <= 0L) {
+            return Long.MAX_VALUE;
+        }
+        long unlockAt = unlockAtEpochMillis(startedAt, unlockDay);
+        return Math.max(0L, unlockAt - Math.max(0L, now));
+    }
+
+    static long unlockAtEpochMillis(long startedAt, int unlockDay) {
+        int daysAfterStart = Math.max(0, unlockDay - 1);
+        long delay = Duration.ofDays(daysAfterStart).toMillis();
+        if (startedAt > Long.MAX_VALUE - delay) {
+            return Long.MAX_VALUE;
+        }
+        return Math.max(0L, startedAt) + delay;
     }
 
     private World configuredWorld() {
@@ -717,8 +1324,16 @@ public final class SmpStartManager implements Listener {
             return "until /startsmp";
         }
         long seconds = Math.max(0L, (millis + 999L) / 1000L);
-        long minutes = seconds / 60L;
+        long days = seconds / 86_400L;
+        long hours = (seconds % 86_400L) / 3_600L;
+        long minutes = (seconds % 3_600L) / 60L;
         long remainingSeconds = seconds % 60L;
+        if (days > 0L) {
+            return days + "d " + hours + "h";
+        }
+        if (hours > 0L) {
+            return hours + "h " + minutes + "m";
+        }
         if (minutes <= 0L) {
             return remainingSeconds + "s";
         }

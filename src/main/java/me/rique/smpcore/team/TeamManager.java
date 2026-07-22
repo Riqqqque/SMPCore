@@ -5,6 +5,8 @@ import me.rique.smpcore.command.MainMenuCommand;
 import me.rique.smpcore.database.DatabaseManager;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.MenuDupeGuardListener;
+import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
 import io.papermc.paper.registry.RegistryAccess;
 import io.papermc.paper.registry.RegistryKey;
@@ -71,6 +73,8 @@ public final class TeamManager implements Listener {
     private static final long INVITE_DURATION_MS = 120_000L;
     private static final long ALLY_INVITE_DURATION_MS = 300_000L;
     private static final int TEAM_VAULT_SIZE = 54;
+    private static final int MAX_TEAM_VAULT_ITEM_BYTES = 1536 * 1024;
+    private static final int MAX_TEAM_VAULT_DATA_BYTES = 1536 * 1024;
     private static final int TEAM_BROWSER_SIZE = 54;
     private static final String SCOREBOARD_TEAM_PREFIX = "smpct_";
     private static final String SCOREBOARD_NO_TEAM_ID = SCOREBOARD_TEAM_PREFIX + "none";
@@ -175,6 +179,11 @@ public final class TeamManager implements Listener {
             if (!data.members.contains(row.ownerUuid())) {
                 data.members.add(row.ownerUuid());
                 plugin.getDatabase().addTeamMember(displayName, row.ownerUuid())
+                    .thenAccept(added -> {
+                        if (!added) {
+                            plugin.getLogger().severe("Could not repair owner membership for team " + displayName + ".");
+                        }
+                    })
                     .exceptionally(ex -> {
                         plugin.getLogger().severe("Failed to repair owner membership for team " + displayName + ": " + ex.getMessage());
                         return null;
@@ -216,6 +225,7 @@ public final class TeamManager implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onCrownDeath(PlayerDeathEvent event) {
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().isDuelParticipant(event.getPlayer())) return;
         if (event.getKeepInventory()) {
             return;
         }
@@ -300,13 +310,29 @@ public final class TeamManager implements Listener {
         });
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onTeamVaultClick(InventoryClickEvent event) {
         if (!(event.getView().getTopInventory().getHolder() instanceof TeamVaultHolder holder)) {
             return;
         }
+        if (event.getWhoClicked() instanceof Player player && denyRestrictedTeamVaultUse(player)) {
+            event.setCancelled(true);
+            return;
+        }
+        if (event.isCancelled()) {
+            return;
+        }
         if (isUnsafeTeamVaultClick(event)) {
             event.setCancelled(true);
+            return;
+        }
+        if (!canApplyTeamVaultClick(event)) {
+            event.setCancelled(true);
+            if (event.getWhoClicked() instanceof Player player) {
+                player.sendMessage(MessageUtil.warn(
+                    "That item carries too much stored data for shared storage. Nothing was moved."
+                ));
+            }
             return;
         }
         scheduleTeamVaultSyncAndSave(holder.teamKey(), "click");
@@ -326,6 +352,87 @@ public final class TeamManager implements Listener {
             || event.getClick() == ClickType.NUMBER_KEY
             || event.getClick() == ClickType.SWAP_OFFHAND
             || event.getClick() == ClickType.UNKNOWN;
+    }
+
+    private boolean canApplyTeamVaultClick(InventoryClickEvent event) {
+        Inventory top = event.getView().getTopInventory();
+        int topSize = top.getSize();
+        int rawSlot = event.getRawSlot();
+        ItemStack[] projected = cloneContents(top.getContents());
+
+        if (event.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY && rawSlot >= topSize) {
+            addToProjectedVault(projected, event.getCurrentItem());
+        } else if (rawSlot >= 0 && rawSlot < topSize) {
+            ItemStack cursor = event.getCursor();
+            switch (event.getAction()) {
+                case SWAP_WITH_CURSOR -> projected[rawSlot] = cloneOrNull(cursor);
+                case PLACE_ALL, PLACE_SOME -> mergeProjectedSlot(projected, rawSlot, cursor, cursor == null ? 0 : cursor.getAmount());
+                case PLACE_ONE -> mergeProjectedSlot(projected, rawSlot, cursor, 1);
+                default -> {
+                    return true;
+                }
+            }
+        } else {
+            return true;
+        }
+
+        try {
+            serialize(projected);
+            return true;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private void addToProjectedVault(ItemStack[] projected, ItemStack source) {
+        ItemStack remaining = cloneOrNull(source);
+        if (remaining == null) {
+            return;
+        }
+        for (int slot = 0; slot < projected.length && remaining.getAmount() > 0; slot++) {
+            ItemStack existing = projected[slot];
+            if (existing == null || !existing.isSimilar(remaining)) {
+                continue;
+            }
+            int room = Math.max(0, existing.getMaxStackSize() - existing.getAmount());
+            int moved = Math.min(room, remaining.getAmount());
+            if (moved > 0) {
+                existing.setAmount(existing.getAmount() + moved);
+                remaining.setAmount(remaining.getAmount() - moved);
+            }
+        }
+        for (int slot = 0; slot < projected.length && remaining.getAmount() > 0; slot++) {
+            if (projected[slot] != null && !projected[slot].getType().isAir()) {
+                continue;
+            }
+            int moved = Math.min(remaining.getMaxStackSize(), remaining.getAmount());
+            ItemStack placed = remaining.clone();
+            placed.setAmount(moved);
+            projected[slot] = placed;
+            remaining.setAmount(remaining.getAmount() - moved);
+        }
+    }
+
+    private void mergeProjectedSlot(ItemStack[] projected, int slot, ItemStack source, int requestedAmount) {
+        ItemStack incoming = cloneOrNull(source);
+        if (incoming == null || requestedAmount <= 0) {
+            return;
+        }
+        ItemStack existing = projected[slot];
+        if (existing == null || existing.getType().isAir()) {
+            incoming.setAmount(Math.min(incoming.getMaxStackSize(), requestedAmount));
+            projected[slot] = incoming;
+            return;
+        }
+        if (!existing.isSimilar(incoming)) {
+            return;
+        }
+        int room = Math.max(0, existing.getMaxStackSize() - existing.getAmount());
+        existing.setAmount(existing.getAmount() + Math.min(room, requestedAmount));
+    }
+
+    private ItemStack cloneOrNull(ItemStack item) {
+        return item == null || item.getType().isAir() || item.getAmount() <= 0 ? null : item.clone();
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -369,9 +476,16 @@ public final class TeamManager implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onTeamVaultDrag(InventoryDragEvent event) {
         if (!(event.getView().getTopInventory().getHolder() instanceof TeamVaultHolder holder)) {
+            return;
+        }
+        if (event.getWhoClicked() instanceof Player player && denyRestrictedTeamVaultUse(player)) {
+            event.setCancelled(true);
+            return;
+        }
+        if (event.isCancelled()) {
             return;
         }
 
@@ -421,9 +535,10 @@ public final class TeamManager implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onTeamBrowserClick(InventoryClickEvent event) {
-        if (!(event.getView().getTopInventory().getHolder() instanceof TeamBrowserHolder holder)) {
+        Inventory top = event.getView().getTopInventory();
+        if (!(top.getHolder(false) instanceof TeamBrowserHolder holder)) {
             return;
         }
 
@@ -431,11 +546,21 @@ public final class TeamManager implements Listener {
         if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
-        if (event.getClickedInventory() == null || event.getClickedInventory().getType() == InventoryType.PLAYER) {
+        if (event.getClick() != ClickType.LEFT && event.getClick() != ClickType.RIGHT) {
+            return;
+        }
+        int slot = event.getRawSlot();
+        if (slot < 0 || slot >= top.getSize()) {
             return;
         }
 
-        int slot = event.getRawSlot();
+        Bukkit.getScheduler().runTask(plugin, () -> handleTeamBrowserClick(player, holder, slot));
+    }
+
+    private void handleTeamBrowserClick(Player player, TeamBrowserHolder holder, int slot) {
+        if (!player.isOnline()) {
+            return;
+        }
         if (slot == TEAM_BROWSER_BACK_SLOT) {
             if (holder.fromMainMenu()) {
                 MainMenuCommand.openMenu(plugin, player);
@@ -469,7 +594,7 @@ public final class TeamManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onTeamBrowserDrag(InventoryDragEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof TeamBrowserHolder) {
+        if (event.getView().getTopInventory().getHolder(false) instanceof TeamBrowserHolder) {
             event.setCancelled(true);
         }
     }
@@ -526,26 +651,23 @@ public final class TeamManager implements Listener {
 
         TeamColor finalColor = color;
         return plugin.getDatabase().createTeam(displayName, creatorId, finalColor.id)
-            .handle((created, ex) -> {
+            .handle((result, ex) -> {
                 if (ex != null) {
                     plugin.getLogger().severe("createTeam failed: " + ex.getMessage());
                     return null;
                 }
-                return created;
+                return result;
             })
-            .thenCompose(created -> {
-                if (created == null) return CompletableFuture.completedFuture("Could not create team right now.");
-                if (!created) return CompletableFuture.completedFuture("That team already exists.");
-                return plugin.getDatabase().addTeamMember(displayName, creatorId)
-                    .handle((ignored, ex) -> {
-                        if (ex == null) return null;
-                        plugin.getLogger().severe("addTeamMember (owner) failed: " + ex.getMessage());
-                        plugin.getDatabase().deleteTeam(displayName);
-                        return "Could not create team right now.";
-                    });
-            })
-            .thenCompose(error -> {
-                if (error != null) return CompletableFuture.completedFuture(error);
+            .thenCompose(result -> {
+                if (result == null || result == DatabaseManager.TeamCreateResult.CONFLICT) {
+                    return CompletableFuture.completedFuture("Could not create team right now.");
+                }
+                if (result == DatabaseManager.TeamCreateResult.NAME_EXISTS) {
+                    return CompletableFuture.completedFuture("That team already exists.");
+                }
+                if (result == DatabaseManager.TeamCreateResult.PLAYER_ALREADY_MEMBER) {
+                    return CompletableFuture.completedFuture("Leave your current team first.");
+                }
                 return runOnMainThread(() -> {
                     if (teamsByKey.containsKey(teamKey) || teamByPlayer.containsKey(creatorId)) {
                         plugin.getDatabase().deleteTeam(displayName);
@@ -741,8 +863,9 @@ public final class TeamManager implements Listener {
         applyTeamTag(target);
 
         return plugin.getDatabase().addTeamMember(team.displayName, targetId)
-            .handle((ignored, ex) -> {
-                if (ex == null) return null;
+            .handle((added, ex) -> {
+                if (ex == null && Boolean.TRUE.equals(added)) return null;
+                if (ex == null) return "Could not join team right now.";
                 plugin.getLogger().severe("addTeamMember failed: " + ex.getMessage());
                 return "Could not join team right now.";
             })
@@ -792,14 +915,30 @@ public final class TeamManager implements Listener {
 
         String teamName = team.displayName;
         String teamKey = team.key;
-        return plugin.getDatabase().removeTeamMember(teamName, playerId)
-            .handle((ignored, ex) -> {
-                if (ex == null) return null;
-                plugin.getLogger().severe("removeTeamMember failed: " + ex.getMessage());
-                return "Could not leave team right now.";
+        CompletableFuture<String> vaultCheck = team.members.size() == 1
+            ? ensureVaultEmptyBeforeDeletion(team)
+            : CompletableFuture.completedFuture(null);
+        return vaultCheck.thenCompose(vaultError -> {
+            if (vaultError != null) {
+                return CompletableFuture.<DatabaseManager.TeamLeaveRecord>failedFuture(new IllegalStateException(vaultError));
+            }
+            return plugin.getDatabase().leaveTeam(teamName, playerId);
+        })
+            .handle((result, ex) -> {
+                if (ex == null) return result;
+                Throwable root = ex.getCause() == null ? ex : ex.getCause();
+                if (root.getMessage() != null && root.getMessage().startsWith("Empty the team vault")) {
+                    return new DatabaseManager.TeamLeaveRecord(false, false, null);
+                }
+                plugin.getLogger().severe("leaveTeam failed: " + root.getMessage());
+                return null;
             })
-            .thenCompose(error -> {
-                if (error != null) return CompletableFuture.completedFuture(error);
+            .thenCompose(result -> {
+                if (result == null || !result.membershipRemoved()) {
+                    return CompletableFuture.completedFuture(result == null
+                        ? "Could not leave team right now."
+                        : "Empty the team vault before deleting the team so its contents are not lost.");
+                }
 
                 return runOnMainThread(() -> {
                     TeamData current = teamsByKey.get(teamKey);
@@ -814,16 +953,11 @@ public final class TeamManager implements Listener {
                     applyTeamTag(player);
                     removeCrownsFromPlayer(player);
 
-                    if (current.members.isEmpty()) {
+                    if (result.teamDeleted()) {
                         discardTeamVault(current.key);
                         teamsByKey.remove(current.key);
                         removeTeamFromAllies(current.key);
                         unregisterScoreboardTeam(current.key);
-                        plugin.getDatabase().deleteTeam(current.displayName)
-                            .exceptionally(ex -> {
-                                plugin.getLogger().severe("deleteTeam failed: " + ex.getMessage());
-                                return null;
-                            });
                         invitesByTarget.entrySet().removeIf(entry -> entry.getValue().teamKey().equals(current.key));
                         allyInvitesByTargetTeam.entrySet().removeIf(entry ->
                             entry.getKey().equals(current.key) || entry.getValue().teamKey().equals(current.key));
@@ -832,16 +966,11 @@ public final class TeamManager implements Listener {
 
                     closeVaultIfViewing(player, current.key);
 
-                    if (current.owner.equals(playerId)) {
-                        UUID newOwner = current.members.stream().findFirst().orElse(null);
-                        if (newOwner != null) {
-                            current.owner = newOwner;
-                            plugin.getDatabase().setTeamOwner(current.displayName, newOwner)
-                                .exceptionally(ex -> {
-                                    plugin.getLogger().severe("setTeamOwner failed: " + ex.getMessage());
-                                    return null;
-                                });
-
+                    boolean ownerLeft = current.owner.equals(playerId);
+                    UUID newOwner = result.ownerUuid();
+                    if (newOwner != null) {
+                        current.owner = newOwner;
+                        if (ownerLeft) {
                             Player ownerOnline = Bukkit.getPlayer(newOwner);
                             if (ownerOnline != null && ownerOnline.isOnline()) {
                                 ownerOnline.sendMessage(MessageUtil.info("You are now the owner of <white>" + current.displayName + "</white>."));
@@ -870,10 +999,17 @@ public final class TeamManager implements Listener {
         String teamName = team.displayName;
         String teamKey = team.key;
         UUID ownerId = owner.getUniqueId();
-        return plugin.getDatabase().deleteTeam(teamName)
+        return ensureVaultEmptyBeforeDeletion(team)
+            .thenCompose(vaultError -> vaultError != null
+                ? CompletableFuture.<Void>failedFuture(new IllegalStateException(vaultError))
+                : plugin.getDatabase().deleteTeam(teamName))
             .handle((ignored, ex) -> {
                 if (ex == null) return null;
-                plugin.getLogger().severe("deleteTeam failed: " + ex.getMessage());
+                Throwable root = ex.getCause() == null ? ex : ex.getCause();
+                if (root.getMessage() != null && root.getMessage().startsWith("Empty the team vault")) {
+                    return "Empty the team vault before deleting the team so its contents are not lost.";
+                }
+                plugin.getLogger().severe("deleteTeam failed: " + root.getMessage());
                 return "Could not disband team right now.";
             })
             .thenCompose(error -> {
@@ -1133,7 +1269,7 @@ public final class TeamManager implements Listener {
                 if (!player.isOnline()) {
                     return;
                 }
-                if (!(player.getOpenInventory().getTopInventory().getHolder() instanceof TeamBrowserHolder current)
+                if (!(player.getOpenInventory().getTopInventory().getHolder(false) instanceof TeamBrowserHolder current)
                     || current != holder) {
                     return;
                 }
@@ -1477,8 +1613,9 @@ public final class TeamManager implements Listener {
         if (meta == null) {
             return item;
         }
-        meta.displayName(name.decoration(TextDecoration.ITALIC, false));
-        meta.lore(lore.stream()
+        Component visibleName = MenuItemUtil.visibleName(name);
+        meta.displayName(visibleName.decoration(TextDecoration.ITALIC, false));
+        meta.lore(MenuItemUtil.visibleLore(name, lore).stream()
             .map(line -> line.decoration(TextDecoration.ITALIC, false))
             .toList());
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES, ItemFlag.HIDE_ENCHANTS, ItemFlag.HIDE_UNBREAKABLE);
@@ -1489,29 +1626,23 @@ public final class TeamManager implements Listener {
     private void decorateTeamBrowser(Inventory inventory) {
         inventory.clear();
         ItemStack filler = teamBrowserPane(Material.BLACK_STAINED_GLASS_PANE);
-        ItemStack accent = teamBrowserPane(Material.CYAN_STAINED_GLASS_PANE);
-        ItemStack gold = teamBrowserPane(Material.ORANGE_STAINED_GLASS_PANE);
-        int lastRow = (inventory.getSize() / 9) - 1;
         for (int slot = 0; slot < inventory.getSize(); slot++) {
-            int row = slot / 9;
-            int col = slot % 9;
-            if (row == 0 || row == lastRow || col == 0 || col == 8) {
+            if (isFrameSlot(slot, inventory.getSize())) {
                 inventory.setItem(slot, filler);
             }
         }
-        for (int slot : List.of(1, 7, 9, 17, 36, 44, 46, 52)) {
-            inventory.setItem(slot, accent);
-        }
-        for (int slot : List.of(2, 6, 18, 26, 27, 35, 47, 51)) {
-            inventory.setItem(slot, gold);
-        }
+    }
+
+    private boolean isFrameSlot(int slot, int size) {
+        return slot < 9 || slot >= size - 9 || slot % 9 == 0 || slot % 9 == 8;
     }
 
     private ItemStack teamBrowserPane(Material material) {
         ItemStack item = new ItemStack(material);
         ItemMeta meta = item.getItemMeta();
         if (meta != null) {
-            meta.displayName(Component.empty());
+            meta.displayName(MenuItemUtil.visibleName(Component.empty()));
+            meta.lore(MenuItemUtil.visibleLore(Component.empty(), List.of()));
             item.setItemMeta(meta);
         }
         return item;
@@ -1521,6 +1652,11 @@ public final class TeamManager implements Listener {
         String unavailable = teamsUnavailableMessage();
         if (unavailable != null) {
             player.sendMessage(MessageUtil.error(unavailable));
+            return;
+        }
+        String restriction = activeTeamVaultRestriction(player);
+        if (restriction != null) {
+            player.sendMessage(MessageUtil.warn(restriction));
             return;
         }
 
@@ -1538,14 +1674,18 @@ public final class TeamManager implements Listener {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (!player.isOnline()) return;
 
+                String currentRestriction = activeTeamVaultRestriction(player);
+                if (currentRestriction != null) {
+                    player.sendMessage(MessageUtil.warn(currentRestriction));
+                    return;
+                }
+
                 TeamData current = teamOf(player.getUniqueId());
                 if (current == null || !current.key.equals(team.key)) {
                     player.sendMessage(MessageUtil.error("You are not in that team anymore."));
                     return;
                 }
 
-                auditTeamVault(player, session, "open");
-                syncTeamVaultLegendaryClaims(session);
                 player.openInventory(session.inventory());
             })
         ).exceptionally(ex -> {
@@ -1557,6 +1697,41 @@ public final class TeamManager implements Listener {
             });
             return null;
         });
+    }
+
+    private boolean denyRestrictedTeamVaultUse(Player player) {
+        String restriction = activeTeamVaultRestriction(player);
+        if (restriction == null) {
+            return false;
+        }
+        player.sendMessage(MessageUtil.warn(restriction));
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (player.isOnline()
+                && player.getOpenInventory().getTopInventory().getHolder() instanceof TeamVaultHolder) {
+                player.closeInventory();
+            }
+        });
+        return true;
+    }
+
+    private String activeTeamVaultRestriction(Player player) {
+        boolean bossFight = player != null
+            && ((plugin.getBossManager() != null && plugin.getBossManager().isActiveBossFight(player))
+                || (plugin.getBossDungeonManager() != null && plugin.getBossDungeonManager().blocksExternalTeleport(player)));
+        boolean duel = player != null
+            && plugin.getDuelManager() != null
+            && plugin.getDuelManager().blocksExternalTeleport(player);
+        return teamVaultRestriction(bossFight, duel);
+    }
+
+    static String teamVaultRestriction(boolean bossFight, boolean duel) {
+        if (bossFight) {
+            return "Team storage is unavailable during an active boss fight.";
+        }
+        if (duel) {
+            return "Team storage is unavailable during a duel or while spectating one.";
+        }
+        return null;
     }
 
     public void openTeamVaultInspector(Player viewer, String rawTeamName) {
@@ -1645,6 +1820,16 @@ public final class TeamManager implements Listener {
         return teamByPlayer.containsKey(playerId);
     }
 
+    public String teamDisplayName(UUID playerId) {
+        TeamData team = teamOf(playerId);
+        return team == null ? null : team.displayName;
+    }
+
+    public Component tabTeamLabel(UUID playerId) {
+        TeamData team = teamOf(playerId);
+        return team == null ? null : Component.text(team.displayName, team.color.textColor);
+    }
+
     public Component nameplateText(Player player) {
         Component playerName = player.displayName();
         if (playerName == null) {
@@ -1685,6 +1870,37 @@ public final class TeamManager implements Listener {
         return first != null && first.allies.contains(secondTeam);
     }
 
+    public void notifyPlayerTeam(UUID playerId, Component message) {
+        if (playerId == null || message == null || !teamsLoaded) {
+            return;
+        }
+        String teamKey = teamByPlayer.get(playerId);
+        if (teamKey == null) {
+            return;
+        }
+        notifyTeam(teamsByKey.get(teamKey), message);
+    }
+
+    public void notifyPlayerTeamGameResult(UUID playerId, Component message) {
+        if (playerId == null || message == null || !teamsLoaded) {
+            return;
+        }
+        String teamKey = teamByPlayer.get(playerId);
+        if (teamKey == null) {
+            return;
+        }
+        TeamData team = teamsByKey.get(teamKey);
+        if (team == null) {
+            return;
+        }
+        for (UUID memberId : team.members) {
+            Player member = Bukkit.getPlayer(memberId);
+            if (member != null && member.isOnline()) {
+                BedrockCompat.sendGameMessage(member, message);
+            }
+        }
+    }
+
     public List<String> teamHelpLines() {
         return List.of(
             "<gold><bold>Team Commands</bold></gold>",
@@ -1705,7 +1921,7 @@ public final class TeamManager implements Listener {
             "<gray><white>/team disband</white> - Disband your team (owner)</gray>",
             "<gray><white>/team info</white> - View your team info</gray>",
             "<gray><white>/tvault</white> (<white>/teamvault</white>) - Open your team storage</gray>",
-            "<gray><white>/teamglow</white> - Privately highlight teammates</gray>"
+            "<gray><white>/teamglow</white> - Privately outline teammates through walls</gray>"
         );
     }
 
@@ -1720,6 +1936,14 @@ public final class TeamManager implements Listener {
 
     public boolean isTeamColor(String raw) {
         return TeamColor.fromId(raw) != null;
+    }
+
+    public List<String> teamColorIds() {
+        List<String> ids = new ArrayList<>();
+        for (TeamColor color : TeamColor.values()) {
+            ids.add(color.id);
+        }
+        return ids;
     }
 
     private void notifyTeam(TeamData team, Component message) {
@@ -1787,7 +2011,7 @@ public final class TeamManager implements Listener {
             return existing;
         }
 
-        plugin.getDatabase().loadTeamVault(team.displayName).whenComplete((raw, ex) -> {
+        plugin.getDatabase().loadTeamVault(team.displayName).whenComplete((snapshot, ex) -> {
             if (!plugin.isEnabled()) {
                 vaultLoadingByTeamKey.remove(team.key, future);
                 future.completeExceptionally(new IllegalStateException("Plugin is disabled."));
@@ -1818,7 +2042,7 @@ public final class TeamManager implements Listener {
                         new TeamVaultSession(
                             current.key,
                             current.displayName,
-                            createTeamVaultInventory(current.key, current.displayName, raw)
+                            createTeamVaultInventory(current.key, current.displayName, snapshot)
                         )
                     );
                     syncTeamVaultLegendaryClaims(loaded);
@@ -1834,18 +2058,81 @@ public final class TeamManager implements Listener {
         return future;
     }
 
-    private Inventory createTeamVaultInventory(String teamKey, String displayName, byte[] rawData) {
+    private CompletableFuture<String> ensureVaultEmptyBeforeDeletion(TeamData team) {
+        return loadTeamVault(team)
+            .thenCompose(session -> runOnMainThread(() -> {
+                boolean hasItems = false;
+                for (ItemStack item : session.inventory().getContents()) {
+                    if (item != null && !item.getType().isAir() && item.getAmount() > 0) {
+                        hasItems = true;
+                        break;
+                    }
+                }
+                if (hasItems) {
+                    return CompletableFuture.completedFuture(
+                        "Empty the team vault before deleting the team so its contents are not lost."
+                    );
+                }
+                for (var viewer : List.copyOf(session.inventory().getViewers())) {
+                    viewer.closeInventory();
+                }
+                return saveTeamVault(session)
+                    .thenApply(ignored -> (String) null);
+            }))
+            .thenCompose(future -> future)
+            .exceptionally(ex -> {
+                plugin.getLogger().severe("Failed to verify team vault before deletion: " + ex.getMessage());
+                return "Could not verify the team vault right now.";
+            });
+    }
+
+    private Inventory createTeamVaultInventory(
+        String teamKey,
+        String displayName,
+        DatabaseManager.TeamVaultSnapshot snapshot
+    ) {
         Inventory inventory = Bukkit.createInventory(
             new TeamVaultHolder(teamKey),
             TEAM_VAULT_SIZE,
             Component.text(displayName + " Vault")
         );
-        inventory.setContents(deserialize(rawData, TEAM_VAULT_SIZE));
+        byte[] currentData = snapshot == null ? new byte[0] : snapshot.contents();
+        byte[] backupData = snapshot == null ? new byte[0] : snapshot.backupContents();
+        try {
+            if (currentData.length == 0 && backupData.length > 0) {
+                throw new IOException("The live team vault row was missing or empty.");
+            }
+            inventory.setContents(deserializeTeamVaultData(currentData, TEAM_VAULT_SIZE));
+        } catch (IOException currentFailure) {
+            if (backupData.length == 0) {
+                throw new IllegalStateException(
+                    "Team vault data is invalid and no rollback snapshot exists; the stored row was left untouched.",
+                    currentFailure
+                );
+            }
+            try {
+                inventory.setContents(deserializeTeamVaultData(backupData, TEAM_VAULT_SIZE));
+                plugin.getLogger().severe("Recovered team vault " + displayName
+                    + " from its previous atomic snapshot because the live row was invalid: "
+                    + currentFailure.getMessage());
+            } catch (IOException backupFailure) {
+                backupFailure.addSuppressed(currentFailure);
+                throw new IllegalStateException(
+                    "Team vault data and its rollback snapshot are both invalid; neither row was modified.",
+                    backupFailure
+                );
+            }
+        }
         return inventory;
     }
 
     private CompletableFuture<Void> saveTeamVault(TeamVaultSession session) {
-        byte[] snapshot = serialize(session.inventory().getContents());
+        final byte[] snapshot;
+        try {
+            snapshot = serialize(session.inventory().getContents());
+        } catch (RuntimeException ex) {
+            return CompletableFuture.failedFuture(ex);
+        }
         CompletableFuture<Void> save = vaultSaveChainsByTeamKey.compute(session.teamKey(), (teamKey, previous) -> {
             CompletableFuture<Void> base = previous == null
                 ? CompletableFuture.completedFuture(null)
@@ -1961,7 +2248,7 @@ public final class TeamManager implements Listener {
         if (player == null || plugin.getLegendaryListener() == null) {
             return;
         }
-        plugin.getLegendaryListener().resyncLegendaryOwnership(player);
+        plugin.getLegendaryListener().syncPlayerLegendaryOwnership(player);
     }
 
     private CompletableFuture<Void> saveAndDiscardVaultForRename(TeamData team) {
@@ -2012,6 +2299,7 @@ public final class TeamManager implements Listener {
             if (!noTeam.hasEntry(player.getName())) {
                 noTeam.addEntry(player.getName());
             }
+            requestTabRefresh();
             return;
         }
 
@@ -2019,6 +2307,7 @@ public final class TeamManager implements Listener {
         if (!scoreboardTeam.hasEntry(player.getName())) {
             scoreboardTeam.addEntry(player.getName());
         }
+        requestTabRefresh();
     }
 
     private Team getOrCreateNoTeamScoreboardTeam() {
@@ -2028,6 +2317,7 @@ public final class TeamManager implements Listener {
             team = board.registerNewTeam(SCOREBOARD_NO_TEAM_ID);
         }
         team.prefix(Component.empty());
+        team.suffix(Component.empty());
         team.color(NamedTextColor.WHITE);
         team.setOption(Team.Option.NAME_TAG_VISIBILITY, Team.OptionStatus.NEVER);
         return team;
@@ -2040,10 +2330,25 @@ public final class TeamManager implements Listener {
         if (team == null) {
             team = board.registerNewTeam(id);
         }
-        team.prefix(Component.text("[" + data.displayName + "] ", data.color.textColor));
-        team.color(data.color.textColor);
+        // The unified tab controller renders the team once. Keeping this neutral prevents
+        // scoreboard formatting from duplicating or recoloring the custom tab row.
+        team.prefix(Component.empty());
+        team.suffix(Component.empty());
+        team.color(NamedTextColor.WHITE);
         team.setOption(Team.Option.NAME_TAG_VISIBILITY, Team.OptionStatus.NEVER);
         return team;
+    }
+
+    private void requestTabRefresh() {
+        if (plugin.getTabListManager() != null) {
+            plugin.getTabListManager().requestRefresh();
+        }
+        if (plugin.getPlayerVisualListener() != null) {
+            plugin.getPlayerVisualListener().requestTeamGlowRefresh();
+        }
+        if (plugin.getBlackMarketManager() != null) {
+            plugin.getBlackMarketManager().requestTrophyGlowRefresh();
+        }
     }
 
     private void removePlayerFromPluginTeams(String playerName) {
@@ -2359,6 +2664,9 @@ public final class TeamManager implements Listener {
     }
 
     private byte[] serialize(ItemStack[] contents) {
+        if (contents == null || contents.length > TEAM_VAULT_SIZE) {
+            throw new IllegalStateException("Team vault slot count is outside the safe range.");
+        }
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
              DataOutputStream out = new DataOutputStream(baos)) {
             out.writeInt(contents.length);
@@ -2368,28 +2676,40 @@ public final class TeamManager implements Listener {
                     continue;
                 }
                 byte[] raw = item.serializeAsBytes();
+                if (!isSafeTeamVaultItemLength(raw.length)) {
+                    throw new IOException("A team vault item exceeded the safe serialized size.");
+                }
+                long projectedSize = (long) baos.size() + Integer.BYTES + raw.length;
+                if (!isSafeTeamVaultDataLength(projectedSize)) {
+                    throw new IOException("Team vault contents exceeded the safe serialized size.");
+                }
                 out.writeInt(raw.length);
                 out.write(raw);
             }
             out.flush();
             return baos.toByteArray();
-        } catch (IOException ex) {
-            plugin.getLogger().severe("Failed to serialize team vault data: " + ex.getMessage());
-            return new byte[0];
+        } catch (Exception ex) {
+            throw new IllegalStateException("Failed to serialize team vault data safely: " + ex.getMessage(), ex);
         }
     }
 
-    private ItemStack[] deserialize(byte[] data, int size) {
+    static ItemStack[] deserializeTeamVaultData(byte[] data, int size) throws IOException {
         ItemStack[] out = new ItemStack[size];
         if (data == null || data.length == 0) return out;
+        if (!isSafeTeamVaultDataLength(data.length)) {
+            throw new IOException("Team vault data exceeded the safe serialized size.");
+        }
 
         try (ByteArrayInputStream bais = new ByteArrayInputStream(data);
              DataInputStream in = new DataInputStream(bais)) {
             int stored = in.readInt();
+            if (!isSafeTeamVaultSlotCount(stored, size)) {
+                throw new IOException("Invalid team vault slot count: " + stored);
+            }
             for (int i = 0; i < stored; i++) {
                 int length = in.readInt();
-                if (length < 0) {
-                    throw new IOException("Negative team vault item length");
+                if (!isSafeTeamVaultItemLength(length)) {
+                    throw new IOException("Team vault item data length is outside the safe range.");
                 }
                 if (length == 0) {
                     continue;
@@ -2400,14 +2720,30 @@ public final class TeamManager implements Listener {
                     throw new IOException("Unexpected end of team vault data");
                 }
 
-                if (i < size) {
-                    out[i] = ItemStack.deserializeBytes(raw);
-                }
+                out[i] = ItemStack.deserializeBytes(raw);
+            }
+            if (bais.available() != 0) {
+                throw new IOException("Trailing bytes were found after the team vault contents.");
             }
         } catch (Exception ex) {
-            plugin.getLogger().warning("Team vault data was invalid and has been reset: " + ex.getMessage());
+            if (ex instanceof IOException ioException) {
+                throw ioException;
+            }
+            throw new IOException("Team vault item data could not be decoded.", ex);
         }
         return out;
+    }
+
+    static boolean isSafeTeamVaultSlotCount(int stored, int capacity) {
+        return capacity >= 0 && capacity <= TEAM_VAULT_SIZE && stored >= 0 && stored <= capacity;
+    }
+
+    static boolean isSafeTeamVaultItemLength(int length) {
+        return length >= 0 && length <= MAX_TEAM_VAULT_ITEM_BYTES;
+    }
+
+    static boolean isSafeTeamVaultDataLength(long length) {
+        return length >= 0L && length <= MAX_TEAM_VAULT_DATA_BYTES;
     }
 
     private ItemStack[] cloneContents(ItemStack[] contents) {
@@ -2501,7 +2837,7 @@ public final class TeamManager implements Listener {
     private record InviteData(String teamKey, UUID inviter, long expiresAt) {}
     private record TeamVaultSession(String teamKey, String displayName, Inventory inventory) {}
 
-    private static final class TeamBrowserHolder implements InventoryHolder {
+    private static final class TeamBrowserHolder implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         private final String search;
         private final boolean fromMainMenu;
         private final Map<Integer, String> teamKeysBySlot = new HashMap<>();
@@ -2537,14 +2873,20 @@ public final class TeamManager implements Listener {
         }
     }
 
-    private record TeamVaultHolder(String teamKey) implements InventoryHolder {
+    private record TeamVaultHolder(String teamKey) implements InventoryHolder, MenuDupeGuardListener.RecoveryTrackedMenuHolder {
+        @Override public String recoverySurface() { return "Team Vault"; }
+        @Override public int[] recoverySlots() {
+            int[] slots = new int[TEAM_VAULT_SIZE];
+            for (int slot = 0; slot < slots.length; slot++) slots[slot] = slot;
+            return slots;
+        }
         @Override
         public Inventory getInventory() {
             return null;
         }
     }
 
-    private record TeamVaultInspectorHolder(String teamKey) implements InventoryHolder {
+    private record TeamVaultInspectorHolder(String teamKey) implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;
