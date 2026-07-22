@@ -1,0 +1,428 @@
+categories:
+  oath:
+    name: The Eleventh Oath
+    icon: ECHO_SHARD
+    description: Campaign, objective, and final decision.
+    order: 1
+  people:
+    name: People of Veilward
+    icon: PLAYER_HEAD
+    description: The people trying to live above the truth.
+    order: 2
+  witnesses:
+    name: Witnesses Below
+    icon: OMINOUS_TRIAL_KEY
+    description: The ten guardians imprisoned below Veilward.
+    order: 3
+  memories:
+    name: Recovered Memories
+    icon: AMETHYST_SHARD
+    description: Truths the Dominion tried to erase.
+    order: 4
+  principles:
+    name: Principles
+    icon: ENCHANTED_BOOK
+    description: What Veilward's systems really mean.
+    order: 5
+  relics:
+    name: Relics
+    icon: NETHER_STAR
+    description: Objects carrying histories of their own.
+    order: 6
+  veilmark:
+    name: Veilmark
+    icon: RECOVERY_COMPASS
+    description: Your class, choices, and place in the Engine.
+    order: 7
+  threads:
+    name: Unresolved Threads
+    icon: END_PORTAL_FRAME
+    description: Doors the recovered truth has opened.
+    order: 8
+
+entries:
+  oath.overview:
+    category: oath
+    name: The Bell Beneath Veilward
+    icon: BELL
+    order: 1
+    text:
+      - "Veilward was not built beside the Veil."
+      - "Something beneath the settlement is beginning to remember."
+  oath.eleventh_oath:
+    category: oath
+    name: The Eleventh Oath
+    icon: ECHO_SHARD
+    order: 2
+    text:
+      - "What was erased will have a witness."
+      - "What is remembered will not be owned."
+  oath.alignment_mend:
+    category: oath
+    name: Mend
+    icon: AMETHYST_SHARD
+    order: 3
+    text:
+      - "Preserve the Veil and release the Imprints slowly."
+      - "Safety is bought with delay and continued machinery."
+  oath.alignment_bind:
+    category: oath
+    name: Bind
+    icon: CHAIN
+    order: 4
+    text:
+      - "Take stewardship until a replacement can be built."
+      - "Careful authority remains authority."
+  oath.alignment_sever:
+    category: oath
+    name: Sever
+    icon: NETHERITE_SCRAP
+    order: 5
+    text:
+      - "Break the Engine and release the stolen dead at once."
+      - "Freedom arrives without a map."
+
+  people.veilward:
+    category: people
+    name: Veilward
+    icon: LANTERN
+    order: 1
+    text:
+      - "A settlement built over a machine nobody remembers constructing."
+      - "Its people inherited the Dominion's shelter and its unpaid debt."
+  people.mira:
+    category: people
+    name: Mira the Guide
+    icon: SOUL_LANTERN
+    order: 2
+    text:
+      - "Mira notices when Veilward remembers events that never happened."
+      - "She treats survival as evidence, not reassurance."
+  people.mayor_bah:
+    category: people
+    name: Mayor Bah
+    icon: WRITABLE_BOOK
+    order: 3
+    text:
+      - "Bah answers fear with necessary work."
+      - "He refuses to use inherited guilt as an excuse for another lie."
+  people.malakar:
+    category: people
+    name: Malakar the Gatekeeper
+    icon: TRIAL_KEY
+    order: 4
+    text:
+      - "The gate he guards keeps the dungeon from remembering Veilward."
+      - "He knows Aurel Voss by name."
+  people.orin:
+    category: people
+    name: Orin the Artificer
+    icon: SMITHING_TABLE
+    order: 5
+    text:
+      - "Orin studies the memories carried by crafted objects."
+      - "To him, power is a responsibility before it is a tool."
+  people.veyr:
+    category: people
+    name: Veyr
+    icon: RESPAWN_ANCHOR
+    order: 6
+    text:
+      - "Veyr understands corruption as a promise that hides its price."
+  people.father_aldren:
+    category: people
+    name: Father Aldren
+    icon: CANDLE
+    order: 7
+    text:
+      - "Aldren believes truthful questions should strengthen faith."
+  people.bram:
+    category: people
+    name: Bram
+    icon: HONEY_BOTTLE
+    order: 8
+    text:
+      - "Bram knows that rumors and spirits both become poison when over-distilled."
+  people.rook:
+    category: people
+    name: Rook
+    icon: PLAYING_CARD
+    order: 9
+    text:
+      - "The dungeon allowed Rook to survive because it needed a warning."
+  people.silas:
+    category: people
+    name: Silas
+    icon: PAPER
+    order: 10
+    text:
+      - "Silas trusts arithmetic more than luck."
+      - "A blank card at his table knows the player's face but not their name."
+
+  witnesses.yule_the_minion:
+    category: witnesses
+    name: Veilbound Marshal
+    icon: IRON_SWORD
+    order: 1
+    text:
+      - "Guardian of Command. His final order was altered after it was issued."
+  witnesses.kael_the_ashen:
+    category: witnesses
+    name: Cindervale Arbalest
+    icon: CROSSBOW
+    order: 2
+    text:
+      - "Guardian of Sacrifice. Cindervale waited for relief that was never sent."
+  witnesses.vesper_the_widow_queen:
+    category: witnesses
+    name: Gloam Matriarch
+    icon: COBWEB
+    order: 3
+    text:
+      - "Guardian of Refuge. Her brood were transformed survivors."
+  witnesses.mirewood_the_root_tyrant:
+    category: witnesses
+    name: Briarveil Regent
+    icon: MANGROVE_ROOTS
+    order: 4
+    text:
+      - "Guardian of Land. The soil was forced to swallow the names of the dead."
+  witnesses.nereida_the_abyss_mother:
+    category: witnesses
+    name: Thalassa
+    icon: HEART_OF_THE_SEA
+    order: 5
+    text:
+      - "Guardian of Passage. Her refugee ships reached a harbor sealed from within."
+  witnesses.iron_saint:
+    category: witnesses
+    name: Argent Confessor
+    icon: HEAVY_CORE
+    order: 6
+    text:
+      - "Guardian of Faith. Its doctrine renamed obedience as mercy."
+  witnesses.aurelion_the_rift_seraph:
+    category: witnesses
+    name: Asterion
+    icon: ENDER_EYE
+    order: 7
+    text:
+      - "Guardian of Threshold. It sees the Veil passing through every dimension."
+  witnesses.morvessa_the_runebloom_witch:
+    category: witnesses
+    name: Morvessa
+    icon: SPORE_BLOSSOM
+    order: 8
+    text:
+      - "Guardian of Transformation. She cultivated memory into magical power."
+  witnesses.voralith_the_crimson_warden:
+    category: witnesses
+    name: Noctyr
+    icon: SCULK_CATALYST
+    order: 9
+    text:
+      - "Guardian of Secrecy. He buried truth because it could wake the Engine."
+  witnesses.corrupted_oathkeeper:
+    category: witnesses
+    name: Aurel Voss
+    icon: CRYING_OBSIDIAN
+    order: 10
+    text:
+      - "Guardian of Oath. The Engine called his refusal corruption."
+      - "He carried thousands of Imprints to keep them from being consumed."
+
+  memories.yule_the_minion:
+    category: memories
+    name: Command
+    icon: IRON_SWORD
+    order: 1
+    text: ["The breach began as an order."]
+  memories.kael_the_ashen:
+    category: memories
+    name: Sacrifice
+    icon: CROSSBOW
+    order: 2
+    text: ["Cindervale was not lost. It was offered."]
+  memories.vesper_the_widow_queen:
+    category: memories
+    name: Refuge
+    icon: COBWEB
+    order: 3
+    text: ["The monsters were survivors."]
+  memories.mirewood_the_root_tyrant:
+    category: memories
+    name: Land
+    icon: MANGROVE_ROOTS
+    order: 4
+    text: ["The earth was taught to forget."]
+  memories.nereida_the_abyss_mother:
+    category: memories
+    name: Passage
+    icon: HEART_OF_THE_SEA
+    order: 5
+    text: ["We reached the harbor. The harbor refused us."]
+  memories.iron_saint:
+    category: memories
+    name: Faith
+    icon: HEAVY_CORE
+    order: 6
+    text: ["Mercy was rewritten as obedience."]
+  memories.aurelion_the_rift_seraph:
+    category: memories
+    name: Threshold
+    icon: ENDER_EYE
+    order: 7
+    text: ["The Veil does not surround the world. It passes through it."]
+  memories.morvessa_the_runebloom_witch:
+    category: memories
+    name: Transformation
+    icon: SPORE_BLOSSOM
+    order: 8
+    text: ["Every enchantment is a borrowed memory."]
+  memories.voralith_the_crimson_warden:
+    category: memories
+    name: Secrecy
+    icon: SCULK_CATALYST
+    order: 9
+    text: ["The Oathkeeper guarded the truth, not the gate."]
+  memories.corrupted_oathkeeper:
+    category: memories
+    name: Oath
+    icon: CRYING_OBSIDIAN
+    order: 10
+    text: ["Your Veilmark is the missing witness."]
+
+  principles.soul_imprints:
+    category: principles
+    name: Soul Imprints
+    icon: ECHO_SHARD
+    order: 1
+    text:
+      - "A Soul Imprint is memory and identity left by a human life."
+      - "The Dominion treated people as fuel. Veilward must not."
+  principles.awakening:
+    category: principles
+    name: Awakening
+    icon: NETHER_STAR
+    order: 2
+    text:
+      - "Awakening asks an object what it was before fear taught it compromise."
+  principles.corruption:
+    category: principles
+    name: Corruption
+    icon: RESPAWN_ANCHOR
+    order: 3
+    text:
+      - "Corruption forces an object to become something and removes its refusal."
+  principles.reforging:
+    category: principles
+    name: Reforging
+    icon: ANVIL
+    order: 4
+    text:
+      - "Metal remembers every hand that failed it. Reforging asks it to try again."
+  principles.familiars:
+    category: principles
+    name: Familiars
+    icon: ALLAY_SPAWN_EGG
+    order: 5
+    text:
+      - "A stabilized Imprint may choose a new shape without being consumed."
+  principles.ethical_stabilization:
+    category: principles
+    name: Ethical Stabilization
+    icon: BREWING_STAND
+    order: 6
+    text:
+      - "Vespera stabilizes boss remnants without erasing the identities inside them."
+  principles.veil_authority:
+    category: principles
+    name: Veil Authority
+    icon: ENDER_EYE
+    order: 7
+    text:
+      - "These ranks began as Dominion permissions over land, passage, and memory."
+      - "The Overseer records the old names so their purpose cannot hide again."
+
+  relics.legendary_uniqueness:
+    category: relics
+    name: Legendary Uniqueness
+    icon: TOTEM_OF_UNDYING
+    order: 1
+    text:
+      - "A legendary relic is singular because a complete history cannot be copied safely."
+  relics.mythic_fusion:
+    category: relics
+    name: Mythic Fusion
+    icon: NETHERITE_UPGRADE_SMITHING_TEMPLATE
+    order: 2
+    text:
+      - "Mythic fusion lets two remembered histories agree on one future."
+
+  veilmark.overview:
+    category: veilmark
+    name: Your Veilmark
+    icon: RECOVERY_COMPASS
+    order: 1
+    text:
+      - "Every class is an incomplete authorization pattern within the Oath Engine."
+      - "It identifies its bearer as a future witness—or future fuel."
+  veilmark.alignment:
+    category: veilmark
+    name: Alignment
+    icon: COMPASS
+    order: 2
+    text:
+      - "Mend, Bind, and Sever describe responsibility, not combat power."
+
+  threads.listening_posts:
+    category: threads
+    name: Listening Posts
+    icon: PLAYER_HEAD
+    order: 1
+    text:
+      - "The hidden goblin effigies are cursed listening posts. Their master is unknown."
+  threads.redstone_heart:
+    category: threads
+    name: The Redstone Heart
+    icon: REDSTONE_BLOCK
+    order: 2
+    text:
+      - "Torren heard a heartbeat in redstone below the oldest stone."
+  threads.memorial_grove:
+    category: threads
+    name: Memorial Grove
+    icon: FLOWERING_AZALEA
+    order: 3
+    text:
+      - "Rowan intends to feed the living while restoring names to the buried dead."
+  threads.dream_rumors:
+    category: threads
+    name: Dream Rumors
+    icon: POTION
+    order: 4
+    text:
+      - "Some tavern dreams may be Imprints remembering through borrowed sleep."
+  threads.blank_card:
+    category: threads
+    name: The Blank Card
+    icon: PAPER
+    order: 5
+    text:
+      - "A card bears your face but no name. Silas did not deal it."
+  threads.the_unwritten:
+    category: threads
+    name: The Unwritten
+    icon: STRUCTURE_VOID
+    order: 6
+    text:
+      - "Some identities were erased so completely that no Soul Imprint remained."
+      - "A second bell has answered from beyond the border."
+  threads.dimension_seals:
+    category: threads
+    name: The Dimension Seals
+    icon: END_PORTAL_FRAME
+    order: 7
+    text:
+      - "The Nether and End wards are not separate doors."
+      - "They are sections of one Veil failing in sequence."

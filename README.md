@@ -1,14 +1,14 @@
 # SMPCore
 
-Core Paper plugin for Ethereal SMP. SMPCore handles server essentials, custom progression systems, custom items, bosses, powers, and the built-in resource pack.
+Core Paper plugin for Ethereal SMP. SMPCore handles server essentials, custom progression systems, custom items, bosses, classes, and the built-in resource pack.
 
 ## Features
 
 - Custom legendary, mythic, awakened, and rare items.
-- Covenant Armory season gear with boss-linked weapons, armor sets, utility relics, and trophy materials.
+- Expanded Armory of the Veil season gear with boss-linked weapons, armor sets, utility relics, and trophy materials.
 - Legendary altar, mythic forge, awakening table, and recipe menus.
 - Custom bosses with boss bars, holograms, phases, attacks, and tracked cleanup.
-- Hidden superpower system with admin assignment tools.
+- Hidden class system with admin assignment tools.
 - Team system with shared team vaults.
 - Backpacks, waystones, death chests, homes, spawn tools, and admin utilities.
 - Custom enchants, custom tools, loot rules, cooldowns, and item audit logging.
@@ -17,10 +17,12 @@ Core Paper plugin for Ethereal SMP. SMPCore handles server essentials, custom pr
 
 ## Requirements
 
-- Paper `26.1.2`
+- Paper `26.2`
 - Java `25`
 - Gradle wrapper included in this repo
-- Optional: Floodgate/Geyser for Bedrock compatibility paths
+- Optional: current Geyser, Floodgate, and ViaVersion for Bedrock players on Paper 26.2
+
+See [Bedrock and Geyser](docs/wiki/Bedrock-And-Geyser.md) for the bridge checklist, visual fallbacks, ability gestures, and placed-anvil access.
 
 ## Build
 
@@ -38,13 +40,33 @@ On Linux:
 
 Build outputs:
 
-- Plugin jar: `build/libs/SMPCore-1.0.0.jar`
+- Plugin jar: `build/libs/SMPCore-<version>-linux-x64.jar`
 - Resource pack zip: `build/resourcepack/SMPCore-resource-pack.zip`
+
+### Publishing the resource pack
+
+Resource-pack publishing is intentionally opt-in. Configure these values in the runtime environment, not in the repository:
+
+- `PUBLISH_RESOURCE_PACK=1`
+- `RESOURCE_PACK_SSH_TARGET` - an SSH config alias or `user@host`
+- `RESOURCE_PACK_REMOTE_PATH` - absolute path to the hosted zip
+- `RESOURCE_PACK_PUBLIC_URL` - public HTTPS URL for the pack
+
+SSH key authentication is used by default. Interactive authentication is disabled unless `RESOURCE_PACK_ALLOW_INTERACTIVE_AUTH=1` is explicitly set for that run.
+
+Run the normal build first, then publish the exact artifact it produced:
+
+```powershell
+.\gradlew.bat build --console=plain
+.\gradlew.bat publishResourcePack --console=plain
+```
+
+The publisher validates the local archive, uploads to a temporary file, validates it remotely, keeps one `.rollback` copy, atomically replaces the hosted zip, and verifies a cache-busted public download before reporting success.
 
 ## Install
 
 1. Build the plugin with the Gradle wrapper.
-2. Put `build/libs/SMPCore-1.0.0.jar` in the server `plugins` folder.
+2. Put `build/libs/SMPCore-<version>-linux-x64.jar` in the server `plugins` folder.
 3. Put the resource pack zip wherever the server serves packs from.
 4. Restart the server.
 5. Review and update `plugins/SMPCore/config.yml`.
@@ -57,8 +79,9 @@ Build outputs:
 - `/customitem give`
 - `/itemaudit`
 - `/bosses`
-- `/bossrituals`
+- `/bossrituals` (dungeon boss and summon-cost preview)
 - `/wiki`
+- `/bedrock`, `/ability`, `/customanvil`
 - `/team`, `/tvault`, `/teamvault`
 - `/powerinfo`, `/setpower`
 - `/admin reward`

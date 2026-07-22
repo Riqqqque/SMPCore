@@ -41,6 +41,15 @@ public final class SpawnerData {
     public boolean isDirty()           { return dirty; }
     public void clearDirty()           { dirty = false; }
 
+    /**
+     * Immutable-in-practice copy used by asynchronous persistence work.
+     */
+    public SpawnerData snapshot() {
+        return new SpawnerData(
+            world, x, y, z, entityType, stackCount, sugarCount, redstoneControlled, aiNerfed
+        );
+    }
+
     // ── Mutators (each marks dirty) ───────────────────────────────────────────
 
     public void setEntityType(String type)    { entityType = type; dirty = true; }
@@ -84,5 +93,23 @@ public final class SpawnerData {
      */
     public int adjustedDelay(int baseDelay, int maxSugar, double maxMultiplier) {
         return (int) Math.max(1, Math.round(baseDelay / speedMultiplier(maxSugar, maxMultiplier)));
+    }
+
+    /**
+     * Effective cycle-rate multiplier after the configured minimum-delay floor is applied.
+     */
+    public double effectiveSpeedMultiplier(
+        int baseMinDelay,
+        int baseMaxDelay,
+        int maxSugar,
+        double maxMultiplier,
+        int minDelayFloor
+    ) {
+        int safeBaseMin = Math.max(1, baseMinDelay);
+        int safeBaseMax = Math.max(safeBaseMin, baseMaxDelay);
+        int safeFloor = Math.max(1, minDelayFloor);
+        int effectiveMin = Math.max(safeFloor, adjustedDelay(safeBaseMin, maxSugar, maxMultiplier));
+        int effectiveMax = Math.max(effectiveMin, adjustedDelay(safeBaseMax, maxSugar, maxMultiplier));
+        return (safeBaseMin + safeBaseMax) / (double) (effectiveMin + effectiveMax);
     }
 }

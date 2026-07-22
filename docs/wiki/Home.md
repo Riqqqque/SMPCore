@@ -1,36 +1,66 @@
-# SMPCore Wiki
+# Ethereal SMP: Season of the Veil
 
-SMPCore is the core plugin for Ethereal SMP. It handles the server start flow, teams, custom relics, bosses, superpowers, custom enchants, inventories, waystones, death chests, audits, and admin tools.
+Welcome to the player guide for **SMPCore**, the custom progression behind Ethereal SMP Season V.
 
-The easiest way to think about the plugin:
+> New here? Open `/menu` in game, then follow the [Getting Started](Getting-Started) checklist. You do not need to memorize every system.
 
-- `Reliquary` is the player-facing item guide.
-- `/menu` is the short hub command for player menus.
-- `Boss Rituals` are how players summon custom bosses.
-- `Covenant Armory` is the boss-forged gear path tied to boss trophies.
-- `Superpowers` are hidden player classes.
-- `Leaderboards` track PvP kills, deaths, boss kills, and mob kills.
-- `Admin Tools` are for staff control, audits, rewards, and recovery.
+## Pick what you need
 
-## Quick Links
+| I want to... | Start here |
+|---|---|
+| Learn the server in a few minutes | [Getting Started](Getting-Started) |
+| Know what to work toward next | [Progression Guide](Progression-Guide) |
+| Find an NPC or quest | [NPC Directory](NPC-Directory) |
+| Earn or spend Essence | [Essence, Economy, and Rewards](Essence-Economy-And-Rewards) |
+| Upgrade an item safely | [Gear Upgrades and Stations](Gear-Upgrades-And-Stations) |
+| Fight the next boss | [Boss Dungeon](Bosses-And-Rituals) |
+| Manage familiars or gathering bonuses | [Familiars and Gathering](Familiars-And-Gathering) |
+| Look up a command | [Commands](Commands) |
+| Recover from an inventory problem | [Inventory Safety and Recovery](Inventory-Safety-And-Recovery) |
+| Play from Bedrock | [Bedrock and Geyser](Bedrock-And-Geyser) |
 
-- [Getting Started](Getting-Started)
-- [Commands](Commands)
-- [Reliquary and Items](Reliquary-And-Items)
-- [Covenant Armory](Covenant-Armory)
-- [Bosses and Rituals](Bosses-And-Rituals)
-- [Superpowers](Superpowers)
-- [Leaderboards](Leaderboards)
-- [Teams and SMP Start](Teams-And-SMP-Start)
-- [Custom Enchants](Custom-Enchants)
-- [Spawners](Spawners)
-- [Admin Guide](Admin-Guide)
-- [FAQ](FAQ)
+## The short version
 
-## Covenant Lore
+- `/menu` is the main hub.
+- `/reliquary` contains the current custom items, recipes, and crafting buttons.
+- **Essence** is earned by normal play and spent on progression, quests, bosses, shops, and games.
+- **Malakar** runs the shared Boss Dungeon. Bosses cannot be summoned in player bases.
+- **Orin** explains reforges, orbs, the Runic Loom, awakening, corruption, and the safest upgrade order.
+- `/familiar` manages every unlocked familiar. Only one may be active at a time.
+- `/settings` controls important-item Drop Safety, spawn music, and boss music.
+- `/wiki` always returns to this guide.
 
-The world is not being invaded. It is remembering.
+## Main progression loop
 
-Each boss is a lock left behind by something older than the current SMP. The players are the current witnesses: the group that either binds the old relics into tools or lets the relics bind them instead. The Covenant Armory is built from boss trophies, not random drops, so every major item has a story behind it and every endgame upgrade asks players to fight for it publicly.
+```text
+Explore and gather
+        ↓
+Earn Essence and finish spawn quests
+        ↓
+Defeat the next Boss Dungeon tier
+        ↓
+Craft seasonal PvE gear from its materials
+        ↓
+Enchant → Reforge → Orbs → Runic Loom
+        ↓
+Choose Awakening OR Corruption as the final path
+```
 
-The tone is dark fantasy, but the design stays server-friendly: strong items have cooldowns, short windows, full-set requirements, or conditional triggers so PvP can stay playable.
+Legendary and Mythic relics are mainly the long-term PvP chase. Boss-forged seasonal gear is tuned primarily for PvE and boss progression.
+
+## Story without spoilers
+
+Veilward was built above the Oath Engine, a machine that stabilized the world by consuming Soul Imprints. The ten bosses each guard a suppressed part of its history. Your class is a Veilmark: part of a missing Eleventh Oath.
+
+Use `/veil` to open the lore journal. Story choices change dialogue, journal entries, cosmetics, and persistent story flags rather than granting exclusive combat power. Read the [The Eleventh Oath](The-Eleventh-Oath) page for the spoiler-light overview.
+
+## In-game sources of truth
+
+Recipes and balance can change during the season. These menus always use the current server data:
+
+- `/reliquary` for item recipes and sources.
+- `/bossrituals` for boss entry costs and drop previews.
+- `/enchants` for custom enchant rules.
+- `/powerinfo` for your class.
+- `/menu` → **Profile** → **Custom Stats** for live multipliers.
+- Orin, Malakar, and the relevant quest NPC for system-specific help.

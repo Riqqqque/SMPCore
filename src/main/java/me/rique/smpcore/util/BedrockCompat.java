@@ -51,6 +51,31 @@ public final class BedrockCompat {
         return isBedrockPlayer(player) ? "Tap" : "Click";
     }
 
+    /**
+     * Sends a normal game result while giving Bedrock clients an action-bar copy.
+     * Inventory-based games can cover chat on Bedrock, so the second channel keeps
+     * the result visible without changing the Java presentation.
+     */
+    public static void sendGameMessage(Player player, Component message) {
+        if (player == null || message == null) {
+            return;
+        }
+        player.sendMessage(message);
+        if (isBedrockPlayer(player)) {
+            player.sendActionBar(message);
+        }
+    }
+
+    public static void syncGameInventory(Player player) {
+        if (isBedrockPlayer(player)) {
+            player.updateInventory();
+        }
+    }
+
+    public static boolean isFloodgateAvailable() {
+        return isFloodgatePresent();
+    }
+
     private static void ensureLookup() {
         if (floodgateGetInstance != null && floodgateIsPlayer != null) {
             return;

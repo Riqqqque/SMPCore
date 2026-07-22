@@ -39,6 +39,7 @@ public final class LeaderboardCommands {
 
         commands.register(
             Commands.literal("playtime")
+                .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.leaderboard"))
                 .executes(ctx -> showPlaytime(plugin, ctx.getSource().getSender()))
                 .build(),
             "Show your playtime",
@@ -98,6 +99,8 @@ public final class LeaderboardCommands {
         builder.suggest("boss_fights");
         builder.suggest("mob_kills");
         builder.suggest("playtime");
+        builder.suggest("duel_wins");
+        builder.suggest("duel_bet_wins");
         return builder.buildFuture();
     }
 }

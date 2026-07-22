@@ -5,7 +5,7 @@
 
 messages:
   prefix: "<dark_gray>[<gradient:#FF6B6B:#FFE66D>Server</gradient>]</dark_gray> "
-  join-first: "<gold>Welcome, <white>{player}</white>!</gold>"
+  join-first: "<gradient:#8b5cf6:#22d3ee><bold>Season 5: Season of the Veil</bold></gradient> <dark_gray>·</dark_gray> <white>{player}</white> <gray>has joined for the first time.</gray>"
   join-return: "<aqua>> <white>{player}</white> has joined the server.</aqua>"
   quit: "<gray>< <white>{player}</white> has left the server.</gray>"
 
@@ -16,20 +16,38 @@ motd:
   # Placeholders: {online}, {max}, {host}, {newline}
   legacy-color-codes: true
   lines:
-    - "<gradient:#00e5ff:#22c55e><bold>Ethereal SMP</bold></gradient> &8| &f{online}&7/&f{max}"
-    - "&7Custom powers, bosses, relics, and waystones."
+    - "<gradient:#8b5cf6:#22d3ee><bold>✦ ETHEREAL SMP ✦</bold></gradient> <dark_gray>•</dark_gray> <white>{online}</white><gray>/</gray><white>{max}</white> <gray>online</gray>"
+    - "<gradient:#f0abfc:#67e8f9><bold>SEASON V • SEASON OF THE VEIL</bold></gradient>"
+
+# Optional launch gate. The live launch config enables this with owner UUIDs.
+launch-access:
+  enabled: false
+  locked: false
+  manage-vanilla-whitelist: true
+  allowed-player-uuids: []
+  denied-message: "<red>The server is still preparing for launch.</red> <gray>Please check back soon.</gray>"
 
 smp-start:
   enabled: true
   world: "world"
-  # While false, the configured world stays inside a tiny border and PvP is blocked.
+  # While false, normal players see a personal barrier 15 blocks from exact spawn. The real world border stays full-sized.
   started: false
   started-at: 0
-  pre-start-border-diameter: 75.0
+  pre-start-border-diameter: 30.0
   # Used only when /startsmp runs. After the SMP has started, manual /worldborder changes persist through restarts.
-  started-border-diameter: 10000.0
+  started-border-diameter: 5000.0
   border-expand-seconds: 0
   post-start-grace-minutes: 60
+  # Real 24-hour days counted from /startsmp. Day 3 begins after 48 hours; Day 5 after 96 hours.
+  nether-unlock-day: 3
+  end-unlock-day: 5
+  # Optional exact UTC epoch milliseconds. A positive value overrides the matching day-based time.
+  nether-unlock-at: 0
+  # July 21, 2026 at 7:00 PM America/Denver (July 22 at 1:00 AM UTC).
+  end-unlock-at: 1784682000000
+  # Managed by /startsmp unlock. Both flags reset when a new SMP start state is created.
+  nether-unlocked-early: false
+  end-unlocked-early: false
   lock-plugin-commands-before-start: true
   lock-block-edits-before-start: true
   start-broadcast: "<gold><bold>The SMP has started!</bold></gold> <gray>The world border is now <white>{border}</white> blocks wide. PvP unlocks in <white>{grace}</white>.</gray>"
@@ -39,16 +57,118 @@ smp-start:
 combat:
   tag-seconds: 45
 
+boss-music:
+  enabled: true
+  # Every boss has a different original theme. It loops through the Records/Jukebox audio channel until the fight ends.
+  volume: 0.68
+
 homes:
   default-max: 1
   multiple-max: 5
 
+wild:
+  enabled: true
+  # /wild always targets this Overworld, even when used from another dimension.
+  world: "world"
+  cooldown-seconds: 300
+  # Landing blocks stay this far inside the live vanilla world border.
+  border-padding: 32
+  minimum-spawn-distance: 600
+  # Candidates load one chunk at a time. Only this many player searches can generate chunks together.
+  search-attempts: 24
+  max-concurrent-searches: 2
+
 spawn:
   world: "world"
+  cooldown-seconds: 5
+  exact:
+    # /setspawn fills this in. Used for first joins, /spawn, and deaths without a bed or anchor.
+    # Returning players keep the exact location where they logged out.
+    set: false
+    # Keeps vanilla world-spawn spreading off.
+    enforce-spawn-radius-zero: true
+    x: 0.5
+    y: 64.0
+    z: 0.5
+    yaw: 0.0
+    pitch: 0.0
+  ambience:
+    enabled: true
+    # Lightweight local particles and ambient sounds cover the wider spawn district.
+    radius: 100
+    song:
+      enabled: true
+      # Original 19-second note-block theme played through the Records/Jukebox audio channel.
+      # Full volume through 100 blocks, then a smooth fade until 120 blocks.
+      radius: 100
+      fade-distance: 20
+      interval-seconds: 300
+      volume: 0.72
+    wisps:
+      enabled: true
+    motes:
+      # Sparse, player-local fireflies and drifting leaves. No entities are created.
+      enabled: true
+    rune-pulse:
+      enabled: true
+      interval-seconds: 35
+    soundscape:
+      enabled: true
+      minimum-seconds: 18
+      maximum-seconds: 32
   protection:
     enabled: true
+    # Keeps vanilla's tiny world-spawn protection from fighting the custom region below.
+    disable-vanilla-spawn-protection: true
+    # Used until /spawnprotect pos1 and /spawnprotect pos2 mark a custom spawn region.
     radius: 150
+    region:
+      world: ""
+      # Build/interact protection follows this. Mob spawn and mob entry always use the full X/Z column.
+      full-height: true
+      pos1:
+        set: false
+        x: 0
+        y: 0
+        z: 0
+      pos2:
+        set: false
+        x: 0
+        y: 0
+        z: 0
+    flags:
+      - build
+      - interact
+      - pvp
+      - hunger-drain
+      - mob-grief
+      - mob-spawns
+      - mob-entry
+      - explosions
+      - fire
+      - liquids
+      - redstone
+      - environment
+      - natural-decay
+      - crop-trample
+      - bone-meal
+      - weather-lock
+      - entity-edit
+    mob-control-defaults-added: true
+    crop-trample-default-added: true
+    natural-decay-default-added: true
+    bone-meal-default-added: true
+    weather-lock-default-added: true
+    hunger-drain-default-added: true
+    # Filled when /spawnprotect on/off confirm changes the master switch.
+    last-toggle-by: "default"
+    last-toggle-at: ""
+    # Temporarily turn this on with /spawnprotect debug on when diagnosing mob spawn issues.
+    debug-mob-spawns: false
     allowed-builders: []
+    # Exact blocks the public can right-click while spawn interaction protection is on.
+    # Use /spawnprotect stick, then confirm the same block twice.
+    public-interactions: []
     deny-message: "<red>Spawn is protected. Ask staff if you need build access here.</red>"
 
 world-rules:
@@ -60,7 +180,6 @@ back:
 
 death-chest:
   enabled: true
-  disable-in-player-combat: false
   lifetime-minutes: 90
   search-radius: 4
   vertical-search-radius: 4
@@ -74,7 +193,7 @@ death-chest:
   notify-chat: true
   chest-name: "<gold><bold>{player}'s Death Chest</bold></gold>"
   chat-message: "<yellow>Your death chest is at <white>{world} {x}, {y}, {z}</white> and expires in <white>{minutes} minutes</white>.</yellow>"
-  no-space-message: "<red>The death chest emergency fallback failed, so your items dropped normally.</red>"
+  no-space-message: "<red>No safe death chest spot was available, so your items dropped normally.</red>"
   note:
     enabled: true
     drop-if-inventory-full: true
@@ -103,14 +222,67 @@ player-shops:
   max-price: 4096
   allow-owner-purchases: false
 
+tab-list:
+  # Keep every online, non-vanished player listed regardless of distance or world.
+  always-show-online-players: true
+  # Two seconds keeps ping/TPS current without rebuilding the panel every tick.
+  refresh-ticks: 40
+  server-title: "ETHEREAL SMP"
+  season-title: "SEASON V · SEASON OF THE VEIL"
+  footer-hint: "/menu  ·  /wiki  ·  /team"
+  # UUIDs here receive the Owner title. If empty, launch-access owners are used.
+  owner-uuids: []
+
 player-finder-defense:
   # Hides enemy players from clients when they are too far away or behind blocks.
   # This makes client-side player finder HUD mods much less useful without breaking close PvP.
+  # Automatically disabled while tab-list.always-show-online-players is true.
   enabled: true
   always-show-radius: 24.0
   line-of-sight-radius: 96.0
   hide-same-team: false
   ignore-ops: true
+
+normal-essence:
+  enabled: true
+  notify: true
+  # Balance/progress saves are batched so mining does not write to SQLite every block.
+  flush-interval-seconds: 45
+  mining:
+    # Stone-like blocks are 1 point. Ores are worth more, ancient debris is worth the most.
+    threshold-points: 250
+    payout: 1
+  xp:
+    # Counts real XP gain events, not manual level edits.
+    threshold-xp: 350
+    payout: 1
+  mobs:
+    # Normal hostile mobs are 1 point. Stronger hostile mobs are worth more.
+    threshold-points: 30
+    payout: 2
+  player-kills:
+    payout: 12
+    same-victim-cooldown-seconds: 1200
+
+boss-dungeon:
+  # Paid only by the summoner when their queued fight actually begins.
+  # Teammates, allies, and spectators are not charged.
+  essence-costs:
+    yule_the_minion: 25
+    kael_the_ashen: 40
+    vesper_the_widow_queen: 60
+    mirewood_the_root_tyrant: 80
+    nereida_the_abyss_mother: 105
+    iron_saint: 130
+    aurelion_the_rift_seraph: 160
+    morvessa_the_runebloom_witch: 195
+    voralith_the_crimson_warden: 235
+    corrupted_oathkeeper: 300
+
+item-audit:
+  # Scans online inventories for tracked custom item movement and duplicates.
+  # Higher values reduce background work. Direct item events still log right away.
+  scan-interval-seconds: 180
 
 spawner:
   silk-touch-enabled: true
@@ -217,8 +389,13 @@ dragon-egg:
   check-interval: 10
 
 crafting:
-  golden-apple-surround-material: GOLD_NUGGET
+  golden-apple-surround-material: GOLD_INGOT
   block-netherite-armor-upgrade: true
+
+legendary:
+  # Checks online inventories for duplicate exclusive legendary items.
+  # Join and item-change checks still run outside this timer.
+  duplicate-audit-interval-seconds: 30
 
 legendary-altar:
   enabled: true
@@ -250,17 +427,10 @@ ender-sword:
 frost-scythe:
   ability-cooldown-seconds: 15
 
-bosses:
-  double-drops:
-    enabled: true
-    timezone: "America/Denver"
-    start-hour: 16
-    end-hour: 18
-    ending-warning-minutes: 10
-
 awakening-table:
   enabled: true
-  rift-seraph-drop-chance: 0.50
+  rift-seraph-drop-chance: 0.025
+  rift-seraph-awakening-shard-drop-chance: 0.25
   success-chance: 0.05
   failure-durability-loss-fraction: 0.50
   destroy-threshold: 0.15
@@ -292,7 +462,7 @@ custom-enchants:
     ancient-city-chest-chance: 0.23
     vertical-boost: 0.82
     forward-boost: 0.75
-    hunger-cost: 4
+    hunger-cost: 2
   dash:
     cooldown-seconds: 15
     horizontal-boost: 1.85

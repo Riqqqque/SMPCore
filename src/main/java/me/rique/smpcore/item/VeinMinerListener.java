@@ -1,6 +1,7 @@
 package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.AtomicYamlFile;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
@@ -194,7 +195,7 @@ public final class VeinMinerListener implements Listener {
         List<Block> extraBlocks = new ArrayList<>(chain);
         extraBlocks.remove(0);
 
-        Bukkit.getScheduler().runTask(plugin, () -> breakChain(player, extraBlocks));
+        Bukkit.getScheduler().runTask(plugin, () -> breakChain(player, extraBlocks, target));
     }
 
     private boolean shouldVeinMine(Player player, Block origin) {
@@ -209,19 +210,15 @@ public final class VeinMinerListener implements Listener {
         VeinTarget target = classifyTarget(player, origin.getType());
         if (target == null) return false;
 
-        if (target.type() == VeinTargetType.ORE && oresRequirePickaxe && !isPickaxe(tool)) {
-            return false;
-        }
-        if (target.type() == VeinTargetType.TREE && treesRequireAxe && !isAxe(tool)) {
-            return false;
-        }
-        if (target.type() == VeinTargetType.CUSTOM && !canMineCustomTarget(tool, origin.getType())) {
-            return false;
-        }
-        return true;
+        return canUseToolForTarget(tool, target, origin.getType());
     }
 
     private VeinTarget classifyTarget(Player player, Material material) {
+        ItemStack tool = player.getInventory().getItemInMainHand();
+        if (isVeinwakePick(tool) && isVeinwakeExcludedMaterial(material)) {
+            return null;
+        }
+
         String oreFamily = oresEnabled ? oreFamilyByMaterial.get(material) : null;
         if (oreFamily != null) {
             return new VeinTarget(VeinTargetType.ORE, oreFamily);
@@ -230,6 +227,9 @@ public final class VeinMinerListener implements Listener {
         String treeFamily = treesEnabled ? treeFamilyByMaterial.get(material) : null;
         if (treeFamily != null) {
             return new VeinTarget(VeinTargetType.TREE, treeFamily);
+        }
+        if (isVeinwakeTerrain(material) && isVeinwakePick(tool)) {
+            return new VeinTarget(VeinTargetType.VEINWAKE_TERRAIN, material.name());
         }
         Set<Material> customBlocks = playerCustomBlocks.get(player.getUniqueId());
         if (customBlocks != null && customBlocks.contains(material)) {
@@ -275,16 +275,17 @@ public final class VeinMinerListener implements Listener {
         return switch (target.type()) {
             case ORE -> target.family().equals(oreFamilyByMaterial.get(material));
             case TREE -> target.family().equals(treeFamilyByMaterial.get(material));
-            case CUSTOM -> target.family().equals(material.name());
+            case VEINWAKE_TERRAIN, CUSTOM -> target.family().equals(material.name());
         };
     }
 
-    private void breakChain(Player player, Collection<Block> blocks) {
+    private void breakChain(Player player, Collection<Block> blocks, VeinTarget target) {
         if (!player.isOnline()) return;
 
         for (Block block : blocks) {
             if (!player.isOnline()) return;
             if (block.getType().isAir()) continue;
+            if (!canUseToolForTarget(player.getInventory().getItemInMainHand(), target, block.getType())) return;
 
             BlockKey key = blockKey(block.getLocation());
             internalBreaks.add(key);
@@ -293,6 +294,15 @@ public final class VeinMinerListener implements Listener {
                 internalBreaks.remove(key);
             }
         }
+    }
+
+    private boolean canUseToolForTarget(ItemStack tool, VeinTarget target, Material material) {
+        return switch (target.type()) {
+            case ORE -> !oresRequirePickaxe || isPickaxe(tool);
+            case TREE -> !treesRequireAxe || isAxe(tool);
+            case VEINWAKE_TERRAIN -> isVeinwakePick(tool);
+            case CUSTOM -> canMineCustomTarget(tool, material);
+        };
     }
 
     private void loadFamilySection(ConfigurationSection section, Map<Material, String> output, String kind) {
@@ -331,7 +341,25 @@ public final class VeinMinerListener implements Listener {
     }
 
     private boolean isPickaxe(ItemStack item) {
-        return item != null && Tag.ITEMS_PICKAXES.isTagged(item.getType());
+        if (item == null || item.getType() == Material.AIR) return false;
+        if (plugin.getMinerManager() != null && plugin.getMinerManager().isVeinwakePick(item)) return true;
+        return Tag.ITEMS_PICKAXES.isTagged(item.getType()) || hasPickaxeMaterialName(item.getType());
+    }
+
+    static boolean hasPickaxeMaterialName(Material material) {
+        return material != null && material.name().endsWith("_PICKAXE");
+    }
+
+    static boolean isVeinwakeTerrain(Material material) {
+        return material == Material.STONE || material == Material.DEEPSLATE;
+    }
+
+    static boolean isVeinwakeExcludedMaterial(Material material) {
+        return material == Material.NETHERRACK;
+    }
+
+    private boolean isVeinwakePick(ItemStack item) {
+        return plugin.getMinerManager() != null && plugin.getMinerManager().isVeinwakePick(item);
     }
 
     private boolean isAxe(ItemStack item) {
@@ -439,7 +467,7 @@ public final class VeinMinerListener implements Listener {
                 plugin.getLogger().warning("Failed to create plugin data folder for vein miner settings.");
                 return;
             }
-            data.save(dataFile);
+            AtomicYamlFile.save(data, dataFile);
         } catch (IOException e) {
             plugin.getLogger().warning("Failed to save vein miner settings: " + e.getMessage());
         }
@@ -504,6 +532,7 @@ public final class VeinMinerListener implements Listener {
     private enum VeinTargetType {
         ORE,
         TREE,
+        VEINWAKE_TERRAIN,
         CUSTOM
     }
 

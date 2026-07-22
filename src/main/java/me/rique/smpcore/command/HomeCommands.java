@@ -2,10 +2,17 @@ package me.rique.smpcore.command;
 
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import io.papermc.paper.command.brigadier.Commands;
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.CommandSuggestionUtil;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.entity.Player;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 @SuppressWarnings("UnstableApiUsage")
 public final class HomeCommands {
@@ -22,6 +29,7 @@ public final class HomeCommands {
                     return Command.SINGLE_SUCCESS;
                 })
                 .then(Commands.argument("name", StringArgumentType.word())
+                    .suggests((ctx, builder) -> suggestHomes(plugin, (Player) ctx.getSource().getSender(), builder))
                     .executes(ctx -> {
                         plugin.getHomeManager().teleportHome(
                             (Player) ctx.getSource().getSender(),
@@ -42,6 +50,7 @@ public final class HomeCommands {
                     return Command.SINGLE_SUCCESS;
                 })
                 .then(Commands.argument("name", StringArgumentType.word())
+                    .suggests((ctx, builder) -> suggestHomes(plugin, (Player) ctx.getSource().getSender(), builder))
                     .executes(ctx -> {
                         Player player = (Player) ctx.getSource().getSender();
                         setHome(player, StringArgumentType.getString(ctx, "name"), plugin);
@@ -84,6 +93,7 @@ public final class HomeCommands {
             Commands.literal(literal)
                 .requires(src -> src.getSender() instanceof Player p && p.hasPermission("smpcore.home"))
                 .then(Commands.argument("name", StringArgumentType.word())
+                    .suggests((ctx, builder) -> suggestHomes(plugin, (Player) ctx.getSource().getSender(), builder))
                     .executes(ctx -> {
                         Player player = (Player) ctx.getSource().getSender();
                         String name = StringArgumentType.getString(ctx, "name");
@@ -121,5 +131,13 @@ public final class HomeCommands {
 
     private static boolean isDefaultHome(String name) {
         return "home".equalsIgnoreCase(name);
+    }
+
+    private static CompletableFuture<Suggestions> suggestHomes(SMPCore plugin, Player player, SuggestionsBuilder builder) {
+        List<String> names = new ArrayList<>(plugin.getHomeManager().cachedHomeNames(player.getUniqueId()));
+        if (!names.contains("home")) {
+            names.add("home");
+        }
+        return CommandSuggestionUtil.suggestMatching(builder, names);
     }
 }

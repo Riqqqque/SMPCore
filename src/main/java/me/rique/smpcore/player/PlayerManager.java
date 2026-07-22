@@ -1,6 +1,7 @@
 package me.rique.smpcore.player;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.LocationUtil;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
@@ -125,14 +126,19 @@ public final class PlayerManager {
     // ── /back ─────────────────────────────────────────────────────────────────
 
     public void saveBackLocation(Player player) {
+        if (player == null) return;
+        saveBackLocation(player.getUniqueId(), player.getLocation());
+    }
+
+    public void saveBackLocation(UUID playerId, Location location) {
         if (plugin.getConfigManager().backOnTeleport) {
-            backLocations.put(player.getUniqueId(), player.getLocation().clone());
+            rememberSafeBackLocation(playerId, location, 2, 4);
         }
     }
 
     public void saveDeathLocation(Player player) {
         if (plugin.getConfigManager().backOnDeath) {
-            backLocations.put(player.getUniqueId(), player.getLocation().clone());
+            rememberSafeBackLocation(player.getUniqueId(), player.getLocation(), 6, 8);
         }
     }
 
@@ -140,14 +146,52 @@ public final class PlayerManager {
         return backLocations.get(uuid);
     }
 
+    private void rememberSafeBackLocation(UUID playerId, Location location, int horizontalRadius, int verticalRadius) {
+        Location safe = LocationUtil.findNearestSafeStandingLocation(location, horizontalRadius, verticalRadius);
+        if (safe == null) {
+            return;
+        }
+        backLocations.put(playerId, safe.clone());
+    }
+
     // ── Cleanup ───────────────────────────────────────────────────────────────
 
     public void onDisconnect(Player player) {
-        vanishedPlayers.remove(player.getUniqueId());
-        godPlayers.remove(player.getUniqueId());
-        flightPlayers.remove(player.getUniqueId());
+        UUID playerId = player.getUniqueId();
+        vanishedPlayers.remove(playerId);
+        if (godPlayers.remove(playerId)) {
+            player.setInvulnerable(false);
+        }
+        if (flightPlayers.remove(playerId)
+            && player.getGameMode() != GameMode.CREATIVE
+            && player.getGameMode() != GameMode.SPECTATOR) {
+            player.setFlying(false);
+            player.setAllowFlight(false);
+        }
         // back location intentionally kept so /back works after relog in future;
         // removed here to keep memory clean for now
-        backLocations.remove(player.getUniqueId());
+        backLocations.remove(playerId);
+    }
+
+    public void shutdown() {
+        for (Player player : org.bukkit.Bukkit.getOnlinePlayers()) {
+            UUID playerId = player.getUniqueId();
+            if (godPlayers.remove(playerId)) {
+                player.setInvulnerable(false);
+            }
+            if (flightPlayers.remove(playerId)
+                && player.getGameMode() != GameMode.CREATIVE
+                && player.getGameMode() != GameMode.SPECTATOR) {
+                player.setFlying(false);
+                player.setAllowFlight(false);
+            }
+            if (vanishedPlayers.remove(playerId)) {
+                showPlayer(player);
+            }
+        }
+        godPlayers.clear();
+        flightPlayers.clear();
+        vanishedPlayers.clear();
+        backLocations.clear();
     }
 }

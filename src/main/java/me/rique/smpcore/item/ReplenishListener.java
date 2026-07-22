@@ -1,16 +1,18 @@
 package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.compat.CrossplayManager.AnvilRecipe;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.InventoryRecipeUtil;
+import me.rique.smpcore.util.ItemModelUtil;
 import me.rique.smpcore.util.MessageUtil;
-import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
+import org.bukkit.Particle;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.Ageable;
 import org.bukkit.block.data.BlockData;
@@ -28,6 +30,7 @@ import org.bukkit.event.inventory.PrepareGrindstoneEvent;
 import org.bukkit.inventory.AnvilInventory;
 import org.bukkit.inventory.GrindstoneInventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.EnchantmentStorageMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
@@ -42,9 +45,6 @@ public final class ReplenishListener implements Listener {
     private static final int REPLENISH_ANVIL_COST = 8;
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
-    private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
-    private static final String REPLENISH_LORE_LINE = "Replenish I";
-
     private final SMPCore plugin;
     private final NamespacedKey keyReplenishHoe;
     private final NamespacedKey keyReplenishBook;
@@ -61,6 +61,9 @@ public final class ReplenishListener implements Listener {
         if (meta == null) return book;
 
         meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.RARE, "Replenish Book"));
+        ItemModelUtil.apply(meta, "replenish_book");
+        meta.setMaxStackSize(1);
+        meta.getPersistentDataContainer().set(keyReplenishBook, PersistentDataType.BYTE, (byte) 1);
         meta.lore(CustomLoreUtil.buildStyledLore(
             meta,
             Material.ENCHANTED_BOOK,
@@ -71,13 +74,28 @@ public final class ReplenishListener implements Listener {
                 "Enchant Effect",
                 "Replenish",
                 "<gray>Apply in an anvil to any hoe.</gray>",
-                "<gray>Enchanting hoes at an enchant table can also grant it.</gray>",
+                "<gray>Any successful enchant-table use on a hoe also grants it.</gray>",
                 "<gray>Breaking supported crops replants them automatically.</gray>"
             ))
         ));
-        meta.getPersistentDataContainer().set(keyReplenishBook, PersistentDataType.BYTE, (byte) 1);
         book.setItemMeta(meta);
         return book;
+    }
+
+    public AnvilRecipe crossplayAnvilRecipe(ItemStack left, ItemStack right) {
+        if (isUnsafeReplenishBook(left) || isUnsafeReplenishBook(right)) {
+            return null;
+        }
+        if (!isReplenishBook(right) || !isHoe(left) || hasReplenish(left)) {
+            return null;
+        }
+        return new AnvilRecipe(
+            applyReplenish(left.clone()),
+            REPLENISH_ANVIL_COST,
+            "Applied <white>Replenish I</white>.",
+            "Applied Replenish I through the crossplay custom anvil.",
+            false
+        );
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -85,7 +103,17 @@ public final class ReplenishListener implements Listener {
         ItemStack left = event.getInventory().getFirstItem();
         ItemStack right = event.getInventory().getSecondItem();
 
-        if (!isReplenishBook(right)) return;
+        if (isUnsafeReplenishBook(left) || isUnsafeReplenishBook(right)) {
+            event.setResult(null);
+            return;
+        }
+        boolean leftBook = isReplenishBook(left);
+        boolean rightBook = isReplenishBook(right);
+        if (!leftBook && !rightBook) return;
+        if (!rightBook) {
+            event.setResult(null);
+            return;
+        }
         if (!isHoe(left) || hasReplenish(left)) {
             event.setResult(null);
             return;
@@ -103,6 +131,7 @@ public final class ReplenishListener implements Listener {
 
         Player enchanter = event.getEnchanter();
         Bukkit.getScheduler().runTask(plugin, () -> {
+            if (event.isCancelled()) return;
             if (!isHoe(item) || hasReplenish(item)) return;
             applyReplenish(item);
             if (enchanter.isOnline()) {
@@ -117,6 +146,18 @@ public final class ReplenishListener implements Listener {
 
         ItemStack top = grindstone.getUpperItem();
         ItemStack bottom = grindstone.getLowerItem();
+        if (isUnsafeReplenishBook(top) || isUnsafeReplenishBook(bottom)) {
+            event.setResult(null);
+            return;
+        }
+        if (isReplenishBook(top) || isReplenishBook(bottom)) {
+            if (!isEmptyItem(top) && !isEmptyItem(bottom)) {
+                event.setResult(null);
+                return;
+            }
+            event.setResult(new ItemStack(Material.BOOK));
+            return;
+        }
         if (!hasReplenish(top) && !hasReplenish(bottom)) return;
 
         ItemStack result = event.getResult();
@@ -126,6 +167,10 @@ public final class ReplenishListener implements Listener {
         }
 
         ItemStack source = hasReplenish(top) ? top : bottom;
+        if (!isEmptyItem(top) && !isEmptyItem(bottom)) {
+            event.setResult(null);
+            return;
+        }
         if (source == null || source.getType() == Material.AIR) return;
         event.setResult(stripReplenish(source.clone()));
     }
@@ -139,10 +184,17 @@ public final class ReplenishListener implements Listener {
 
         ItemStack left = anvil.getFirstItem();
         ItemStack right = anvil.getSecondItem();
+        if (isUnsafeReplenishBook(left) || isUnsafeReplenishBook(right)) {
+            event.setCancelled(true);
+            player.sendMessage(MessageUtil.warn(
+                "That Replenish book has invalid or mixed enchant data. Ask staff to replace it."
+            ));
+            return;
+        }
         if (!isReplenishBook(right) || !isHoe(left) || hasReplenish(left)) return;
 
-        ItemStack result = event.getCurrentItem();
-        if (result == null || result.getType() == Material.AIR) return;
+        ItemStack result = applyReplenish(left.clone());
+        if (result.getType() == Material.AIR) return;
 
         event.setCancelled(true);
         if (!canReceiveAnvilResult(player, event)) {
@@ -175,14 +227,23 @@ public final class ReplenishListener implements Listener {
         BlockData replanted = crop.replanted();
         if (replanted == null) return;
 
+        BlockData original = block.getBlockData().clone();
         List<ItemStack> drops = List.of();
+        boolean needsInventorySeed = false;
         if (crop.mature()) {
             Material seedMaterial = seedMaterialFor(block.getType());
             if (seedMaterial == null) return;
 
             List<ItemStack> harvestDrops = new ArrayList<>(block.getDrops(tool, player));
-            if (!consumeSeedDrop(harvestDrops, seedMaterial) && !consumeOneFromInventory(player, seedMaterial)) {
-                return;
+            if (!consumeSeedDrop(harvestDrops, seedMaterial)) {
+                if (!hasPlainInventoryItem(player, seedMaterial)) {
+                    return;
+                }
+                needsInventorySeed = true;
+            }
+            if (plugin.getCustomEnchantListener() != null
+                && plugin.getCustomEnchantListener().applyHarvestingBonus(player, tool, harvestDrops)) {
+                player.getWorld().spawnParticle(Particle.HAPPY_VILLAGER, block.getLocation().add(0.5, 0.8, 0.5), 5, 0.25, 0.25, 0.25, 0.01);
             }
             drops = harvestDrops;
         }
@@ -190,25 +251,36 @@ public final class ReplenishListener implements Listener {
         event.setDropItems(false);
         Location location = block.getLocation();
         List<ItemStack> finalDrops = cloneDrops(drops);
+        boolean consumeInventorySeedAfterBreak = needsInventorySeed;
+        boolean telekinesis = plugin.getCustomEnchantListener() != null
+            && plugin.getCustomEnchantListener().hasTelekinesisEnchant(tool);
         Bukkit.getScheduler().runTask(plugin, () -> {
             if (!block.getType().isAir()) return;
-            giveDrops(player, finalDrops, location);
+            if (consumeInventorySeedAfterBreak) {
+                Material seedMaterial = seedMaterialFor(original.getMaterial());
+                if (seedMaterial == null || !consumeOneFromInventory(player, seedMaterial)) {
+                    block.setBlockData(original, false);
+                    return;
+                }
+            }
+            if (telekinesis) {
+                giveDrops(player, finalDrops, location);
+            } else {
+                dropDropsNaturally(finalDrops, location);
+            }
             block.setBlockData(replanted, false);
         });
     }
 
-    private ItemStack applyReplenish(ItemStack hoe) {
+    public ItemStack applyReplenish(ItemStack hoe) {
         ItemMeta meta = hoe.getItemMeta();
         if (meta == null) return hoe;
 
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
         pdc.set(keyReplenishHoe, PersistentDataType.BYTE, (byte) 1);
 
-        List<Component> lore = meta.lore() == null ? new ArrayList<>() : new ArrayList<>(meta.lore());
-        lore.removeIf(line -> REPLENISH_LORE_LINE.equalsIgnoreCase(PLAIN.serialize(line).trim()));
-        lore.add(0, MM.deserialize("<gray>Replenish I</gray>"));
-        meta.lore(lore);
         hoe.setItemMeta(meta);
+        CustomLoreUtil.refreshEnchantLore(hoe);
         return hoe;
     }
 
@@ -218,10 +290,8 @@ public final class ReplenishListener implements Listener {
         if (meta == null) return hoe;
 
         meta.getPersistentDataContainer().remove(keyReplenishHoe);
-        List<Component> lore = meta.lore() == null ? new ArrayList<>() : new ArrayList<>(meta.lore());
-        lore.removeIf(line -> REPLENISH_LORE_LINE.equalsIgnoreCase(PLAIN.serialize(line).trim()));
-        meta.lore(lore.isEmpty() ? null : lore);
         hoe.setItemMeta(meta);
+        CustomLoreUtil.refreshEnchantLore(hoe);
         return hoe;
     }
 
@@ -236,18 +306,116 @@ public final class ReplenishListener implements Listener {
         if (!isHoe(item)) return false;
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return false;
-        return meta.getPersistentDataContainer().has(keyReplenishHoe, PersistentDataType.BYTE);
+        Byte marker = meta.getPersistentDataContainer().get(keyReplenishHoe, PersistentDataType.BYTE);
+        return marker != null && marker == (byte) 1;
     }
 
     public boolean isReplenishEnchantDataKey(NamespacedKey key) {
         return keyReplenishHoe.equals(key);
     }
 
-    private boolean isReplenishBook(ItemStack item) {
+    public boolean hasReplenishBookData(ItemStack item) {
         if (item == null || item.getType() != Material.ENCHANTED_BOOK) return false;
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return false;
-        return meta.getPersistentDataContainer().has(keyReplenishBook, PersistentDataType.BYTE);
+        return meta.getPersistentDataContainer().getKeys().contains(keyReplenishBook);
+    }
+
+    public boolean isReplenishBook(ItemStack item) {
+        if (!hasReplenishBookData(item)) return false;
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) return false;
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        Byte marker = pdc.get(keyReplenishBook, PersistentDataType.BYTE);
+        CustomEnchantListener custom = plugin.getCustomEnchantListener();
+        boolean hasVanillaEnchantData = !meta.getEnchants().isEmpty()
+            || meta instanceof EnchantmentStorageMeta storageMeta && storageMeta.hasStoredEnchants();
+        return isValidReplenishBookPayload(
+            item.getAmount(),
+            marker,
+            pdc.getKeys().contains(keyReplenishHoe),
+            hasVanillaEnchantData,
+            custom != null && custom.hasCustomEnchantBookData(item)
+        );
+    }
+
+    static boolean isValidReplenishBookPayload(
+        int amount,
+        Byte marker,
+        boolean hasHoeMarker,
+        boolean hasVanillaEnchantData,
+        boolean hasCustomEnchantData
+    ) {
+        return amount == 1
+            && marker != null
+            && marker == (byte) 1
+            && !hasHoeMarker
+            && !hasVanillaEnchantData
+            && !hasCustomEnchantData;
+    }
+
+    public boolean isUnsafeReplenishBook(ItemStack item) {
+        return hasReplenishBookData(item) && !isReplenishBook(item);
+    }
+
+    public boolean normalizeReplenishData(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        if (item.getType() == Material.ENCHANTED_BOOK) {
+            if (!pdc.getKeys().contains(keyReplenishBook)
+                || item.getAmount() != 1
+                || pdc.get(keyReplenishBook, PersistentDataType.BYTE) == null
+                || pdc.get(keyReplenishBook, PersistentDataType.BYTE) != (byte) 1) {
+                return false;
+            }
+            CustomEnchantListener custom = plugin.getCustomEnchantListener();
+            if (custom != null && custom.hasCustomEnchantBookData(item)) {
+                return false;
+            }
+            boolean changed = false;
+            if (pdc.getKeys().contains(keyReplenishHoe)) {
+                pdc.remove(keyReplenishHoe);
+                changed = true;
+            }
+            for (org.bukkit.enchantments.Enchantment enchantment : new ArrayList<>(meta.getEnchants().keySet())) {
+                changed |= meta.removeEnchant(enchantment);
+            }
+            if (meta instanceof EnchantmentStorageMeta storageMeta) {
+                for (org.bukkit.enchantments.Enchantment enchantment : new ArrayList<>(storageMeta.getStoredEnchants().keySet())) {
+                    changed |= storageMeta.removeStoredEnchant(enchantment);
+                }
+            }
+            if (!meta.hasMaxStackSize() || meta.getMaxStackSize() != 1) {
+                meta.setMaxStackSize(1);
+                changed = true;
+            }
+            if (!changed) {
+                return false;
+            }
+            meta.displayName(CustomLoreUtil.displayName(CustomLoreUtil.Rarity.RARE, "Replenish Book"));
+            ItemModelUtil.apply(meta, "replenish_book");
+            item.setItemMeta(meta);
+            CustomLoreUtil.refreshEnchantLore(item);
+            return true;
+        }
+
+        if (!pdc.getKeys().contains(keyReplenishHoe)) {
+            return false;
+        }
+        Byte marker = pdc.get(keyReplenishHoe, PersistentDataType.BYTE);
+        if (isHoe(item) && marker != null && marker == (byte) 1) {
+            return false;
+        }
+        pdc.remove(keyReplenishHoe);
+        item.setItemMeta(meta);
+        CustomLoreUtil.refreshEnchantLore(item);
+        return true;
     }
 
     private boolean isHoe(ItemStack item) {
@@ -303,6 +471,19 @@ public final class ReplenishListener implements Listener {
         return leftovers.isEmpty();
     }
 
+    private boolean hasPlainInventoryItem(Player player, Material material) {
+        if (player == null || material == null || material.isAir()) {
+            return false;
+        }
+        ItemStack plain = new ItemStack(material, 1);
+        for (ItemStack item : player.getInventory().getStorageContents()) {
+            if (item != null && item.getAmount() > 0 && item.isSimilar(plain)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private ItemStack consumeOne(ItemStack stack) {
         if (stack == null || stack.getType() == Material.AIR) return null;
         if (stack.getAmount() <= 1) return null;
@@ -311,11 +492,27 @@ public final class ReplenishListener implements Listener {
         return next;
     }
 
+    private static boolean isEmptyItem(ItemStack item) {
+        return item == null || item.getType().isAir() || item.getAmount() <= 0;
+    }
+
     private void giveDrops(Player player, Collection<ItemStack> drops, Location origin) {
         for (ItemStack drop : drops) {
             if (drop == null || drop.getType() == Material.AIR) continue;
             Map<Integer, ItemStack> leftovers = player.getInventory().addItem(drop);
             leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(origin, left));
+        }
+    }
+
+    private void dropDropsNaturally(Collection<ItemStack> drops, Location origin) {
+        if (origin == null || origin.getWorld() == null) {
+            return;
+        }
+        for (ItemStack drop : drops) {
+            if (drop == null || drop.getType().isAir() || drop.getAmount() <= 0) {
+                continue;
+            }
+            origin.getWorld().dropItemNaturally(origin, drop);
         }
     }
 
@@ -369,7 +566,7 @@ public final class ReplenishListener implements Listener {
 
     private void giveAnvilResult(Player player, InventoryClickEvent event, ItemStack result) {
         if (event.isShiftClick()) {
-            player.getInventory().addItem(result);
+            InventoryRecipeUtil.giveOrDrop(player, result);
             return;
         }
         player.setItemOnCursor(result);

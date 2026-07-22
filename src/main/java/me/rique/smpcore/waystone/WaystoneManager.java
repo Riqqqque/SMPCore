@@ -1,7 +1,12 @@
 package me.rique.smpcore.waystone;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.BedrockCompat;
+import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.LocationUtil;
+import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.ScheduledDimensionPolicy;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
@@ -9,12 +14,14 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
+import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.Sign;
 import org.bukkit.block.sign.Side;
 import org.bukkit.entity.Player;
+import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemFlag;
@@ -39,6 +46,10 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class WaystoneManager {
 
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
+    private static final String LANDING_TOGGLE_ACTION = "__landing_toggle__";
+    private static final String PREVIOUS_PAGE_ACTION = "__previous_page__";
+    private static final String NEXT_PAGE_ACTION = "__next_page__";
+    private static final int ENTRIES_PER_PAGE = 45;
 
     private final SMPCore plugin;
     private final NamespacedKey waystoneMenuTargetKey;
@@ -47,6 +58,7 @@ public final class WaystoneManager {
     private final ConcurrentMap<UUID, CompletableFuture<Set<String>>> knownLoading = new ConcurrentHashMap<>();
     private final ConcurrentMap<UUID, Long> knownSessionTokens = new ConcurrentHashMap<>();
     private final Set<UUID> knownLoaded = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> pendingTeleports = ConcurrentHashMap.newKeySet();
     private final AtomicLong knownSessionSequence = new AtomicLong();
 
     public WaystoneManager(SMPCore plugin) {
@@ -68,6 +80,7 @@ public final class WaystoneManager {
         knownLoading.remove(playerId);
         knownLoaded.remove(playerId);
         knownSessionTokens.remove(playerId);
+        pendingTeleports.remove(playerId);
     }
 
     public CompletableFuture<InteractResult> onSignInteract(Player player, Location middleFence, String signName) {
@@ -96,9 +109,11 @@ public final class WaystoneManager {
                 if (wasKnown) {
                     return CompletableFuture.completedFuture(InteractResult.known(entry));
                 }
-                known.add(entry.key());
                 return plugin.getDatabase().addKnownWaystone(player.getUniqueId(), entry)
-                    .thenApply(inserted -> InteractResult.registered(entry));
+                    .thenApply(inserted -> {
+                        known.add(entry.key());
+                        return inserted ? InteractResult.registered(entry) : InteractResult.known(entry);
+                    });
             });
         });
     }
@@ -203,33 +218,37 @@ public final class WaystoneManager {
     }
 
     public void openWaystoneMenu(Player player, List<WaystoneEntry> waystones) {
+        openWaystoneMenu(player, waystones, false, 0);
+    }
+
+    private void openWaystoneMenu(Player player, List<WaystoneEntry> waystones, boolean topOfGlowstone, int requestedPage) {
         List<WaystoneEntry> valid = filterValidWaystones(waystones);
         if (valid.isEmpty()) {
             player.sendMessage(MessageUtil.info("You do not know any waystones yet."));
             return;
         }
 
-        final int maxEntries = 45;
-        boolean truncated = valid.size() > maxEntries;
-        if (truncated) {
-            valid = new ArrayList<>(valid.subList(0, maxEntries));
+        List<WaystoneEntry> all = List.copyOf(valid);
+        int pageCount = pageCount(all.size());
+        int page = clampPage(requestedPage, pageCount);
+        int start = page * ENTRIES_PER_PAGE;
+        int end = Math.min(start + ENTRIES_PER_PAGE, all.size());
+        Inventory inventory = Bukkit.createInventory(
+            new WaystoneMenuHolder(all, topOfGlowstone, page),
+            54,
+            BedrockCompat.menuTitle(
+                player,
+                Component.text("Waystones " + (page + 1) + "/" + pageCount),
+                "Waystones " + (page + 1) + "/" + pageCount
+            )
+        );
+        for (int sourceIndex = start, slot = 0; sourceIndex < end; sourceIndex++, slot++) {
+            inventory.setItem(slot, createMenuItem(player, all.get(sourceIndex), topOfGlowstone));
         }
 
-        Inventory inventory = Bukkit.createInventory(new WaystoneMenuHolder(), 54, Component.text("Waystones"));
-        for (int i = 0; i < valid.size(); i++) {
-            inventory.setItem(i, createMenuItem(valid.get(i)));
-        }
-
-        if (truncated) {
-            ItemStack more = new ItemStack(Material.PAPER);
-            ItemMeta meta = more.getItemMeta();
-            if (meta != null) {
-                meta.displayName(Component.text("More waystones exist", NamedTextColor.YELLOW));
-                meta.lore(List.of(Component.text("Only the first 45 are shown here.", NamedTextColor.GRAY)));
-                more.setItemMeta(meta);
-            }
-            inventory.setItem(49, more);
-        }
+        if (page > 0) inventory.setItem(45, createPageButton(false, page, pageCount));
+        inventory.setItem(49, createLandingToggle(topOfGlowstone));
+        if (page + 1 < pageCount) inventory.setItem(53, createPageButton(true, page, pageCount));
 
         player.openInventory(inventory);
     }
@@ -238,15 +257,29 @@ public final class WaystoneManager {
         return inventory != null && inventory.getHolder() instanceof WaystoneMenuHolder;
     }
 
-    public void handleWaystoneMenuClick(Player player, ItemStack clicked, boolean topOfGlowstone) {
+    public void handleWaystoneMenuClick(Player player, Inventory inventory, ItemStack clicked) {
         if (clicked == null || clicked.getType() == Material.AIR) return;
+        if (!(inventory.getHolder(false) instanceof WaystoneMenuHolder holder)) return;
         ItemMeta meta = clicked.getItemMeta();
         if (meta == null) return;
         String key = meta.getPersistentDataContainer().get(waystoneMenuTargetKey, PersistentDataType.STRING);
         if (key == null || key.isBlank()) return;
 
+        if (LANDING_TOGGLE_ACTION.equals(key)) {
+            openWaystoneMenu(player, holder.waystones(), !holder.topOfGlowstone(), holder.page());
+            return;
+        }
+        if (PREVIOUS_PAGE_ACTION.equals(key)) {
+            openWaystoneMenu(player, holder.waystones(), holder.topOfGlowstone(), holder.page() - 1);
+            return;
+        }
+        if (NEXT_PAGE_ACTION.equals(key)) {
+            openWaystoneMenu(player, holder.waystones(), holder.topOfGlowstone(), holder.page() + 1);
+            return;
+        }
+
         player.closeInventory();
-        teleportKnownByKey(player, key, topOfGlowstone);
+        teleportKnownByKey(player, key, holder.topOfGlowstone());
     }
 
     public void teleportKnownByKey(Player player, String key) {
@@ -255,6 +288,12 @@ public final class WaystoneManager {
 
     public void teleportKnownByKey(Player player, String key, boolean topOfGlowstone) {
         if (!player.isOnline()) return;
+        if (isInPlayerCombat(player)) return;
+        String restriction = activeTeleportRestriction(player);
+        if (restriction != null) {
+            player.sendMessage(MessageUtil.warn(restriction));
+            return;
+        }
         if (!player.hasPermission("smpcore.waystone.use")) {
             player.sendMessage(MessageUtil.error("You do not have permission to use waystones."));
             return;
@@ -274,6 +313,8 @@ public final class WaystoneManager {
                 player.sendMessage(MessageUtil.error("Waystone world is not loaded."));
                 return;
             }
+            case UNLOADED -> {
+            }
             case INTACT -> {
             }
         }
@@ -284,6 +325,26 @@ public final class WaystoneManager {
                     if (!player.isOnline()) return;
                     if (!allowed) {
                         player.sendMessage(MessageUtil.error("You have not unlocked that waystone."));
+                        return;
+                    }
+                    if (waystonesByKey.get(key) != current) {
+                        player.sendMessage(MessageUtil.error("That waystone no longer exists."));
+                        return;
+                    }
+                    StructureStatus latestStatus = structureStatus(current);
+                    if (latestStatus == StructureStatus.BROKEN) {
+                        removeWaystone(current);
+                        player.sendMessage(MessageUtil.error("That waystone was destroyed."));
+                        return;
+                    }
+                    if (latestStatus == StructureStatus.WORLD_UNAVAILABLE) {
+                        player.sendMessage(MessageUtil.error("Waystone world is not loaded."));
+                        return;
+                    }
+                    if (isInPlayerCombat(player)) return;
+                    String currentRestriction = activeTeleportRestriction(player);
+                    if (currentRestriction != null) {
+                        player.sendMessage(MessageUtil.warn(currentRestriction));
                         return;
                     }
                     teleport(player, current, topOfGlowstone);
@@ -315,20 +376,53 @@ public final class WaystoneManager {
         return valid;
     }
 
-    private ItemStack createMenuItem(WaystoneEntry entry) {
+    private ItemStack createMenuItem(Player player, WaystoneEntry entry, boolean topOfGlowstone) {
         ItemStack item = new ItemStack(Material.LODESTONE);
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return item;
 
         meta.displayName(Component.text(entry.name(), NamedTextColor.AQUA));
-        meta.lore(List.of(
+        meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
             Component.text("World: " + entry.world(), NamedTextColor.GRAY),
             Component.text("X: " + entry.x() + " Y: " + entry.y() + " Z: " + entry.z(), NamedTextColor.GRAY),
-            Component.text("Left-click: Normal teleport", NamedTextColor.DARK_GRAY),
-            Component.text("Right-click: Teleport to the glowstone top", NamedTextColor.DARK_GRAY)
-        ));
+            Component.text("Landing: " + (topOfGlowstone ? "Glowstone top" : "Safest nearby spot"), NamedTextColor.DARK_GRAY),
+            Component.text(BedrockCompat.menuActionWord(player) + " to teleport", NamedTextColor.YELLOW)
+        )));
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         meta.getPersistentDataContainer().set(waystoneMenuTargetKey, PersistentDataType.STRING, entry.key());
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private ItemStack createLandingToggle(boolean topOfGlowstone) {
+        ItemStack item = new ItemStack(Material.COMPASS);
+        ItemMeta meta = item.getItemMeta();
+        meta.displayName(Component.text(
+            "Landing: " + (topOfGlowstone ? "Glowstone top" : "Safest spot"),
+            NamedTextColor.YELLOW
+        ));
+        meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
+            Component.text("Tap to change where waystones place you.", NamedTextColor.GRAY),
+            Component.text("This replaces unreliable left/right menu clicks.", NamedTextColor.DARK_GRAY)
+        )));
+        meta.getPersistentDataContainer().set(waystoneMenuTargetKey, PersistentDataType.STRING, LANDING_TOGGLE_ACTION);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private ItemStack createPageButton(boolean next, int page, int pageCount) {
+        ItemStack item = new ItemStack(next ? Material.ARROW : Material.SPECTRAL_ARROW);
+        ItemMeta meta = item.getItemMeta();
+        meta.displayName(Component.text(next ? "Next page" : "Previous page", NamedTextColor.YELLOW));
+        meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
+            Component.text("Page " + (page + 1) + " of " + pageCount, NamedTextColor.GRAY),
+            Component.text("Tap to browse", NamedTextColor.DARK_GRAY)
+        )));
+        meta.getPersistentDataContainer().set(
+            waystoneMenuTargetKey,
+            PersistentDataType.STRING,
+            next ? NEXT_PAGE_ACTION : PREVIOUS_PAGE_ACTION
+        );
         item.setItemMeta(meta);
         return item;
     }
@@ -357,26 +451,231 @@ public final class WaystoneManager {
     }
 
     private void teleport(Player player, WaystoneEntry entry, boolean topOfGlowstone) {
-        Location destination = topOfGlowstone ? glowstoneTopLocation(entry) : null;
-        if (destination == null) {
-            destination = teleportLocation(entry);
+        if (isInPlayerCombat(player)) return;
+        String restriction = activeTeleportRestriction(player);
+        if (restriction != null) {
+            player.sendMessage(MessageUtil.warn(restriction));
+            return;
         }
-        if (destination == null || destination.getWorld() == null) {
+        World destinationWorld = Bukkit.getWorld(entry.world());
+        if (destinationWorld == null) {
             player.sendMessage(MessageUtil.error("Waystone world is not loaded."));
             return;
         }
+        if (isScheduledDimensionLocked(player, destinationWorld)) {
+            return;
+        }
 
-        plugin.getPlayerManager().saveBackLocation(player);
-        player.teleportAsync(destination).thenAccept(ok ->
+        UUID playerId = player.getUniqueId();
+        if (!pendingTeleports.add(playerId)) {
+            player.sendMessage(MessageUtil.warn("Your waystone teleport is still loading."));
+            return;
+        }
+        CompletableFuture<Void> load;
+        try {
+            load = loadStructureChunks(destinationWorld, entry);
+        } catch (RuntimeException ex) {
+            pendingTeleports.remove(playerId);
+            player.sendMessage(MessageUtil.error("That waystone could not be loaded. Try again shortly."));
+            plugin.getLogger().warning("Could not start waystone chunk load for " + player.getName() + ": " + ex.getMessage());
+            return;
+        }
+        load.whenComplete((ignored, loadError) -> Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!player.isOnline()) {
+                pendingTeleports.remove(playerId);
+                return;
+            }
+            if (loadError != null) {
+                pendingTeleports.remove(playerId);
+                player.sendMessage(MessageUtil.error("That waystone could not be loaded. Try again shortly."));
+                return;
+            }
+            if (waystonesByKey.get(entry.key()) != entry) {
+                pendingTeleports.remove(playerId);
+                player.sendMessage(MessageUtil.error("That waystone no longer exists."));
+                return;
+            }
+            StructureStatus loadedStatus = structureStatus(entry);
+            if (loadedStatus != StructureStatus.INTACT) {
+                pendingTeleports.remove(playerId);
+                if (loadedStatus == StructureStatus.BROKEN) removeWaystone(entry);
+                player.sendMessage(MessageUtil.error(loadedStatus == StructureStatus.BROKEN
+                    ? "That waystone was destroyed or changed."
+                    : "That waystone could not be loaded. Try again shortly."));
+                return;
+            }
+            if (isInPlayerCombat(player)) {
+                pendingTeleports.remove(playerId);
+                return;
+            }
+            String latestRestriction = activeTeleportRestriction(player);
+            if (latestRestriction != null) {
+                pendingTeleports.remove(playerId);
+                player.sendMessage(MessageUtil.warn(latestRestriction));
+                return;
+            }
+            if (isScheduledDimensionLocked(player, destinationWorld)) {
+                pendingTeleports.remove(playerId);
+                return;
+            }
+
+            Location destination = topOfGlowstone ? glowstoneTopLocation(entry) : null;
+            if (destination == null) destination = teleportLocation(entry);
+            if (destination == null || !destinationWorld.getWorldBorder().isInside(destination)) {
+                pendingTeleports.remove(playerId);
+                player.sendMessage(MessageUtil.warn(destination == null
+                    ? "That waystone has no safe landing spot."
+                    : "That waystone is outside the current world border."));
+                return;
+            }
+            beginValidatedTeleport(player, entry, destination, player.getLocation().clone(), true);
+        }));
+    }
+
+    private void beginValidatedTeleport(
+        Player player,
+        WaystoneEntry entry,
+        Location destination,
+        Location returnLocation,
+        boolean retryAvailable
+    ) {
+        UUID playerId = player.getUniqueId();
+        if (!player.isOnline()) {
+            pendingTeleports.remove(playerId);
+            return;
+        }
+        if (isInPlayerCombat(player)) {
+            pendingTeleports.remove(playerId);
+            return;
+        }
+        String restriction = activeTeleportRestriction(player);
+        if (restriction != null) {
+            pendingTeleports.remove(playerId);
+            player.sendMessage(MessageUtil.warn(restriction));
+            return;
+        }
+        if (waystonesByKey.get(entry.key()) != entry || structureStatus(entry) != StructureStatus.INTACT) {
+            pendingTeleports.remove(playerId);
+            player.sendMessage(MessageUtil.error("That waystone was destroyed or changed."));
+            return;
+        }
+        if (isScheduledDimensionLocked(player, destination.getWorld())) {
+            pendingTeleports.remove(playerId);
+            return;
+        }
+        if (!destination.getWorld().getWorldBorder().isInside(destination)) {
+            pendingTeleports.remove(playerId);
+            player.sendMessage(MessageUtil.warn("That waystone is outside the current world border."));
+            return;
+        }
+
+        boolean crossWorld = !player.getWorld().getUID().equals(destination.getWorld().getUID());
+        if (crossWorld && !prepareCrossWorldTeleport(player)) {
+            pendingTeleports.remove(playerId);
+            player.sendMessage(MessageUtil.warn("Leave your seat or mount, then try the waystone again."));
+            return;
+        }
+
+        player.teleportAsync(destination, PlayerTeleportEvent.TeleportCause.PLUGIN).whenComplete((ok, error) ->
             Bukkit.getScheduler().runTask(plugin, () -> {
-                if (!player.isOnline()) return;
-                if (ok) {
-                    player.sendMessage(MessageUtil.success("Teleported to waystone <white>" + entry.name() + "</white>."));
-                } else {
-                    player.sendMessage(MessageUtil.error("Teleport failed."));
+                if (!player.isOnline()) {
+                    pendingTeleports.remove(playerId);
+                    return;
                 }
+                if (error == null && Boolean.TRUE.equals(ok)) {
+                    pendingTeleports.remove(playerId);
+                    plugin.getPlayerManager().saveBackLocation(playerId, returnLocation);
+                    player.playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 0.65F, 1.15F);
+                    player.sendMessage(MessageUtil.success("Teleported to waystone <white>" + entry.name() + "</white>."));
+                    return;
+                }
+
+                boolean combatBlocked = isCurrentlyInPlayerCombat(player);
+                String currentRestriction = activeTeleportRestriction(player);
+                if (shouldRetryCrossWorldTeleport(
+                    crossWorld,
+                    player.isOnline(),
+                    combatBlocked,
+                    currentRestriction != null,
+                    retryAvailable
+                )) {
+                    Bukkit.getScheduler().runTaskLater(
+                        plugin,
+                        () -> beginValidatedTeleport(player, entry, destination, returnLocation, false),
+                        1L
+                    );
+                    return;
+                }
+
+                pendingTeleports.remove(playerId);
+                if (combatBlocked) {
+                    player.sendMessage(MessageUtil.warn("You cannot teleport while in combat."));
+                } else if (currentRestriction != null) {
+                    player.sendMessage(MessageUtil.warn(currentRestriction));
+                } else {
+                    player.sendMessage(MessageUtil.error("Waystone teleport failed. Dismount and try again."));
+                }
+                String errorName = error == null ? "none" : error.getClass().getSimpleName();
+                plugin.getLogger().warning(
+                    "Waystone teleport rejected for " + player.getName()
+                        + " from=" + player.getWorld().getName()
+                        + " to=" + destination.getWorld().getName()
+                        + " crossWorld=" + crossWorld
+                        + " vehicle=" + player.isInsideVehicle()
+                        + " passengers=" + player.getPassengers().size()
+                        + " error=" + errorName
+                );
             })
         );
+    }
+
+    private boolean isInPlayerCombat(Player player) {
+        if (!isCurrentlyInPlayerCombat(player)) {
+            return false;
+        }
+        player.sendMessage(MessageUtil.warn("You cannot teleport while in combat."));
+        return true;
+    }
+
+    private boolean isCurrentlyInPlayerCombat(Player player) {
+        return plugin.getCombatLogListener() != null && plugin.getCombatLogListener().isInPlayerCombat(player);
+    }
+
+    private String activeTeleportRestriction(Player player) {
+        if (plugin.getDuelManager() != null && plugin.getDuelManager().blocksExternalTeleport(player)) {
+            return "You cannot use waystones during a duel.";
+        }
+        if ((plugin.getBossManager() != null && plugin.getBossManager().isActiveBossFight(player))
+            || (plugin.getBossDungeonManager() != null && plugin.getBossDungeonManager().blocksExternalTeleport(player))) {
+            return "You cannot leave an active boss fight.";
+        }
+        return null;
+    }
+
+    private static boolean prepareCrossWorldTeleport(Player player) {
+        if (player.isInsideVehicle()) {
+            player.leaveVehicle();
+        }
+        if (!player.getPassengers().isEmpty()) {
+            player.eject();
+        }
+        return !player.isInsideVehicle() && player.getPassengers().isEmpty();
+    }
+
+    private boolean isScheduledDimensionLocked(Player player, World destination) {
+        World.Environment from = player.getWorld().getEnvironment();
+        World.Environment to = destination.getEnvironment();
+        if (to != World.Environment.NETHER && to != World.Environment.THE_END) {
+            return false;
+        }
+        boolean bypass = player.hasPermission("smpcore.startsmp.bypass-dimension-lock");
+        boolean unlocked = plugin.getSmpStartManager() == null || plugin.getSmpStartManager().isDimensionUnlocked(to);
+        if (!ScheduledDimensionPolicy.blocksTravel(from, to, bypass, unlocked)) {
+            return false;
+        }
+        String dimension = to == World.Environment.NETHER ? "Nether" : "End";
+        player.sendMessage(MessageUtil.warn("The <white>" + dimension + "</white> is still locked."));
+        return true;
     }
 
     private Location glowstoneTopLocation(WaystoneEntry entry) {
@@ -490,12 +789,7 @@ public final class WaystoneManager {
     }
 
     private static boolean isSafe(World world, int x, int y, int z) {
-        if (y < world.getMinHeight() || y + 1 >= world.getMaxHeight()) return false;
-        Block feet = world.getBlockAt(x, y, z);
-        Block head = world.getBlockAt(x, y + 1, z);
-        Block below = world.getBlockAt(x, y - 1, z);
-        if (feet.getType() != Material.AIR || head.getType() != Material.AIR) return false;
-        return below.getType().isSolid();
+        return LocationUtil.isSafeStandingLocation(centered(world, x, y, z));
     }
 
     private static Location centered(World world, int x, int y, int z) {
@@ -505,8 +799,37 @@ public final class WaystoneManager {
     private StructureStatus structureStatus(WaystoneEntry entry) {
         World world = Bukkit.getWorld(entry.world());
         if (world == null) return StructureStatus.WORLD_UNAVAILABLE;
+        if (!structureChunksLoaded(world, entry)) return StructureStatus.UNLOADED;
 
         return isStructureIntact(world, entry) ? StructureStatus.INTACT : StructureStatus.BROKEN;
+    }
+
+    private static boolean structureChunksLoaded(World world, WaystoneEntry entry) {
+        int minChunkX = (entry.x() - 1) >> 4;
+        int maxChunkX = (entry.x() + 1) >> 4;
+        int minChunkZ = (entry.z() - 1) >> 4;
+        int maxChunkZ = (entry.z() + 1) >> 4;
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                if (!world.isChunkLoaded(chunkX, chunkZ)) return false;
+            }
+        }
+        return true;
+    }
+
+    private static CompletableFuture<Void> loadStructureChunks(World world, WaystoneEntry entry) {
+        int minChunkX = (entry.x() - 1) >> 4;
+        int maxChunkX = (entry.x() + 1) >> 4;
+        int minChunkZ = (entry.z() - 1) >> 4;
+        int maxChunkZ = (entry.z() + 1) >> 4;
+        CompletableFuture<?>[] loads = new CompletableFuture<?>[(maxChunkX - minChunkX + 1) * (maxChunkZ - minChunkZ + 1)];
+        int index = 0;
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                loads[index++] = world.getChunkAtAsync(chunkX, chunkZ, false);
+            }
+        }
+        return CompletableFuture.allOf(loads);
     }
 
     private boolean isStructureIntact(World world, WaystoneEntry entry) {
@@ -563,13 +886,36 @@ public final class WaystoneManager {
     private enum StructureStatus {
         INTACT,
         BROKEN,
+        UNLOADED,
         WORLD_UNAVAILABLE
     }
 
-    private record WaystoneMenuHolder() implements InventoryHolder {
+    private record WaystoneMenuHolder(
+        List<WaystoneEntry> waystones,
+        boolean topOfGlowstone,
+        int page
+    ) implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;
         }
+    }
+
+    static int pageCount(int entryCount) {
+        return Math.max(1, (Math.max(0, entryCount) + ENTRIES_PER_PAGE - 1) / ENTRIES_PER_PAGE);
+    }
+
+    static int clampPage(int requestedPage, int pageCount) {
+        return Math.max(0, Math.min(requestedPage, Math.max(1, pageCount) - 1));
+    }
+
+    static boolean shouldRetryCrossWorldTeleport(
+        boolean crossWorld,
+        boolean online,
+        boolean combatBlocked,
+        boolean arenaBlocked,
+        boolean retryAvailable
+    ) {
+        return crossWorld && online && !combatBlocked && !arenaBlocked && retryAvailable;
     }
 }
