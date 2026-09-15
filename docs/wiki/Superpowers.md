@@ -24,7 +24,7 @@ The `/powerinfo` menu is sorted from most common to rarest.
 - `Arcanist` - 3.29%. XP, enchanting, luck, durability, and essence extraction.
 - `Oathbound` - 3.29%. Team aura identity for grouped fights.
 - `Runesmith` - 3.29%. Durability protection and boss-kill repair flavor.
-- `Sovereign` - 3.29%. Stores killed hostile mobs only. `/msummon` summons 1 stored hostile mob, `/msummon <amount>` summons more, and `/msummon despawn` unsummons active mobs. Summons have 40 HP, boosted damage, armor, resistance, and knockback defense.
+- `Shadow Monarch` - 3.29%. Stores killed hostile mobs only. `/msummon` summons 1 stored hostile mob, `/msummon <amount>` summons more, and `/msummon despawn` unsummons active mobs. Summons have 40 HP, boosted damage, armor, resistance, and knockback defense.
 - `The World` - 3.29%. Bound clock that stops time in a radius.
 - `Graveborn` - 2.88%. Undead resistance and healing from kills.
 - `Riftwarden` - 2.88%. Boss-hunter with Slow Falling near custom bosses, plus Resistance near bosses or in the End.

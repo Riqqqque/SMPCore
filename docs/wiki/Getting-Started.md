@@ -24,5 +24,6 @@
 - Many major custom items are tracked by the item audit system.
 - Bosses are tracked and can be cleared by staff if something goes wrong.
 - Team vaults and backpacks are handled defensively to prevent common inventory dupes.
-- Death chests try safe placement first, then force an emergency chest if the death spot is blocked by lava, water, terrain, or bedrock-level weirdness.
+- `/home`, `/back`, `/spawn`, waystones, and short-range relic teleports avoid unsafe landing spots when possible.
+- Death chests try safe placement first, including nearby safe ground for void deaths, then force an emergency chest if the death spot is blocked by lava, water, terrain, or bedrock-level weirdness.
 - Cooldowns are stored on players where needed so relogging does not reset important timers.

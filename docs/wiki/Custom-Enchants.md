@@ -100,7 +100,7 @@ Sculk Heart    | Book       | Sculk Heart
 ## Safety Rules
 
 - Custom enchant books apply through anvils and consume XP levels.
-- Custom-enchanted vanilla tools and armor, including Replenish hoes, keep their SMPCore enchants when upgraded in a smithing table. Actual custom relics are still blocked from vanilla crafting and smithing.
+- Custom-enchanted vanilla tools and armor, including Replenish hoes, keep their SMPCore enchants when upgraded in a smithing table. Actual custom relics are still blocked from vanilla crafting and smithing, except Covenant armor can use normal armor trims.
 - Custom enchants can be removed safely in a grindstone.
 - Dash cooldowns are stored on the player, so relogging does not bypass them.
 - Boss-crafted enchant books require real Covenant boss materials.

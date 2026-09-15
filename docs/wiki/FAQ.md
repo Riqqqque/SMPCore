@@ -26,7 +26,11 @@ Yes. Same-type tools and armor can merge SMPCore custom enchants in an anvil whe
 
 ## Can custom-enchanted gear be upgraded to netherite?
 
-Custom-enchanted vanilla gear keeps its SMPCore enchants through smithing, including Replenish hoes. Full custom relics are still blocked from vanilla crafting and smithing so players do not accidentally consume rare items.
+Custom-enchanted vanilla gear keeps its SMPCore enchants through smithing, including Replenish hoes. Full custom relics are still blocked from vanilla crafting and smithing so players do not accidentally consume rare items. Covenant armor can still use normal armor trims.
+
+## Can Covenant armor use armor trims?
+
+Yes. Use a smithing table like normal. The trim changes the look only; the armor keeps its relic stats, lore, durability, set bonuses, and tracking.
 
 ## How do I get Covenant Armory items?
 

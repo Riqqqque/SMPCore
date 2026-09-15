@@ -415,7 +415,7 @@ public final class PlayerCommands {
                         return runMonarchSummon(plugin, player, amount);
                     }))
                 .build(),
-            "Summon stored Monarch mobs"
+            "Summon stored Shadow Monarch mobs"
         );
     }
 
@@ -440,8 +440,13 @@ public final class PlayerCommands {
                         player.sendMessage(MessageUtil.error("No previous location saved."));
                         return 0;
                     }
+                    Location safe = LocationUtil.findNearestSafeStandingLocation(back, 5, 8);
+                    if (safe == null) {
+                        player.sendMessage(MessageUtil.error("That saved location is not safe anymore."));
+                        return 0;
+                    }
                     plugin.getPlayerManager().saveBackLocation(player);
-                    player.teleportAsync(back).thenAccept(ok -> {
+                    player.teleportAsync(safe).thenAccept(ok -> {
                         Bukkit.getScheduler().runTask(plugin, () -> {
                             if (!player.isOnline()) return;
                             if (ok) player.sendMessage(MessageUtil.success("Returned to previous location."));
@@ -467,8 +472,13 @@ public final class PlayerCommands {
                         player.sendMessage(MessageUtil.error("Spawn world is not loaded."));
                         return 0;
                     }
+                    Location safe = LocationUtil.findNearestSafeStandingLocation(world.getSpawnLocation(), 8, 8);
+                    if (safe == null) {
+                        player.sendMessage(MessageUtil.error("Spawn is not safe right now."));
+                        return 0;
+                    }
                     plugin.getPlayerManager().saveBackLocation(player);
-                    player.teleportAsync(world.getSpawnLocation()).thenAccept(ok -> {
+                    player.teleportAsync(safe).thenAccept(ok -> {
                         Bukkit.getScheduler().runTask(plugin, () -> {
                             if (!player.isOnline()) return;
                             if (ok) player.sendMessage(MessageUtil.success("Teleported to spawn."));
@@ -494,6 +504,9 @@ public final class PlayerCommands {
         }
         if (player.hasPermission("smpcore.menu")) {
             lines.add("<gray><white>/menu</white> - Open the main plugin menu</gray>");
+        }
+        if (player.hasPermission("smpcore.changelog")) {
+            lines.add("<gray><white>/changelog</white> - See the latest player-facing update notes</gray>");
         }
         if (player.hasPermission("smpcore.leaderboard")) {
             lines.add("<gray><white>/leaderboards</white> (<white>/lb</white>) - View kills, deaths, boss damage, and fight reports</gray>");

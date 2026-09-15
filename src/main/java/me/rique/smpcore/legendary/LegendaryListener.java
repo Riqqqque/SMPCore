@@ -151,7 +151,7 @@ public final class LegendaryListener implements Listener {
     private static final long ORB_OF_THE_MYSTICS_COOLDOWN_MS = 60L * 60L * 1000L;
     private static final int STARTUP_LEGENDARY_MIGRATION_CHUNKS_PER_TICK = 24;
     private static final int LEGENDARY_ITEM_SCAN_MAX_DEPTH = 2;
-    private static final long LEGENDARY_DUPLICATE_AUDIT_INTERVAL_TICKS = 20L * 15L;
+    private static final int DEFAULT_LEGENDARY_DUPLICATE_AUDIT_INTERVAL_SECONDS = 30;
     private static final int ENDERBOW_TP_COOLDOWN = 30;
     private static final double ENDER_SWORD_MELEE_DAMAGE = 10.0;
     private static final int CHRONO_READY_SECONDS = 7;
@@ -214,6 +214,7 @@ public final class LegendaryListener implements Listener {
     private static final double STRENGTH_SWORD_DOMAIN_ATTACK_SPEED_SCALAR = 0.35;
     private static final int STRENGTH_SWORD_MAX_DURABILITY = 8192;
     private static final int STRENGTH_SWORD_REPAIR_XP_COST = 12;
+    private static final double STRENGTH_SWORD_MOB_DAMAGE = 24.0;
     private static final int DASH_MACE_COOLDOWN = 15;
     private static final double DASH_MACE_HORIZONTAL = 2.10;
     private static final double DASH_MACE_VERTICAL = 0.52;
@@ -479,7 +480,13 @@ public final class LegendaryListener implements Listener {
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickLegendaryStates, 10L, 10L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickEnderSwordDragons, 1L, 1L);
         Bukkit.getScheduler().runTaskTimer(plugin, this::cleanupExpiredLegendaryCooldowns, 20L * 60L, 20L * 60L);
-        Bukkit.getScheduler().runTaskTimer(plugin, this::auditLegendaryClaimsAndDuplicates, LEGENDARY_DUPLICATE_AUDIT_INTERVAL_TICKS, LEGENDARY_DUPLICATE_AUDIT_INTERVAL_TICKS);
+        long duplicateAuditIntervalTicks = legendaryDuplicateAuditIntervalTicks();
+        Bukkit.getScheduler().runTaskTimer(
+            plugin,
+            this::auditLegendaryClaimsAndDuplicates,
+            duplicateAuditIntervalTicks,
+            duplicateAuditIntervalTicks
+        );
     }
 
     @EventHandler
@@ -2038,6 +2045,9 @@ public final class LegendaryListener implements Listener {
         } else if (held == LegendaryType.LIFE_STEALER) {
             refreshLifeStealerLore(attacker);
         } else if (held == LegendaryType.STRENGTH_SWORD) {
+            if (!(victim instanceof Player)) {
+                event.setDamage(Math.max(event.getDamage(), STRENGTH_SWORD_MOB_DAMAGE));
+            }
             applyStrengthSwordStageHit(attacker, victim);
         } else if (held == LegendaryType.STRENGTH_MACE) {
             event.setDamage(event.getDamage() + STRENGTH_MACE_DAMAGE_BONUS);
@@ -2107,7 +2117,7 @@ public final class LegendaryListener implements Listener {
         refreshLifeStealerLore(attacker);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onOwnedEnderDragonDamage(EntityDamageEvent event) {
         if (!isOwnedEnderDragon(event.getEntity())) {
             return;
@@ -2115,7 +2125,7 @@ public final class LegendaryListener implements Listener {
         event.setCancelled(true);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onOwnedEnderDragonChangeBlock(EntityChangeBlockEvent event) {
         if (!isOwnedEnderDragon(event.getEntity())) {
             return;
@@ -2123,7 +2133,7 @@ public final class LegendaryListener implements Listener {
         event.setCancelled(true);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onOwnedEnderDragonExplode(EntityExplodeEvent event) {
         if (!isOwnedEnderDragon(event.getEntity())) {
             return;
@@ -3319,14 +3329,7 @@ public final class LegendaryListener implements Listener {
         );
 
         EnderDragon dragon = world.spawn(spawn, EnderDragon.class, entity -> {
-            entity.setAI(true);
-            entity.setAware(true);
-            entity.setGravity(false);
-            entity.setNoPhysics(true);
-            entity.setCollidable(false);
-            entity.setSilent(true);
-            entity.setPersistent(false);
-            entity.setInvulnerable(true);
+            applyEnderSwordDragonSafety(entity);
             entity.setPhase(EnderDragon.Phase.CIRCLING);
             entity.getPersistentDataContainer().set(
                 keyEnderSwordDragonOwner,
@@ -3554,10 +3557,23 @@ public final class LegendaryListener implements Listener {
             return;
         }
 
+        applyEnderSwordDragonSafety(dragon);
         Location dragonLocation = dragonVisualLocation(seatLocation, yaw);
         dragon.setPhase(EnderDragon.Phase.CIRCLING);
         dragon.setRotation(dragonLocation.getYaw(), dragonLocation.getPitch());
         moveEnderDragonVisual(dragon, dragonLocation, snap);
+    }
+
+    private void applyEnderSwordDragonSafety(EnderDragon dragon) {
+        dragon.setAI(false);
+        dragon.setAware(false);
+        dragon.setGravity(false);
+        dragon.setNoPhysics(true);
+        dragon.setCollidable(false);
+        dragon.setSilent(true);
+        dragon.setPersistent(false);
+        dragon.setInvulnerable(true);
+        dragon.setVelocity(new Vector());
     }
 
     private void moveEnderDragonVisual(EnderDragon dragon, Location dragonLocation, boolean snap) {
@@ -3863,12 +3879,36 @@ public final class LegendaryListener implements Listener {
     }
 
     private UUID enderDragonOwner(Entity entity) {
-        if (entity instanceof EnderDragon dragon) {
-            return enderDragonOwnerByDragon.get(dragon.getUniqueId());
+        EnderDragon dragon = owningEnderDragonEntity(entity);
+        if (dragon == null) {
+            return null;
         }
-        if (entity instanceof EnderDragonPart part) {
-            Entity parent = part.getParent();
-            return parent instanceof EnderDragon dragon ? enderDragonOwnerByDragon.get(dragon.getUniqueId()) : null;
+
+        UUID mappedOwner = enderDragonOwnerByDragon.get(dragon.getUniqueId());
+        if (mappedOwner != null) {
+            return mappedOwner;
+        }
+
+        String storedOwner = dragon.getPersistentDataContainer().get(keyEnderSwordDragonOwner, PersistentDataType.STRING);
+        if (storedOwner == null || storedOwner.isBlank()) {
+            return null;
+        }
+        try {
+            UUID ownerId = UUID.fromString(storedOwner);
+            enderDragonOwnerByDragon.putIfAbsent(dragon.getUniqueId(), ownerId);
+            enderDragonByOwner.putIfAbsent(ownerId, dragon.getUniqueId());
+            return ownerId;
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    private EnderDragon owningEnderDragonEntity(Entity entity) {
+        if (entity instanceof EnderDragon dragon) {
+            return dragon;
+        }
+        if (entity instanceof EnderDragonPart part && part.getParent() instanceof EnderDragon dragon) {
+            return dragon;
         }
         return null;
     }
@@ -6938,7 +6978,7 @@ public final class LegendaryListener implements Listener {
             CustomLoreUtil.section(
                 "Passive",
                 "Shadow Hunger",
-                "<gray>The blade grows stronger in the hands of a <white>Sovereign</white> or <white>Nightshade</white>.</gray>",
+                "<gray>The blade grows stronger in the hands of a <white>Shadow Monarch</white> or <white>Nightshade</white>.</gray>",
                 "<gray>Hitting another player instantly breaks the cloak.</gray>"
             )
         );
@@ -7004,6 +7044,7 @@ public final class LegendaryListener implements Listener {
                 "<gray>Unique Player Kills: <white>" + uniqueVictimCount + "</white></gray>",
                 "<gray>Current Stage: <white>" + stage + "</white>/3</gray>",
                 "<gray>Durability: <white>" + STRENGTH_SWORD_MAX_DURABILITY + "</white></gray>",
+                "<gray>Mob Damage: <white>" + formatDamageNumber(STRENGTH_SWORD_MOB_DAMAGE / 2.0) + " hearts</white></gray>",
                 "<gray>Beam Cooldown: <white>" + STRENGTH_SWORD_BEAM_COOLDOWN + "s</white> | Domain Cooldown: <white>" + STRENGTH_SWORD_DOMAIN_COOLDOWN + "s</white></gray>"
             ),
             CustomLoreUtil.section(
@@ -7681,6 +7722,13 @@ public final class LegendaryListener implements Listener {
             legendaryDuplicateAuditQueued = false;
             auditLegendaryClaimsAndDuplicates();
         });
+    }
+
+    private long legendaryDuplicateAuditIntervalTicks() {
+        int seconds = plugin.getConfigManager() == null
+            ? DEFAULT_LEGENDARY_DUPLICATE_AUDIT_INTERVAL_SECONDS
+            : plugin.getConfigManager().legendaryDuplicateAuditIntervalSeconds;
+        return Math.max(15L, seconds) * 20L;
     }
 
     private void auditLegendaryClaimsAndDuplicates() {
@@ -8979,22 +9027,8 @@ public final class LegendaryListener implements Listener {
     }
 
     private boolean isLegendaryIngredient(ItemStack item) {
-        if (typeOf(item) != null) return true;
-
-        ItemMeta meta = item.getItemMeta();
-        if (meta == null || !meta.hasDisplayName()) return false;
-
-        String actualName = PLAIN.serialize(meta.displayName()).trim();
-        if (actualName.isEmpty()) return false;
-
-        for (LegendaryType type : LegendaryType.values()) {
-            if (item.getType() != type.material) continue;
-            String expectedName = PLAIN.serialize(MM.deserialize(type.display)).trim();
-            if (actualName.equals(expectedName)) {
-                return true;
-            }
-        }
-        return false;
+        // Display names are player-controlled through anvils; only trust plugin PDC.
+        return typeOf(item) != null;
     }
 
     private Map<Material, Integer> ingredientsFor(LegendaryType type) {

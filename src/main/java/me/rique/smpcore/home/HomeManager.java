@@ -1,6 +1,7 @@
 package me.rique.smpcore.home;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -20,6 +21,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * Homes are loaded lazily and cached for the current session.
  */
 public final class HomeManager {
+
+    private static final int HOME_SAFE_HORIZONTAL_RADIUS = 5;
+    private static final int HOME_SAFE_VERTICAL_RADIUS = 8;
 
     private final SMPCore plugin;
     private final Map<UUID, Map<String, HomeEntry>> cache = new ConcurrentHashMap<>();
@@ -132,9 +136,18 @@ public final class HomeManager {
                 player.sendMessage(MessageUtil.error(worldMissingMessage(name, normalized)));
                 return;
             }
+            Location safe = LocationUtil.findNearestSafeStandingLocation(
+                loc,
+                HOME_SAFE_HORIZONTAL_RADIUS,
+                HOME_SAFE_VERTICAL_RADIUS
+            );
+            if (safe == null) {
+                player.sendMessage(MessageUtil.error(unsafeMessage(name, normalized)));
+                return;
+            }
 
             plugin.getPlayerManager().saveBackLocation(player);
-            player.teleportAsync(loc).thenAccept(success -> {
+            player.teleportAsync(safe).thenAccept(success -> {
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     if (!player.isOnline()) return;
                     if (success) {
@@ -294,6 +307,12 @@ public final class HomeManager {
         return isDefaultHome(normalized)
             ? "World for your default home is not loaded."
             : "World for <white>" + inputName + "</white> is not loaded.";
+    }
+
+    private static String unsafeMessage(String inputName, String normalized) {
+        return isDefaultHome(normalized)
+            ? "Your default home is not safe right now."
+            : "Home <white>" + inputName + "</white> is not safe right now.";
     }
 
     private static String teleportedMessage(String inputName, String normalized) {

@@ -388,7 +388,11 @@ public final class SalvagingDepotListener implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onInventoryClick(InventoryClickEvent event) {
         Inventory top = event.getView().getTopInventory();
-        if (!resolveDepotInventory(event.getWhoClicked() instanceof Player player ? player : null, top)) {
+        Player player = event.getWhoClicked() instanceof Player clickedPlayer ? clickedPlayer : null;
+        if (!resolveDepotInventory(player, top)) {
+            if (player != null && cleanEscapedDepotState(event)) {
+                Bukkit.getScheduler().runTask(plugin, () -> purgeQueuedItemsOutsideDepot(player, true));
+            }
             return;
         }
 
@@ -401,16 +405,16 @@ public final class SalvagingDepotListener implements Listener {
             ItemStack current = event.getCurrentItem();
             if (isProcessing(current)) {
                 event.setCancelled(true);
-                if (event.getWhoClicked() instanceof Player player) {
+                if (player != null) {
                     player.sendMessage(MessageUtil.warn("Items placed in the Salvaging Depot are locked until salvage finishes."));
                 }
                 scheduleScan(top);
                 return;
             }
             if (isQueued(current)) {
-                event.setCurrentItem(cleanQueuedItem(current));
+                event.setCurrentItem(cleanDepotState(current));
                 scheduleScan(top);
-                if (event.getWhoClicked() instanceof Player player) {
+                if (player != null) {
                     Bukkit.getScheduler().runTask(plugin, () -> purgeQueuedItemsOutsideDepot(player, true));
                 }
                 return;
@@ -837,10 +841,25 @@ public final class SalvagingDepotListener implements Listener {
             return;
         }
         ItemStack stack = itemEntity.getItemStack();
-        if (!isQueued(stack) && !isProcessing(stack)) {
+        if (!hasDepotState(stack)) {
             return;
         }
         itemEntity.setItemStack(cleanDepotState(stack));
+    }
+
+    private boolean cleanEscapedDepotState(InventoryClickEvent event) {
+        boolean changed = false;
+        ItemStack current = event.getCurrentItem();
+        if (hasDepotState(current)) {
+            event.setCurrentItem(cleanDepotState(current));
+            changed = true;
+        }
+        ItemStack cursor = event.getCursor();
+        if (hasDepotState(cursor)) {
+            event.getView().setCursor(cleanDepotState(cursor));
+            changed = true;
+        }
+        return changed;
     }
 
     private ItemStack cleanDepotState(ItemStack item) {
@@ -923,6 +942,10 @@ public final class SalvagingDepotListener implements Listener {
         return queueReadyAt(item) > 0L;
     }
 
+    private boolean hasDepotState(ItemStack item) {
+        return isQueued(item) || isProcessing(item);
+    }
+
     private void purgeQueuedItemsOutsideDepot(Player player) {
         purgeQueuedItemsOutsideDepot(player, false);
     }
@@ -936,26 +959,26 @@ public final class SalvagingDepotListener implements Listener {
         Inventory inventory = player.getInventory();
         for (int slot = 0; slot < inventory.getSize(); slot++) {
             ItemStack item = inventory.getItem(slot);
-            if (!isQueued(item)) {
+            if (!hasDepotState(item)) {
                 continue;
             }
-            inventory.setItem(slot, cleanQueuedItem(item));
+            inventory.setItem(slot, cleanDepotState(item));
             changed = true;
         }
 
         ItemStack offhand = player.getInventory().getItemInOffHand();
-        if (isQueued(offhand)) {
-            player.getInventory().setItemInOffHand(cleanQueuedItem(offhand));
+        if (hasDepotState(offhand)) {
+            player.getInventory().setItemInOffHand(cleanDepotState(offhand));
             changed = true;
         }
 
         ItemStack[] armor = player.getInventory().getArmorContents();
         boolean armorChanged = false;
         for (int i = 0; i < armor.length; i++) {
-            if (!isQueued(armor[i])) {
+            if (!hasDepotState(armor[i])) {
                 continue;
             }
-            armor[i] = cleanQueuedItem(armor[i]);
+            armor[i] = cleanDepotState(armor[i]);
             armorChanged = true;
             changed = true;
         }
@@ -964,8 +987,8 @@ public final class SalvagingDepotListener implements Listener {
         }
 
         ItemStack cursor = player.getItemOnCursor();
-        if (isQueued(cursor)) {
-            player.setItemOnCursor(cleanQueuedItem(cursor));
+        if (hasDepotState(cursor)) {
+            player.setItemOnCursor(cleanDepotState(cursor));
             changed = true;
         }
 

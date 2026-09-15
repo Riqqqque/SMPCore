@@ -1,6 +1,7 @@
 package me.rique.smpcore.waystone;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -490,12 +491,7 @@ public final class WaystoneManager {
     }
 
     private static boolean isSafe(World world, int x, int y, int z) {
-        if (y < world.getMinHeight() || y + 1 >= world.getMaxHeight()) return false;
-        Block feet = world.getBlockAt(x, y, z);
-        Block head = world.getBlockAt(x, y + 1, z);
-        Block below = world.getBlockAt(x, y - 1, z);
-        if (feet.getType() != Material.AIR || head.getType() != Material.AIR) return false;
-        return below.getType().isSolid();
+        return LocationUtil.isSafeStandingLocation(centered(world, x, y, z));
     }
 
     private static Location centered(World world, int x, int y, int z) {

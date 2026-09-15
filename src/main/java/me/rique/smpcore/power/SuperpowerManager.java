@@ -845,8 +845,8 @@ public final class SuperpowerManager implements Listener {
 
         int removed = despawnMonarchSummons(player.getUniqueId(), true);
         player.sendMessage(removed > 0
-            ? MessageUtil.success("Unsummoned <white>" + removed + "</white> Monarch summon(s).")
-            : MessageUtil.info("No loaded Monarch summons were active. Any unloaded summons will be removed when their chunks load."));
+            ? MessageUtil.success("Unsummoned <white>" + removed + "</white> Shadow Monarch summon(s).")
+            : MessageUtil.info("No loaded Shadow Monarch summons were active. Any unloaded summons will be removed when their chunks load."));
         return true;
     }
 
@@ -3591,7 +3591,7 @@ public final class SuperpowerManager implements Listener {
         stored.add(type);
         saveMonarchStorage(player, stored);
         player.sendMessage(MessageUtil.info(
-            "Monarch stored hostile <white>" + prettyEntityType(type) + "</white> (<white>" + stored.size() + "/" + MONARCH_STORAGE_LIMIT + "</white>)."
+            "Shadow Monarch stored hostile <white>" + prettyEntityType(type) + "</white> (<white>" + stored.size() + "/" + MONARCH_STORAGE_LIMIT + "</white>)."
         ));
     }
 
@@ -3608,7 +3608,7 @@ public final class SuperpowerManager implements Listener {
         if (hostileOnly.size() != stored.size()) {
             saveMonarchStorage(player, hostileOnly);
             int removed = stored.size() - hostileOnly.size();
-            player.sendMessage(MessageUtil.info("Cleared <white>" + removed + "</white> old non-hostile Sovereign stored mob(s)."));
+            player.sendMessage(MessageUtil.info("Cleared <white>" + removed + "</white> old non-hostile Shadow Monarch stored mob(s)."));
         }
         return hostileOnly;
     }
@@ -5150,7 +5150,7 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Summons have <white>40 HP</white>, stronger damage, armor, resistance, and knockback defense.</gray>"));
                 lore.add(MM.deserialize("<gray>They persist during normal gameplay and guard against enemies of your team.</gray>"));
                 lore.add(MM.deserialize("<gray>They auto-prioritize enemy players, then hostile mobs.</gray>"));
-                lore.add(MM.deserialize("<gray>Undead mobs refuse to target the Monarch.</gray>"));
+                lore.add(MM.deserialize("<gray>Undead mobs refuse to target the Shadow Monarch.</gray>"));
                 lore.add(MM.deserialize("<gray>Storage limit: <white>" + MONARCH_STORAGE_LIMIT + "</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Command: <white>/msummon [amount]</white> or <white>/msummon despawn</white></gray>"));
             }

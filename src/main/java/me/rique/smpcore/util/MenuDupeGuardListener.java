@@ -25,14 +25,17 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 
 public final class MenuDupeGuardListener implements Listener {
 
     private static final String PLUGIN_PACKAGE_PREFIX = "me.rique.smpcore.";
     private static final long PREVIEW_LOG_WINDOW_MILLIS = 30_000L;
+    private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final Set<String> WARNING_PREVIEW_REASONS = Set.of(
         "drop",
         "world spawn",
@@ -40,11 +43,40 @@ public final class MenuDupeGuardListener implements Listener {
         "inventory pickup",
         "inventory transfer"
     );
-    private static final Set<String> MUTABLE_MENU_HOLDERS = Set.of(
-        "AwakeningMenuHolder",
-        "BackpackHolder",
-        "MythicForgeMenuHolder",
-        "TeamVaultHolder"
+    private static final Set<String> READ_ONLY_MENU_HOLDERS = Set.of(
+        "AncientScrollRecipeHolder",
+        "AgriculturalPylonRecipeHolder",
+        "AscendantCoreRecipeHolder",
+        "AwakeningTableInfoHolder",
+        "BackpackRecipeHolder",
+        "BossMenuHolder",
+        "BossPotionMenuHolder",
+        "BossReportMenuHolder",
+        "BossRitualMenuHolder",
+        "CustomToolRecipeHolder",
+        "DruidGrimoireHolder",
+        "EnchantMenuHolder",
+        "EnchantRecipeMenuHolder",
+        "FaradaysMagnetRecipeHolder",
+        "LeaderboardMenuHolder",
+        "MainMenuHolder",
+        "MythicForgeRecipeHolder",
+        "MythicFusionMenuHolder",
+        "MythicFusionRecipeHolder",
+        "PowerChoiceHolder",
+        "PowerInfoHolder",
+        "RecipeMenuHolder",
+        "ReliquaryMenuHolder",
+        "SalvagingDepotRecipeHolder",
+        "SeasonMenuHolder",
+        "SettingsMenuHolder",
+        "SpawnerGuideHolder",
+        "TalismanRecipeHolder",
+        "TeamBrowserHolder",
+        "TeamVaultInspectorHolder",
+        "WaystoneMenuHolder",
+        "XpLecternMenuHolder",
+        "XpLecternRecipeHolder"
     );
 
     private final SMPCore plugin;
@@ -54,6 +86,12 @@ public final class MenuDupeGuardListener implements Listener {
     public MenuDupeGuardListener(SMPCore plugin) {
         this.plugin = plugin;
         this.menuPreviewKey = new NamespacedKey(plugin, "menu_preview_item");
+    }
+
+    public interface ReadOnlyMenuHolder {
+    }
+
+    public interface MutableMenuHolder {
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -67,7 +105,23 @@ public final class MenuDupeGuardListener implements Listener {
     public void onInventoryClick(InventoryClickEvent event) {
         Inventory top = event.getView().getTopInventory();
         if (!isReadOnlyPluginMenu(top)) {
-            purgeIllegalPreviewCursor(event.getWhoClicked() instanceof Player player ? player : null);
+            Player player = event.getWhoClicked() instanceof Player clickedPlayer ? clickedPlayer : null;
+            boolean sanitized = false;
+            ItemStack current = event.getCurrentItem();
+            if (sanitizeSuspiciousVanillaMarker(current)) {
+                event.setCurrentItem(current);
+                sanitized = true;
+            }
+            ItemStack cursor = event.getCursor();
+            if (sanitizeSuspiciousVanillaMarker(cursor)) {
+                event.getView().setCursor(cursor);
+                sanitized = true;
+            }
+            if (sanitized && player != null) {
+                plugin.getServer().getScheduler().runTask(plugin,
+                    () -> sanitizeSuspiciousVanillaMarkers(player, "inventory click"));
+            }
+            purgeIllegalPreviewCursor(player);
             return;
         }
 
@@ -112,6 +166,7 @@ public final class MenuDupeGuardListener implements Listener {
         if (!(event.getPlayer() instanceof Player player)) {
             return;
         }
+        sanitizeSuspiciousVanillaMarkers(player, "inventory close");
         // The top inventory is being discarded by Bukkit on close, so clearing its
         // marked preview items only creates noisy false-positive warnings.
         boolean clearedCursor = clearPreviewCursor(player, "inventory close");
@@ -123,24 +178,31 @@ public final class MenuDupeGuardListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerJoin(PlayerJoinEvent event) {
+        sanitizeSuspiciousVanillaMarkers(event.getPlayer(), "player join");
         purgeMarkedItems(event.getPlayer().getInventory(), event.getPlayer(), "player join");
         clearPreviewCursor(event.getPlayer(), "player join");
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerKick(PlayerKickEvent event) {
+        sanitizeSuspiciousVanillaMarkers(event.getPlayer(), "player kick");
         purgeMarkedItems(event.getPlayer().getInventory(), event.getPlayer(), "player kick");
         clearPreviewCursor(event.getPlayer(), "player kick");
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerQuit(PlayerQuitEvent event) {
+        sanitizeSuspiciousVanillaMarkers(event.getPlayer(), "player quit");
         purgeMarkedItems(event.getPlayer().getInventory(), event.getPlayer(), "player quit");
         clearPreviewCursor(event.getPlayer(), "player quit");
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerDropItem(PlayerDropItemEvent event) {
+        ItemStack stack = event.getItemDrop().getItemStack();
+        if (sanitizeSuspiciousVanillaMarker(stack)) {
+            event.getItemDrop().setItemStack(stack);
+        }
         if (!hasMenuPreviewMarker(event.getItemDrop().getItemStack())) {
             return;
         }
@@ -151,6 +213,10 @@ public final class MenuDupeGuardListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onItemSpawn(ItemSpawnEvent event) {
+        ItemStack stack = event.getEntity().getItemStack();
+        if (sanitizeSuspiciousVanillaMarker(stack)) {
+            event.getEntity().setItemStack(stack);
+        }
         if (hasMenuPreviewMarker(event.getEntity().getItemStack())) {
             logBlockedPreview(null, event.getEntity().getItemStack(), "world spawn");
             event.setCancelled(true);
@@ -159,6 +225,10 @@ public final class MenuDupeGuardListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onItemPickup(EntityPickupItemEvent event) {
+        ItemStack stack = event.getItem().getItemStack();
+        if (sanitizeSuspiciousVanillaMarker(stack)) {
+            event.getItem().setItemStack(stack);
+        }
         if (!hasMenuPreviewMarker(event.getItem().getItemStack())) {
             return;
         }
@@ -169,6 +239,10 @@ public final class MenuDupeGuardListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onInventoryPickupItem(InventoryPickupItemEvent event) {
+        ItemStack stack = event.getItem().getItemStack();
+        if (sanitizeSuspiciousVanillaMarker(stack)) {
+            event.getItem().setItemStack(stack);
+        }
         if (!hasMenuPreviewMarker(event.getItem().getItemStack())) {
             return;
         }
@@ -197,23 +271,27 @@ public final class MenuDupeGuardListener implements Listener {
             return false;
         }
 
+        if (holder instanceof MutableMenuHolder) {
+            return false;
+        }
+        if (holder instanceof ReadOnlyMenuHolder) {
+            return true;
+        }
+
         Class<?> holderClass = holder.getClass();
-        String className = holderClass.getName();
-        if (!className.startsWith(PLUGIN_PACKAGE_PREFIX)) {
-            return false;
-        }
-
         String simpleName = holderClass.getSimpleName();
-        if (MUTABLE_MENU_HOLDERS.contains(simpleName)) {
+        if (READ_ONLY_MENU_HOLDERS.contains(simpleName)) {
+            return true;
+        }
+
+        String className = holderClass.getName();
+        if (className.startsWith(PLUGIN_PACKAGE_PREFIX) && simpleName.endsWith("Holder")) {
+            plugin.getLogger().fine("Plugin menu holder " + className
+                + " is not registered as read-only; menu preview protection was skipped.");
             return false;
         }
 
-        return simpleName.endsWith("MenuHolder")
-            || simpleName.endsWith("RecipeHolder")
-            || simpleName.endsWith("GuideHolder")
-            || simpleName.endsWith("InfoHolder")
-            || simpleName.endsWith("GrimoireHolder")
-            || simpleName.endsWith("InspectorHolder");
+        return false;
     }
 
     private void markMenuItems(Inventory inventory) {
@@ -255,6 +333,75 @@ public final class MenuDupeGuardListener implements Listener {
             logBlockedPreviewBatch(player, reason, removed);
         }
         return changed;
+    }
+
+    private void sanitizeSuspiciousVanillaMarkers(Player player, String reason) {
+        if (player == null) {
+            return;
+        }
+        boolean changed = sanitizeSuspiciousVanillaMarkers(player.getInventory());
+        ItemStack cursor = player.getItemOnCursor();
+        if (sanitizeSuspiciousVanillaMarker(cursor)) {
+            player.setItemOnCursor(cursor);
+            changed = true;
+        }
+        if (!changed) {
+            return;
+        }
+        plugin.getLogger().warning("Cleaned leaked vanilla marker item for " + player.getName()
+            + " via " + reason + ".");
+        if (player.isOnline()) {
+            player.updateInventory();
+        }
+    }
+
+    private boolean sanitizeSuspiciousVanillaMarkers(Inventory inventory) {
+        boolean changed = false;
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            ItemStack item = inventory.getItem(slot);
+            if (!sanitizeSuspiciousVanillaMarker(item)) {
+                continue;
+            }
+            inventory.setItem(slot, item);
+            changed = true;
+        }
+        return changed;
+    }
+
+    private boolean sanitizeSuspiciousVanillaMarker(ItemStack item) {
+        if (!isSuspiciousVanillaMarker(item)) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        meta.displayName(null);
+        item.setItemMeta(meta);
+        return true;
+    }
+
+    private boolean isSuspiciousVanillaMarker(ItemStack item) {
+        if (isEmpty(item) || item.getType().isAir()) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null || !meta.hasDisplayName() || meta.displayName() == null) {
+            return false;
+        }
+        if (meta.hasLore() && meta.lore() != null && !meta.lore().isEmpty()) {
+            return false;
+        }
+        if (!meta.getPersistentDataContainer().getKeys().isEmpty()) {
+            return false;
+        }
+        String name = PLAIN.serialize(meta.displayName()).trim().toLowerCase(Locale.ROOT);
+        String materialName = prettyMaterialName(item.getType());
+        return name.equals("used " + materialName) || name.equals("used " + materialName + "s");
+    }
+
+    private String prettyMaterialName(Material material) {
+        return material.name().toLowerCase(Locale.ROOT).replace('_', ' ');
     }
 
     private boolean clearPreviewCursor(Player player, String reason) {
