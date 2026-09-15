@@ -121,6 +121,7 @@ public final class ConfigManager {
     public int legendaryAltarSearchAttempts;
     public int legendaryAltarBeaconViewRange;
     public boolean legendaryAltarBossBarEnabled;
+    public int legendaryDuplicateAuditIntervalSeconds;
 
     public int enderBoneDropCount;
     public int enderSwordSummonCooldownSeconds;
@@ -203,6 +204,7 @@ public final class ConfigManager {
     public double playerFinderDefenseLineOfSightRadius;
     public boolean playerFinderDefenseHideSameTeam;
     public boolean playerFinderDefenseIgnoreOps;
+    public int itemAuditScanIntervalSeconds;
 
     public ConfigManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -439,6 +441,17 @@ public final class ConfigManager {
         dragonEggCheckInterval = Math.max(1, c.getInt("dragon-egg.check-interval", 10));
         goldenAppleSurroundMaterial = material(c.getString("crafting.golden-apple-surround-material"), Material.IRON_NUGGET);
         blockNetheriteArmorUpgrade = c.getBoolean("crafting.block-netherite-armor-upgrade", true);
+
+        boolean legendaryConfigChanged = false;
+        if (!c.contains("legendary.duplicate-audit-interval-seconds")) {
+            c.set("legendary.duplicate-audit-interval-seconds", 30);
+            legendaryConfigChanged = true;
+        }
+        if (legendaryConfigChanged) {
+            plugin.saveConfig();
+        }
+
+        legendaryDuplicateAuditIntervalSeconds = clamp(c.getInt("legendary.duplicate-audit-interval-seconds", 30), 15, 600);
 
         legendaryAltarEnabled = c.getBoolean("legendary-altar.enabled", true);
         legendaryAltarWorld = c.getString("legendary-altar.world", spawnWorld);
@@ -683,6 +696,17 @@ public final class ConfigManager {
         );
         playerFinderDefenseHideSameTeam = c.getBoolean("player-finder-defense.hide-same-team", false);
         playerFinderDefenseIgnoreOps = c.getBoolean("player-finder-defense.ignore-ops", true);
+
+        boolean itemAuditConfigChanged = false;
+        if (!c.contains("item-audit.scan-interval-seconds")) {
+            c.set("item-audit.scan-interval-seconds", 180);
+            itemAuditConfigChanged = true;
+        }
+        if (itemAuditConfigChanged) {
+            plugin.saveConfig();
+        }
+
+        itemAuditScanIntervalSeconds = clamp(c.getInt("item-audit.scan-interval-seconds", 180), 60, 1800);
     }
 
     public void setBlockNetheriteArmorUpgrade(boolean value) {

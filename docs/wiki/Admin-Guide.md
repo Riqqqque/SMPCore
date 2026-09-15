@@ -20,6 +20,8 @@
 - `/customitem give <item> [player]` gives non-legendary custom items, boss trophies, Covenant relics, and utility items.
 - `/itemaudit <player> [item]` checks item origin logs.
 - OPs and players with `smpcore.staff` receive live audit alerts for suspicious tracked custom item activity.
+- `Duplicate tracked item` means the same tracked ID was found in more than one place.
+- `Moved without a known handoff` means the item changed owner during a scan without a matching drop, pickup, craft, or admin give record.
 
 ## Spawn Protection
 

@@ -24,6 +24,8 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.SmithingInventory;
+import org.bukkit.inventory.SmithingTrimRecipe;
+import org.bukkit.inventory.meta.ArmorMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 
@@ -124,19 +126,30 @@ public final class CraftingRulesListener implements Listener {
     public void onPrepareSmithing(PrepareSmithingEvent event) {
         ItemStack source = null;
         boolean preserveCustomEnchants = false;
+        boolean preserveCovenantArmorTrim = false;
         if (event.getInventory() instanceof SmithingInventory smithing) {
             source = smithing.getInputEquipment();
             preserveCustomEnchants = isCustomEnchantedVanillaGear(source);
             if (isProtectedCustomItem(source) && !preserveCustomEnchants) {
-                event.setResult(null);
-                return;
+                preserveCovenantArmorTrim = isCovenantArmorTrimRecipe(smithing, source, event.getResult());
+                if (!preserveCovenantArmorTrim) {
+                    event.setResult(null);
+                    return;
+                }
             }
         }
 
         ItemStack result = event.getResult();
         if (result == null || result.getType() == Material.AIR) return;
-        if (plugin.getConfigManager().blockNetheriteArmorUpgrade && isNetheriteArmor(result.getType())) {
+        if (plugin.getConfigManager().blockNetheriteArmorUpgrade
+            && event.getInventory() instanceof SmithingInventory smithing
+            && !isArmorTrimRecipe(smithing)
+            && isNetheriteArmor(result.getType())) {
             event.setResult(null);
+            return;
+        }
+        if (preserveCovenantArmorTrim) {
+            event.setResult(preserveCovenantArmorTrim(source, result));
             return;
         }
         if (!preserveCustomEnchants) return;
@@ -162,14 +175,17 @@ public final class CraftingRulesListener implements Listener {
 
         ItemStack source = smith.getInputEquipment();
         if (isProtectedCustomItem(source) && !isCustomEnchantedVanillaGear(source)) {
-            event.setCancelled(true);
-            player.sendMessage(MessageUtil.warn("Custom items cannot be used in vanilla smithing recipes."));
-            return;
+            if (!isCovenantArmorTrimRecipe(smith, source, smith.getResult())) {
+                event.setCancelled(true);
+                player.sendMessage(MessageUtil.warn("Custom items cannot be used in vanilla smithing recipes."));
+                return;
+            }
         }
 
         ItemStack result = smith.getResult();
         if (result == null || result.getType() == Material.AIR) return;
         if (!plugin.getConfigManager().blockNetheriteArmorUpgrade) return;
+        if (isArmorTrimRecipe(smith)) return;
         if (!isNetheriteArmor(result.getType())) return;
 
         event.setCancelled(true);
@@ -289,6 +305,39 @@ public final class CraftingRulesListener implements Listener {
         return event.getView().getTopInventory().getType() == InventoryType.SMITHING
             && (event.getClickedInventory() == event.getView().getTopInventory() || event.getRawSlot() == 3)
             && (event.getSlotType() == InventoryType.SlotType.RESULT || event.getRawSlot() == 3);
+    }
+
+    private boolean isCovenantArmorTrimRecipe(SmithingInventory smithing, ItemStack source, ItemStack result) {
+        if (!isArmorTrimRecipe(smithing)) {
+            return false;
+        }
+        if (plugin.getSeasonRelicManager() == null || !plugin.getSeasonRelicManager().isCovenantArmor(source)) {
+            return false;
+        }
+        if (!(source.getItemMeta() instanceof ArmorMeta) || result == null || result.getType().isAir()) {
+            return false;
+        }
+        return result.getItemMeta() instanceof ArmorMeta armorMeta && armorMeta.hasTrim();
+    }
+
+    private boolean isArmorTrimRecipe(SmithingInventory smithing) {
+        return smithing != null && smithing.getRecipe() instanceof SmithingTrimRecipe;
+    }
+
+    private ItemStack preserveCovenantArmorTrim(ItemStack source, ItemStack result) {
+        ItemStack updated = source.clone();
+        updated.setAmount(1);
+
+        ItemMeta resultMeta = result.getItemMeta();
+        ItemMeta updatedMeta = updated.getItemMeta();
+        if (!(resultMeta instanceof ArmorMeta resultArmor) || !resultArmor.hasTrim()
+            || !(updatedMeta instanceof ArmorMeta updatedArmor)) {
+            return result.clone();
+        }
+
+        updatedArmor.setTrim(resultArmor.getTrim());
+        updated.setItemMeta(updatedArmor);
+        return updated;
     }
 
     private boolean containsProtectedCustomItem(ItemStack[] contents) {

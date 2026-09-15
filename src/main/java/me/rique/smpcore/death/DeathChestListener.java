@@ -1,6 +1,7 @@
 package me.rique.smpcore.death;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -379,6 +380,8 @@ public final class DeathChestListener implements Listener {
     }
 
     private DeathChestPlacement findPlacement(Location deathLocation, int itemCount) {
+        deathLocation = deathChestSearchOrigin(deathLocation);
+
         DeathChestPlacement safe = findPlacement(deathLocation, itemCount, PlacementMode.SAFE);
         if (safe != null) {
             return safe;
@@ -395,6 +398,25 @@ public final class DeathChestListener implements Listener {
         }
 
         return emergencyPlacement(deathLocation, itemCount);
+    }
+
+    private Location deathChestSearchOrigin(Location deathLocation) {
+        if (deathLocation == null || deathLocation.getWorld() == null) {
+            return deathLocation;
+        }
+
+        World world = deathLocation.getWorld();
+        int y = deathLocation.getBlockY();
+        if (y > world.getMinHeight() && y < world.getMaxHeight() - 1) {
+            return deathLocation;
+        }
+
+        Location safe = LocationUtil.findNearestSafeStandingLocation(
+            deathLocation,
+            Math.max(plugin.getConfigManager().deathChestSearchRadius, 8),
+            Math.max(plugin.getConfigManager().deathChestVerticalSearchRadius, 8)
+        );
+        return safe == null ? deathLocation : safe;
     }
 
     private DeathChestPlacement emergencyPlacement(Location deathLocation, int itemCount) {

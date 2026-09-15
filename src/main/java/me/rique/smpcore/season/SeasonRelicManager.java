@@ -7,6 +7,7 @@ import me.rique.smpcore.legendary.MythicForgeListener;
 import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -183,6 +184,11 @@ public final class SeasonRelicManager implements Listener {
 
     public boolean isSeasonRelic(ItemStack item) {
         return relicId(item) != null;
+    }
+
+    public boolean isCovenantArmor(ItemStack item) {
+        RelicDefinition definition = relics.get(relicId(item));
+        return definition != null && definition.kind() == RelicKind.ARMOR;
     }
 
     public String displayNameFor(String input) {
@@ -1012,15 +1018,16 @@ public final class SeasonRelicManager implements Listener {
             player.sendMessage(MessageUtil.warn("Sneak-right-click first to bind this anchor."));
             return false;
         }
-        if (!isSafeTeleport(target)) {
+        Location safe = LocationUtil.findNearestSafeStandingLocation(target, 2, 3);
+        if (safe == null) {
             player.sendMessage(MessageUtil.error("The bound rift is no longer safe."));
             return false;
         }
         Location from = player.getLocation();
-        player.teleport(target);
+        player.teleport(safe);
         from.getWorld().spawnParticle(Particle.PORTAL, from.add(0.0, 1.0, 0.0), 60, 0.6, 0.9, 0.6, 0.55);
-        target.getWorld().spawnParticle(Particle.REVERSE_PORTAL, target.clone().add(0.0, 1.0, 0.0), 60, 0.6, 0.9, 0.6, 0.18);
-        player.playSound(target, Sound.ENTITY_ENDERMAN_TELEPORT, 1.0f, 0.85f);
+        safe.getWorld().spawnParticle(Particle.REVERSE_PORTAL, safe.clone().add(0.0, 1.0, 0.0), 60, 0.6, 0.9, 0.6, 0.18);
+        player.playSound(safe, Sound.ENTITY_ENDERMAN_TELEPORT, 1.0f, 0.85f);
         return true;
     }
 
@@ -1931,34 +1938,7 @@ public final class SeasonRelicManager implements Listener {
     }
 
     private Location nearestSafeTeleport(Location target) {
-        World world = target.getWorld();
-        if (world == null) {
-            return null;
-        }
-        for (int dy = 0; dy <= 3; dy++) {
-            for (int sign : List.of(1, -1)) {
-                Location candidate = target.clone().add(0.0, dy * sign, 0.0);
-                if (isSafeTeleport(candidate)) {
-                    return candidate.getBlock().getLocation().add(0.5, 0.0, 0.5);
-                }
-            }
-        }
-        return null;
-    }
-
-    private boolean isSafeTeleport(Location location) {
-        World world = location.getWorld();
-        if (world == null) {
-            return false;
-        }
-        Block feet = location.getBlock();
-        Block head = feet.getRelative(BlockFace.UP);
-        Block floor = feet.getRelative(BlockFace.DOWN);
-        return feet.isPassable()
-            && head.isPassable()
-            && !floor.isPassable()
-            && !floor.isLiquid()
-            && floor.getType() != Material.LAVA;
+        return LocationUtil.findNearestSafeStandingLocation(target, 2, 3);
     }
 
     private static String sanitizeKey(String id) {

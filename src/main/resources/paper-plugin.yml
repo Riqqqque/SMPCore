@@ -45,6 +45,9 @@ permissions:
   smpcore.help:
     description: Use /help
     default: true
+  smpcore.changelog:
+    description: Use /changelog, /changes, and /updates
+    default: true
   smpcore.menu:
     description: Use /menu and /smpmenu
     default: true
@@ -87,6 +90,9 @@ permissions:
   smpcore.shop:
     description: Use /shops and create player chest shops
     default: true
+  smpcore.changelog.reload:
+    description: Reload the player-facing changelog
+    default: op
 
   # Admin
   smpcore.gmc:

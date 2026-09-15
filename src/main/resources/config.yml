@@ -112,6 +112,11 @@ player-finder-defense:
   hide-same-team: false
   ignore-ops: true
 
+item-audit:
+  # Scans online inventories for tracked custom item movement and duplicates.
+  # Higher values reduce background work. Direct item events still log right away.
+  scan-interval-seconds: 180
+
 spawner:
   silk-touch-enabled: true
   max-stack: 64
@@ -219,6 +224,11 @@ dragon-egg:
 crafting:
   golden-apple-surround-material: GOLD_NUGGET
   block-netherite-armor-upgrade: true
+
+legendary:
+  # Checks online inventories for duplicate exclusive legendary items.
+  # Join and item-change checks still run outside this timer.
+  duplicate-audit-interval-seconds: 30
 
 legendary-altar:
   enabled: true

@@ -506,9 +506,7 @@ public final class MythicForgeListener implements Listener {
         event.setCancelled(true);
         Player player = event.getPlayer();
         ItemStack hand = player.getInventory().getItemInMainHand();
-        if (player.isSneaking()
-            && player.hasPermission("smpcore.customitem.admin")
-            && (hand == null || hand.getType() == Material.AIR)) {
+        if (player.isSneaking() && isEmptyHand(hand)) {
             destroyForgeHologram(crystal.getUniqueId());
             crystal.remove();
             Map<Integer, ItemStack> leftovers = player.getInventory().addItem(createMythicForgeItem());
@@ -516,8 +514,16 @@ public final class MythicForgeListener implements Listener {
             player.sendMessage(MessageUtil.success("Recovered the <white>Mythic Forge</white>."));
             return;
         }
+        if (player.isSneaking()) {
+            player.sendMessage(MessageUtil.warn("Use an empty hand to pick up the Mythic Forge."));
+            return;
+        }
 
         openForgeMenu(player, crystal.getUniqueId());
+    }
+
+    private boolean isEmptyHand(ItemStack item) {
+        return item == null || item.getType().isAir();
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)

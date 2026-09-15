@@ -6,12 +6,14 @@ import me.rique.smpcore.audit.PluginActivityLogger;
 import me.rique.smpcore.awakening.AwakeningTableListener;
 import me.rique.smpcore.backpack.BackpackListener;
 import me.rique.smpcore.boss.BossManager;
+import me.rique.smpcore.changelog.ChangelogManager;
 import me.rique.smpcore.combat.CombatLogListener;
 import me.rique.smpcore.combat.DamageNumberListener;
 import me.rique.smpcore.crafting.CraftingRulesListener;
 import me.rique.smpcore.command.AdminCommands;
 import me.rique.smpcore.command.BossCommands;
 import me.rique.smpcore.command.BossPotionCommands;
+import me.rique.smpcore.command.ChangelogCommand;
 import me.rique.smpcore.command.GamemodeCommands;
 import me.rique.smpcore.command.HomeCommands;
 import me.rique.smpcore.command.LeaderboardCommands;
@@ -77,6 +79,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 public final class SMPCore extends JavaPlugin {
 
     private ConfigManager configManager;
+    private ChangelogManager changelogManager;
     private DatabaseManager databaseManager;
     private SpawnerManager spawnerManager;
     private HomeManager homeManager;
@@ -122,6 +125,7 @@ public final class SMPCore extends JavaPlugin {
         saveDefaultConfig();
 
         configManager = new ConfigManager(this);
+        changelogManager = new ChangelogManager(this);
 
         databaseManager = new DatabaseManager(this);
         try {
@@ -308,6 +312,7 @@ public final class SMPCore extends JavaPlugin {
             LeaderboardCommands.register(commands, this);
             ShopCommands.register(commands, this);
             WikiCommand.register(commands, this);
+            ChangelogCommand.register(commands, this);
             MainMenuCommand.register(commands, this);
             SpawnProtectionCommand.register(commands, this);
 
@@ -316,6 +321,7 @@ public final class SMPCore extends JavaPlugin {
     }
 
     public ConfigManager getConfigManager() { return configManager; }
+    public ChangelogManager getChangelogManager() { return changelogManager; }
     public DatabaseManager getDatabase() { return databaseManager; }
     public SpawnerManager getSpawnerManager() { return spawnerManager; }
     public HomeManager getHomeManager() { return homeManager; }

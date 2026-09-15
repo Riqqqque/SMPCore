@@ -136,6 +136,11 @@ public final class MainMenuCommand implements Listener {
             "<gray>Includes important-item drop safety.</gray>",
             "<yellow>Click to configure.</yellow>"
         )));
+        inventory.setItem(49, button(Material.KNOWLEDGE_BOOK, "<gradient:#f97316:#22d3ee><bold>Changelog</bold></gradient>", List.of(
+            "<gray>Short update notes for players.</gray>",
+            "<dark_gray>Items, bosses, powers, menus, fixes.</dark_gray>",
+            "<yellow>Click to read.</yellow>"
+        )));
         inventory.setItem(53, button(Material.WRITABLE_BOOK, "<yellow><bold>Wiki</bold></yellow>", List.of(
             "<gray>Open the server guide link.</gray>",
             "<dark_gray>Recipes, bosses, powers, commands.</dark_gray>",
@@ -170,6 +175,10 @@ public final class MainMenuCommand implements Listener {
             case 31 -> openTeams(player);
             case 32 -> openLeaderboards(player);
             case 40 -> openSettings(player);
+            case 49 -> {
+                player.closeInventory();
+                player.performCommand("changelog");
+            }
             case 53 -> {
                 player.closeInventory();
                 player.performCommand("wiki");

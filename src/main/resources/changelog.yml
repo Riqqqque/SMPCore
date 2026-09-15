@@ -1,0 +1,18 @@
+title: "<gradient:#f97316:#22d3ee><bold>Latest Changes</bold></gradient>"
+updated: "July 4, 2026"
+revision: 2026070401
+max-shown: 10
+
+# Keep this player-facing. Do not add private admin-only tools, staff-only commands, or exploit details here.
+entries:
+  - "<aqua>Custom Enchants:</aqua> anvil combining now keeps the intended SMPCore enchants and levels."
+  - "<dark_purple>Skybound:</dark_purple> temporary flight now clears properly when powers change."
+  - "<yellow>Safety:</yellow> homes, back, spawn, waystones, and relic teleports now avoid unsafe landing spots when possible."
+  - "<yellow>Death Chests:</yellow> void deaths now try nearby safe ground before falling back to emergency placement."
+  - "<gold>Covenant Armor:</gold> armor trims now work on boss-forged armor."
+  - "<dark_purple>Power:</dark_purple> <white>Sovereign</white> has been renamed to <white>Shadow Monarch</white>."
+  - "<gold>New:</gold> <white>/changelog</white> now shows quick player-facing update notes."
+  - "<aqua>Ender Sword:</aqua> rideable dragons are safer and should not break blocks."
+  - "<red>Crimson Dominion:</red> now hits mobs harder."
+  - "<green>Salvaging Depot:</green> gear recycling is more reliable for damaged armor and weapons."
+  - "<yellow>Reliquary/Menu:</yellow> recent cleanup makes player menus safer and less glitchy."

@@ -16,7 +16,7 @@ public enum SuperpowerType {
     TRAVELER("Wayfarer", 0.025, Material.ENDER_PEARL, "Use /travel [x] [y] [z] [dimension] or /travel close"),
     FLORIST("Verdant", 0.09, Material.OAK_SAPLING, null),
     DRUID("Druid", 0.045, Material.ENCHANTED_BOOK, null),
-    MONARCH("Sovereign", 0.04, Material.ZOMBIE_HEAD, "Use /msummon [amount] or /msummon despawn"),
+    MONARCH("Shadow Monarch", 0.04, Material.ZOMBIE_HEAD, "Use /msummon [amount] or /msummon despawn"),
     SHADOW("Nightshade", 0.055, Material.BLACK_DYE, "Use /shadow toggle"),
     THE_WORLD("The World", 0.04, Material.CLOCK, null),
     XRAY_VISION("Oracle Eye", 0.03, Material.SPYGLASS, "Use /xray"),
@@ -89,6 +89,7 @@ public enum SuperpowerType {
         addAlias(lookup, HUMAN, "no power", "no powers", "none", "normal", "no_power", "no_powers");
         addAlias(lookup, TRAVELER, "traveller");
         addAlias(lookup, FLORIST, "florest", "forest");
+        addAlias(lookup, MONARCH, "monarch", "sovereign");
         addAlias(lookup, THE_WORLD, "world", "theworld", "time stop", "timestop");
         addAlias(lookup, XRAY_VISION, "xray", "x ray", "x-ray", "oracle");
         addAlias(lookup, GIANT, "giant");

@@ -22,16 +22,16 @@
 - `/teamglow`, `/allyglow`, `/teammateglow` - privately highlights teammates and allied teams for your client with a glowing ally marker.
 - `/powerinfo` - opens superpower information.
 - `/stormcaller on|off|toggle|status` - Stormcaller-only lightning strike toggle.
-- `/home`, `/sethome`, `/delhome`, `/homes` - home system.
+- `/home`, `/sethome`, `/delhome`, `/homes` - home system. Teleports use the nearest safe spot around the saved home.
 - `/spawn` - OP-only spawn command on this server.
-- `/back` - OP-only back command on this server.
+- `/back` - OP-only back command on this server. Unsafe void death spots do not replace the last good back location.
 - `/veinminer` - vein miner toggle if enabled.
 - `/veinminer addblock [block]` or `/veinminer add block [block]` - add the block you are looking at, holding, or typing to your personal veinminer list.
 - `/veinminer removeblock [block]` or `/veinminer remove block [block]` - remove a block from your personal veinminer list.
 - `/veinminer blocks` - list your personal veinminer blocks.
-- `/msummon` - Sovereign-only command to summon 1 stored hostile mob.
-- `/msummon <amount>` - Sovereign-only command to summon multiple stored hostile mobs.
-- `/msummon despawn` - Sovereign-only command to unsummon active mobs.
+- `/msummon` - Shadow Monarch-only command to summon 1 stored hostile mob.
+- `/msummon <amount>` - Shadow Monarch-only command to summon multiple stored hostile mobs.
+- `/msummon despawn` - Shadow Monarch-only command to unsummon active mobs.
 
 ## Admin Commands
 

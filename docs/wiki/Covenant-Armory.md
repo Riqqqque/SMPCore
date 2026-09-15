@@ -144,4 +144,6 @@ Each armor set recipe creates the full set through the Covenant Armory menu.
 
 Open `/reliquary`, choose `Covenant Armory`, choose a category, then click any item to view and craft it. Crafting consumes the shown materials from normal storage slots and does not consume equipped armor or offhand items.
 
+Covenant armor can use normal armor trims in a smithing table. The trim is visual only; the armor keeps its relic stats, lore, durability, set bonuses, and tracking. Netherite upgrades and vanilla crafting with Covenant gear are still blocked.
+
 The intended progression is to kill early bosses for trophy materials, craft safer utility and armor, then use those upgrades to challenge harder rituals. Boss-crafted gear should feel stronger than normal loot, but most effects use cooldowns, ally checks, or short windows so PvP stays playable.

@@ -1604,21 +1604,24 @@ public final class DatabaseManager {
                        actor_uuid, actor_name, event_type, method, details
                 FROM managed_item_events
                 WHERE subject_uuid = ?
-                  AND (? IS NULL OR item_key = ?)
+                  AND (? IS NULL OR item_key = ? OR instance_id = ?)
                 ORDER BY logged_at DESC, id DESC
                 LIMIT ?
                 """;
             try (Connection conn = connection();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, subjectUuid.toString());
-                if (itemKeyFilter == null || itemKeyFilter.isBlank()) {
+                String filter = itemKeyFilter == null || itemKeyFilter.isBlank() ? null : itemKeyFilter;
+                if (filter == null) {
                     ps.setNull(2, Types.VARCHAR);
                     ps.setNull(3, Types.VARCHAR);
+                    ps.setNull(4, Types.VARCHAR);
                 } else {
-                    ps.setString(2, itemKeyFilter);
-                    ps.setString(3, itemKeyFilter);
+                    ps.setString(2, filter);
+                    ps.setString(3, filter);
+                    ps.setString(4, filter);
                 }
-                ps.setInt(4, Math.max(1, limit));
+                ps.setInt(5, Math.max(1, limit));
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         records.add(new ManagedItemEventRecord(

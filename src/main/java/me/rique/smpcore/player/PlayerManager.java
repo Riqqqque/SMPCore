@@ -1,6 +1,7 @@
 package me.rique.smpcore.player;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.LocationUtil;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
@@ -126,18 +127,26 @@ public final class PlayerManager {
 
     public void saveBackLocation(Player player) {
         if (plugin.getConfigManager().backOnTeleport) {
-            backLocations.put(player.getUniqueId(), player.getLocation().clone());
+            rememberSafeBackLocation(player.getUniqueId(), player.getLocation(), 2, 4);
         }
     }
 
     public void saveDeathLocation(Player player) {
         if (plugin.getConfigManager().backOnDeath) {
-            backLocations.put(player.getUniqueId(), player.getLocation().clone());
+            rememberSafeBackLocation(player.getUniqueId(), player.getLocation(), 6, 8);
         }
     }
 
     public Location getBackLocation(UUID uuid) {
         return backLocations.get(uuid);
+    }
+
+    private void rememberSafeBackLocation(UUID playerId, Location location, int horizontalRadius, int verticalRadius) {
+        Location safe = LocationUtil.findNearestSafeStandingLocation(location, horizontalRadius, verticalRadius);
+        if (safe == null) {
+            return;
+        }
+        backLocations.put(playerId, safe.clone());
     }
 
     // ── Cleanup ───────────────────────────────────────────────────────────────

@@ -1458,6 +1458,7 @@ public final class CustomEnchantListener implements Listener {
         }
 
         PersistentDataContainer resultPdc = resultMeta.getPersistentDataContainer();
+        clearManagedEnchantData(resultMeta);
         for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
             int level = storedEnchantLevel(sourceMeta, enchant);
             if (level > 0) {
@@ -1473,10 +1474,7 @@ public final class CustomEnchantListener implements Listener {
         ItemMeta meta = item.getItemMeta();
         if (meta == null) return item;
 
-        PersistentDataContainer pdc = meta.getPersistentDataContainer();
-        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
-            pdc.remove(keyFor(enchant));
-        }
+        clearManagedEnchantData(meta);
         applyManagedEnchantLore(meta);
         item.setItemMeta(meta);
         return item;
@@ -1606,6 +1604,7 @@ public final class CustomEnchantListener implements Listener {
         boolean changedByRightItem = false;
         int costLevels = 0;
         PersistentDataContainer resultPdc = meta.getPersistentDataContainer();
+        clearManagedEnchantData(meta);
         for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
             if (!enchant.applicable.test(result.getType())) {
                 continue;
@@ -1662,6 +1661,16 @@ public final class CustomEnchantListener implements Listener {
             return enchant.clampLevel(leftLevel + 1);
         }
         return enchant.clampLevel(Math.max(leftLevel, rightLevel));
+    }
+
+    private void clearManagedEnchantData(ItemMeta meta) {
+        if (meta == null) {
+            return;
+        }
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        for (CustomEnchantEntry enchant : CustomEnchantEntry.MANAGED) {
+            pdc.remove(keyFor(enchant));
+        }
     }
 
     private int combinedBookLevel(BookEnchantData left, BookEnchantData right) {

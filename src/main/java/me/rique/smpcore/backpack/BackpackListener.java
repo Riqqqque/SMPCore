@@ -17,6 +17,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Event;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
+import org.bukkit.event.block.BlockDispenseEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.CraftItemEvent;
@@ -160,6 +161,15 @@ public final class BackpackListener implements Listener {
         }
         event.setCancelled(true);
         maybeWarn(event.getPlayer(), "Backpacks cannot be placed.");
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onDispenseBackpack(BlockDispenseEvent event) {
+        if (!isBackpack(event.getItem())) {
+            return;
+        }
+        // Dispensers bypass BlockPlaceEvent for legacy minecart backpacks.
+        event.setCancelled(true);
     }
 
     @EventHandler
