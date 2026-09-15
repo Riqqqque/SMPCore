@@ -4,6 +4,7 @@ import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.config.ConfigManager;
 import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.HeightMap;
@@ -397,7 +398,8 @@ public final class WildTeleportManager implements Listener {
         if (player.getGameMode() == GameMode.SPECTATOR) {
             return "Leave spectator mode before using <white>/wild</white>.";
         }
-        if (!player.isOp() && plugin.getSmpStartManager() != null && plugin.getSmpStartManager().isPreStartLocked()) {
+        if (!OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.startsmp.bypass-dimension-lock")
+            && plugin.getSmpStartManager() != null && plugin.getSmpStartManager().isPreStartLocked()) {
             return "Wild travel unlocks when the SMP starts.";
         }
         if (plugin.getCombatLogListener() != null && plugin.getCombatLogListener().isInPlayerCombat(player)) {
@@ -414,7 +416,7 @@ public final class WildTeleportManager implements Listener {
     }
 
     private long cooldownSecondsRemaining(Player player, long now) {
-        if (player.hasPermission("smpcore.wild.cooldown.bypass")) {
+        if (OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.wild.cooldown.bypass")) {
             return 0L;
         }
         long until = player.getPersistentDataContainer().getOrDefault(cooldownUntilKey, PersistentDataType.LONG, 0L);
@@ -433,7 +435,7 @@ public final class WildTeleportManager implements Listener {
     }
 
     private void setCooldown(Player player) {
-        if (player.hasPermission("smpcore.wild.cooldown.bypass")) {
+        if (OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.wild.cooldown.bypass")) {
             player.getPersistentDataContainer().remove(cooldownUntilKey);
             return;
         }

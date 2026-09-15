@@ -52,18 +52,15 @@ public final class BedrockCompat {
     }
 
     /**
-     * Sends a normal game result while giving Bedrock clients an action-bar copy.
-     * Inventory-based games can cover chat on Bedrock, so the second channel keeps
-     * the result visible without changing the Java presentation.
+     * Sends game results through chat and the action bar. The second channel keeps
+     * results visible while an inventory menu or Bedrock form is covering chat.
      */
     public static void sendGameMessage(Player player, Component message) {
         if (player == null || message == null) {
             return;
         }
         player.sendMessage(message);
-        if (isBedrockPlayer(player)) {
-            player.sendActionBar(message);
-        }
+        player.sendActionBar(message);
     }
 
     public static void syncGameInventory(Player player) {

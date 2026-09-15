@@ -51,4 +51,20 @@ class PlayerShopListenerTest {
         assertFalse(PlayerShopListener.blocksOwnerPurchase(true, false, owner, owner));
         assertFalse(PlayerShopListener.blocksOwnerPurchase(false, true, owner, owner));
     }
+
+    @Test
+    void guiAdjustmentsStayInsideConfiguredBounds() {
+        assertEquals(1, PlayerShopListener.adjustBounded(1, -100, 64));
+        assertEquals(64, PlayerShopListener.adjustBounded(63, 100, 64));
+        assertEquals(11, PlayerShopListener.adjustBounded(1, 10, 64));
+        assertEquals(1, PlayerShopListener.adjustBounded(Integer.MAX_VALUE, 1, 1));
+    }
+
+    @Test
+    void currencyButtonsWrapInBothDirections() {
+        assertEquals(ShopCurrency.COPPER, PlayerShopListener.nextCurrency(ShopCurrency.COAL));
+        assertEquals(ShopCurrency.COAL, PlayerShopListener.nextCurrency(ShopCurrency.ESSENCE));
+        assertEquals(ShopCurrency.ESSENCE, PlayerShopListener.previousCurrency(ShopCurrency.COAL));
+        assertEquals(ShopCurrency.NETHERITE, PlayerShopListener.previousCurrency(ShopCurrency.ESSENCE));
+    }
 }

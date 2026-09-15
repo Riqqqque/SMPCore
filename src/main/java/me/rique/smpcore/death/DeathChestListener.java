@@ -745,7 +745,7 @@ public final class DeathChestListener implements Listener {
 
     private void cleanupDeathChestsInChunk(Chunk chunk, long now) {
         Set<String> removedChestIds = new HashSet<>();
-        for (org.bukkit.block.BlockState state : chunk.getTileEntities()) {
+        for (org.bukkit.block.BlockState state : chunk.getTileEntities(false)) {
             if (!(state instanceof Chest chest)) {
                 continue;
             }
@@ -786,8 +786,8 @@ public final class DeathChestListener implements Listener {
             return blocks;
         }
         if (holder instanceof DoubleChest doubleChest) {
-            InventoryHolder left = doubleChest.getLeftSide();
-            InventoryHolder right = doubleChest.getRightSide();
+            InventoryHolder left = doubleChest.getLeftSide(false);
+            InventoryHolder right = doubleChest.getRightSide(false);
             if (left instanceof Chest leftChest) {
                 addDeathChestBlocks(blocks, leftChest.getBlock(), chestId);
             }
@@ -819,14 +819,14 @@ public final class DeathChestListener implements Listener {
             return deathChestIdFromState(chest);
         }
         if (holder instanceof DoubleChest doubleChest) {
-            InventoryHolder left = doubleChest.getLeftSide();
+            InventoryHolder left = doubleChest.getLeftSide(false);
             if (left instanceof Chest leftChest) {
                 String id = deathChestIdFromState(leftChest);
                 if (id != null) {
                     return id;
                 }
             }
-            InventoryHolder right = doubleChest.getRightSide();
+            InventoryHolder right = doubleChest.getRightSide(false);
             if (right instanceof Chest rightChest) {
                 return deathChestIdFromState(rightChest);
             }

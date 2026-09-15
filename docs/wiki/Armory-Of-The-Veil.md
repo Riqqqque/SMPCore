@@ -2,14 +2,14 @@
 
 The Armory of the Veil is the boss-forged item path inside `/reliquary`.
 
-Veil gear is the seasonal PvE progression path. Seasonal weapons gain 12-40% damage during custom boss encounters based on rarity and deal 22% less damage to players. Seasonal armor reduces damage from bosses and their adds by 3.5-8.5% per piece; matching full sets gain another 6%, with a 40% total cap. Legendary and mythic systems outside the Armory remain the main PvP chase gear.
+Veil gear is the seasonal boss progression path. Seasonal weapons gain 12-40% damage during custom boss encounters based on rarity and no longer have a built-in PvP damage penalty. Boss armor is built for mixing: wearing any piece activates that set's utility and offense perks. If several pieces provide the same offense bonus, only the strongest applies. Special damage mitigation is the one reward reserved for a matching four-piece set, providing 20-40% Boss Ward depending on rarity. Veil armor also takes half normal durability wear from boss attacks. Failed boss mechanics cause only one normal point of armor wear instead of scaling wear with their lethal damage.
 
 It adds:
 
 - 16 custom weapons and tools.
 - 6 full armor sets, each with a four-piece set bonus.
 - 13 standalone armor pieces with individual passives.
-- 17 utility relics.
+- 17 utility relics, listed with the other support gear under `Reliquary → Tools & Gear`.
 - 1 craftable corruption catalyst.
 - Boss trophies used as crafting materials.
 
@@ -24,11 +24,11 @@ It adds:
 - `Riftglass Lens` - Asterion the Rift Oracle and Morvessa the Runebloom Witch.
 - `Moonless Halo` - rare Asterion drop.
 - `Depthveil Pearl` - Thalassa the Drowned Veil.
-- `Tideveil Heart` - rare Thalassa drop.
+- `Tideveil Heart` - 70% drop from Thalassa.
 - `Argent Gear` - The Argent Confessor.
 - `Confessor Alloy` - rare Argent Confessor drop.
 - `Briarwake Bark` - The Briarveil Regent.
-- `Briarheart` - rare Regent drop.
+- `Briarheart` - 70% drop from the Briarveil Regent.
 - `Corrupted Essence` - the Corrupted Oathkeeper always drops 2, with a 25% chance for a third. Used at Corruption Anchors.
 - `Corruption Stone` - craftable lower-tier catalyst for non-legendary items.
 
@@ -38,26 +38,24 @@ It adds:
 
 Morvessa the Runebloom Witch also has a 5% chance to drop one. This averages one Orb per 20 kills, while every Morvessa kill still gives 2 Riftglass Lenses. The rare boss roll is a bonus; Asterion and the crafted route remain the reliable progression path.
 
+`Unweaving Orb` is the cheaper removal fuel: 4 Amethyst Shards, 8 Experience Bottles, 16 Lapis Lazuli, and 8 String. Switch the Runic Loom to its removal page, choose one exact enchant, and spend one orb. It does not refund XP. Intrinsic set enchants are not removable.
+
 ## Weapons
 
-- `Veilbrand Verdict` - bonus damage and short fire pressure.
-- `Gloamfang` - cooldown poison and slowness.
-- `Riftglass Pike` - periodically pulls targets toward the wielder.
-- `Confessor's Splitter` - bonus damage and cooldown Weakness.
-- `Tideveil Breaker` - deals extra damage in water or rain.
-- `Graveveil Reaper` - small lifesteal on a short cooldown.
-- `Nullveil Rapier` - removes one beneficial effect on cooldown.
-- `Moonless Repeater` - crossbow bolts inflict Wither and Darkness.
-- `Briarwhisper` - arrows apply strong Slowness.
-- `Cinderveil Dagger` - backstabs deal extra damage and give the wielder speed.
-- `Veilbreaker Mattock` - boss-focused mining weapon. Hurts custom bosses harder and can weaken targets.
-- `Duskveil Mallet` - mace with a short sonic burst around the impact target.
-- `Briarveil Saw` - axe that slows enemies and punishes wounded targets.
-- `Veilpiercer Glaive` - marks targets, then hits marked targets harder.
-- `Hollowsong Bow` - arrows weaken, slow, and punish already-weakened targets.
-- `Starfall Mace` - heavy mace with a cooldown impact burst.
+The Armory lists these from Tier 1 to Tier 10. Tier describes their intended boss-path position; weapons within the same tier are sidegrades.
 
-Veil boss weapons keep their enchants permanently. Use enchanted books at an anvil as normal; melee boss weapons also accept combat books such as Sharpness, Smite, Fire Aspect, Knockback, and Looting even when the base item would normally reject them. Grindstones cannot remove these enchants. Bedrock players can use the placed-anvil custom menu for the same results.
+- **Tier 1:** `Veilbreaker Mattock`.
+- **Tier 2:** `Cinderveil Dagger`, `Veilbrand Verdict`.
+- **Tier 3:** `Gloamfang`.
+- **Tier 4:** `Briarwhisper`, `Briarveil Saw`.
+- **Tier 5:** `Tideveil Breaker`.
+- **Tier 6:** `Confessor's Splitter`.
+- **Tier 7:** `Nullveil Rapier`, `Riftglass Pike`.
+- **Tier 8:** `Hollowsong Bow`.
+- **Tier 9:** `Moonless Repeater`, `Graveveil Reaper`, `Veilpiercer Glaive`.
+- **Tier 10:** `Duskveil Mallet`, `Starfall Mace`.
+
+Use enchanted books at an anvil as normal; melee boss weapons also accept combat books such as Sharpness, Smite, Fire Aspect, Knockback, and Looting even when the base item would normally reject them. Grindstones cannot strip Veil weapons or armor. Use the Runic Loom's removal page and an Unweaving Orb to remove one chosen enchant instead. Bedrock players can use the placed-anvil custom menu for the same results.
 
 ## Weapon and Tool Recipes
 
@@ -78,16 +76,16 @@ Veil boss weapons keep their enchants permanently. Use enchanted books at an anv
 - `Hollowsong Bow` - Bow, 8 Gloam Silk, 4 Depthveil Pearl, 2 Riftglass Lens, 8 Note Blocks.
 - `Starfall Mace` - Mace, 1 Moonless Halo, 1 Confessor Alloy, 1 Tideveil Heart, 1 Heavy Core.
 
-## Full Armor Sets
+## Boss Armor Sets
 
-Each set bonus only works when all four pieces are worn.
+Utility and offense perks work from any equipped piece, so pieces from different sets can be mixed. Overlapping potion effects follow normal Minecraft rules, and set damage bonuses use only the strongest equipped piece instead of stacking. Boss Ward and any listed Resistance effect require all four matching pieces.
 
-- `Nocturne Guard` - Resistance I. At low health, gain Strength II and Regeneration I.
+- `Nocturne Guard` - At low health, gain Strength II and Regeneration I. The full set also grants Resistance I.
 - `Gloam Court` - Speed II, Jump Boost I, and poison cleansing.
 - `Cinder Confessor` - Fire Resistance, Haste II, and Strength I.
 - `Depthveil` - Water Breathing. In water or rain, gain Dolphin's Grace, Speed II, and Regeneration I.
-- `Riftveil` - Slow Falling, Speed II, and Resistance I.
-- `Eclipse Mantle` - Night Vision and Resistance I. In darkness, gain Strength I and Speed II.
+- `Riftveil` - Slow Falling and Speed II. The full set also grants Resistance I.
+- `Eclipse Mantle` - Night Vision. In darkness, gain Strength I and Speed II. The full set also grants Resistance I.
 
 ## Standalone Armor
 
@@ -172,7 +170,7 @@ Armor is crafted one piece at a time. The amounts below are required for each pi
 
 ## Crafting
 
-Open `/reliquary`, choose `Armory of the Veil`, choose a category, then click any item to view and craft it. Crafting consumes the shown materials from normal storage slots and does not consume equipped armor or offhand items.
+Open `/reliquary`, choose `Armory of the Veil`, choose a weapon, armor, or material category, then click any item to view and craft it. Utility relics are grouped with the rest of the support catalog under `Tools & Gear`. Crafting consumes the shown materials from normal storage slots and does not consume equipped armor or offhand items.
 
 Veil armor can use normal armor trims in a smithing table. The trim is visual only; the armor keeps its relic stats, lore, durability, set bonuses, and tracking. Netherite upgrades and vanilla crafting with Veil gear are still blocked.
 

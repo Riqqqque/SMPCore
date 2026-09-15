@@ -66,6 +66,8 @@ Teams support:
 - A searchable team browser through `/teams`.
 - Team vault storage through `/tvault` or `/teamvault`.
 - Team alliances that count as friendly for protections and ally glow without sharing vaults.
+- Owner-appointed captains who can invite members, control friendly damage, and sever alliances without gaining alliance-creation, kick, disband, or ownership permissions.
+- Teammate damage that is disabled by default. Allied PvP requires both teams to enable it.
 - Owner crown unlocks when team size requirements are met.
 
 Useful team commands:
@@ -78,18 +80,32 @@ Useful team commands:
 - `/team color <color>` - change your team color. Owner only.
 - `/team rename "new name"` - rename your team. Owner only.
 - `/team name "new name"` - alias for `/team rename`.
-- `/team invite <player>` - invite a player. Owner only.
+- `/team invite <player>` - invite a player. Owner or captain.
+- `/team captain add <member>` - promote a member to captain. Owner only.
+- `/team captain remove <member>` - remove a captain. Owner only.
+- `/team captain list` - list current captains.
+- `/team damage [on|off|toggle|status]` - control teammate and ally damage. Owner or captain.
 - `/team ally add <team>` - request an alliance with another team. Owner only.
 - `/team ally accept <team>` - accept an incoming alliance request. Owner only.
 - `/team ally deny <team>` - deny an incoming alliance request. Owner only.
-- `/team ally remove <team>` - end an alliance. Owner only.
+- `/team ally remove <team>` - end an alliance. Owner or captain.
 - `/team allies` - show allies and pending alliance requests.
+- `/allysethome <name> [ally team]` - set a shared alliance home. Team leader only.
+- `/allyhome <name> [ally team]` - teleport to a shared alliance home.
+- `/allyhomes [ally team]` - list the homes shared by your active alliances.
+- `/allydelhome <name> [ally team]` - delete a shared alliance home. Team leader only.
 - `/team leave` - leave your current team.
 - `/team disband` - disband your team. Owner only.
 - `/team info` - view team members, owner, color, and allies.
 - `/tvault` or `/teamvault` - open your team vault.
 
-Allies are treated as friendly for team-safe plugin systems such as protection checks and private ally glow. They do not get access to your `/tvault`, and your team does not get access to theirs.
+Allies are treated as friendly for team-safe plugin systems such as protection checks and private ally glow. They do not get access to your `/tvault`, and your team does not get access to theirs. Team damage starts disabled. Same-team PvP works only after an owner or captain enables it. Damage between allied teams works only while both teams have enabled it, so one team cannot expose the other without permission.
+
+Alliance homes are separate from personal homes and have no count limit. Either team leader may set or delete homes for that exact alliance, and every member of both teams may use them. If either leader ends the alliance, or either team disbands, those shared homes are permanently deleted. They do not return if the teams ally again. The same combat, duel, boss, world-border, dimension-lock, safe-landing, and cross-world checks used by `/home` also protect `/allyhome`.
+
+Player-kill weapon progress never counts against current teammates or allies. Leaving or disbanding a team also keeps every former teammate pair ineligible for one month. A blocked former-teammate kill tells the attacker how much cooldown time remains.
+
+Team hopping is limited separately. Three voluntary team exits within seven days trigger a 24-hour lock during which that player cannot accept a team invite or create another team. Owner-disbanding counts as an exit for the owner; members removed by somebody else's disband are not penalized. Join attempts show the remaining lock time.
 
 ## Team Browser
 

@@ -17,12 +17,15 @@ import org.bukkit.block.Block;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Item;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Villager;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockDropItemEvent;
 import org.bukkit.event.enchantment.EnchantItemEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.CraftItemEvent;
@@ -33,6 +36,7 @@ import org.bukkit.event.inventory.PrepareGrindstoneEvent;
 import org.bukkit.event.inventory.PrepareItemCraftEvent;
 import org.bukkit.event.player.PlayerFishEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.AnvilInventory;
 import org.bukkit.inventory.CraftingInventory;
@@ -40,6 +44,7 @@ import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.GrindstoneInventory;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.MerchantRecipe;
 import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.meta.Damageable;
@@ -71,6 +76,7 @@ public final class CustomToolListener implements Listener {
     public static final String SPELUNKER_LANTERN_ID = "spelunker_lantern";
     public static final String SURVEYORS_LENS_ID = "surveyors_lens";
     public static final String MENDERS_KIT_ID = "menders_kit";
+    public static final String RESTOCK_TOKEN_ID = "restock_token";
     private static final String LEGACY_AMETHYST_PICKAXE_ID = "amethyst_pickaxe";
 
     private static final Set<Material> GOLD_ORES = EnumSet.of(Material.GOLD_ORE, Material.DEEPSLATE_GOLD_ORE, Material.NETHER_GOLD_ORE);
@@ -185,7 +191,8 @@ public final class CustomToolListener implements Listener {
             || GRAPPLE_HOOK_ID.equals(id)
             || SPELUNKER_LANTERN_ID.equals(id)
             || SURVEYORS_LENS_ID.equals(id)
-            || MENDERS_KIT_ID.equals(id);
+            || MENDERS_KIT_ID.equals(id)
+            || RESTOCK_TOKEN_ID.equals(id);
     }
 
     public List<String> craftableToolIds() {
@@ -205,6 +212,7 @@ public final class CustomToolListener implements Listener {
             case SPELUNKER_LANTERN_ID -> "Spelunker's Lantern";
             case SURVEYORS_LENS_ID -> "Surveyor's Lens";
             case MENDERS_KIT_ID -> "Mender's Kit";
+            case RESTOCK_TOKEN_ID -> "Restock Token";
             default -> null;
         };
     }
@@ -249,6 +257,7 @@ public final class CustomToolListener implements Listener {
             case SPELUNKER_LANTERN_ID -> createSpelunkerLantern();
             case SURVEYORS_LENS_ID -> createSurveyorsLens();
             case MENDERS_KIT_ID -> createMendersKit();
+            case RESTOCK_TOKEN_ID -> createRestockToken();
             default -> new ItemStack(Material.BARRIER);
         };
     }
@@ -325,6 +334,73 @@ public final class CustomToolListener implements Listener {
     public void onJoin(PlayerJoinEvent event) {
         discoverRecipes(event.getPlayer());
         refreshPlayerCustomTools(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onVillagerBurnDeath(EntityDeathEvent event) {
+        if (!(event.getEntity() instanceof Villager villager)) {
+            return;
+        }
+        EntityDamageEvent lastDamage = villager.getLastDamageCause();
+        if (lastDamage == null || !isRestockTokenBurnCause(lastDamage.getCause())) {
+            return;
+        }
+
+        ItemStack token = createRestockToken();
+        if (plugin.getItemAuditManager() != null) {
+            plugin.getItemAuditManager().recordGeneratedItem(
+                token,
+                "villager_burn_drop",
+                "Dropped when a villager died to fire."
+            );
+        }
+        event.getDrops().add(token);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onRestockTokenUse(PlayerInteractEntityEvent event) {
+        if (!(event.getRightClicked() instanceof Villager villager) || !event.getPlayer().isSneaking()) {
+            return;
+        }
+        EquipmentSlot hand = event.getHand();
+        ItemStack token = hand == EquipmentSlot.OFF_HAND
+            ? event.getPlayer().getInventory().getItemInOffHand()
+            : event.getPlayer().getInventory().getItemInMainHand();
+        if (!RESTOCK_TOKEN_ID.equals(customToolId(token))) {
+            return;
+        }
+
+        event.setCancelled(true);
+        List<MerchantRecipe> currentRecipes = villager.getRecipes();
+        if (currentRecipes.isEmpty()) {
+            event.getPlayer().sendMessage(MessageUtil.warn("This villager has no trades to restock."));
+            return;
+        }
+
+        List<MerchantRecipe> restockedRecipes = new ArrayList<>(currentRecipes.size());
+        for (MerchantRecipe current : currentRecipes) {
+            MerchantRecipe restocked = new MerchantRecipe(current);
+            restocked.setUses(0);
+            restocked.setDemand(0);
+            restocked.setSpecialPrice(0);
+            restockedRecipes.add(restocked);
+        }
+        villager.setRecipes(restockedRecipes);
+        villager.setRestocksToday(0);
+
+        recordToolConsumption(event.getPlayer(), token, "restock_token", "Reset all villager trade uses and pricing.");
+        consumeOne(event.getPlayer(), hand, token);
+        event.getPlayer().sendMessage(MessageUtil.success("The villager's trades were fully restocked."));
+        event.getPlayer().playSound(villager.getLocation(), Sound.ENTITY_VILLAGER_YES, 0.9f, 1.15f);
+        villager.getWorld().spawnParticle(
+            org.bukkit.Particle.HAPPY_VILLAGER,
+            villager.getLocation().clone().add(0.0, 1.0, 0.0),
+            20,
+            0.45,
+            0.6,
+            0.45,
+            0.02
+        );
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -782,6 +858,16 @@ public final class CustomToolListener implements Listener {
         return item;
     }
 
+    private ItemStack createRestockToken() {
+        ItemStack item = new ItemStack(Material.EMERALD);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) return item;
+        applyCustomToolState(meta, RESTOCK_TOKEN_ID);
+        applyCustomToolPresentation(meta, RESTOCK_TOKEN_ID, item.getType());
+        item.setItemMeta(meta);
+        return item;
+    }
+
     private void applyCustomToolState(ItemMeta meta, String toolId) {
         meta.getPersistentDataContainer().set(keyCustomToolId, PersistentDataType.STRING, toolId);
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
@@ -946,9 +1032,28 @@ public final class CustomToolListener implements Listener {
                     List.of(CustomLoreUtil.section(
                         "Right Click",
                         "Patchwork",
-                        "<gray>Repairs your most damaged carried or worn item by <white>35%</white>.</gray>",
+                        "<gray>Hold a damaged item in your other hand.</gray>",
+                        "<gray>Repairs that item by <white>35%</white> of its maximum durability.</gray>",
                         "<gray>Only consumes itself after a repair succeeds.</gray>",
                         "<gray>Will never repair another Mender's Kit.</gray>"
+                    ))
+                ));
+            }
+            case RESTOCK_TOKEN_ID -> {
+                baseDisplayName = CustomLoreUtil.displayName(CustomLoreUtil.Rarity.RARE, "Restock Token");
+                meta.displayName(baseDisplayName);
+                meta.lore(CustomLoreUtil.buildStyledLore(
+                    meta,
+                    material,
+                    CustomLoreUtil.Rarity.RARE.label(),
+                    "VILLAGER TOKEN",
+                    List.of("<gray>A hot-stamped token carrying a villager's final bargain.</gray>"),
+                    List.of(CustomLoreUtil.section(
+                        "Shift + Right Click Villager",
+                        "Fresh Stock",
+                        "<gray>Resets every trade's uses, demand, and special price.</gray>",
+                        "<gray>Consumed only after a successful restock.</gray>",
+                        "<gray>Obtained when a villager burns to death.</gray>"
                     ))
                 ));
             }
@@ -1201,62 +1306,24 @@ public final class CustomToolListener implements Listener {
     }
 
     private void useMendersKit(Player player, EquipmentSlot hand, ItemStack kit) {
-        RepairTarget target = findMostDamagedRepairTarget(player);
-        if (target == null) {
-            player.sendMessage(MessageUtil.warn("Nothing in your inventory needs the Mender's Kit."));
+        ItemStack target = hand == EquipmentSlot.OFF_HAND
+            ? player.getInventory().getItemInMainHand()
+            : player.getInventory().getItemInOffHand();
+        if (target == null || target.getType().isAir() || MENDERS_KIT_ID.equals(customToolId(target))) {
+            player.sendMessage(MessageUtil.warn("Hold the damaged item in your other hand."));
             player.playSound(player.getLocation(), Sound.BLOCK_ANVIL_LAND, 0.45f, 1.35f);
             return;
         }
 
-        if (!repairItem(target.item(), MENDERS_KIT_REPAIR_PERCENT)) {
-            player.sendMessage(MessageUtil.warn("The kit could not repair that item."));
+        if (!repairItem(target, MENDERS_KIT_REPAIR_PERCENT)) {
+            player.sendMessage(MessageUtil.warn("That item is not damaged or cannot be repaired."));
             return;
         }
 
-        applyRepairTarget(player, target);
+        recordToolConsumption(player, kit, "menders_kit", "Repaired the item held in the other hand by 35%.");
         consumeOne(player, hand, kit);
-        player.sendMessage(MessageUtil.success("Patched <white>" + target.label() + "</white>."));
+        player.sendMessage(MessageUtil.success("Repaired the item in your other hand by <white>35%</white>."));
         player.playSound(player.getLocation(), Sound.BLOCK_ANVIL_USE, 0.75f, 1.2f);
-    }
-
-    private RepairTarget findMostDamagedRepairTarget(Player player) {
-        RepairTarget best = null;
-        ItemStack[] storage = player.getInventory().getStorageContents();
-        for (int slot = 0; slot < storage.length; slot++) {
-            best = betterRepairTarget(best, repairTarget(storage[slot], slot, null, "inventory item"));
-        }
-        best = betterRepairTarget(best, repairTarget(player.getInventory().getItemInOffHand(), -1, EquipmentSlot.OFF_HAND, "offhand item"));
-        best = betterRepairTarget(best, repairTarget(player.getInventory().getHelmet(), -1, EquipmentSlot.HEAD, "helmet"));
-        best = betterRepairTarget(best, repairTarget(player.getInventory().getChestplate(), -1, EquipmentSlot.CHEST, "chestplate"));
-        best = betterRepairTarget(best, repairTarget(player.getInventory().getLeggings(), -1, EquipmentSlot.LEGS, "leggings"));
-        best = betterRepairTarget(best, repairTarget(player.getInventory().getBoots(), -1, EquipmentSlot.FEET, "boots"));
-        return best;
-    }
-
-    private RepairTarget repairTarget(ItemStack item, int storageSlot, EquipmentSlot equipmentSlot, String label) {
-        double ratio = damageRatio(item);
-        return ratio <= 0.0 ? null : new RepairTarget(item, storageSlot, equipmentSlot, label, ratio);
-    }
-
-    private RepairTarget betterRepairTarget(RepairTarget current, RepairTarget candidate) {
-        if (candidate == null) {
-            return current;
-        }
-        return current == null || candidate.damageRatio() > current.damageRatio() ? candidate : current;
-    }
-
-    private double damageRatio(ItemStack item) {
-        if (item == null || item.getType().isAir() || MENDERS_KIT_ID.equals(customToolId(item))) {
-            return 0.0;
-        }
-        if (!(item.getItemMeta() instanceof Damageable damageable)) {
-            return 0.0;
-        }
-        int maxDamage = maxDamage(item, damageable);
-        if (maxDamage <= 0 || damageable.getDamage() <= 0) {
-            return 0.0;
-        }
-        return Math.min(1.0, damageable.getDamage() / (double) maxDamage);
     }
 
     private boolean repairItem(ItemStack item, double percentOfMax) {
@@ -1278,22 +1345,6 @@ public final class CustomToolListener implements Listener {
         return Math.max(0, maxDamage);
     }
 
-    private void applyRepairTarget(Player player, RepairTarget target) {
-        if (target.storageSlot() >= 0) {
-            player.getInventory().setItem(target.storageSlot(), target.item());
-            return;
-        }
-        switch (target.equipmentSlot()) {
-            case OFF_HAND -> player.getInventory().setItemInOffHand(target.item());
-            case HEAD -> player.getInventory().setHelmet(target.item());
-            case CHEST -> player.getInventory().setChestplate(target.item());
-            case LEGS -> player.getInventory().setLeggings(target.item());
-            case FEET -> player.getInventory().setBoots(target.item());
-            default -> {
-            }
-        }
-    }
-
     private void consumeOne(Player player, EquipmentSlot hand, ItemStack item) {
         ItemStack next = item.clone();
         next.setAmount(next.getAmount() - 1);
@@ -1305,6 +1356,21 @@ public final class CustomToolListener implements Listener {
         } else {
             player.getInventory().setItemInMainHand(next);
         }
+    }
+
+    private void recordToolConsumption(Player player, ItemStack item, String method, String details) {
+        if (plugin.getItemAuditManager() == null || item == null) {
+            return;
+        }
+        ItemStack consumed = item.clone();
+        consumed.setAmount(1);
+        plugin.getItemAuditManager().recordConsumption(player, consumed, method, details);
+    }
+
+    static boolean isRestockTokenBurnCause(EntityDamageEvent.DamageCause cause) {
+        return cause == EntityDamageEvent.DamageCause.FIRE
+            || cause == EntityDamageEvent.DamageCause.FIRE_TICK
+            || cause == EntityDamageEvent.DamageCause.LAVA;
     }
 
     private String formatOreBreakdown(Map<String, Integer> counts) {
@@ -1422,8 +1488,6 @@ public final class CustomToolListener implements Listener {
     }
 
     private record BlockKey(UUID worldId, int x, int y, int z) {}
-    private record RepairTarget(ItemStack item, int storageSlot, EquipmentSlot equipmentSlot, String label, double damageRatio) {}
-
     private static final class SurveyorScan {
         private final UUID worldId;
         private final Location origin;

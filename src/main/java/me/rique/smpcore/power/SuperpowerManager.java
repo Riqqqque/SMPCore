@@ -1,7 +1,6 @@
 package me.rique.smpcore.power;
 
 import io.papermc.paper.event.entity.EntityLoadCrossbowEvent;
-import io.papermc.paper.event.entity.EntityEquipmentChangedEvent;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.combat.AbilityDamageContext;
 import me.rique.smpcore.awakening.AwakeningTableListener;
@@ -15,6 +14,7 @@ import me.rique.smpcore.util.ItemModelUtil;
 import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
@@ -50,6 +50,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockDispenseEvent;
 import org.bukkit.event.block.BlockDropItemEvent;
 import org.bukkit.event.block.BlockFadeEvent;
 import org.bukkit.event.block.BlockFromToEvent;
@@ -65,6 +66,7 @@ import org.bukkit.event.enchantment.PrepareItemEnchantEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.entity.EntityShootBowEvent;
 import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
 import org.bukkit.event.entity.ProjectileHitEvent;
@@ -73,6 +75,9 @@ import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.InventoryMoveItemEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
+import org.bukkit.event.inventory.InventoryPickupItemEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.event.inventory.PrepareGrindstoneEvent;
@@ -85,6 +90,7 @@ import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerExpChangeEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerItemDamageEvent;
 import org.bukkit.event.player.PlayerItemHeldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -103,6 +109,8 @@ import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.inventory.meta.BlockStateMeta;
+import org.bukkit.inventory.meta.BundleMeta;
 import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.EnchantmentStorageMeta;
 import org.bukkit.inventory.meta.ItemMeta;
@@ -142,7 +150,7 @@ public final class SuperpowerManager implements Listener {
         "stormcaller", "sclightning", "stormpower", "smokebomb", "sb",
         "travel", "domainexpansion", "domain", "domainexp", "infinity", "infinite", "honoredinfinity",
         "unstoppableforce", "uf", "deadeyearrows", "darrows", "deadeyeinfinity",
-        "arcanebook", "maxbook", "bookmax", "oathsummon",
+        "arcanebook", "maxbook", "bookmax", "oathsummon", "bulwark",
         "bloodsacrifice", "bloodheal", "curse", "msummon"
     );
 
@@ -222,6 +230,10 @@ public final class SuperpowerManager implements Listener {
     private static final double MINER_EXTRA_ORE_CHANCE = 0.25;
     private static final double MINER_HEALTH_BONUS = 2.0;
     private static final int MINER_NIGHT_VISION_Y_LEVEL = 32;
+    private static final double PHYSICALLY_GIFTED_HEALTH_BONUS = 4.0;
+    private static final double PHYSICALLY_GIFTED_MOB_DAMAGE_MULTIPLIER = 2.0;
+    private static final double PHYSICALLY_GIFTED_PLAYER_DAMAGE_MULTIPLIER = 1.75;
+    private static final double PHYSICALLY_GIFTED_BOSS_DAMAGE_MULTIPLIER = 1.50;
     private static final double GIANT_SCALE_MULTIPLIER = 1.2;
     private static final double GIANT_HEALTH_BONUS = 12.0;
     private static final double GIANT_KNOCKBACK_RESISTANCE = 0.40;
@@ -253,9 +265,19 @@ public final class SuperpowerManager implements Listener {
     private static final int VOIDSTEP_SLOW_FALLING_SECONDS = 7;
     private static final int VOIDSTEP_INVISIBILITY_SECONDS = 12;
     private static final double VOIDSTEP_AMBUSH_DAMAGE = 3.0;
-    private static final double SENTINEL_AURA_RADIUS = 7.0;
-    private static final double SENTINEL_HEALTH_BONUS = 6.0;
-    private static final double SENTINEL_BRACE_DAMAGE_REDUCTION = 0.35;
+    private static final double SENTINEL_AURA_RADIUS = 8.0;
+    private static final double SENTINEL_HEALTH_BONUS = 8.0;
+    private static final double SENTINEL_BRACE_DAMAGE_REDUCTION = 0.40;
+    private static final double SENTINEL_BRACE_KNOCKBACK_RESISTANCE = 0.55;
+    private static final double SENTINEL_BULWARK_RADIUS = 10.0;
+    private static final int SENTINEL_BULWARK_DURATION_SECONDS = 10;
+    private static final int SENTINEL_BULWARK_COOLDOWN_SECONDS = 3 * 60;
+    private static final int SENTINEL_HEALTH_GRANT_REVISION = 1;
+    private static final int SENTINEL_BULWARK_RESISTANCE_I = 1;
+    private static final int SENTINEL_BULWARK_RESISTANCE_II = 1 << 1;
+    private static final int SENTINEL_BULWARK_ABSORPTION_II = 1 << 2;
+    private static final int SENTINEL_BULWARK_ABSORPTION_IV = 1 << 3;
+    private static final int SENTINEL_BULWARK_REGENERATION_I = 1 << 4;
     private static final double WATERMAN_DAMAGE_MULTIPLIER = 1.25;
     private static final double WATERMAN_DAMAGE_REDUCTION = 0.25;
     private static final double WATERMAN_SUBMERGED_MINING_BONUS = 0.8;
@@ -383,18 +405,21 @@ public final class SuperpowerManager implements Listener {
     private final NamespacedKey keyMotherNatureStick;
     private final NamespacedKey keyTheWorldClock;
     private final NamespacedKey keyDruidGrimoire;
+    private final NamespacedKey keyDruidGrimoireOwner;
     private final NamespacedKey keyEnchanterLapis;
     private final NamespacedKey keyTankImmovableModifier;
     private final NamespacedKey keyEnchanterLuckModifier;
     private final NamespacedKey keyEnchanterMoveModifier;
     private final NamespacedKey keyEnchanterAttackModifier;
     private final NamespacedKey keyMinerHealthModifier;
+    private final NamespacedKey keyPhysicallyGiftedHealthModifier;
     private final NamespacedKey keyGiantHealthModifier;
     private final NamespacedKey keyGiantScaleModifier;
     private final NamespacedKey keyGiantKnockbackModifier;
     private final NamespacedKey keyGiantAttackDamageModifier;
     private final NamespacedKey keySupermanHealthModifier;
     private final NamespacedKey keySentinelHealthModifier;
+    private final NamespacedKey keySentinelBraceKnockbackModifier;
     private final NamespacedKey keyVeilAssassinHealthModifier;
     private final NamespacedKey keyVeilAssassinSneakingSpeedModifier;
     private final NamespacedKey keyWatermanSubmergedMiningModifier;
@@ -406,6 +431,10 @@ public final class SuperpowerManager implements Listener {
     private final NamespacedKey keyPhoenixCooldownUntil;
     private final NamespacedKey keyVoidstepCooldownUntil;
     private final NamespacedKey keyVoidstepVeilUntil;
+    private final NamespacedKey keySentinelBulwarkCooldownUntil;
+    private final NamespacedKey keySentinelBulwarkBuffUntil;
+    private final NamespacedKey keySentinelBulwarkBuffMask;
+    private final NamespacedKey keySentinelHealthGrantRevision;
     private final NamespacedKey keyVoidwalkerNightVisionEnabled;
     private final NamespacedKey keyNightshadeNightVisionEnabled;
     private final NamespacedKey keyJuggernautUnstoppableActiveUntil;
@@ -442,7 +471,7 @@ public final class SuperpowerManager implements Listener {
     private final Map<UUID, Integer> oracleXrayScanCursors = new ConcurrentHashMap<>();
     private final Map<UUID, Long> veilAssassinCrouchStartedAt = new ConcurrentHashMap<>();
     private final Map<UUID, Long> veilAssassinSmokeInvisibilityUntil = new ConcurrentHashMap<>();
-    private final Map<UUID, Long> veilAssassinArmorWarnCooldowns = new ConcurrentHashMap<>();
+    private final Map<UUID, DruidBlessing> pendingDruidBlessings = new ConcurrentHashMap<>();
     private final Map<UUID, Long> bedrockPowerItemActivationDebounces = new ConcurrentHashMap<>();
     private final Map<UUID, TimeStopState> activeTimeStops = new ConcurrentHashMap<>();
     private final Map<UUID, FrozenMobState> frozenMobs = new ConcurrentHashMap<>();
@@ -475,18 +504,21 @@ public final class SuperpowerManager implements Listener {
         this.keyMotherNatureStick = new NamespacedKey(plugin, MOTHER_NATURE_STICK_ITEM_ID);
         this.keyTheWorldClock = new NamespacedKey(plugin, THE_WORLD_CLOCK_ITEM_ID);
         this.keyDruidGrimoire = new NamespacedKey(plugin, DRUID_GRIMOIRE_ITEM_ID);
+        this.keyDruidGrimoireOwner = new NamespacedKey(plugin, "druid_grimoire_owner");
         this.keyEnchanterLapis = new NamespacedKey(plugin, "superpower_enchanter_lapis");
         this.keyTankImmovableModifier = new NamespacedKey(plugin, "superpower_tank_immovable");
         this.keyEnchanterLuckModifier = new NamespacedKey(plugin, "superpower_enchanter_luck");
         this.keyEnchanterMoveModifier = new NamespacedKey(plugin, "superpower_enchanter_move");
         this.keyEnchanterAttackModifier = new NamespacedKey(plugin, "superpower_enchanter_attack");
         this.keyMinerHealthModifier = new NamespacedKey(plugin, "superpower_miner_health");
+        this.keyPhysicallyGiftedHealthModifier = new NamespacedKey(plugin, "superpower_physically_gifted_health");
         this.keyGiantHealthModifier = new NamespacedKey(plugin, "superpower_giant_health");
         this.keyGiantScaleModifier = new NamespacedKey(plugin, "superpower_giant_scale");
         this.keyGiantKnockbackModifier = new NamespacedKey(plugin, "superpower_giant_knockback");
         this.keyGiantAttackDamageModifier = new NamespacedKey(plugin, "superpower_giant_attack_damage");
         this.keySupermanHealthModifier = new NamespacedKey(plugin, "superpower_superman_health");
         this.keySentinelHealthModifier = new NamespacedKey(plugin, "superpower_sentinel_health");
+        this.keySentinelBraceKnockbackModifier = new NamespacedKey(plugin, "superpower_sentinel_brace_knockback");
         this.keyVeilAssassinHealthModifier = new NamespacedKey(plugin, "superpower_veil_assassin_health");
         this.keyVeilAssassinSneakingSpeedModifier = new NamespacedKey(plugin, "superpower_veil_assassin_sneaking_speed");
         this.keyWatermanSubmergedMiningModifier = new NamespacedKey(plugin, "superpower_waterman_submerged_mining");
@@ -498,6 +530,10 @@ public final class SuperpowerManager implements Listener {
         this.keyPhoenixCooldownUntil = new NamespacedKey(plugin, "superpower_phoenix_cooldown_until");
         this.keyVoidstepCooldownUntil = new NamespacedKey(plugin, "superpower_voidstep_cooldown_until");
         this.keyVoidstepVeilUntil = new NamespacedKey(plugin, "superpower_voidstep_veil_until");
+        this.keySentinelBulwarkCooldownUntil = new NamespacedKey(plugin, "superpower_sentinel_bulwark_cooldown_until");
+        this.keySentinelBulwarkBuffUntil = new NamespacedKey(plugin, "superpower_sentinel_bulwark_buff_until");
+        this.keySentinelBulwarkBuffMask = new NamespacedKey(plugin, "superpower_sentinel_bulwark_buff_mask");
+        this.keySentinelHealthGrantRevision = new NamespacedKey(plugin, "superpower_sentinel_health_grant_revision");
         this.keyVoidwalkerNightVisionEnabled = new NamespacedKey(plugin, "superpower_voidwalker_night_vision_enabled");
         this.keyNightshadeNightVisionEnabled = new NamespacedKey(plugin, "superpower_nightshade_night_vision_enabled");
         this.keyJuggernautUnstoppableActiveUntil = new NamespacedKey(plugin, "superpower_juggernaut_unstoppable_until");
@@ -534,6 +570,7 @@ public final class SuperpowerManager implements Listener {
                 restoreShadowAppearance(player);
             }
             clearVeilAssassinState(player, true);
+            clearSentinelBulwarkEffects(player);
             syncTankImmovableState(player, false);
             clearPowerAttributeModifiers(player);
             syncSupermanFlightState(player, false);
@@ -576,7 +613,7 @@ public final class SuperpowerManager implements Listener {
         oracleXrayScanCursors.clear();
         veilAssassinCrouchStartedAt.clear();
         veilAssassinSmokeInvisibilityUntil.clear();
-        veilAssassinArmorWarnCooldowns.clear();
+        pendingDruidBlessings.clear();
         veilAssassinsInVeil.clear();
         bedrockPowerItemActivationDebounces.clear();
         enchanterLapisMutations.clear();
@@ -630,13 +667,16 @@ public final class SuperpowerManager implements Listener {
         return item;
     }
 
-    public ItemStack createDruidGrimoireItem() {
+    public ItemStack createDruidGrimoireItem(Player owner) {
+        if (owner == null) {
+            throw new IllegalArgumentException("Druid grimoire owner cannot be null.");
+        }
         ItemStack item = new ItemStack(Material.BOOK);
         ItemMeta meta = item.getItemMeta();
         if (meta == null) {
             return item;
         }
-        applyDruidGrimoireState(meta);
+        applyDruidGrimoireState(meta, owner.getUniqueId());
         applyDruidGrimoirePresentation(meta);
         item.setItemMeta(meta);
         return item;
@@ -668,6 +708,31 @@ public final class SuperpowerManager implements Listener {
 
     public boolean isDruidGrimoire(ItemStack item) {
         return hasTaggedItem(item, keyDruidGrimoire, DRUID_GRIMOIRE_ITEM_ID);
+    }
+
+    public UUID druidGrimoireOwner(ItemStack item) {
+        if (!isDruidGrimoire(item)) {
+            return null;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return null;
+        }
+        String rawOwner = meta.getPersistentDataContainer().get(keyDruidGrimoireOwner, PersistentDataType.STRING);
+        if (rawOwner == null || rawOwner.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(rawOwner);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    public boolean isOwnedDruidGrimoire(ItemStack item, Player player) {
+        return player != null
+            && isDruidGrimoire(item)
+            && player.getUniqueId().equals(druidGrimoireOwner(item));
     }
 
     public boolean refreshPowerItem(ItemStack item) {
@@ -722,13 +787,22 @@ public final class SuperpowerManager implements Listener {
 
     private boolean hasCommandPower(Player player, SuperpowerType type) {
         return player != null
+            && !isStaffVanished(player)
             && !isActiveBossFight(player)
             && (hasPower(player, type) || player.hasPermission(POWER_COMMAND_BYPASS_PERMISSION));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onClassAbilityCommandDuringBoss(PlayerCommandPreprocessEvent event) {
-        if (!isActiveBossFight(event.getPlayer()) || !isClassAbilityCommand(event.getMessage())) {
+        if (!isClassAbilityCommand(event.getMessage())) {
+            return;
+        }
+        if (isStaffVanished(event.getPlayer())) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage(MessageUtil.warn("Class abilities are disabled while vanished."));
+            return;
+        }
+        if (!isActiveBossFight(event.getPlayer())) {
             return;
         }
         event.setCancelled(true);
@@ -765,6 +839,19 @@ public final class SuperpowerManager implements Listener {
 
     static boolean classEffectsCanModifyTarget(boolean bossEncounterEntity) {
         return !bossEncounterEntity;
+    }
+
+    static double sentinelBraceDamage(double incomingDamage) {
+        return Math.max(0.0, incomingDamage) * (1.0 - SENTINEL_BRACE_DAMAGE_REDUCTION);
+    }
+
+    static double physicallyGiftedDamageMultiplier(boolean playerTarget, boolean bossTarget) {
+        if (bossTarget) {
+            return PHYSICALLY_GIFTED_BOSS_DAMAGE_MULTIPLIER;
+        }
+        return playerTarget
+            ? PHYSICALLY_GIFTED_PLAYER_DAMAGE_MULTIPLIER
+            : PHYSICALLY_GIFTED_MOB_DAMAGE_MULTIPLIER;
     }
 
     static boolean shouldIgnorePassiveMobTarget(boolean passiveMatches, boolean bossTargeter) {
@@ -992,6 +1079,84 @@ public final class SuperpowerManager implements Listener {
         player.sendMessage(MessageUtil.success("Unstoppable Force active for <white>20s</white>. Sprint into walls."));
         player.getWorld().playSound(player.getLocation(), Sound.ENTITY_RAVAGER_ROAR, 0.9f, 0.75f);
         player.getWorld().spawnParticle(Particle.CLOUD, player.getLocation().clone().add(0.0, 1.0, 0.0), 40, 0.7, 0.45, 0.7, 0.08);
+        return true;
+    }
+
+    public boolean handleSentinelBulwarkCommand(Player player) {
+        if (!hasCommandPower(player, SuperpowerType.SENTINEL)) {
+            player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return false;
+        }
+        if (player.isDead() || player.getGameMode() == GameMode.SPECTATOR) {
+            player.sendMessage(MessageUtil.warn("You cannot raise a bulwark right now."));
+            return false;
+        }
+
+        long now = System.currentTimeMillis();
+        long cooldownUntil = sentinelBulwarkCooldownUntil(player);
+        if (cooldownUntil > now) {
+            player.sendMessage(MessageUtil.warn(
+                "Bulwark cooldown: <white>" + formatShortDuration(cooldownUntil - now) + "</white>."
+            ));
+            return false;
+        }
+
+        long buffUntil = now + (SENTINEL_BULWARK_DURATION_SECONDS * 1000L);
+        List<Player> targets = nearbySentinelTargets(player, SENTINEL_BULWARK_RADIUS);
+        for (Player target : targets) {
+            boolean caster = target.getUniqueId().equals(player.getUniqueId());
+            int appliedMask = 0;
+            appliedMask |= applyTrackedBulwarkPotion(
+                target,
+                PotionEffectType.RESISTANCE,
+                caster ? 1 : 0,
+                caster ? SENTINEL_BULWARK_RESISTANCE_II : SENTINEL_BULWARK_RESISTANCE_I
+            );
+            appliedMask |= applyTrackedBulwarkPotion(
+                target,
+                PotionEffectType.ABSORPTION,
+                caster ? 3 : 1,
+                caster ? SENTINEL_BULWARK_ABSORPTION_IV : SENTINEL_BULWARK_ABSORPTION_II
+            );
+            appliedMask |= applyTrackedBulwarkPotion(
+                target,
+                PotionEffectType.REGENERATION,
+                0,
+                SENTINEL_BULWARK_REGENERATION_I
+            );
+            markSentinelBulwarkBuff(target, buffUntil, appliedMask);
+            target.sendActionBar(MM.deserialize(
+                caster
+                    ? "<gold><bold>BULWARK RAISED</bold></gold> <gray>Hold the line.</gray>"
+                    : "<gold><bold>SENTINEL BULWARK</bold></gold> <gray>You are protected.</gray>"
+            ));
+            target.playSound(target.getLocation(), Sound.ITEM_SHIELD_BLOCK, 0.8f, caster ? 0.72f : 1.05f);
+            target.getWorld().spawnParticle(
+                Particle.TOTEM_OF_UNDYING,
+                target.getLocation().clone().add(0.0, 1.0, 0.0),
+                caster ? 28 : 14,
+                0.55,
+                0.6,
+                0.55,
+                0.02
+            );
+        }
+
+        setSentinelBulwarkCooldownUntil(player, now + (SENTINEL_BULWARK_COOLDOWN_SECONDS * 1000L));
+        player.getWorld().playSound(player.getLocation(), Sound.BLOCK_BEACON_ACTIVATE, 1.0f, 0.7f);
+        player.getWorld().spawnParticle(
+            Particle.END_ROD,
+            player.getLocation().clone().add(0.0, 1.0, 0.0),
+            46,
+            1.1,
+            0.7,
+            1.1,
+            0.025
+        );
+        player.sendMessage(MessageUtil.success(
+            "Bulwark protects <white>" + targets.size() + "</white> ally(s) for <white>"
+                + SENTINEL_BULWARK_DURATION_SECONDS + "s</white>."
+        ));
         return true;
     }
 
@@ -1701,16 +1866,23 @@ public final class SuperpowerManager implements Listener {
                 drops.remove(i);
             }
         }
-        if (hasPower(player, SuperpowerType.DRUID)) {
-            List<ItemStack> drops = event.getDrops();
-            for (int i = drops.size() - 1; i >= 0; i--) {
-                ItemStack drop = drops.get(i);
-                if (!isDruidGrimoire(drop)) {
-                    continue;
-                }
-                event.getItemsToKeep().add(drop.clone());
-                drops.remove(i);
+        ItemStack keptGrimoire = null;
+        List<ItemStack> drops = event.getDrops();
+        for (int i = drops.size() - 1; i >= 0; i--) {
+            ItemStack drop = drops.get(i);
+            if (!isDruidGrimoire(drop)) {
+                continue;
             }
+            if (keptGrimoire == null
+                && hasPower(player, SuperpowerType.DRUID)
+                && canKeepDruidGrimoire(true, player.getUniqueId(), druidGrimoireOwner(drop))) {
+                keptGrimoire = drop.clone();
+                bindDruidGrimoire(keptGrimoire, player.getUniqueId());
+            }
+            drops.remove(i);
+        }
+        if (keptGrimoire != null) {
+            event.getItemsToKeep().add(keptGrimoire);
         }
         if (isShadowActive(player)) {
             deactivateShadow(player, false, false);
@@ -1736,6 +1908,7 @@ public final class SuperpowerManager implements Listener {
             if (pending > 0) {
                 giveMotherNatureStick(player, true);
             }
+            synchronizeDruidGrimoire(player, false);
         });
     }
 
@@ -1746,9 +1919,11 @@ public final class SuperpowerManager implements Listener {
         syncTankImmovableState(player, false);
         clearPowerAttributeModifiers(player);
         stopSupermanFlight(player, false);
+        clearSentinelBulwarkEffects(player);
         clearVirtualEnchanterLapis(player);
         closeTravelerPortal(playerId, false);
         clearTimeStopForOwner(playerId);
+        releaseHonoredFrozenProjectiles(playerId);
         handleHonoredDomainPlayerExit(playerId, true);
         timeStoppedPlayers.remove(playerId);
         honoredDomainParalyzedPlayers.remove(playerId);
@@ -1765,7 +1940,7 @@ public final class SuperpowerManager implements Listener {
         oracleXrayScanCursors.remove(playerId);
         veilAssassinCrouchStartedAt.remove(playerId);
         veilAssassinSmokeInvisibilityUntil.remove(playerId);
-        veilAssassinArmorWarnCooldowns.remove(playerId);
+        pendingDruidBlessings.remove(playerId);
         veilAssassinsInVeil.remove(playerId);
         bedrockPowerItemActivationDebounces.remove(playerId);
     }
@@ -1955,13 +2130,6 @@ public final class SuperpowerManager implements Listener {
         if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
-        if (hasPower(player, SuperpowerType.VEIL_ASSASSIN)) {
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                if (player.isOnline() && hasPower(player, SuperpowerType.VEIL_ASSASSIN)) {
-                    enforceVeilAssassinArmor(player);
-                }
-            });
-        }
         if (!(event.getView().getTopInventory() instanceof EnchantingInventory enchanting)) {
             return;
         }
@@ -1978,28 +2146,6 @@ public final class SuperpowerManager implements Listener {
         }
 
         Bukkit.getScheduler().runTask(plugin, () -> refreshEnchanterLapis(player, enchanting));
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onVeilAssassinEquipmentChanged(EntityEquipmentChangedEvent event) {
-        if (!(event.getEntity() instanceof Player player) || !hasPower(player, SuperpowerType.VEIL_ASSASSIN)) {
-            return;
-        }
-        boolean armorChanged = false;
-        for (EquipmentSlot slot : event.getEquipmentChanges().keySet()) {
-            if (slot == EquipmentSlot.HEAD || slot == EquipmentSlot.CHEST || slot == EquipmentSlot.LEGS || slot == EquipmentSlot.FEET) {
-                armorChanged = true;
-                break;
-            }
-        }
-        if (!armorChanged) {
-            return;
-        }
-        Bukkit.getScheduler().runTask(plugin, () -> {
-            if (player.isOnline() && hasPower(player, SuperpowerType.VEIL_ASSASSIN)) {
-                enforceVeilAssassinArmor(player);
-            }
-        });
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -2141,6 +2287,16 @@ public final class SuperpowerManager implements Listener {
             return;
         }
 
+        if (attacker != null
+            && event.getDamage() > 0.0
+            && !friendlyTarget
+            && hasPower(attacker, SuperpowerType.PHYSICALLY_GIFTED)) {
+            event.setDamage(event.getDamage() * physicallyGiftedDamageMultiplier(
+                victim instanceof Player,
+                bossEncounterVictim
+            ));
+        }
+
         if (attacker != null && event.getDamage() > 0.0 && !friendlyTarget && classEffectsAllowed) {
             if (hasPower(attacker, SuperpowerType.TIDEBORN) && isWatermanEmpowered(attacker)) {
                 event.setDamage(event.getDamage() * WATERMAN_DAMAGE_MULTIPLIER);
@@ -2242,7 +2398,7 @@ public final class SuperpowerManager implements Listener {
         }
 
         if (hasPower(defender, SuperpowerType.SENTINEL) && defender.isSneaking() && event.getDamage() > 0.0) {
-            event.setDamage(event.getDamage() * (1.0 - SENTINEL_BRACE_DAMAGE_REDUCTION));
+            event.setDamage(sentinelBraceDamage(event.getDamage()));
             if (!isBossEncounterEntity(source)) {
                 applyPotion(source, PotionEffectType.WEAKNESS, 80, 0);
             }
@@ -2636,7 +2792,7 @@ public final class SuperpowerManager implements Listener {
         Bukkit.getScheduler().runTask(plugin, () -> refundDeadeyeArrow(player, refund));
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onDeadeyeProjectileLaunch(ProjectileLaunchEvent event) {
         if (!(event.getEntity().getShooter() instanceof Player player)
             || !hasPower(player, SuperpowerType.DEADEYE)
@@ -2712,15 +2868,148 @@ public final class SuperpowerManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onDropDruidGrimoire(PlayerDropItemEvent event) {
-        if (!isDruidGrimoire(event.getItemDrop().getItemStack())) {
+        ItemStack dropped = event.getItemDrop().getItemStack();
+        if (purgeNestedDruidGrimoires(dropped, 0)) {
+            event.getItemDrop().setItemStack(dropped);
+            Bukkit.getScheduler().runTask(plugin, () -> synchronizeDruidGrimoire(event.getPlayer(), false));
+        }
+        if (!isDruidGrimoire(dropped)) {
             return;
         }
-        if (!hasPower(event.getPlayer(), SuperpowerType.DRUID)) {
+        event.setCancelled(true);
+        event.getPlayer().sendMessage(MessageUtil.warn("The Druid's Grimoire refuses to leave its keeper."));
+        Bukkit.getScheduler().runTask(plugin, () -> synchronizeDruidGrimoire(event.getPlayer(), false));
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onDruidGrimoirePickup(EntityPickupItemEvent event) {
+        ItemStack dropped = event.getItem().getItemStack();
+        if (purgeNestedDruidGrimoires(dropped, 0)) {
+            event.getItem().setItemStack(dropped);
+            if (event.getEntity() instanceof Player player) {
+                Bukkit.getScheduler().runTask(plugin, () -> synchronizeDruidGrimoire(player, false));
+            }
+        }
+        if (!isDruidGrimoire(dropped)) {
+            return;
+        }
+        event.setCancelled(true);
+        event.getItem().remove();
+        if (event.getEntity() instanceof Player player) {
+            Bukkit.getScheduler().runTask(plugin, () -> synchronizeDruidGrimoire(player, false));
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onDruidGrimoireHopperPickup(InventoryPickupItemEvent event) {
+        if (!isDruidGrimoire(event.getItem().getItemStack())) {
+            return;
+        }
+        event.setCancelled(true);
+        event.getItem().remove();
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onDruidGrimoireInventoryMove(InventoryMoveItemEvent event) {
+        if (isDruidGrimoire(event.getItem())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onDruidGrimoireDispense(BlockDispenseEvent event) {
+        if (isDruidGrimoire(event.getItem())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onDruidGrimoireEntityInteraction(PlayerInteractEntityEvent event) {
+        ItemStack held = event.getPlayer().getInventory().getItem(event.getHand());
+        if (!isDruidGrimoire(held)) {
+            return;
+        }
+        event.setCancelled(true);
+        synchronizeDruidGrimoire(event.getPlayer(), false);
+        event.getPlayer().sendMessage(MessageUtil.warn("The Druid's Grimoire cannot be displayed or transferred."));
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onDruidGrimoireInventoryOpen(InventoryOpenEvent event) {
+        Inventory opened = event.getInventory();
+        if (isPersonalInventoryType(opened.getType())) {
+            return;
+        }
+        int removed = purgeDruidGrimoires(opened);
+        if (removed > 0 && event.getPlayer() instanceof Player player) {
+            Bukkit.getScheduler().runTask(plugin, () -> synchronizeDruidGrimoire(player, false));
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onDruidGrimoireInventoryClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+        ItemStack current = event.getCurrentItem();
+        ItemStack cursor = event.getCursor();
+        ItemStack hotbar = event.getHotbarButton() >= 0
+            ? player.getInventory().getItem(event.getHotbarButton())
+            : null;
+        if (isBundle(current) || isBundle(cursor) || isBundle(hotbar)) {
+            Bukkit.getScheduler().runTask(plugin, () -> synchronizeDruidGrimoire(player, false));
+        }
+        boolean currentIsGrimoire = isDruidGrimoire(current);
+        boolean cursorIsGrimoire = isDruidGrimoire(cursor);
+        boolean hotbarIsGrimoire = isDruidGrimoire(hotbar);
+        if (!currentIsGrimoire && !cursorIsGrimoire && !hotbarIsGrimoire) {
             return;
         }
 
+        ItemStack involved = currentIsGrimoire ? current : cursorIsGrimoire ? cursor : hotbar;
+        boolean legitimateOwner = hasPower(player, SuperpowerType.DRUID)
+            && isOwnedDruidGrimoire(involved, player);
+        Inventory top = event.getView().getTopInventory();
+        boolean topSlot = event.getRawSlot() >= 0 && event.getRawSlot() < top.getSize();
+        boolean shiftsTowardTop = event.isShiftClick()
+            && event.getClickedInventory() == player.getInventory()
+            && currentIsGrimoire;
+        boolean unsafeStorageMove = !isPersonalInventoryType(top.getType())
+            && (topSlot || shiftsTowardTop || event.getRawSlot() < 0 && cursorIsGrimoire);
+        boolean insertsIntoAnotherItem = cursorIsGrimoire && isNonAirItem(current)
+            || currentIsGrimoire && isNonAirItem(cursor);
+
+        if (legitimateOwner && !unsafeStorageMove && !insertsIntoAnotherItem) {
+            return;
+        }
         event.setCancelled(true);
-        event.getPlayer().sendMessage(MessageUtil.warn("The Druid's Grimoire refuses to leave its keeper."));
+        Bukkit.getScheduler().runTask(plugin, () -> synchronizeDruidGrimoire(player, false));
+        player.sendMessage(MessageUtil.warn(
+            legitimateOwner
+                ? "The Druid's Grimoire cannot be stored outside your inventory."
+                : "The Druid's Grimoire rejects anyone but its Druid."
+        ));
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onDruidGrimoireInventoryDrag(InventoryDragEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player) || !isDruidGrimoire(event.getOldCursor())) {
+            return;
+        }
+        Inventory top = event.getView().getTopInventory();
+        boolean dragsIntoTop = event.getRawSlots().stream().anyMatch(slot -> slot < top.getSize());
+        boolean legitimateOwner = hasPower(player, SuperpowerType.DRUID)
+            && isOwnedDruidGrimoire(event.getOldCursor(), player);
+        if (legitimateOwner && (isPersonalInventoryType(top.getType()) || !dragsIntoTop)) {
+            return;
+        }
+        event.setCancelled(true);
+        Bukkit.getScheduler().runTask(plugin, () -> synchronizeDruidGrimoire(player, false));
+        player.sendMessage(MessageUtil.warn(
+            legitimateOwner
+                ? "The Druid's Grimoire cannot be stored outside your inventory."
+                : "The Druid's Grimoire rejects anyone but its Druid."
+        ));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -2826,6 +3115,14 @@ public final class SuperpowerManager implements Listener {
             return;
         }
         if (isDruidGrimoire(item) && isPowerItemActivationClick(player, action)) {
+            if (!canActivateDruidGrimoire(player, item)) {
+                event.setCancelled(true);
+                event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
+                event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
+                synchronizeDruidGrimoire(player, false);
+                player.sendMessage(MessageUtil.warn("The Druid's Grimoire rejects anyone but its Druid."));
+                return;
+            }
             if (!markPowerItemActivation(player)) {
                 return;
             }
@@ -2868,6 +3165,11 @@ public final class SuperpowerManager implements Listener {
             return true;
         }
         if (isDruidGrimoire(item)) {
+            if (!canActivateDruidGrimoire(player, item)) {
+                synchronizeDruidGrimoire(player, false);
+                player.sendMessage(MessageUtil.warn("The Druid's Grimoire rejects anyone but its Druid."));
+                return true;
+            }
             if (markPowerItemActivation(player)) {
                 openDruidGrimoire(player);
             }
@@ -2914,8 +3216,13 @@ public final class SuperpowerManager implements Listener {
             }
             return;
         }
-        if (isDruidGrimoire(item) && markPowerItemActivation(player)) {
-            openDruidGrimoire(player);
+        if (isDruidGrimoire(item)) {
+            if (!canActivateDruidGrimoire(player, item)) {
+                synchronizeDruidGrimoire(player, false);
+                player.sendMessage(MessageUtil.warn("The Druid's Grimoire rejects anyone but its Druid."));
+            } else if (markPowerItemActivation(player)) {
+                openDruidGrimoire(player);
+            }
         }
     }
 
@@ -3169,7 +3476,7 @@ public final class SuperpowerManager implements Listener {
             }
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (player.isOnline()) {
-                    useDruidBlessing(player, blessing);
+                    selectDruidBlessing(player, blessing);
                 }
             });
         }
@@ -3192,6 +3499,9 @@ public final class SuperpowerManager implements Listener {
     @EventHandler
     public void onPowerMenuClose(InventoryCloseEvent event) {
         InventoryHolder holder = event.getView().getTopInventory().getHolder(false);
+        if (holder instanceof DruidGrimoireHolder druidHolder) {
+            pendingDruidBlessings.remove(druidHolder.ownerId());
+        }
         if (holder instanceof PowerInfoHolder
             || holder instanceof PowerChoiceHolder
             || holder instanceof DruidGrimoireHolder) {
@@ -3211,9 +3521,7 @@ public final class SuperpowerManager implements Listener {
         if (power == SuperpowerType.THE_WORLD && !hasTheWorldClock(player)) {
             giveTheWorldClock(player, false);
         }
-        if (power == SuperpowerType.DRUID && !hasDruidGrimoire(player)) {
-            giveDruidGrimoire(player, false);
-        }
+        synchronizeDruidGrimoire(player, false);
         if (power == SuperpowerType.NIGHTSHADE && isShadowActive(player)) {
             applyShadowEffects(player);
         }
@@ -3238,12 +3546,20 @@ public final class SuperpowerManager implements Listener {
             if (juggernautUnstoppableActiveUntil(player) <= now) {
                 setJuggernautUnstoppableActiveUntil(player, 0L);
             }
+            if (sentinelBulwarkBuffUntil(player) > 0L && sentinelBulwarkBuffUntil(player) <= now) {
+                clearSentinelBulwarkEffects(player);
+            }
             if (supermanFlightActiveUntil(player) > 0L && supermanFlightActiveUntil(player) <= now) {
                 stopSupermanFlight(player, true);
+            }
+            if (isStaffVanished(player)) {
+                plugin.getPlayerManager().reconcileFlightAccess(player);
+                continue;
             }
             suppressActiveCommandEffectsForBoss(player, now);
             applyPassiveEffects(player);
             applyBypassedCommandEffects(player, now);
+            plugin.getPlayerManager().reconcileFlightAccess(player);
         }
         cleanupRecentPortalTravel(now);
         tickMonarchSummons();
@@ -3287,6 +3603,10 @@ public final class SuperpowerManager implements Listener {
                 refreshVeilAssassinConcealment(player);
                 restoreShadowAppearance(player);
             }
+            sealed = true;
+        }
+        if (sentinelBulwarkBuffUntil(player) > now) {
+            clearSentinelBulwarkEffects(player);
             sealed = true;
         }
         if (activeTravelerPortals.containsKey(player.getUniqueId())) {
@@ -3383,11 +3703,7 @@ public final class SuperpowerManager implements Listener {
                     giveTheWorldClock(player, false);
                 }
             }
-            case DRUID -> {
-                if (!hasDruidGrimoire(player)) {
-                    giveDruidGrimoire(player, false);
-                }
-            }
+            case DRUID -> synchronizeDruidGrimoire(player, false);
             case ORACLE_EYE -> {
                 if (xrayActiveUntil(player) > System.currentTimeMillis()) {
                     renderXrayHighlights(player);
@@ -3401,6 +3717,17 @@ public final class SuperpowerManager implements Listener {
                     removePassiveNightVision(player);
                 }
                 syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyMinerHealthModifier, MINER_HEALTH_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
+            }
+            case PHYSICALLY_GIFTED -> {
+                applyPotion(player, PotionEffectType.SPEED, 80, 1);
+                syncPlayerAttributeModifier(
+                    player,
+                    Attribute.MAX_HEALTH,
+                    keyPhysicallyGiftedHealthModifier,
+                    PHYSICALLY_GIFTED_HEALTH_BONUS,
+                    AttributeModifier.Operation.ADD_NUMBER,
+                    true
+                );
             }
             case TITAN -> {
                 syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyGiantHealthModifier, GIANT_HEALTH_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
@@ -3457,7 +3784,15 @@ public final class SuperpowerManager implements Listener {
                 }
             }
             case SENTINEL -> {
-                syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySentinelHealthModifier, SENTINEL_HEALTH_BONUS, AttributeModifier.Operation.ADD_NUMBER, true);
+                syncSentinelHealthBonus(player);
+                syncPlayerAttributeModifier(
+                    player,
+                    Attribute.KNOCKBACK_RESISTANCE,
+                    keySentinelBraceKnockbackModifier,
+                    SENTINEL_BRACE_KNOCKBACK_RESISTANCE,
+                    AttributeModifier.Operation.ADD_NUMBER,
+                    player.isSneaking()
+                );
                 applySentinelAura(player);
             }
             case FROSTBORN -> {
@@ -3532,6 +3867,33 @@ public final class SuperpowerManager implements Listener {
         player.addPotionEffect(new PotionEffect(type, durationTicks, amplifier, true, false, false));
     }
 
+    private void applyVisiblePotion(Player player, PotionEffectType type, int durationTicks, int amplifier) {
+        PotionEffect current = player.getPotionEffect(type);
+        if (current != null && current.getAmplifier() > amplifier && current.getDuration() > 20) {
+            return;
+        }
+        if (current != null && current.getAmplifier() == amplifier && current.getDuration() > (durationTicks / 2)) {
+            return;
+        }
+        player.addPotionEffect(new PotionEffect(type, durationTicks, amplifier, true, false, true));
+    }
+
+    private int applyTrackedBulwarkPotion(
+        Player player,
+        PotionEffectType type,
+        int amplifier,
+        int trackingFlag
+    ) {
+        PotionEffect current = player.getPotionEffect(type);
+        int durationTicks = SENTINEL_BULWARK_DURATION_SECONDS * 20;
+        if (current != null && (current.getAmplifier() > amplifier
+            || (current.getAmplifier() == amplifier && current.getDuration() >= durationTicks))) {
+            return 0;
+        }
+        boolean applied = player.addPotionEffect(new PotionEffect(type, durationTicks, amplifier, true, false, true));
+        return applied ? trackingFlag : 0;
+    }
+
     private void applyPotion(LivingEntity entity, PotionEffectType type, int durationTicks, int amplifier) {
         PotionEffect current = entity.getPotionEffect(type);
         if (current != null && current.getAmplifier() > amplifier && current.getDuration() > 20) {
@@ -3584,7 +3946,6 @@ public final class SuperpowerManager implements Listener {
 
     private void applyVeilAssassinPassives(Player player) {
         syncVeilAssassinHealthCap(player);
-        enforceVeilAssassinArmor(player);
         tickVeilAssassinSmokeInvisibility(player);
         tickVeilAssassinCrouch(player);
     }
@@ -3672,7 +4033,6 @@ public final class SuperpowerManager implements Listener {
         boolean hadCrouch = veilAssassinCrouchStartedAt.containsKey(playerId);
         boolean hadSmoke = veilAssassinSmokeInvisibilityUntil.remove(playerId) != null;
         boolean hadVeil = veilAssassinsInVeil.contains(playerId);
-        veilAssassinArmorWarnCooldowns.remove(playerId);
         if (!hadCrouch && !hadSmoke && !hadVeil) {
             return;
         }
@@ -3761,62 +4121,6 @@ public final class SuperpowerManager implements Listener {
         plugin.getPlayerVisualListener().refreshPlayerConcealment(player);
     }
 
-    private void enforceVeilAssassinArmor(Player player) {
-        PlayerInventory inventory = player.getInventory();
-        boolean removed = false;
-        removed |= removeForbiddenVeilAssassinArmor(player, EquipmentSlot.HEAD, inventory.getHelmet());
-        removed |= removeForbiddenVeilAssassinArmor(player, EquipmentSlot.CHEST, inventory.getChestplate());
-        removed |= removeForbiddenVeilAssassinArmor(player, EquipmentSlot.LEGS, inventory.getLeggings());
-        removed |= removeForbiddenVeilAssassinArmor(player, EquipmentSlot.FEET, inventory.getBoots());
-        if (!removed) {
-            return;
-        }
-
-        long now = System.currentTimeMillis();
-        long nextWarnAt = veilAssassinArmorWarnCooldowns.getOrDefault(player.getUniqueId(), 0L);
-        if (nextWarnAt <= now) {
-            veilAssassinArmorWarnCooldowns.put(player.getUniqueId(), now + 3000L);
-            player.sendMessage(MessageUtil.warn("Veil Assassins cannot wear netherite armor."));
-        }
-        player.getWorld().playSound(player.getLocation(), Sound.ITEM_ARMOR_EQUIP_LEATHER, 0.65f, 0.7f);
-        player.updateInventory();
-    }
-
-    private boolean removeForbiddenVeilAssassinArmor(Player player, EquipmentSlot slot, ItemStack item) {
-        if (!isNetheriteArmor(item)) {
-            return false;
-        }
-        ItemStack removed = item.clone();
-        switch (slot) {
-            case HEAD -> player.getInventory().setHelmet(null);
-            case CHEST -> player.getInventory().setChestplate(null);
-            case LEGS -> player.getInventory().setLeggings(null);
-            case FEET -> player.getInventory().setBoots(null);
-            default -> {
-                return false;
-            }
-        }
-        giveOrDrop(player, removed);
-        return true;
-    }
-
-    private boolean isNetheriteArmor(ItemStack item) {
-        if (item == null || item.getType().isAir()) {
-            return false;
-        }
-        return switch (item.getType()) {
-            case NETHERITE_HELMET, NETHERITE_CHESTPLATE, NETHERITE_LEGGINGS, NETHERITE_BOOTS -> true;
-            default -> false;
-        };
-    }
-
-    private void giveOrDrop(Player player, ItemStack item) {
-        if (item == null || item.getType().isAir() || item.getAmount() <= 0) {
-            return;
-        }
-        player.getInventory().addItem(item).values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
-    }
-
     private void applyVeilAssassinBackstab(EntityDamageByEntityEvent event, Player attacker, LivingEntity victim) {
         double targetFinalDamage = veilAssassinBackstabDamage(victim.getHealth());
         setFinalDamageAtLeast(event, targetFinalDamage);
@@ -3887,6 +4191,7 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void assignPower(Player player, SuperpowerType power, boolean rerolled, boolean notifyScrollResult) {
+        SuperpowerType previousPower = powerOf(player);
         prepareForPowerAssignment(player, power);
 
         PersistentDataContainer pdc = player.getPersistentDataContainer();
@@ -3904,10 +4209,14 @@ public final class SuperpowerManager implements Listener {
         if (power == SuperpowerType.THE_WORLD && !hasTheWorldClock(player)) {
             giveTheWorldClock(player, false);
         }
-        if (power == SuperpowerType.DRUID && !hasDruidGrimoire(player)) {
-            giveDruidGrimoire(player, false);
-        }
+        synchronizeDruidGrimoire(player, false);
         applyPassiveEffects(player);
+        if (power == SuperpowerType.PHYSICALLY_GIFTED && previousPower != power) {
+            var maxHealth = player.getAttribute(Attribute.MAX_HEALTH);
+            if (maxHealth != null) {
+                player.setHealth(Math.min(maxHealth.getValue(), player.getHealth() + PHYSICALLY_GIFTED_HEALTH_BONUS));
+            }
+        }
         player.updateInventory();
         refreshPowerCommandVisibility();
         if (notifyScrollResult || power.hasCommandHint()) {
@@ -3930,6 +4239,8 @@ public final class SuperpowerManager implements Listener {
         handleHonoredDomainPlayerExit(playerId, false);
         honoredDomainSwingCooldowns.remove(playerId);
         clearVeilAssassinState(player, true);
+        clearSentinelBulwarkEffects(player);
+        player.getPersistentDataContainer().remove(keySentinelHealthGrantRevision);
         stopSupermanFlight(player, false);
 
         if (isShadowActive(player)) {
@@ -3964,6 +4275,9 @@ public final class SuperpowerManager implements Listener {
         pdc.remove(keyPhoenixCooldownUntil);
         pdc.remove(keyVoidstepCooldownUntil);
         pdc.remove(keyVoidstepVeilUntil);
+        pdc.remove(keySentinelBulwarkCooldownUntil);
+        pdc.remove(keySentinelBulwarkBuffUntil);
+        pdc.remove(keySentinelBulwarkBuffMask);
         pdc.remove(keyNightshadeNightVisionEnabled);
         pdc.remove(keyJuggernautUnstoppableActiveUntil);
         pdc.remove(keyJuggernautUnstoppableCooldownUntil);
@@ -4115,7 +4429,7 @@ public final class SuperpowerManager implements Listener {
         if (environment != World.Environment.NETHER && environment != World.Environment.THE_END) {
             return true;
         }
-        if (player.hasPermission("smpcore.startsmp.bypass-dimension-lock")) {
+        if (OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.startsmp.bypass-dimension-lock")) {
             return true;
         }
         return plugin.getSmpStartManager() == null || plugin.getSmpStartManager().isDimensionUnlocked(environment);
@@ -4271,6 +4585,14 @@ public final class SuperpowerManager implements Listener {
         return player.getPersistentDataContainer().getOrDefault(keyVoidstepVeilUntil, PersistentDataType.LONG, 0L);
     }
 
+    private long sentinelBulwarkCooldownUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keySentinelBulwarkCooldownUntil, PersistentDataType.LONG, 0L);
+    }
+
+    private long sentinelBulwarkBuffUntil(Player player) {
+        return player.getPersistentDataContainer().getOrDefault(keySentinelBulwarkBuffUntil, PersistentDataType.LONG, 0L);
+    }
+
     private boolean isVoidwalkerNightVisionEnabled(Player player) {
         Byte raw = player.getPersistentDataContainer().get(keyVoidwalkerNightVisionEnabled, PersistentDataType.BYTE);
         return raw == null ? hasPower(player, SuperpowerType.VOIDWALKER) : raw != 0;
@@ -4355,6 +4677,51 @@ public final class SuperpowerManager implements Listener {
             return;
         }
         pdc.set(keyVoidstepVeilUntil, PersistentDataType.LONG, value);
+    }
+
+    private void setSentinelBulwarkCooldownUntil(Player player, long value) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        if (value <= 0L) {
+            pdc.remove(keySentinelBulwarkCooldownUntil);
+            return;
+        }
+        pdc.set(keySentinelBulwarkCooldownUntil, PersistentDataType.LONG, value);
+    }
+
+    private void markSentinelBulwarkBuff(Player player, long buffUntil, int appliedMask) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        long existingUntil = pdc.getOrDefault(keySentinelBulwarkBuffUntil, PersistentDataType.LONG, 0L);
+        int existingMask = pdc.getOrDefault(keySentinelBulwarkBuffMask, PersistentDataType.INTEGER, 0);
+        pdc.set(keySentinelBulwarkBuffUntil, PersistentDataType.LONG, Math.max(existingUntil, buffUntil));
+        pdc.set(keySentinelBulwarkBuffMask, PersistentDataType.INTEGER, existingMask | appliedMask);
+    }
+
+    private void clearSentinelBulwarkMarker(Player player) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        pdc.remove(keySentinelBulwarkBuffUntil);
+        pdc.remove(keySentinelBulwarkBuffMask);
+    }
+
+    private void clearSentinelBulwarkEffects(Player player) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        int mask = pdc.getOrDefault(keySentinelBulwarkBuffMask, PersistentDataType.INTEGER, 0);
+        int maxDurationTicks = SENTINEL_BULWARK_DURATION_SECONDS * 20 + 20;
+        if ((mask & SENTINEL_BULWARK_RESISTANCE_I) != 0) {
+            removeLikelyPowerPotion(player, PotionEffectType.RESISTANCE, 0, maxDurationTicks);
+        }
+        if ((mask & SENTINEL_BULWARK_RESISTANCE_II) != 0) {
+            removeLikelyPowerPotion(player, PotionEffectType.RESISTANCE, 1, maxDurationTicks);
+        }
+        if ((mask & SENTINEL_BULWARK_ABSORPTION_II) != 0) {
+            removeLikelyPowerPotion(player, PotionEffectType.ABSORPTION, 1, maxDurationTicks);
+        }
+        if ((mask & SENTINEL_BULWARK_ABSORPTION_IV) != 0) {
+            removeLikelyPowerPotion(player, PotionEffectType.ABSORPTION, 3, maxDurationTicks);
+        }
+        if ((mask & SENTINEL_BULWARK_REGENERATION_I) != 0) {
+            removeLikelyPowerPotion(player, PotionEffectType.REGENERATION, 0, maxDurationTicks);
+        }
+        clearSentinelBulwarkMarker(player);
     }
 
     private void setVoidwalkerNightVisionEnabled(Player player, boolean enabled) {
@@ -4476,6 +4843,15 @@ public final class SuperpowerManager implements Listener {
     private void refreshVisibleShadowsFor(Player viewer) {
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (player.equals(viewer)) {
+                continue;
+            }
+            if (plugin.getPlayerManager() != null
+                && plugin.getPlayerManager().isVanished(player.getUniqueId())
+                && !OperatorGameplayMode.allowsPassiveBypass(viewer, "smpcore.vanish.see")) {
+                viewer.hidePlayer(plugin, player);
+                if (viewer.isListed(player)) {
+                    viewer.unlistPlayer(player);
+                }
                 continue;
             }
             if (isVeilAssassinFullyConcealed(player)) {
@@ -4678,46 +5054,50 @@ public final class SuperpowerManager implements Listener {
             return;
         }
 
+        pendingDruidBlessings.remove(player.getUniqueId());
         Inventory inventory = Bukkit.createInventory(
             new DruidGrimoireHolder(player.getUniqueId()),
             DRUID_MENU_SIZE,
             BedrockCompat.menuTitle(player, DRUID_MENU_TITLE, "Druid's Grimoire")
         );
-        fillDruidMenu(inventory);
+        fillDruidMenu(inventory, null);
         player.openInventory(inventory);
     }
 
-    private void fillDruidMenu(Inventory inventory) {
+    private void fillDruidMenu(Inventory inventory, DruidBlessing selected) {
+        inventory.clear();
         for (int slot = 0; slot < inventory.getSize(); slot++) {
             if (isFrameSlot(slot, inventory.getSize())) {
                 inventory.setItem(slot, fillerPane());
             }
         }
-        inventory.setItem(4, createDruidHeaderIcon());
+        inventory.setItem(4, createDruidHeaderIcon(selected));
         for (DruidBlessing blessing : DruidBlessing.values()) {
-            inventory.setItem(blessing.slot(), createDruidBlessingIcon(blessing));
+            inventory.setItem(blessing.slot(), createDruidBlessingIcon(blessing, blessing == selected));
         }
     }
 
-    private ItemStack createDruidHeaderIcon() {
+    private ItemStack createDruidHeaderIcon(DruidBlessing selected) {
         ItemStack item = new ItemStack(Material.WRITABLE_BOOK);
         ItemMeta meta = item.getItemMeta();
         if (meta == null) {
             return item;
         }
         meta.displayName(MM.deserialize("<gradient:#63c74d:#c6ff6b><bold>Druid's Grimoire</bold></gradient>"));
-        meta.lore(CustomLoreUtil.wrapLoreLines(List.of(
-            MM.deserialize("<gray>Choose one positive blessing for yourself and nearby teammates.</gray>"),
-            MM.deserialize("<gray>Only one blessing is cast per use.</gray>"),
-            Component.empty(),
-            MM.deserialize("<gray>Radius: <white>" + DRUID_BUFF_RADIUS + " blocks</white></gray>"),
-            MM.deserialize("<gray>Duration: <white>" + DRUID_BUFF_DURATION_SECONDS + "s</white></gray>")
-        )));
+        List<Component> lore = new ArrayList<>();
+        lore.add(MM.deserialize("<gray>Choose <white>two different blessings</white> for yourself and nearby teammates.</gray>"));
+        lore.add(selected == null
+            ? MM.deserialize("<yellow>Select your first blessing.</yellow>")
+            : MM.deserialize("<green>First: <white>" + selected.plainName() + "</white></green>"));
+        lore.add(Component.empty());
+        lore.add(MM.deserialize("<gray>Radius: <white>" + DRUID_BUFF_RADIUS + " blocks</white></gray>"));
+        lore.add(MM.deserialize("<gray>Duration: <white>" + DRUID_BUFF_DURATION_SECONDS + "s</white></gray>"));
+        meta.lore(CustomLoreUtil.wrapLoreLines(lore));
         item.setItemMeta(meta);
         return item;
     }
 
-    private ItemStack createDruidBlessingIcon(DruidBlessing blessing) {
+    private ItemStack createDruidBlessingIcon(DruidBlessing blessing, boolean selected) {
         ItemStack item = new ItemStack(blessing.icon());
         ItemMeta meta = item.getItemMeta();
         if (meta == null) {
@@ -4728,6 +5108,7 @@ public final class SuperpowerManager implements Listener {
         lore.add(MM.deserialize("<gray>Bless yourself and nearby teammates within <white>" + DRUID_BUFF_RADIUS + " blocks</white>.</gray>"));
         lore.add(MM.deserialize(blessing.lore()));
         lore.add(Component.empty());
+        lore.add(MM.deserialize(selected ? "<green><bold>SELECTED FIRST</bold></green>" : "<yellow>Click to select</yellow>"));
         lore.add(MM.deserialize("<gray>Duration: <white>" + blessing.durationText() + "</white></gray>"));
         lore.add(MM.deserialize("<gray>Cooldown: <white>" + DRUID_BUFF_COOLDOWN_SECONDS + "s</white></gray>"));
         meta.lore(CustomLoreUtil.wrapLoreLines(lore));
@@ -4735,10 +5116,16 @@ public final class SuperpowerManager implements Listener {
         return item;
     }
 
-    private void useDruidBlessing(Player player, DruidBlessing blessing) {
+    private void selectDruidBlessing(Player player, DruidBlessing blessing) {
         if (!hasPower(player, SuperpowerType.DRUID)) {
             player.closeInventory();
             player.sendMessage(MessageUtil.warn("Nothing happens."));
+            return;
+        }
+        Inventory openMenu = player.getOpenInventory().getTopInventory();
+        if (!(openMenu.getHolder(false) instanceof DruidGrimoireHolder holder)
+            || !player.getUniqueId().equals(holder.ownerId())) {
+            pendingDruidBlessings.remove(player.getUniqueId());
             return;
         }
 
@@ -4752,6 +5139,22 @@ public final class SuperpowerManager implements Listener {
             return;
         }
 
+        DruidBlessing first = pendingDruidBlessings.get(player.getUniqueId());
+        if (first == null) {
+            pendingDruidBlessings.put(player.getUniqueId(), blessing);
+            fillDruidMenu(openMenu, blessing);
+            player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 0.65f, 1.25f);
+            player.sendActionBar(MM.deserialize(
+                "<green>First blessing: <white>" + blessing.plainName() + "</white></green> <gray>Choose one more.</gray>"
+            ));
+            return;
+        }
+        if (first == blessing) {
+            player.sendMessage(MessageUtil.warn("Choose a different second blessing."));
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_BASS, 0.65f, 0.75f);
+            return;
+        }
+
         List<Player> targets = nearbyDruidTargets(player);
         if (targets.isEmpty()) {
             player.sendMessage(MessageUtil.warn("No one is close enough to receive that blessing."));
@@ -4759,22 +5162,29 @@ public final class SuperpowerManager implements Listener {
             return;
         }
 
+        List<DruidBlessing> blessings = List.of(first, blessing);
         for (Player target : targets) {
-            blessing.apply(this, target);
+            for (DruidBlessing selected : blessings) {
+                selected.apply(this, target);
+                target.getWorld().spawnParticle(selected.particle(), target.getLocation().clone().add(0.0, 1.0, 0.0), 12, 0.25, 0.35, 0.25, 0.01);
+                target.playSound(target.getLocation(), selected.sound(), 0.65f, 1.1f);
+            }
             Location effectCenter = target.getLocation().clone().add(0.0, 1.0, 0.0);
             target.getWorld().strikeLightningEffect(target.getLocation());
             target.getWorld().spawnParticle(Particle.HAPPY_VILLAGER, effectCenter, 10, 0.3, 0.4, 0.3, 0.02);
-            target.getWorld().spawnParticle(blessing.particle(), effectCenter, 12, 0.25, 0.35, 0.25, 0.01);
-            target.playSound(target.getLocation(), blessing.sound(), 0.8f, 1.1f);
             if (!target.equals(player)) {
-                target.sendMessage(MessageUtil.success("The druid blessed you with <white>" + blessing.plainName() + "</white>."));
+                target.sendMessage(MessageUtil.success(
+                    "The druid blessed you with <white>" + first.plainName() + "</white> and <white>" + blessing.plainName() + "</white>."
+                ));
             }
         }
 
         setDruidBuffCooldownUntil(player, now + (DRUID_BUFF_COOLDOWN_SECONDS * 1000L));
+        pendingDruidBlessings.remove(player.getUniqueId());
         player.closeInventory();
         player.sendMessage(MessageUtil.success(
-            "You channeled <white>" + blessing.plainName() + "</white> into <white>" + targets.size() + "</white> ally(s), including yourself."
+            "You channeled <white>" + first.plainName() + "</white> and <white>" + blessing.plainName()
+                + "</white> into <white>" + targets.size() + "</white> ally(s), including yourself."
         ));
         player.getWorld().playSound(player.getLocation(), Sound.BLOCK_ENCHANTMENT_TABLE_USE, 0.95f, 0.85f);
         player.getWorld().spawnParticle(Particle.ENCHANT, player.getLocation().add(0.0, 1.2, 0.0), 32, 0.6, 0.8, 0.6, 0.02);
@@ -4802,25 +5212,47 @@ public final class SuperpowerManager implements Listener {
         return targets;
     }
 
-    private void applySentinelAura(Player player) {
-        if (!player.isSneaking()) {
-            return;
-        }
-
-        double radiusSquared = SENTINEL_AURA_RADIUS * SENTINEL_AURA_RADIUS;
-        applyPotion(player, PotionEffectType.SLOWNESS, 45, 0);
+    private List<Player> nearbySentinelTargets(Player player, double radius) {
+        double radiusSquared = radius * radius;
+        List<Player> targets = new ArrayList<>();
+        targets.add(player);
         for (Player nearby : player.getWorld().getPlayers()) {
-            if (nearby.isDead() || nearby.getGameMode() == GameMode.SPECTATOR) {
+            if (nearby.equals(player) || nearby.isDead() || nearby.getGameMode() == GameMode.SPECTATOR) {
                 continue;
             }
             if (nearby.getLocation().distanceSquared(player.getLocation()) > radiusSquared) {
                 continue;
             }
-            if (!sameTeamOrSelf(player.getUniqueId(), nearby.getUniqueId())) {
+            if (sameTeamOrSelf(player.getUniqueId(), nearby.getUniqueId())) {
+                targets.add(nearby);
+            }
+        }
+        return targets;
+    }
+
+    private void applySentinelAura(Player player) {
+        boolean bracing = player.isSneaking();
+        boolean bossGuard = isActiveBossFight(player);
+        if (!bracing && !bossGuard) {
+            return;
+        }
+
+        if (bracing) {
+            applyPotion(player, PotionEffectType.SLOWNESS, 45, 0);
+        }
+        for (Player target : nearbySentinelTargets(player, SENTINEL_AURA_RADIUS)) {
+            if (bossGuard && !isActiveBossFight(target)) {
                 continue;
             }
-            applyPotion(nearby, PotionEffectType.RESISTANCE, 60, 0);
-            applyPotion(nearby, PotionEffectType.ABSORPTION, 60, 0);
+            applyVisiblePotion(target, PotionEffectType.RESISTANCE, 60, 0);
+            applyVisiblePotion(target, PotionEffectType.ABSORPTION, 60, 0);
+            target.sendActionBar(MM.deserialize(
+                target.equals(player)
+                    ? (bracing
+                        ? "<gold><bold>GUARDING</bold></gold> <gray>40% brace reduction</gray>"
+                        : "<gold><bold>BOSS GUARD</bold></gold> <gray>Protecting nearby allies</gray>")
+                    : "<gold><bold>SENTINEL GUARD</bold></gold> <gray>Resistance and Absorption</gray>"
+            ));
         }
         player.getWorld().spawnParticle(Particle.TOTEM_OF_UNDYING, player.getLocation().clone().add(0.0, 1.0, 0.0), 8, 0.8, 0.35, 0.8, 0.01);
     }
@@ -5538,6 +5970,10 @@ public final class SuperpowerManager implements Listener {
     private void tickPortals() {
         long now = System.currentTimeMillis();
         for (Map.Entry<UUID, PortalPair> entry : new ArrayList<>(activeTravelerPortals.entrySet())) {
+            if (plugin.getPlayerManager().isVanished(entry.getKey())) {
+                closeTravelerPortal(entry.getKey(), false);
+                continue;
+            }
             PortalPair pair = entry.getValue();
             if (pair.expiresAt() <= now) {
                 closeTravelerPortal(entry.getKey(), true);
@@ -6080,6 +6516,8 @@ public final class SuperpowerManager implements Listener {
                 continue;
             }
 
+            boolean ownerVanished = plugin.getPlayerManager().isVanished(ownerId);
+
             for (UUID mobId : new HashSet<>(summons)) {
                 Entity entity = Bukkit.getEntity(mobId);
                 if (entity == null) {
@@ -6088,6 +6526,11 @@ public final class SuperpowerManager implements Listener {
                 if (!(entity instanceof Mob mob) || !mob.isValid() || mob.isDead()) {
                     summons.remove(mobId);
                     monarchOwnerByMob.remove(mobId);
+                    continue;
+                }
+
+                if (ownerVanished) {
+                    mob.setTarget(null);
                     continue;
                 }
 
@@ -6310,6 +6753,28 @@ public final class SuperpowerManager implements Listener {
         instance.addTransientModifier(new AttributeModifier(key, amount, operation));
     }
 
+    private void syncSentinelHealthBonus(Player player) {
+        PersistentDataContainer pdc = player.getPersistentDataContainer();
+        int appliedRevision = pdc.getOrDefault(keySentinelHealthGrantRevision, PersistentDataType.INTEGER, 0);
+        syncPlayerAttributeModifier(
+            player,
+            Attribute.MAX_HEALTH,
+            keySentinelHealthModifier,
+            SENTINEL_HEALTH_BONUS,
+            AttributeModifier.Operation.ADD_NUMBER,
+            true
+        );
+        if (appliedRevision >= SENTINEL_HEALTH_GRANT_REVISION) {
+            return;
+        }
+
+        var maxHealth = player.getAttribute(Attribute.MAX_HEALTH);
+        if (maxHealth != null) {
+            player.setHealth(Math.min(maxHealth.getValue(), player.getHealth() + SENTINEL_HEALTH_BONUS));
+        }
+        pdc.set(keySentinelHealthGrantRevision, PersistentDataType.INTEGER, SENTINEL_HEALTH_GRANT_REVISION);
+    }
+
     private void clearInactivePowerAttributeModifiers(Player player, SuperpowerType power) {
         if (power != SuperpowerType.ARCANIST) {
             syncPlayerAttributeModifier(player, Attribute.LUCK, keyEnchanterLuckModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
@@ -6318,6 +6783,9 @@ public final class SuperpowerManager implements Listener {
         }
         if (power != SuperpowerType.PROSPECTOR) {
             syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyMinerHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        }
+        if (power != SuperpowerType.PHYSICALLY_GIFTED) {
+            syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyPhysicallyGiftedHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         }
         if (power != SuperpowerType.TITAN) {
             syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyGiantHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
@@ -6330,6 +6798,8 @@ public final class SuperpowerManager implements Listener {
         }
         if (power != SuperpowerType.SENTINEL) {
             syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySentinelHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+            syncPlayerAttributeModifier(player, Attribute.KNOCKBACK_RESISTANCE, keySentinelBraceKnockbackModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+            player.getPersistentDataContainer().remove(keySentinelHealthGrantRevision);
         }
         if (power != SuperpowerType.VEIL_ASSASSIN) {
             syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyVeilAssassinHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
@@ -6346,12 +6816,14 @@ public final class SuperpowerManager implements Listener {
         syncPlayerAttributeModifier(player, Attribute.MOVEMENT_SPEED, keyEnchanterMoveModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR, false);
         syncPlayerAttributeModifier(player, Attribute.ATTACK_SPEED, keyEnchanterAttackModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR, false);
         syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyMinerHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyPhysicallyGiftedHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyGiantHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.SCALE, keyGiantScaleModifier, 0.0, AttributeModifier.Operation.ADD_SCALAR, false);
         syncPlayerAttributeModifier(player, Attribute.KNOCKBACK_RESISTANCE, keyGiantKnockbackModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.ATTACK_DAMAGE, keyGiantAttackDamageModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySupermanHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keySentinelHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
+        syncPlayerAttributeModifier(player, Attribute.KNOCKBACK_RESISTANCE, keySentinelBraceKnockbackModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.MAX_HEALTH, keyVeilAssassinHealthModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.SNEAKING_SPEED, keyVeilAssassinSneakingSpeedModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
         syncPlayerAttributeModifier(player, Attribute.SUBMERGED_MINING_SPEED, keyWatermanSubmergedMiningModifier, 0.0, AttributeModifier.Operation.ADD_NUMBER, false);
@@ -6664,6 +7136,10 @@ public final class SuperpowerManager implements Listener {
 
         for (Map.Entry<UUID, TimeStopState> entry : new HashMap<>(activeTimeStops).entrySet()) {
             TimeStopState state = entry.getValue();
+            if (plugin.getPlayerManager().isVanished(state.ownerId())) {
+                activeTimeStops.remove(entry.getKey());
+                continue;
+            }
             Location center = state.center();
             World world = center.getWorld();
             if (world == null) {
@@ -6834,7 +7310,8 @@ public final class SuperpowerManager implements Listener {
         for (Map.Entry<UUID, HonoredDomainState> entry : new HashMap<>(activeHonoredDomains).entrySet()) {
             HonoredDomainState state = entry.getValue();
             Player owner = Bukkit.getPlayer(state.ownerId());
-            if (owner == null || !owner.isOnline() || owner.isDead() || owner.getGameMode() == GameMode.SPECTATOR) {
+            if (owner == null || !owner.isOnline() || owner.isDead() || owner.getGameMode() == GameMode.SPECTATOR
+                || isStaffVanished(owner)) {
                 endHonoredDomain(state.ownerId(), false);
                 continue;
             }
@@ -7381,6 +7858,7 @@ public final class SuperpowerManager implements Listener {
             if (!hasCommandPower(player, SuperpowerType.HONORED_ONE)
                 || !isHonoredInfinityEnabled(player)
                 || player.isDead()
+                || isStaffVanished(player)
                 || player.getGameMode() == GameMode.SPECTATOR) {
                 continue;
             }
@@ -7398,6 +7876,33 @@ public final class SuperpowerManager implements Listener {
                 freezeHonoredProjectile(projectile, player);
             }
         }
+    }
+
+    public void suppressPlayerTracesForVanish(Player player) {
+        if (player == null) {
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        closeTravelerPortal(playerId, false);
+        clearTimeStopForOwner(playerId);
+        handleHonoredDomainPlayerExit(playerId, true);
+        returnPendingHonoredDomainPlayer(player);
+        Set<UUID> summons = monarchSummonsByOwner.get(playerId);
+        if (summons == null) {
+            return;
+        }
+        for (UUID summonId : new HashSet<>(summons)) {
+            Entity entity = Bukkit.getEntity(summonId);
+            if (entity instanceof Mob mob && entity.isValid()) {
+                mob.setTarget(null);
+            }
+        }
+    }
+
+    private boolean isStaffVanished(Player player) {
+        return player != null
+            && plugin.getPlayerManager() != null
+            && plugin.getPlayerManager().isVanished(player.getUniqueId());
     }
 
     private void renderHonoredProjectileAura(Player player, Location center) {
@@ -7658,11 +8163,11 @@ public final class SuperpowerManager implements Listener {
 
     private boolean hasDruidGrimoire(Player player) {
         for (ItemStack item : player.getInventory().getContents()) {
-            if (isDruidGrimoire(item)) {
+            if (isOwnedDruidGrimoire(item, player)) {
                 return true;
             }
         }
-        return isDruidGrimoire(player.getItemOnCursor());
+        return isOwnedDruidGrimoire(player.getItemOnCursor(), player);
     }
 
     private void giveMotherNatureStick(Player player, boolean restored) {
@@ -7740,7 +8245,17 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void giveDruidGrimoire(Player player, boolean restored) {
-        ItemStack grimoire = createDruidGrimoireItem();
+        if (!hasPower(player, SuperpowerType.DRUID) || hasDruidGrimoire(player)) {
+            return;
+        }
+        int slot = player.getInventory().firstEmpty();
+        if (slot == -1) {
+            if (restored) {
+                player.sendMessage(MessageUtil.warn("Clear an inventory slot so the Druid's Grimoire can return."));
+            }
+            return;
+        }
+        ItemStack grimoire = createDruidGrimoireItem(player);
         if (plugin.getItemAuditManager() != null) {
             plugin.getItemAuditManager().recordKnownAcquisition(
                 player,
@@ -7749,8 +8264,7 @@ public final class SuperpowerManager implements Listener {
                 restored ? "Restored Druid's Grimoire." : "Granted Druid's Grimoire."
             );
         }
-        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(grimoire);
-        leftovers.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
+        player.getInventory().setItem(slot, grimoire);
         if (restored) {
             player.sendMessage(MessageUtil.info("The Druid's Grimoire returned to you."));
         }
@@ -7767,6 +8281,146 @@ public final class SuperpowerManager implements Listener {
         if (isDruidGrimoire(player.getItemOnCursor())) {
             player.setItemOnCursor(null);
         }
+    }
+
+    private void synchronizeDruidGrimoire(Player player, boolean restored) {
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+        boolean isDruid = hasPower(player, SuperpowerType.DRUID);
+        boolean kept = false;
+        for (int slot = 0; slot < player.getInventory().getSize(); slot++) {
+            ItemStack item = player.getInventory().getItem(slot);
+            if (purgeNestedDruidGrimoires(item, 0)) {
+                player.getInventory().setItem(slot, item);
+            }
+            if (!isDruidGrimoire(item)) {
+                continue;
+            }
+            UUID owner = druidGrimoireOwner(item);
+            if (!isDruid || kept || !canKeepDruidGrimoire(true, player.getUniqueId(), owner)) {
+                player.getInventory().setItem(slot, null);
+                continue;
+            }
+            bindDruidGrimoire(item, player.getUniqueId());
+            player.getInventory().setItem(slot, item);
+            kept = true;
+        }
+
+        ItemStack cursor = player.getItemOnCursor();
+        if (purgeNestedDruidGrimoires(cursor, 0)) {
+            player.setItemOnCursor(cursor);
+        }
+        if (isDruidGrimoire(cursor)) {
+            UUID owner = druidGrimoireOwner(cursor);
+            if (!isDruid || kept || !canKeepDruidGrimoire(true, player.getUniqueId(), owner)) {
+                player.setItemOnCursor(null);
+            } else {
+                bindDruidGrimoire(cursor, player.getUniqueId());
+                player.setItemOnCursor(cursor);
+                kept = true;
+            }
+        }
+
+        if (isDruid && !kept) {
+            giveDruidGrimoire(player, restored);
+        }
+    }
+
+    static boolean canKeepDruidGrimoire(boolean isDruid, UUID playerId, UUID ownerId) {
+        return isDruid && playerId != null && (ownerId == null || playerId.equals(ownerId));
+    }
+
+    private boolean canActivateDruidGrimoire(Player player, ItemStack item) {
+        return hasPower(player, SuperpowerType.DRUID) && isOwnedDruidGrimoire(item, player);
+    }
+
+    private void bindDruidGrimoire(ItemStack item, UUID ownerId) {
+        if (!isDruidGrimoire(item) || ownerId == null) {
+            return;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return;
+        }
+        item.setAmount(1);
+        applyDruidGrimoireState(meta, ownerId);
+        applyDruidGrimoirePresentation(meta);
+        item.setItemMeta(meta);
+    }
+
+    private int purgeDruidGrimoires(Inventory inventory) {
+        int removed = 0;
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            if (!isDruidGrimoire(inventory.getItem(slot))) {
+                continue;
+            }
+            inventory.setItem(slot, null);
+            removed++;
+        }
+        return removed;
+    }
+
+    private boolean purgeNestedDruidGrimoires(ItemStack item, int depth) {
+        if (item == null || item.getType().isAir() || depth >= 4) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta instanceof BundleMeta bundleMeta) {
+            List<ItemStack> contents = new ArrayList<>(bundleMeta.getItems());
+            boolean changed = false;
+            for (int slot = contents.size() - 1; slot >= 0; slot--) {
+                ItemStack nested = contents.get(slot);
+                if (isDruidGrimoire(nested)) {
+                    contents.remove(slot);
+                    changed = true;
+                } else if (purgeNestedDruidGrimoires(nested, depth + 1)) {
+                    contents.set(slot, nested);
+                    changed = true;
+                }
+            }
+            if (changed) {
+                bundleMeta.setItems(contents);
+                item.setItemMeta(bundleMeta);
+            }
+            return changed;
+        }
+        if (!(meta instanceof BlockStateMeta blockStateMeta)) {
+            return false;
+        }
+        BlockState state = blockStateMeta.getBlockState();
+        if (!(state instanceof InventoryHolder holder)) {
+            return false;
+        }
+        Inventory nestedInventory = holder.getInventory();
+        boolean changed = false;
+        for (int slot = 0; slot < nestedInventory.getSize(); slot++) {
+            ItemStack nested = nestedInventory.getItem(slot);
+            if (isDruidGrimoire(nested)) {
+                nestedInventory.setItem(slot, null);
+                changed = true;
+            } else if (purgeNestedDruidGrimoires(nested, depth + 1)) {
+                nestedInventory.setItem(slot, nested);
+                changed = true;
+            }
+        }
+        if (changed) {
+            blockStateMeta.setBlockState(state);
+            item.setItemMeta(blockStateMeta);
+        }
+        return changed;
+    }
+
+    private boolean isPersonalInventoryType(InventoryType type) {
+        return type == InventoryType.CRAFTING || type == InventoryType.CREATIVE || type == InventoryType.PLAYER;
+    }
+
+    private boolean isBundle(ItemStack item) {
+        return item != null && !item.getType().isAir() && item.getItemMeta() instanceof BundleMeta;
+    }
+
+    private boolean isNonAirItem(ItemStack item) {
+        return item != null && !item.getType().isAir();
     }
 
     private void refreshPowerItems(Player player) {
@@ -7928,7 +8582,7 @@ public final class SuperpowerManager implements Listener {
             applyTheWorldClockState(meta);
             applyTheWorldClockPresentation(meta);
         } else if (isDruidGrimoire(source)) {
-            applyDruidGrimoireState(meta);
+            applyDruidGrimoireState(meta, druidGrimoireOwner(source));
             applyDruidGrimoirePresentation(meta);
         }
         updated.setItemMeta(meta);
@@ -7965,7 +8619,8 @@ public final class SuperpowerManager implements Listener {
             10, 11, 12, 13, 14, 15, 16,
             19, 20, 21, 22, 23, 24, 25,
             28, 29, 30, 31, 32, 33, 34,
-            37, 38, 39, 40, 41, 42, 43
+            37, 38, 39, 40, 41, 42, 43,
+            48
         };
         for (int i = 0; i < types.size() && i < slots.length; i++) {
             inventory.setItem(slots[i], createPowerInfoIcon(types.get(i)));
@@ -8162,7 +8817,7 @@ public final class SuperpowerManager implements Listener {
             }
             case VEIL_ASSASSIN -> {
                 lore.add(MM.deserialize("<gray>Has only <white>8 hearts</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Cannot wear <white>netherite armor</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Can wear armor through <white>netherite</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Crouch for <white>5s</white> to enter the veil.</gray>"));
                 lore.add(MM.deserialize("<gray>In the veil, crouching moves at full speed with Speed IV.</gray>"));
                 lore.add(MM.deserialize("<gray>Your body, gear, name, and ally marker are fully hidden.</gray>"));
@@ -8215,10 +8870,9 @@ public final class SuperpowerManager implements Listener {
             }
             case DRUID -> {
                 lore.add(MM.deserialize("<gray>Receives a bound <white>Druid's Grimoire</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Choose one blessing for yourself and nearby teammates within <white>" + DRUID_BUFF_RADIUS + " blocks</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Can grant the positive potion blessings in the grimoire.</gray>"));
+                lore.add(MM.deserialize("<gray>Choose <white>two different blessings</white> for yourself and nearby teammates within <white>" + DRUID_BUFF_RADIUS + " blocks</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Both blessings apply together as one cast.</gray>"));
                 lore.add(MM.deserialize("<gray>Non-instant blessings last <white>" + (DRUID_BUFF_DURATION_SECONDS / 60) + " minutes</white>.</gray>"));
-                lore.add(MM.deserialize("<gray>Only one blessing can be chosen each use.</gray>"));
                 lore.add(MM.deserialize("<gray>Cooldown: <white>" + DRUID_BUFF_COOLDOWN_SECONDS + "s</white>.</gray>"));
             }
             case MONARCH -> {
@@ -8256,6 +8910,13 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Grants <white>+2 health</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Gains Night Vision under Y <white>" + MINER_NIGHT_VISION_Y_LEVEL + "</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Mining ores has a <white>25%</white> chance to duplicate the drop.</gray>"));
+            }
+            case PHYSICALLY_GIFTED -> {
+                lore.add(MM.deserialize("<gray>Permanent <white>Speed II</white> and <white>12 hearts</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Deals <white>2x</white> damage to ordinary mobs.</gray>"));
+                lore.add(MM.deserialize("<gray>Deals <white>1.75x</white> damage to players.</gray>"));
+                lore.add(MM.deserialize("<gray>Deals <white>1.5x</white> damage to custom bosses.</gray>"));
+                lore.add(MM.deserialize("<gray>Damage multiplies normally with weapons and Strength.</gray>"));
             }
             case TITAN -> {
                 lore.add(MM.deserialize("<gray>Scaled to <white>1.2x</white> normal size.</gray>"));
@@ -8299,11 +8960,18 @@ public final class SuperpowerManager implements Listener {
                 lore.add(MM.deserialize("<gray>Cooldown: <white>" + VOIDSTEP_COOLDOWN_SECONDS + "s</white>.</gray>"));
             }
             case SENTINEL -> {
-                lore.add(MM.deserialize("<gray>Grants <white>+3 hearts</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Grants <white>+4 hearts</white>.</gray>"));
                 lore.add(MM.deserialize("<gray>Sneak to project a <white>" + (int) SENTINEL_AURA_RADIUS + " block</white> guard aura.</gray>"));
                 lore.add(MM.deserialize("<gray>You and nearby teammates gain <white>Resistance I</white> and Absorption.</gray>"));
-                lore.add(MM.deserialize("<gray>While braced, incoming damage is reduced and attackers are weakened.</gray>"));
+                lore.add(MM.deserialize("<gray>During boss fights, the aura automatically protects participating teammates.</gray>"));
+                lore.add(MM.deserialize("<gray>Bracing: <white>40%</white> less damage and high knockback resistance.</gray>"));
+                lore.add(MM.deserialize("<gray>Attackers receive Weakness and are pushed back.</gray>"));
                 lore.add(MM.deserialize("<gray>The caster is slowed while bracing the aura.</gray>"));
+                lore.add(MM.deserialize("<gray><white>/bulwark</white>: you gain Resistance II, Absorption IV, and Regeneration I.</gray>"));
+                lore.add(MM.deserialize("<gray>Nearby teammates gain Resistance I, Absorption II, and Regeneration I for <white>"
+                    + SENTINEL_BULWARK_DURATION_SECONDS + "s</white>.</gray>"));
+                lore.add(MM.deserialize("<gray>Bulwark cooldown: <white>"
+                    + (SENTINEL_BULWARK_COOLDOWN_SECONDS / 60) + " minutes</white>.</gray>"));
             }
             case FROSTBORN -> {
                 lore.add(MM.deserialize("<gray>Permanent <white>Water Breathing</white>.</gray>"));
@@ -8529,7 +9197,14 @@ public final class SuperpowerManager implements Listener {
     }
 
     private void applyDruidGrimoireState(ItemMeta meta) {
+        applyDruidGrimoireState(meta, null);
+    }
+
+    private void applyDruidGrimoireState(ItemMeta meta, UUID ownerId) {
         meta.getPersistentDataContainer().set(keyDruidGrimoire, PersistentDataType.STRING, DRUID_GRIMOIRE_ITEM_ID);
+        if (ownerId != null) {
+            meta.getPersistentDataContainer().set(keyDruidGrimoireOwner, PersistentDataType.STRING, ownerId.toString());
+        }
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         CustomLoreUtil.applyStyledItemFlags(meta);
     }
@@ -8542,12 +9217,15 @@ public final class SuperpowerManager implements Listener {
             Material.BOOK,
             CustomLoreUtil.Rarity.EPIC.label(),
             "GRIMOIRE",
-            List.of("<gray>Bound to the keeper of the grove.</gray>"),
+            List.of(
+                "<gray>Soulbound to your Druid class.</gray>",
+                "<dark_gray>Cannot be dropped, stored, traded, or transferred.</dark_gray>"
+            ),
             List.of(CustomLoreUtil.section(
                 "Right Click",
                 "Wild Communion",
-                "<gray>Open the grimoire and choose <white>one</white> blessing.</gray>",
-                "<gray>Blesses you and nearby teammates within <white>" + DRUID_BUFF_RADIUS + " blocks</white>.</gray>",
+                "<gray>Choose <white>two different blessings</white>.</gray>",
+                "<gray>Both affect you and nearby teammates within <white>" + DRUID_BUFF_RADIUS + " blocks</white>.</gray>",
                 "<gray>Cooldown: <white>" + DRUID_BUFF_COOLDOWN_SECONDS + "s</white>.</gray>"
             ))
         ));

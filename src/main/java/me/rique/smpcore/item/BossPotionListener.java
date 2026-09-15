@@ -2,6 +2,7 @@ package me.rique.smpcore.item;
 
 import io.papermc.paper.potion.PotionMix;
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.command.MainMenuCommand;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.ItemModelUtil;
@@ -46,6 +47,7 @@ public final class BossPotionListener implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final int MENU_SIZE = 54;
     private static final int BACK_SLOT = 49;
+    static final int STRENGTH_DURATION_TICKS = 8 * 60 * 20;
     private static final int[] BREW_SLOTS = {10, 11, 12, 13, 14, 15, 16};
     private static final Material[] POTION_TYPES = {
         Material.POTION,
@@ -83,10 +85,7 @@ public final class BossPotionListener implements Listener {
     }
 
     public void openPotionMenu(Player player) {
-        if (!canBrewBossPotions(player)) {
-            player.sendMessage(me.rique.smpcore.util.MessageUtil.warn("Complete Vespera's Moonlit Thesis before brewing boss potions."));
-            return;
-        }
+        boolean brewingUnlocked = canBrewBossPotions(player);
         Inventory inventory = Bukkit.createInventory(
             new BossPotionMenuHolder(),
             MENU_SIZE,
@@ -98,17 +97,26 @@ public final class BossPotionListener implements Listener {
                 inventory.setItem(slot, filler);
             }
         }
+        inventory.setItem(0, menuItem(Material.CYAN_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, MenuItemUtil.INACTIVE_SLOT_LORE));
+        inventory.setItem(8, menuItem(Material.PINK_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, MenuItemUtil.INACTIVE_SLOT_LORE));
+        inventory.setItem(45, menuItem(Material.CYAN_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, MenuItemUtil.INACTIVE_SLOT_LORE));
+        inventory.setItem(53, menuItem(Material.PINK_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, MenuItemUtil.INACTIVE_SLOT_LORE));
 
-        inventory.setItem(4, menuItem(Material.BREWING_STAND, "<gradient:#38bdf8:#fb7185><bold>Boss Brews</bold></gradient>", List.of(
+        List<String> headerLore = new ArrayList<>(List.of(
             "<gray>Stronger potions brewed from boss materials.</gray>",
             "<gray>Use an <white>Awkward Potion</white> plus one listed material.</gray>",
             "<dark_gray>Works with normal, splash, and lingering awkward potions.</dark_gray>"
-        )));
+        ));
+        headerLore.add("<dark_gray> </dark_gray>");
+        headerLore.add(brewingUnlocked
+            ? "<green>Brewing unlocked.</green>"
+            : "<yellow>Preview mode. Complete Vespera's Moonlit Thesis to brew.</yellow>");
+        inventory.setItem(4, menuItem(Material.BREWING_STAND, "<gradient:#38bdf8:#fb7185><bold>Boss Brews</bold></gradient>", headerLore));
         BossBrew[] brews = BossBrew.values();
         for (int i = 0; i < brews.length && i < BREW_SLOTS.length; i++) {
-            inventory.setItem(BREW_SLOTS[i], brewPreview(brews[i]));
+            inventory.setItem(BREW_SLOTS[i], brewPreview(brews[i], brewingUnlocked));
         }
-        inventory.setItem(BACK_SLOT, menuItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to /menu.</gray>")));
+        inventory.setItem(BACK_SLOT, menuItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to Bosses.</gray>")));
         player.openInventory(inventory);
     }
 
@@ -135,8 +143,7 @@ public final class BossPotionListener implements Listener {
                 if (!player.isOnline()) {
                     return;
                 }
-                player.closeInventory();
-                player.performCommand("menu");
+                MainMenuCommand.openBossesMenu(plugin, player);
             });
         }
     }
@@ -327,7 +334,7 @@ public final class BossPotionListener implements Listener {
         return String.join(" or ", names).replace("<", "\\<");
     }
 
-    private ItemStack brewPreview(BossBrew brew) {
+    private ItemStack brewPreview(BossBrew brew, boolean brewingUnlocked) {
         ItemStack item = createBossPotion(brew, Material.POTION);
         ItemMeta meta = item.getItemMeta();
         if (meta == null) {
@@ -335,7 +342,9 @@ public final class BossPotionListener implements Listener {
         }
         List<Component> lore = new ArrayList<>(meta.lore() == null ? List.of() : meta.lore());
         lore.add(Component.empty());
-        lore.add(MM.deserialize("<yellow>Brew in a normal brewing stand.</yellow>"));
+        lore.add(MM.deserialize(brewingUnlocked
+            ? "<green>Ready to brew in a normal brewing stand.</green>"
+            : "<yellow>Recipe preview only — finish the Moonlit Thesis to brew.</yellow>"));
         meta.lore(CustomLoreUtil.normalizeLore(lore));
         item.setItemMeta(meta);
         return item;
@@ -382,7 +391,7 @@ public final class BossPotionListener implements Listener {
                 new BrewEffect(PotionEffectType.FIRE_RESISTANCE, 20 * 60 * 20, 0, "Fire Resistance I - 20:00"),
                 new BrewEffect(PotionEffectType.SPEED, 8 * 60 * 20, 2, "Speed III - 8:00"),
                 new BrewEffect(PotionEffectType.HASTE, 8 * 60 * 20, 2, "Haste III - 8:00"),
-                new BrewEffect(PotionEffectType.STRENGTH, 8 * 60 * 20, 0, "Strength I - 8:00")
+                new BrewEffect(PotionEffectType.STRENGTH, STRENGTH_DURATION_TICKS, 0, "Strength I - 8:00")
             )
         ),
         DOMINION_BLOOD(
@@ -391,7 +400,7 @@ public final class BossPotionListener implements Listener {
             Color.fromRGB(190, 30, 55),
             List.of("crimson_rib", "sculk_heart"),
             List.of(
-                new BrewEffect(PotionEffectType.STRENGTH, 6 * 60 * 20, 2, "Strength III - 6:00"),
+                new BrewEffect(PotionEffectType.STRENGTH, STRENGTH_DURATION_TICKS, 2, "Strength III - 8:00"),
                 new BrewEffect(PotionEffectType.RESISTANCE, 8 * 60 * 20, 1, "Resistance II - 8:00"),
                 new BrewEffect(PotionEffectType.ABSORPTION, 6 * 60 * 20, 3, "Absorption IV - 6:00"),
                 new BrewEffect(PotionEffectType.REGENERATION, 2 * 60 * 20, 1, "Regeneration II - 2:00")
@@ -453,7 +462,7 @@ public final class BossPotionListener implements Listener {
                 new BrewEffect(PotionEffectType.INVISIBILITY, 5 * 60 * 20, 0, "Invisibility I - 5:00"),
                 new BrewEffect(PotionEffectType.SPEED, 5 * 60 * 20, 2, "Speed III - 5:00"),
                 new BrewEffect(PotionEffectType.JUMP_BOOST, 5 * 60 * 20, 2, "Jump Boost III - 5:00"),
-                new BrewEffect(PotionEffectType.STRENGTH, 3 * 60 * 20, 0, "Strength I - 3:00")
+                new BrewEffect(PotionEffectType.STRENGTH, STRENGTH_DURATION_TICKS, 0, "Strength I - 8:00")
             )
         );
 

@@ -1,6 +1,7 @@
 package me.rique.smpcore.leaderboard;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.boss.BossManager;
 import me.rique.smpcore.database.DatabaseManager;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.MenuDupeGuardListener;
@@ -27,6 +28,7 @@ import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayList;
@@ -141,28 +143,28 @@ public final class LeaderboardManager implements Listener {
         );
         decorate(inventory);
         inventory.setItem(4, item(Material.GOLD_BLOCK, "<gradient:#facc15:#22d3ee><bold>Leaderboards</bold></gradient>", List.of(
-            "<gray>Track the players shaping the SMP.</gray>",
-            "<gray>PvP, mobs, bosses, and fight reports</gray>",
-            "<dark_gray>Saved to the plugin database.</dark_gray>"
+            "<gray>Four clear paths through the server's live records.</gray>",
+            "<gray>Choose a column, then open the board you want.</gray>",
+            "<dark_gray>Playtime is refreshed before it is displayed.</dark_gray>"
         )));
 
-        inventory.setItem(10, label(Material.DIAMOND_SWORD, "<gradient:#fb7185:#f97316><bold>Combat</bold></gradient>", List.of("<dark_gray>PvP and death stats</dark_gray>")));
-        inventory.setItem(13, label(Material.CLOCK, "<gradient:#67e8f9:#facc15><bold>Activity</bold></gradient>", List.of("<dark_gray>Time spent online</dark_gray>")));
-        inventory.setItem(16, label(Material.WITHER_SKELETON_SKULL, "<gradient:#a855f7:#22d3ee><bold>Bosses</bold></gradient>", List.of("<dark_gray>Boss contribution stats</dark_gray>")));
-        inventory.setItem(29, label(Material.NETHERITE_SWORD, "<gradient:#ef4444:#f59e0b><bold>Duels</bold></gradient>", List.of("<dark_gray>Arena wins and successful bets</dark_gray>")));
+        inventory.setItem(10, label(Material.DIAMOND_SWORD, "<gradient:#fb7185:#f97316><bold>Combat</bold></gradient>", List.of("<gray>PvP, deaths, and mob hunting.</gray>")));
+        inventory.setItem(12, label(Material.CLOCK, "<gradient:#67e8f9:#facc15><bold>Activity</bold></gradient>", List.of("<gray>Time invested in the season.</gray>")));
+        inventory.setItem(14, label(Material.WITHER_SKELETON_SKULL, "<gradient:#a855f7:#22d3ee><bold>Bosses</bold></gradient>", List.of("<gray>Kills, damage, and participation.</gray>")));
+        inventory.setItem(16, label(Material.NETHERITE_SWORD, "<gradient:#ef4444:#f59e0b><bold>Duels</bold></gradient>", List.of("<gray>Arena wins and winning wagers.</gray>")));
 
         inventory.setItem(19, categoryItem(LeaderboardType.PLAYER_KILLS));
-        inventory.setItem(20, categoryItem(LeaderboardType.DEATHS));
-        inventory.setItem(21, categoryItem(LeaderboardType.MOB_KILLS));
-        inventory.setItem(22, categoryItem(LeaderboardType.PLAYTIME));
+        inventory.setItem(28, categoryItem(LeaderboardType.DEATHS));
+        inventory.setItem(37, categoryItem(LeaderboardType.MOB_KILLS));
+        inventory.setItem(21, categoryItem(LeaderboardType.PLAYTIME));
         inventory.setItem(23, categoryItem(LeaderboardType.BOSS_KILLS));
-        inventory.setItem(24, categoryItem(LeaderboardType.BOSS_DAMAGE));
-        inventory.setItem(25, categoryItem(LeaderboardType.BOSS_FIGHTS));
-        inventory.setItem(32, categoryItem(LeaderboardType.DUEL_WINS));
-        inventory.setItem(33, categoryItem(LeaderboardType.DUEL_BET_WINS));
-        inventory.setItem(40, item(Material.WRITABLE_BOOK, "<gradient:#fb7185:#facc15><bold>My Boss Reports</bold></gradient>", List.of(
-            "<gray>Review your recent boss fights, damage,</gray>",
-            "<gray>healing received, outcome, and rank.</gray>",
+        inventory.setItem(32, categoryItem(LeaderboardType.BOSS_DAMAGE));
+        inventory.setItem(41, categoryItem(LeaderboardType.BOSS_FIGHTS));
+        inventory.setItem(25, categoryItem(LeaderboardType.DUEL_WINS));
+        inventory.setItem(34, categoryItem(LeaderboardType.DUEL_BET_WINS));
+        inventory.setItem(43, item(Material.WRITABLE_BOOK, "<gradient:#fb7185:#facc15><bold>My Boss Reports</bold></gradient>", List.of(
+            "<gray>Your personal after-action archive:</gray>",
+            "<gray>result, rank, damage, healing, and loot state.</gray>",
             "<yellow>Click to view.</yellow>"
         )));
         inventory.setItem(BACK_SLOT, item(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to /menu.</gray>")));
@@ -176,6 +178,9 @@ public final class LeaderboardManager implements Listener {
             BedrockCompat.menuTitle(player, MM.deserialize("<gradient:#fb7185:#facc15><bold>My Boss Reports</bold></gradient>"), "My Boss Reports")
         );
         decorate(loading);
+        loading.setItem(4, item(Material.WRITABLE_BOOK, "<gradient:#fb7185:#facc15><bold>My Boss Reports</bold></gradient>", List.of(
+            "<gray>Building your personal fight archive.</gray>"
+        )));
         loading.setItem(22, item(Material.CLOCK, "<yellow>Loading...</yellow>", List.of("<gray>Reading your recent boss fights.</gray>")));
         loading.setItem(BACK_SLOT, item(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to leaderboards.</gray>")));
         player.openInventory(loading);
@@ -206,12 +211,13 @@ public final class LeaderboardManager implements Listener {
                 )));
 
                 int[] slots = {10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34};
-                for (int i = 0; i < slots.length; i++) {
-                    if (i >= entries.size()) {
-                        inventory.setItem(slots[i], item(Material.PAPER, "<dark_gray>No Report</dark_gray>", List.of("<gray>Finish a boss fight to fill this slot.</gray>")));
-                        continue;
-                    }
+                for (int i = 0; i < slots.length && i < entries.size(); i++) {
                     inventory.setItem(slots[i], bossReportItem(entries.get(i)));
+                }
+                if (entries.isEmpty()) {
+                    inventory.setItem(22, item(Material.GRAY_STAINED_GLASS_PANE, "<gray><bold>No Reports Yet</bold></gray>", List.of(
+                        "<gray>Finish a custom boss fight to create your first report.</gray>"
+                    )));
                 }
                 inventory.setItem(BACK_SLOT, item(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to leaderboards.</gray>")));
                 player.openInventory(inventory);
@@ -232,6 +238,7 @@ public final class LeaderboardManager implements Listener {
             BedrockCompat.menuTitle(player, MM.deserialize("<gradient:#facc15:#22d3ee><bold>" + type.title + "</bold></gradient>"), type.title)
         );
         decorate(loading);
+        loading.setItem(4, item(type.icon, type.gradientTitle(), List.of(type.description)));
         loading.setItem(22, item(Material.CLOCK, "<yellow>Loading...</yellow>", List.of("<gray>Reading saved stats.</gray>")));
         loading.setItem(BACK_SLOT, item(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to leaderboards.</gray>")));
         player.openInventory(loading);
@@ -269,17 +276,23 @@ public final class LeaderboardManager implements Listener {
                     type.description,
                     "<dark_gray>Top 10 saved players.</dark_gray>"
                 )));
-                inventory.setItem(12, label(Material.GOLD_BLOCK, "<gold><bold>Top Three</bold></gold>", List.of("<gray>The current podium.</gray>")));
-                inventory.setItem(37, label(Material.PAPER, "<aqua><bold>Chasers</bold></aqua>", List.of("<gray>The rest of the board.</gray>")));
-                int[] slots = {13, 21, 23, 28, 29, 30, 31, 32, 33, 34};
+                int[] slots = rankingSlots();
                 for (int i = 0; i < slots.length; i++) {
                     if (i >= entries.size()) {
-                        inventory.setItem(slots[i], item(Material.PAPER, "<dark_gray>#" + (i + 1) + " Empty</dark_gray>", List.of("<gray>No stat recorded yet.</gray>")));
+                        inventory.setItem(slots[i], item(Material.GRAY_STAINED_GLASS_PANE, "<dark_gray>#" + (i + 1) + " Open</dark_gray>", List.of(
+                            "<gray>No player has claimed this rank yet.</gray>"
+                        )));
                         continue;
                     }
                     DatabaseManager.LeaderboardEntry entry = entries.get(i);
                     inventory.setItem(slots[i], leaderboardEntryItem(i + 1, entry, type));
                 }
+                inventory.setItem(29, podiumBase(2));
+                inventory.setItem(31, podiumBase(1));
+                inventory.setItem(33, podiumBase(3));
+                inventory.setItem(35, label(Material.COMPASS, "<aqua><bold>Ranks 4–10</bold></aqua>", List.of(
+                    "<gray>The chase pack, ordered left to right.</gray>"
+                )));
                 inventory.setItem(BACK_SLOT, item(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to leaderboards.</gray>")));
                 player.openInventory(inventory);
                 player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 0.6f, 1.2f);
@@ -416,21 +429,10 @@ public final class LeaderboardManager implements Listener {
             return;
         }
 
-        LeaderboardType type = switch (rawSlot) {
-            case 19 -> LeaderboardType.PLAYER_KILLS;
-            case 20 -> LeaderboardType.DEATHS;
-            case 21 -> LeaderboardType.MOB_KILLS;
-            case 22 -> LeaderboardType.PLAYTIME;
-            case 23 -> LeaderboardType.BOSS_KILLS;
-            case 24 -> LeaderboardType.BOSS_DAMAGE;
-            case 25 -> LeaderboardType.BOSS_FIGHTS;
-            case 32 -> LeaderboardType.DUEL_WINS;
-            case 33 -> LeaderboardType.DUEL_BET_WINS;
-            default -> null;
-        };
+        LeaderboardType type = overviewTypeAt(rawSlot);
         if (type != null) {
             openLeaderboardMenu(player, type);
-        } else if (rawSlot == 40) {
+        } else if (rawSlot == 43) {
             openMyBossReportsMenu(player);
         }
     }
@@ -503,24 +505,24 @@ public final class LeaderboardManager implements Listener {
     }
 
     private ItemStack leaderboardEntryItem(int rank, DatabaseManager.LeaderboardEntry entry, LeaderboardType type) {
-        Material material = switch (rank) {
-            case 1 -> Material.NETHER_STAR;
-            case 2 -> Material.GOLD_INGOT;
-            case 3 -> Material.IRON_INGOT;
-            default -> Material.PAPER;
-        };
         String name = entry.playerName() == null || entry.playerName().isBlank()
             ? playerName(entry.playerUuid())
             : entry.playerName();
-        return item(material, rankTitle(rank, name), List.of(
+        ItemStack item = item(Material.PLAYER_HEAD, rankTitle(rank, name), List.of(
             rankSubtitle(rank),
             "<gray>" + type.valueLabel + ": <white>" + formatLeaderboardValue(entry.value(), type) + "</white></gray>",
             rank == 1 ? "<gold>Current leader.</gold>" : "<dark_gray>Keep climbing.</dark_gray>"
         ));
+        if (entry.playerUuid() != null && item.getItemMeta() instanceof SkullMeta meta) {
+            meta.setOwningPlayer(Bukkit.getOfflinePlayer(entry.playerUuid()));
+            item.setItemMeta(meta);
+        }
+        return item;
     }
 
     private ItemStack bossReportItem(DatabaseManager.BossFightMenuEntry entry) {
-        Material material = "victory".equalsIgnoreCase(entry.outcome()) ? Material.LIME_CONCRETE : Material.RED_CONCRETE;
+        BossManager.BossType bossType = BossManager.BossType.fromInput(entry.bossId());
+        Material material = bossType == null ? Material.RECOVERY_COMPASS : bossType.menuIcon();
         String bossName = plugin.getBossManager() == null
             ? prettyBossName(entry.bossId())
             : plugin.getBossManager().displayNameForBoss(entry.bossId());
@@ -551,6 +553,10 @@ public final class LeaderboardManager implements Listener {
                 inventory.setItem(slot, filler);
             }
         }
+        inventory.setItem(0, item(Material.YELLOW_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, MenuItemUtil.INACTIVE_SLOT_LORE));
+        inventory.setItem(8, item(Material.CYAN_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, MenuItemUtil.INACTIVE_SLOT_LORE));
+        inventory.setItem(inventory.getSize() - 9, item(Material.YELLOW_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, MenuItemUtil.INACTIVE_SLOT_LORE));
+        inventory.setItem(inventory.getSize() - 1, item(Material.CYAN_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, MenuItemUtil.INACTIVE_SLOT_LORE));
     }
 
     private boolean isFrameSlot(int slot, int size) {
@@ -572,6 +578,34 @@ public final class LeaderboardManager implements Listener {
 
     private ItemStack label(Material material, String name, List<String> lore) {
         return item(material, name, lore);
+    }
+
+    private ItemStack podiumBase(int rank) {
+        Material material = switch (rank) {
+            case 1 -> Material.GOLD_BLOCK;
+            case 2 -> Material.IRON_BLOCK;
+            default -> Material.COPPER_BLOCK;
+        };
+        return label(material, rankTitle(rank, "Podium"), List.of(rankSubtitle(rank)));
+    }
+
+    static int[] rankingSlots() {
+        return new int[] {22, 20, 24, 37, 38, 39, 40, 41, 42, 43};
+    }
+
+    static LeaderboardType overviewTypeAt(int slot) {
+        return switch (slot) {
+            case 19 -> LeaderboardType.PLAYER_KILLS;
+            case 28 -> LeaderboardType.DEATHS;
+            case 37 -> LeaderboardType.MOB_KILLS;
+            case 21 -> LeaderboardType.PLAYTIME;
+            case 23 -> LeaderboardType.BOSS_KILLS;
+            case 32 -> LeaderboardType.BOSS_DAMAGE;
+            case 41 -> LeaderboardType.BOSS_FIGHTS;
+            case 25 -> LeaderboardType.DUEL_WINS;
+            case 34 -> LeaderboardType.DUEL_BET_WINS;
+            default -> null;
+        };
     }
 
     private String rankTitle(int rank, String name) {

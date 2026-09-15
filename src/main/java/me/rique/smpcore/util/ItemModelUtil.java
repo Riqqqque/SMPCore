@@ -24,7 +24,9 @@ public final class ItemModelUtil {
         "runic_loom",
         "soul_imprint",
         "the_world_clock",
+        "unweaving_orb",
         "veilshift_orb",
+        "velocity_nullifier",
         "warden_lure_orb"
     );
 

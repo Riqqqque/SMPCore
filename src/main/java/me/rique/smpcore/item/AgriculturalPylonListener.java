@@ -367,7 +367,7 @@ public final class AgriculturalPylonListener implements Listener {
     private void syncChunkPylons(Chunk chunk) {
         removeChunkPylonCache(chunk);
         removeStaleChunkHolograms(chunk);
-        for (BlockState state : chunk.getTileEntities()) {
+        for (BlockState state : chunk.getTileEntities(false)) {
             Block block = state.getBlock();
             if (!isPylonBlock(block)) {
                 continue;

@@ -87,7 +87,7 @@ final class FamiliarFollower {
     }
 
     void spawn(Player player) {
-        if (player == null || !activeCheck.test(player) || currentDisplay(player) != null) return;
+        if (player == null || isOwnerVanished(player) || !activeCheck.test(player) || currentDisplay(player) != null) return;
         remove(player.getUniqueId());
         FamiliarMotion.State motion = motionStates.computeIfAbsent(
             player.getUniqueId(),
@@ -154,7 +154,7 @@ final class FamiliarFollower {
 
     private void tick() {
         for (Player player : Bukkit.getOnlinePlayers()) {
-            if (!activeCheck.test(player)) {
+            if (isOwnerVanished(player) || !activeCheck.test(player)) {
                 remove(player.getUniqueId());
                 continue;
             }
@@ -285,6 +285,11 @@ final class FamiliarFollower {
 
     private boolean isBossFightNearby(Player player) {
         return plugin.getBossManager() != null && plugin.getBossManager().isActiveBossFight(player);
+    }
+
+    private boolean isOwnerVanished(Player player) {
+        return plugin.getPlayerManager() != null
+            && plugin.getPlayerManager().isVanished(player.getUniqueId());
     }
 
     private void tagOwner(Entity entity, Player player) {

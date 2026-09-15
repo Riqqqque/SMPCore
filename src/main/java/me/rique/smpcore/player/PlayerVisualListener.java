@@ -3,6 +3,7 @@ package me.rique.smpcore.player;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.team.TeamManager;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
@@ -354,7 +355,8 @@ public final class PlayerVisualListener implements Listener {
         if (isVanishedFromViewer(viewer, target)) {
             return false;
         }
-        if (plugin.getConfigManager().playerFinderDefenseIgnoreOps && (viewer.isOp() || target.isOp())) {
+        if (plugin.getConfigManager().playerFinderDefenseIgnoreOps
+            && (isProtectedStaffViewer(viewer) || isProtectedStaffViewer(target))) {
             return false;
         }
         if (!plugin.getConfigManager().playerFinderDefenseHideSameTeam
@@ -376,10 +378,14 @@ public final class PlayerVisualListener implements Listener {
         return true;
     }
 
+    private boolean isProtectedStaffViewer(Player player) {
+        return player != null && player.isOp() && OperatorGameplayMode.isStaffModeEnabled(player);
+    }
+
     private boolean isVanishedFromViewer(Player viewer, Player target) {
         return plugin.getPlayerManager() != null
             && plugin.getPlayerManager().isVanished(target.getUniqueId())
-            && !viewer.hasPermission("smpcore.vanish.see");
+            && !OperatorGameplayMode.allowsPassiveBypass(viewer, "smpcore.vanish.see");
     }
 
     private void showPlayerFinderDefenseTarget(Player viewer, UUID targetId) {

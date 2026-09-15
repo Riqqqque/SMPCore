@@ -6,6 +6,7 @@ import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import me.rique.smpcore.util.ScheduledDimensionPolicy;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -668,7 +669,7 @@ public final class WaystoneManager {
         if (to != World.Environment.NETHER && to != World.Environment.THE_END) {
             return false;
         }
-        boolean bypass = player.hasPermission("smpcore.startsmp.bypass-dimension-lock");
+        boolean bypass = OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.startsmp.bypass-dimension-lock");
         boolean unlocked = plugin.getSmpStartManager() == null || plugin.getSmpStartManager().isDimensionUnlocked(to);
         if (!ScheduledDimensionPolicy.blocksTravel(from, to, bypass, unlocked)) {
             return false;

@@ -3,6 +3,7 @@ package me.rique.smpcore.game;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.tavern.TavernManager.TavernGame;
 import me.rique.smpcore.util.BedrockCompat;
+import me.rique.smpcore.util.GameAnnouncementUtil;
 import me.rique.smpcore.util.ItemEscrowService;
 import me.rique.smpcore.util.ItemEscrowService.EscrowedItem;
 import me.rique.smpcore.util.MenuDupeGuardListener;
@@ -49,7 +50,6 @@ public final class RouletteManager implements Listener {
     private static final UUID HOUSE_ESCROW_OWNER_ID = UUID.fromString("91d20dc2-d639-42af-9d40-73565aa1ccbe");
     private static final String HOUSE_ESCROW_OWNER_NAME = "SMPCore Roulette House";
     private static final int MAX_WAGER = 64;
-    private static final double ANNOUNCEMENT_RADIUS = 16.0D;
     private static final int[] CURRENCY_SLOTS = {10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28};
     private static final int[] WHEEL_DISPLAY_SLOTS = {19, 20, 21, 22, 23, 24, 25};
     private static final List<Integer> WHEEL_ORDER = List.of(
@@ -592,18 +592,17 @@ public final class RouletteManager implements Listener {
     }
 
     private void announceWin(RouletteGame game) {
-        Location location = game.tableLocation;
-        World world = location.getWorld();
-        if (world == null) return;
+        Player winner = Bukkit.getPlayer(game.playerId);
         String payout = game.totalPayout + " " + currencyName(game.selection.currency(), Math.toIntExact(game.totalPayout));
         Component message = MessageUtil.success(
             "<white>" + game.playerName + "</white> won <white>" + payout + "</white> on " + game.bet.display() + " in roulette."
         );
-        for (Player nearby : world.getNearbyPlayers(location, ANNOUNCEMENT_RADIUS)) {
-            if (!nearby.getUniqueId().equals(game.playerId)) {
-                BedrockCompat.sendGameMessage(nearby, message);
-                nearby.playSound(location, Sound.ENTITY_FIREWORK_ROCKET_TWINKLE, 0.55F, 1.25F);
-            }
+        int recipients = GameAnnouncementUtil.announceNearby(
+            game.tableLocation, winner, message, Sound.ENTITY_FIREWORK_ROCKET_TWINKLE, 0.55F, 1.25F,
+            Set.of(game.playerId)
+        );
+        if (recipients == 0 && winner != null && winner.isOnline()) {
+            plugin.getLogger().warning("Could not deliver the nearby roulette win announcement for " + game.playerName + ".");
         }
     }
 

@@ -3,6 +3,7 @@ package me.rique.smpcore.home;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import me.rique.smpcore.util.ScheduledDimensionPolicy;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -20,6 +21,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 
 /**
  * Manages per-player homes with async DB backing.
@@ -154,17 +156,6 @@ public final class HomeManager {
     }
 
     private void beginHomeTeleport(Player player, UUID playerId, String inputName) {
-        if (!player.isOnline() || isInPlayerCombat(player)) {
-            pendingTeleports.remove(playerId);
-            return;
-        }
-        String initialRestriction = activeTeleportRestriction(player);
-        if (initialRestriction != null) {
-            pendingTeleports.remove(playerId);
-            player.sendMessage(MessageUtil.warn(initialRestriction));
-            return;
-        }
-
         String normalized = inputName.toLowerCase(Locale.ROOT);
         Map<String, HomeEntry> homes = cache.get(playerId);
         HomeEntry entry = homes == null ? null : homes.get(normalized);
@@ -174,10 +165,81 @@ public final class HomeManager {
             return;
         }
 
+        beginResolvedHomeTeleport(
+            player,
+            playerId,
+            entry,
+            () -> {
+                Map<String, HomeEntry> currentHomes = cache.get(playerId);
+                return currentHomes != null && entry.equals(currentHomes.get(normalized));
+            },
+            "That home changed while it was loading. Try again.",
+            worldMissingMessage(inputName, normalized),
+            unsafeMessage(inputName, normalized),
+            teleportedMessage(inputName, normalized)
+        );
+    }
+
+    public void teleportSharedHome(
+        Player player,
+        HomeEntry entry,
+        String successMessage,
+        BooleanSupplier accessStillValid
+    ) {
+        if (player == null || entry == null || accessStillValid == null) {
+            return;
+        }
+        if (isInPlayerCombat(player)) {
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        if (!pendingTeleports.add(playerId)) {
+            player.sendMessage(MessageUtil.warn("Your last home teleport is still loading."));
+            return;
+        }
+        sessionToken(playerId);
+        beginResolvedHomeTeleport(
+            player,
+            playerId,
+            entry,
+            accessStillValid,
+            "That alliance home is no longer available.",
+            "That alliance home's world is unavailable.",
+            "That alliance home has no safe landing spot nearby.",
+            successMessage
+        );
+    }
+
+    private void beginResolvedHomeTeleport(
+        Player player,
+        UUID playerId,
+        HomeEntry entry,
+        BooleanSupplier accessStillValid,
+        String changedMessage,
+        String missingWorldMessage,
+        String unsafeLocationMessage,
+        String successMessage
+    ) {
+        if (!player.isOnline() || isInPlayerCombat(player)) {
+            pendingTeleports.remove(playerId);
+            return;
+        }
+        if (!accessStillValid.getAsBoolean()) {
+            pendingTeleports.remove(playerId);
+            player.sendMessage(MessageUtil.warn(changedMessage));
+            return;
+        }
+        String initialRestriction = activeTeleportRestriction(player);
+        if (initialRestriction != null) {
+            pendingTeleports.remove(playerId);
+            player.sendMessage(MessageUtil.warn(initialRestriction));
+            return;
+        }
+
         Location destination = entry.toLocation();
         if (destination == null || destination.getWorld() == null) {
             pendingTeleports.remove(playerId);
-            player.sendMessage(MessageUtil.error(worldMissingMessage(inputName, normalized)));
+            player.sendMessage(MessageUtil.error(missingWorldMessage));
             return;
         }
         if (isScheduledDimensionLocked(player, destination.getWorld())) {
@@ -207,10 +269,9 @@ public final class HomeManager {
                 pendingTeleports.remove(playerId);
                 return;
             }
-            Map<String, HomeEntry> currentHomes = cache.get(playerId);
-            if (currentHomes == null || !entry.equals(currentHomes.get(normalized))) {
+            if (!accessStillValid.getAsBoolean()) {
                 pendingTeleports.remove(playerId);
-                player.sendMessage(MessageUtil.warn("That home changed while it was loading. Try again."));
+                player.sendMessage(MessageUtil.warn(changedMessage));
                 return;
             }
             if (loadError != null) {
@@ -240,7 +301,7 @@ public final class HomeManager {
             );
             if (safe == null) {
                 pendingTeleports.remove(playerId);
-                player.sendMessage(MessageUtil.error(unsafeMessage(inputName, normalized)));
+                player.sendMessage(MessageUtil.error(unsafeLocationMessage));
                 return;
             }
             if (!canBypassHomeBorder(player) && !world.getWorldBorder().isInside(safe)) {
@@ -250,7 +311,16 @@ public final class HomeManager {
             }
 
             Location returnLocation = player.getLocation().clone();
-            beginValidatedTeleport(player, playerId, safe, returnLocation, inputName, normalized, true);
+            beginValidatedTeleport(
+                player,
+                playerId,
+                safe,
+                returnLocation,
+                successMessage,
+                accessStillValid,
+                changedMessage,
+                true
+            );
         }));
     }
 
@@ -259,8 +329,9 @@ public final class HomeManager {
         UUID playerId,
         Location destination,
         Location returnLocation,
-        String inputName,
-        String normalized,
+        String successMessage,
+        BooleanSupplier accessStillValid,
+        String changedMessage,
         boolean retryAvailable
     ) {
         if (!player.isOnline()) {
@@ -269,6 +340,11 @@ public final class HomeManager {
         }
         if (isInPlayerCombat(player)) {
             pendingTeleports.remove(playerId);
+            return;
+        }
+        if (!accessStillValid.getAsBoolean()) {
+            pendingTeleports.remove(playerId);
+            player.sendMessage(MessageUtil.warn(changedMessage));
             return;
         }
         String restriction = activeTeleportRestriction(player);
@@ -281,7 +357,7 @@ public final class HomeManager {
         boolean crossWorld = !player.getWorld().getUID().equals(destination.getWorld().getUID());
         if (crossWorld && !prepareCrossWorldTeleport(player)) {
             pendingTeleports.remove(playerId);
-            player.sendMessage(MessageUtil.warn("Leave your seat or mount, then try /home again."));
+            player.sendMessage(MessageUtil.warn("Leave your seat or mount, then try again."));
             return;
         }
 
@@ -295,7 +371,7 @@ public final class HomeManager {
                     pendingTeleports.remove(playerId);
                     plugin.getPlayerManager().saveBackLocation(playerId, returnLocation);
                     player.playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 0.65F, 1.15F);
-                    player.sendMessage(MessageUtil.success(teleportedMessage(inputName, normalized)));
+                    player.sendMessage(MessageUtil.success(successMessage));
                     return;
                 }
 
@@ -315,8 +391,9 @@ public final class HomeManager {
                             playerId,
                             destination,
                             returnLocation,
-                            inputName,
-                            normalized,
+                            successMessage,
+                            accessStillValid,
+                            changedMessage,
                             false
                         ),
                         1L
@@ -382,7 +459,7 @@ public final class HomeManager {
         if (to != World.Environment.NETHER && to != World.Environment.THE_END) {
             return false;
         }
-        boolean bypass = player.hasPermission("smpcore.startsmp.bypass-dimension-lock");
+        boolean bypass = OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.startsmp.bypass-dimension-lock");
         boolean unlocked = plugin.getSmpStartManager() == null || plugin.getSmpStartManager().isDimensionUnlocked(to);
         if (!ScheduledDimensionPolicy.blocksTravel(from, to, bypass, unlocked)) {
             return false;
@@ -393,7 +470,7 @@ public final class HomeManager {
     }
 
     private boolean canBypassHomeBorder(Player player) {
-        return player.hasPermission("smpcore.home.bypass-border");
+        return OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.home.bypass-border");
     }
 
     private static CompletableFuture<Void> loadSafetyChunks(World world, Location destination) {

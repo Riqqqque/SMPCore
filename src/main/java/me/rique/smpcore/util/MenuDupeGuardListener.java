@@ -109,6 +109,19 @@ public final class MenuDupeGuardListener implements Listener {
             return;
         }
 
+        if (!isEmpty(player.getItemOnCursor())) {
+            event.setCancelled(true);
+            player.sendMessage(MessageUtil.warn(
+                "Place the item on your cursor before opening another menu."
+            ));
+            scheduleInventoryRefresh(player);
+            return;
+        }
+
+        if (isReadOnlyPluginMenu(top)) {
+            markReadOnlyPreviewItems(top);
+        }
+
         // Some modded and shader clients keep the first window-content packet even
         // when menu items are sanitized during InventoryOpenEvent. Resend the final
         // server state one tick later so visible icons and clickable slots agree.
@@ -122,7 +135,7 @@ public final class MenuDupeGuardListener implements Listener {
         }
         BukkitTask refresh = plugin.getServer().getScheduler().runTask(plugin, () -> {
             pendingInventoryRefreshes.remove(playerId);
-            if (!player.isOnline() || !isPluginMenu(player.getOpenInventory().getTopInventory())) {
+            if (!player.isOnline()) {
                 return;
             }
             player.updateInventory();
@@ -155,7 +168,7 @@ public final class MenuDupeGuardListener implements Listener {
 
         event.setCancelled(true);
         if (event.getWhoClicked() instanceof Player player) {
-            scheduleInventoryRefresh(player);
+            scheduleReadOnlySanitizer(player);
         }
     }
 
@@ -179,7 +192,7 @@ public final class MenuDupeGuardListener implements Listener {
         clearPreviewCursor(event.getPlayer(), "player join");
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerKick(PlayerKickEvent event) {
         clearPendingInventoryRefresh(event.getPlayer());
         purgeMarkedItems(event.getPlayer().getInventory(), event.getPlayer(), "player kick");
@@ -317,11 +330,13 @@ public final class MenuDupeGuardListener implements Listener {
             if (!player.isOnline()) {
                 return;
             }
-            boolean clearedCursor = clearPreviewCursor(player, "read-only menu click");
-            boolean clearedInventory = purgeMarkedItems(player.getInventory(), player, "read-only menu inventory leak");
-            if (clearedCursor || clearedInventory) {
-                player.updateInventory();
+            Inventory top = player.getOpenInventory().getTopInventory();
+            if (isReadOnlyPluginMenu(top)) {
+                markReadOnlyPreviewItems(top);
             }
+            clearPreviewCursor(player, "read-only menu click");
+            purgeMarkedItems(player.getInventory(), player, "read-only menu inventory leak");
+            player.updateInventory();
         });
         pendingReadOnlySanitizers.put(playerId, sanitizer);
     }
@@ -330,6 +345,27 @@ public final class MenuDupeGuardListener implements Listener {
         if (player != null && clearPreviewCursor(player, "non-menu cursor cleanup")) {
             player.updateInventory();
         }
+    }
+
+    private boolean markReadOnlyPreviewItems(Inventory inventory) {
+        boolean changed = false;
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            ItemStack item = inventory.getItem(slot);
+            if (isEmpty(item) || hasMenuPreviewMarker(item)) {
+                continue;
+            }
+
+            ItemStack marked = item.clone();
+            ItemMeta meta = marked.getItemMeta();
+            if (meta == null) {
+                continue;
+            }
+            meta.getPersistentDataContainer().set(menuPreviewKey, PersistentDataType.BYTE, (byte) 1);
+            marked.setItemMeta(meta);
+            inventory.setItem(slot, marked);
+            changed = true;
+        }
+        return changed;
     }
 
     private boolean purgeMarkedItems(Inventory inventory, Player player, String reason) {
@@ -417,10 +453,6 @@ public final class MenuDupeGuardListener implements Listener {
 
         ItemMeta meta = item.getItemMeta();
         return meta != null && meta.getPersistentDataContainer().has(menuPreviewKey, PersistentDataType.BYTE);
-    }
-
-    private boolean isSamePreview(ItemStack expected, ItemStack actual) {
-        return !isEmpty(expected) && !isEmpty(actual) && expected.isSimilar(actual);
     }
 
     private boolean isEmpty(ItemStack item) {

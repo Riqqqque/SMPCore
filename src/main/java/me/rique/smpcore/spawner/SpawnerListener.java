@@ -5,6 +5,7 @@ import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
@@ -343,7 +344,7 @@ public final class SpawnerListener implements Listener {
 
         Player player = event.getPlayer();
         if (player.getGameMode() != GameMode.CREATIVE) return;
-        if (!player.hasPermission("smpcore.spawner.admin")) {
+        if (!OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.spawner.admin")) {
             event.setCancelled(true);
             player.sendMessage(MessageUtil.error("You do not have permission to clone custom spawners."));
             return;
@@ -813,9 +814,13 @@ public final class SpawnerListener implements Listener {
         if (!plugin.getConfigManager().spawnerAiNerfEnabled) return;
         if (!mob.isValid() || mob.isDead()) return;
 
-        mob.setTarget(null);
+        if (mob.getTarget() != null) {
+            mob.setTarget(null);
+        }
         // Disable pathfinding/targeting while keeping normal physics interactions for farms.
-        mob.setAware(false);
+        if (mob.isAware()) {
+            mob.setAware(false);
+        }
     }
 
     private void queueAiEnforcement(Mob mob) {
@@ -853,7 +858,7 @@ public final class SpawnerListener implements Listener {
                     int z = sourceZ + dz;
                     SpawnerData data = manager.getData(source.getWorld(), x, y, z);
                     if (data == null || !data.redstoneControlled()) continue;
-                    manager.updateHologram(new Location(source.getWorld(), x, y, z));
+                    manager.queueHologramUpdate(new Location(source.getWorld(), x, y, z));
                 }
             }
         }

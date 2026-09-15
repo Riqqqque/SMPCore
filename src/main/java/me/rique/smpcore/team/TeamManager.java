@@ -18,10 +18,16 @@ import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.enchantments.Enchantment;
+import org.bukkit.entity.AreaEffectCloud;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Projectile;
+import org.bukkit.entity.TNTPrimed;
+import org.bukkit.entity.Tameable;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryAction;
@@ -43,6 +49,7 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.components.EquippableComponent;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.projectiles.ProjectileSource;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.scoreboard.Team;
@@ -53,6 +60,7 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -72,6 +80,10 @@ public final class TeamManager implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final long INVITE_DURATION_MS = 120_000L;
     private static final long ALLY_INVITE_DURATION_MS = 300_000L;
+    private static final long FORMER_TEAMMATE_KILL_PROGRESS_BLOCK_MS = 30L * 24L * 60L * 60L * 1000L;
+    private static final long TEAM_LEAVE_WINDOW_MS = 7L * 24L * 60L * 60L * 1000L;
+    private static final int TEAM_LEAVE_JOIN_LOCK_THRESHOLD = 3;
+    private static final long TEAM_JOIN_LOCK_MS = 24L * 60L * 60L * 1000L;
     private static final int TEAM_VAULT_SIZE = 54;
     private static final int MAX_TEAM_VAULT_ITEM_BYTES = 1536 * 1024;
     private static final int MAX_TEAM_VAULT_DATA_BYTES = 1536 * 1024;
@@ -100,7 +112,10 @@ public final class TeamManager implements Listener {
     private final Enchantment enchantRespiration;
     private final Map<String, TeamData> teamsByKey = new ConcurrentHashMap<>();
     private final Map<UUID, String> teamByPlayer = new ConcurrentHashMap<>();
+    private final Map<PlayerPair, Long> formerTeammateKillProgressBlocks = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> teamJoinLockedUntil = new ConcurrentHashMap<>();
     private final Map<UUID, InviteData> invitesByTarget = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> friendlyDamageNotices = new ConcurrentHashMap<>();
     private final Map<String, AllyInviteData> allyInvitesByTargetTeam = new ConcurrentHashMap<>();
     private final Map<String, String> scoreboardIdByTeamKey = new ConcurrentHashMap<>();
     private final Map<String, TeamVaultSession> teamVaultsByKey = new ConcurrentHashMap<>();
@@ -129,9 +144,16 @@ public final class TeamManager implements Listener {
         teamsLoading = true;
         teamsLoaded = false;
         try {
-            finishTeamLoad(plugin.getDatabase().loadTeams().join(), null);
+            List<DatabaseManager.TeamRecord> teams = plugin.getDatabase().loadTeams().join();
+            List<DatabaseManager.TeamKillProgressCooldownRecord> cooldowns = plugin.getDatabase()
+                .loadActiveTeamKillProgressCooldowns(System.currentTimeMillis())
+                .join();
+            List<DatabaseManager.TeamJoinLockRecord> joinLocks = plugin.getDatabase()
+                .loadActiveTeamJoinLocks(System.currentTimeMillis())
+                .join();
+            finishTeamLoad(teams, cooldowns, joinLocks, null);
         } catch (CompletionException ex) {
-            finishTeamLoad(List.of(), ex);
+            finishTeamLoad(List.of(), List.of(), List.of(), ex);
         }
     }
 
@@ -140,13 +162,32 @@ public final class TeamManager implements Listener {
 
         teamsLoading = true;
         teamsLoaded = false;
-        plugin.getDatabase().loadTeams().whenComplete((rows, ex) -> {
+        plugin.getDatabase().loadTeams()
+            .thenCombine(
+                plugin.getDatabase().loadActiveTeamKillProgressCooldowns(System.currentTimeMillis()),
+                (teams, cooldowns) -> new TeamLoadSnapshot(teams, cooldowns, List.of())
+            )
+            .thenCombine(
+                plugin.getDatabase().loadActiveTeamJoinLocks(System.currentTimeMillis()),
+                (snapshot, joinLocks) -> new TeamLoadSnapshot(snapshot.teams(), snapshot.cooldowns(), joinLocks)
+            )
+            .whenComplete((snapshot, ex) -> {
             if (!plugin.isEnabled()) return;
-            Bukkit.getScheduler().runTask(plugin, () -> finishTeamLoad(rows, ex));
+            Bukkit.getScheduler().runTask(plugin, () -> finishTeamLoad(
+                snapshot == null ? List.of() : snapshot.teams(),
+                snapshot == null ? List.of() : snapshot.cooldowns(),
+                snapshot == null ? List.of() : snapshot.joinLocks(),
+                ex
+            ));
         });
     }
 
-    private void finishTeamLoad(List<DatabaseManager.TeamRecord> rows, Throwable throwable) {
+    private void finishTeamLoad(
+        List<DatabaseManager.TeamRecord> rows,
+        List<DatabaseManager.TeamKillProgressCooldownRecord> cooldowns,
+        List<DatabaseManager.TeamJoinLockRecord> joinLocks,
+        Throwable throwable
+    ) {
         teamsLoading = false;
         if (throwable != null) {
             Throwable root = throwable instanceof CompletionException && throwable.getCause() != null
@@ -158,9 +199,27 @@ public final class TeamManager implements Listener {
 
         teamsByKey.clear();
         teamByPlayer.clear();
+        formerTeammateKillProgressBlocks.clear();
+        teamJoinLockedUntil.clear();
         invitesByTarget.clear();
         allyInvitesByTargetTeam.clear();
         scoreboardIdByTeamKey.clear();
+
+        long now = System.currentTimeMillis();
+        for (DatabaseManager.TeamKillProgressCooldownRecord cooldown : cooldowns) {
+            if (cooldown == null || cooldown.blockedUntil() <= now) {
+                continue;
+            }
+            PlayerPair pair = PlayerPair.of(cooldown.firstPlayer(), cooldown.secondPlayer());
+            if (pair != null) {
+                formerTeammateKillProgressBlocks.merge(pair, cooldown.blockedUntil(), Math::max);
+            }
+        }
+        for (DatabaseManager.TeamJoinLockRecord joinLock : joinLocks) {
+            if (joinLock != null && joinLock.playerId() != null && joinLock.joinLockedUntil() > now) {
+                teamJoinLockedUntil.merge(joinLock.playerId(), joinLock.joinLockedUntil(), Math::max);
+            }
+        }
 
         for (DatabaseManager.TeamRecord row : rows) {
             String displayName = row.name();
@@ -170,6 +229,12 @@ public final class TeamManager implements Listener {
             TeamColor color = TeamColor.fromId(row.color());
             TeamData data = new TeamData(key, displayName, row.ownerUuid(), color);
             data.members.addAll(row.members());
+            data.friendlyFireEnabled = row.friendlyFireEnabled();
+            for (UUID captain : row.captains()) {
+                if (captain != null && data.members.contains(captain) && !captain.equals(row.ownerUuid())) {
+                    data.captains.add(captain);
+                }
+            }
             for (String allyName : row.allies()) {
                 String allyKey = key(allyName);
                 if (!allyKey.isEmpty() && !allyKey.equals(key)) {
@@ -258,7 +323,7 @@ public final class TeamManager implements Listener {
         });
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onKick(PlayerKickEvent event) {
         flushOpenTeamVault(event.getPlayer(), "kick");
     }
@@ -266,7 +331,34 @@ public final class TeamManager implements Listener {
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         invitesByTarget.remove(event.getPlayer().getUniqueId());
+        friendlyDamageNotices.remove(event.getPlayer().getUniqueId());
         flushOpenTeamVault(event.getPlayer(), "quit");
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onTeamFriendlyDamage(EntityDamageByEntityEvent event) {
+        if (!(event.getEntity() instanceof Player victim)) {
+            return;
+        }
+        Player attacker = resolvePlayerAttacker(event.getDamager());
+        if (attacker == null || attacker.getUniqueId().equals(victim.getUniqueId())) {
+            return;
+        }
+        if (plugin.getDuelManager() != null
+            && plugin.getDuelManager().areOpponents(attacker.getUniqueId(), victim.getUniqueId())) {
+            return;
+        }
+        if (!shouldBlockFriendlyDamage(attacker.getUniqueId(), victim.getUniqueId())) {
+            return;
+        }
+
+        event.setCancelled(true);
+        long now = System.currentTimeMillis();
+        long nextNotice = friendlyDamageNotices.getOrDefault(attacker.getUniqueId(), 0L);
+        if (nextNotice <= now) {
+            friendlyDamageNotices.put(attacker.getUniqueId(), now + 1_500L);
+            attacker.sendActionBar(MM.deserialize("<yellow>Team damage is disabled.</yellow>"));
+        }
     }
 
     private void flushOpenTeamVault(Player player, String reason) {
@@ -317,13 +409,20 @@ public final class TeamManager implements Listener {
         }
         if (event.getWhoClicked() instanceof Player player && denyRestrictedTeamVaultUse(player)) {
             event.setCancelled(true);
+            resyncRejectedTeamVaultInteraction(player);
             return;
         }
         if (event.isCancelled()) {
+            if (event.getWhoClicked() instanceof Player player) {
+                resyncRejectedTeamVaultInteraction(player);
+            }
             return;
         }
         if (isUnsafeTeamVaultClick(event)) {
             event.setCancelled(true);
+            if (event.getWhoClicked() instanceof Player player) {
+                resyncRejectedTeamVaultInteraction(player);
+            }
             return;
         }
         if (!canApplyTeamVaultClick(event)) {
@@ -332,10 +431,22 @@ public final class TeamManager implements Listener {
                 player.sendMessage(MessageUtil.warn(
                     "That item carries too much stored data for shared storage. Nothing was moved."
                 ));
+                resyncRejectedTeamVaultInteraction(player);
             }
             return;
         }
         scheduleTeamVaultSyncAndSave(holder.teamKey(), "click");
+    }
+
+    private void resyncRejectedTeamVaultInteraction(Player player) {
+        if (player == null) {
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (player.isOnline()) {
+                player.updateInventory();
+            }
+        });
     }
 
     private boolean isUnsafeTeamVaultClick(InventoryClickEvent event) {
@@ -483,9 +594,13 @@ public final class TeamManager implements Listener {
         }
         if (event.getWhoClicked() instanceof Player player && denyRestrictedTeamVaultUse(player)) {
             event.setCancelled(true);
+            resyncRejectedTeamVaultInteraction(player);
             return;
         }
         if (event.isCancelled()) {
+            if (event.getWhoClicked() instanceof Player player) {
+                resyncRejectedTeamVaultInteraction(player);
+            }
             return;
         }
 
@@ -493,6 +608,9 @@ public final class TeamManager implements Listener {
         for (int rawSlot : event.getRawSlots()) {
             if (rawSlot < topSize) {
                 event.setCancelled(true);
+                if (event.getWhoClicked() instanceof Player player) {
+                    resyncRejectedTeamVaultInteraction(player);
+                }
                 return;
             }
         }
@@ -621,6 +739,7 @@ public final class TeamManager implements Listener {
         vaultAutosaveTasksByTeamKey.values().forEach(BukkitTask::cancel);
         vaultAutosaveTasksByTeamKey.clear();
         teamVaultsByKey.clear();
+        friendlyDamageNotices.clear();
         unregisterAllScoreboardTeams();
     }
 
@@ -640,6 +759,10 @@ public final class TeamManager implements Listener {
         }
 
         UUID creatorId = creator.getUniqueId();
+        long joinLockRemaining = teamJoinLockRemainingMillis(creatorId);
+        if (joinLockRemaining > 0L) {
+            return CompletableFuture.completedFuture(teamJoinLockMessage(joinLockRemaining));
+        }
         if (teamByPlayer.containsKey(creatorId)) {
             return CompletableFuture.completedFuture("Leave your current team first.");
         }
@@ -802,6 +925,9 @@ public final class TeamManager implements Listener {
                     }
                 }
                 current.allies.remove(oldKey);
+                if (plugin.getAllianceHomeManager() != null) {
+                    plugin.getAllianceHomeManager().renameTeamLocal(oldName, displayName);
+                }
                 allyInvitesByTargetTeam.entrySet().removeIf(entry ->
                     entry.getKey().equals(oldKey) || entry.getValue().teamKey().equals(oldKey));
                 refreshTeamVisuals(current);
@@ -821,8 +947,8 @@ public final class TeamManager implements Listener {
         TeamData team = teamOf(inviter.getUniqueId());
         if (team == null) return "You are not in a team.";
         if (renamingTeamKeys.contains(team.key)) return "Team settings are updating. Try again in a moment.";
-        if (!team.owner.equals(inviter.getUniqueId())) {
-            return "Only the team owner can invite players.";
+        if (!canManageCaptainOperations(team, inviter.getUniqueId())) {
+            return "Only the team owner or a captain can invite players.";
         }
         if (target.getUniqueId().equals(inviter.getUniqueId())) {
             return "You cannot invite yourself.";
@@ -845,6 +971,10 @@ public final class TeamManager implements Listener {
         UUID targetId = target.getUniqueId();
         if (teamByPlayer.containsKey(targetId)) {
             return CompletableFuture.completedFuture("Leave your current team first.");
+        }
+        long joinLockRemaining = teamJoinLockRemainingMillis(targetId);
+        if (joinLockRemaining > 0L) {
+            return CompletableFuture.completedFuture(teamJoinLockMessage(joinLockRemaining));
         }
 
         InviteData invite = invitesByTarget.remove(targetId);
@@ -915,6 +1045,9 @@ public final class TeamManager implements Listener {
 
         String teamName = team.displayName;
         String teamKey = team.key;
+        Set<UUID> formerTeammates = new LinkedHashSet<>(team.members);
+        formerTeammates.remove(playerId);
+        long blockedUntil = formerTeammateBlockUntil(System.currentTimeMillis());
         CompletableFuture<String> vaultCheck = team.members.size() == 1
             ? ensureVaultEmptyBeforeDeletion(team)
             : CompletableFuture.completedFuture(null);
@@ -922,13 +1055,22 @@ public final class TeamManager implements Listener {
             if (vaultError != null) {
                 return CompletableFuture.<DatabaseManager.TeamLeaveRecord>failedFuture(new IllegalStateException(vaultError));
             }
-            return plugin.getDatabase().leaveTeam(teamName, playerId);
+            long leaveAt = System.currentTimeMillis();
+            return plugin.getDatabase().leaveTeam(
+                teamName,
+                playerId,
+                blockedUntil,
+                leaveAt,
+                TEAM_LEAVE_WINDOW_MS,
+                TEAM_LEAVE_JOIN_LOCK_THRESHOLD,
+                TEAM_JOIN_LOCK_MS
+            );
         })
             .handle((result, ex) -> {
                 if (ex == null) return result;
                 Throwable root = ex.getCause() == null ? ex : ex.getCause();
                 if (root.getMessage() != null && root.getMessage().startsWith("Empty the team vault")) {
-                    return new DatabaseManager.TeamLeaveRecord(false, false, null);
+                    return new DatabaseManager.TeamLeaveRecord(false, false, null, 0L);
                 }
                 plugin.getLogger().severe("leaveTeam failed: " + root.getMessage());
                 return null;
@@ -941,6 +1083,15 @@ public final class TeamManager implements Listener {
                 }
 
                 return runOnMainThread(() -> {
+                    rememberFormerTeammatePairs(playerId, formerTeammates, blockedUntil);
+                    rememberTeamJoinLock(playerId, result.joinLockedUntil());
+                    if (result.joinLockedUntil() > System.currentTimeMillis()) {
+                        player.sendMessage(MessageUtil.warn(
+                            "You left teams too often. You cannot join or create a team for <white>"
+                                + formatTeamJoinLock(result.joinLockedUntil() - System.currentTimeMillis())
+                                + "</white>."
+                        ));
+                    }
                     TeamData current = teamsByKey.get(teamKey);
                     if (current == null) {
                         teamByPlayer.remove(playerId);
@@ -949,12 +1100,16 @@ public final class TeamManager implements Listener {
                     }
 
                     current.members.remove(playerId);
+                    current.captains.remove(playerId);
                     teamByPlayer.remove(playerId);
                     applyTeamTag(player);
                     removeCrownsFromPlayer(player);
 
                     if (result.teamDeleted()) {
                         discardTeamVault(current.key);
+                        if (plugin.getAllianceHomeManager() != null) {
+                            plugin.getAllianceHomeManager().removeTeamLocal(current.displayName);
+                        }
                         teamsByKey.remove(current.key);
                         removeTeamFromAllies(current.key);
                         unregisterScoreboardTeam(current.key);
@@ -970,6 +1125,7 @@ public final class TeamManager implements Listener {
                     UUID newOwner = result.ownerUuid();
                     if (newOwner != null) {
                         current.owner = newOwner;
+                        current.captains.remove(newOwner);
                         if (ownerLeft) {
                             Player ownerOnline = Bukkit.getPlayer(newOwner);
                             if (ownerOnline != null && ownerOnline.isOnline()) {
@@ -999,26 +1155,52 @@ public final class TeamManager implements Listener {
         String teamName = team.displayName;
         String teamKey = team.key;
         UUID ownerId = owner.getUniqueId();
+        Set<UUID> formerMembers = new LinkedHashSet<>(team.members);
+        long blockedUntil = formerTeammateBlockUntil(System.currentTimeMillis());
+        long leaveAt = System.currentTimeMillis();
         return ensureVaultEmptyBeforeDeletion(team)
             .thenCompose(vaultError -> vaultError != null
-                ? CompletableFuture.<Void>failedFuture(new IllegalStateException(vaultError))
-                : plugin.getDatabase().deleteTeam(teamName))
-            .handle((ignored, ex) -> {
-                if (ex == null) return null;
+                ? CompletableFuture.<Long>failedFuture(new IllegalStateException(vaultError))
+                : plugin.getDatabase().deleteTeamForOwner(
+                    teamName,
+                    blockedUntil,
+                    ownerId,
+                    leaveAt,
+                    TEAM_LEAVE_WINDOW_MS,
+                    TEAM_LEAVE_JOIN_LOCK_THRESHOLD,
+                    TEAM_JOIN_LOCK_MS
+                ))
+            .handle((joinLockedUntil, ex) -> {
+                if (ex == null) return new DisbandOutcome(null, joinLockedUntil == null ? 0L : joinLockedUntil);
                 Throwable root = ex.getCause() == null ? ex : ex.getCause();
                 if (root.getMessage() != null && root.getMessage().startsWith("Empty the team vault")) {
-                    return "Empty the team vault before deleting the team so its contents are not lost.";
+                    return new DisbandOutcome(
+                        "Empty the team vault before deleting the team so its contents are not lost.",
+                        0L
+                    );
                 }
                 plugin.getLogger().severe("deleteTeam failed: " + root.getMessage());
-                return "Could not disband team right now.";
+                return new DisbandOutcome("Could not disband team right now.", 0L);
             })
-            .thenCompose(error -> {
-                if (error != null) return CompletableFuture.completedFuture(error);
+            .thenCompose(outcome -> {
+                if (outcome.error() != null) return CompletableFuture.completedFuture(outcome.error());
 
                 return runOnMainThread(() -> {
+                    rememberFormerTeammatePairs(formerMembers, blockedUntil);
+                    rememberTeamJoinLock(ownerId, outcome.joinLockedUntil());
+                    if (outcome.joinLockedUntil() > System.currentTimeMillis()) {
+                        owner.sendMessage(MessageUtil.warn(
+                            "You left teams too often. You cannot join or create a team for <white>"
+                                + formatTeamJoinLock(outcome.joinLockedUntil() - System.currentTimeMillis())
+                                + "</white>."
+                        ));
+                    }
                     discardTeamVault(teamKey);
                     TeamData current = teamsByKey.remove(teamKey);
                     if (current == null) return null;
+                    if (plugin.getAllianceHomeManager() != null) {
+                        plugin.getAllianceHomeManager().removeTeamLocal(current.displayName);
+                    }
                     removeTeamFromAllies(teamKey);
 
                     for (UUID member : current.members) {
@@ -1147,12 +1329,17 @@ public final class TeamManager implements Listener {
 
         TeamData team = teamOf(owner.getUniqueId());
         if (team == null) return CompletableFuture.completedFuture("You are not in a team.");
-        if (!team.owner.equals(owner.getUniqueId())) return CompletableFuture.completedFuture("Only the team owner can manage allies.");
+        if (!canManageCaptainOperations(team, owner.getUniqueId())) {
+            return CompletableFuture.completedFuture("Only the team owner or a captain can sever alliances.");
+        }
         if (renamingTeamKeys.contains(team.key)) return CompletableFuture.completedFuture("Team settings are updating. Try again in a moment.");
 
         TeamData ally = teamsByKey.get(key(normalizeDisplayName(rawTeamName)));
         if (ally == null) return CompletableFuture.completedFuture("That team does not exist.");
         if (!team.allies.contains(ally.key)) return CompletableFuture.completedFuture("Your team is not allied with <white>" + ally.displayName + "</white>.");
+        if (!beginAllianceHomeMutation(team.displayName, ally.displayName)) {
+            return CompletableFuture.completedFuture("One of those teams is already updating. Try again in a moment.");
+        }
 
         return plugin.getDatabase().removeTeamAlliance(team.displayName, ally.displayName)
             .handle((ignored, ex) -> {
@@ -1170,6 +1357,9 @@ public final class TeamManager implements Listener {
                 if (currentAlly != null) {
                     currentAlly.allies.remove(team.key);
                 }
+                if (plugin.getAllianceHomeManager() != null) {
+                    plugin.getAllianceHomeManager().removeAllianceLocal(team.displayName, ally.displayName);
+                }
                 if (currentTeam != null) {
                     notifyTeam(currentTeam, MessageUtil.warn("Your alliance with <white>" + ally.displayName + "</white> ended."));
                 }
@@ -1177,7 +1367,8 @@ public final class TeamManager implements Listener {
                     notifyTeam(currentAlly, MessageUtil.warn("<white>" + team.displayName + "</white> ended your alliance."));
                 }
                 return (String) null;
-            }));
+            }))
+            .whenComplete((ignored, error) -> endAllianceHomeMutation(team.displayName, ally.displayName));
     }
 
     public Component alliesMessage(UUID playerId) {
@@ -1217,23 +1408,149 @@ public final class TeamManager implements Listener {
             return MessageUtil.info("You are not in a team.");
         }
 
-        List<String> memberNames = new ArrayList<>();
+        List<String> rosterNames = new ArrayList<>();
         for (UUID member : team.members) {
             String name = Bukkit.getOfflinePlayer(member).getName();
-            memberNames.add(name == null ? member.toString() : name);
+            rosterNames.add(name == null ? member.toString() : name);
         }
-        memberNames.sort(String::compareToIgnoreCase);
+        rosterNames.sort(String::compareToIgnoreCase);
 
         String ownerName = Bukkit.getOfflinePlayer(team.owner).getName();
         if (ownerName == null) ownerName = team.owner.toString();
+        List<String> captainNames = memberNames(team.captains);
 
         return MessageUtil.prefixedRaw(
                 "<gold>Team</gold> <white>" + team.displayName + "</white> " +
                 "<gray>| Owner: <white>" + ownerName + "</white> " +
                 "| Color: <" + team.color.id + ">" + team.color.display + "</" + team.color.id + "> " +
                 "| Members: <white>" + team.members.size() + "</white> " +
+                "| Captains: <white>" + (captainNames.isEmpty() ? "none" : String.join(", ", captainNames)) + "</white> " +
                 "| Allies: <white>" + allyDisplayNames(team) + "</white> " +
-            "| List: <white>" + String.join(", ", memberNames) + "</white></gray>"
+                "| Team Damage: <white>" + (team.friendlyFireEnabled ? "enabled" : "disabled") + "</white> " +
+            "| List: <white>" + String.join(", ", rosterNames) + "</white></gray>"
+        );
+    }
+
+    public CompletableFuture<String> setTeamDamage(Player actor, Boolean requestedEnabled) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) return CompletableFuture.completedFuture(unavailable);
+
+        TeamData team = teamOf(actor.getUniqueId());
+        if (team == null) return CompletableFuture.completedFuture("You are not in a team.");
+        if (!canManageCaptainOperations(team, actor.getUniqueId())) {
+            return CompletableFuture.completedFuture("Only the team owner or a captain can change team damage.");
+        }
+        boolean enabled = requestedEnabled == null ? !team.friendlyFireEnabled : requestedEnabled;
+        if (team.friendlyFireEnabled == enabled) {
+            return CompletableFuture.completedFuture("Team damage is already " + (enabled ? "enabled." : "disabled."));
+        }
+
+        String teamKey = team.key;
+        String teamName = team.displayName;
+        UUID actorId = actor.getUniqueId();
+        return plugin.getDatabase().setTeamFriendlyFire(teamName, enabled)
+            .handle((saved, ex) -> {
+                if (ex == null && Boolean.TRUE.equals(saved)) return null;
+                if (ex != null) {
+                    plugin.getLogger().severe("setTeamFriendlyFire failed: " + ex.getMessage());
+                }
+                return "Could not change team damage right now.";
+            })
+            .thenCompose(error -> runOnMainThread(() -> {
+                if (error != null) return error;
+                TeamData current = teamsByKey.get(teamKey);
+                if (current == null) return "That team no longer exists.";
+                if (!canManageCaptainOperations(current, actorId)) {
+                    return "Only the team owner or a captain can change team damage.";
+                }
+                current.friendlyFireEnabled = enabled;
+                notifyTeam(
+                    current,
+                    MessageUtil.info(
+                        "<white>" + actor.getName() + "</white> " + (enabled ? "enabled" : "disabled")
+                            + " teammate and ally damage."
+                    )
+                );
+                return (String) null;
+            }));
+    }
+
+    public CompletableFuture<String> setCaptain(Player owner, String rawMember, boolean promote) {
+        String unavailable = teamsUnavailableMessage();
+        if (unavailable != null) return CompletableFuture.completedFuture(unavailable);
+
+        TeamData team = teamOf(owner.getUniqueId());
+        if (team == null) return CompletableFuture.completedFuture("You are not in a team.");
+        if (!team.owner.equals(owner.getUniqueId())) {
+            return CompletableFuture.completedFuture("Only the team owner can manage captains.");
+        }
+        UUID memberId = findTeamMember(team, rawMember);
+        if (memberId == null) {
+            return CompletableFuture.completedFuture("That player is not a member of your team.");
+        }
+        if (memberId.equals(team.owner)) {
+            return CompletableFuture.completedFuture("The team owner already has full permissions.");
+        }
+        if (promote == team.captains.contains(memberId)) {
+            return CompletableFuture.completedFuture(
+                playerName(memberId) + " is " + (promote ? "already a captain." : "not a captain.")
+            );
+        }
+
+        String teamKey = team.key;
+        String teamName = team.displayName;
+        CompletableFuture<Boolean> update = promote
+            ? plugin.getDatabase().addTeamCaptain(teamName, memberId)
+            : plugin.getDatabase().removeTeamCaptain(teamName, memberId);
+        return update.handle((saved, ex) -> {
+                if (ex == null && Boolean.TRUE.equals(saved)) return null;
+                if (ex != null) {
+                    plugin.getLogger().severe((promote ? "addTeamCaptain" : "removeTeamCaptain") + " failed: " + ex.getMessage());
+                }
+                return "Could not update that captain right now.";
+            })
+            .thenCompose(error -> runOnMainThread(() -> {
+                if (error != null) return error;
+                TeamData current = teamsByKey.get(teamKey);
+                if (current == null || !current.owner.equals(owner.getUniqueId()) || !current.members.contains(memberId)) {
+                    return "Team membership changed before the captain update finished.";
+                }
+                if (promote) {
+                    current.captains.add(memberId);
+                } else {
+                    current.captains.remove(memberId);
+                }
+                notifyTeam(
+                    current,
+                    MessageUtil.info(
+                        "<white>" + playerName(memberId) + "</white> is " + (promote ? "now" : "no longer") + " a team captain."
+                    )
+                );
+                return (String) null;
+            }));
+    }
+
+    public List<String> teamMemberNames(UUID actorId) {
+        TeamData team = teamOf(actorId);
+        return team == null ? List.of() : memberNames(team.members);
+    }
+
+    public Component captainStatusMessage(UUID playerId) {
+        TeamData team = teamOf(playerId);
+        if (team == null) {
+            return MessageUtil.info("You are not in a team.");
+        }
+        List<String> captains = memberNames(team.captains);
+        return MessageUtil.info("Team captains: <white>" + (captains.isEmpty() ? "none" : String.join(", ", captains)) + "</white>.");
+    }
+
+    public Component teamDamageStatusMessage(UUID playerId) {
+        TeamData team = teamOf(playerId);
+        if (team == null) {
+            return MessageUtil.info("You are not in a team.");
+        }
+        return MessageUtil.info(
+            "Teammate and ally damage is <white>" + (team.friendlyFireEnabled ? "enabled" : "disabled") + "</white>."
         );
     }
 
@@ -1825,6 +2142,68 @@ public final class TeamManager implements Listener {
         return team == null ? null : team.displayName;
     }
 
+    public String teamDisplayNameByKey(String rawTeamKey) {
+        if (!teamsLoaded || rawTeamKey == null || rawTeamKey.isBlank()) {
+            return null;
+        }
+        TeamData team = teamsByKey.get(key(rawTeamKey));
+        return team == null ? null : team.displayName;
+    }
+
+    public boolean isTeamOwner(UUID playerId) {
+        TeamData team = teamOf(playerId);
+        return team != null && team.owner.equals(playerId);
+    }
+
+    public List<String> alliedTeamNames(UUID playerId) {
+        TeamData team = teamOf(playerId);
+        if (team == null || team.allies.isEmpty()) {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>();
+        for (String allyKey : team.allies) {
+            TeamData ally = teamsByKey.get(allyKey);
+            if (ally != null && ally.allies.contains(team.key)) {
+                names.add(ally.displayName);
+            }
+        }
+        names.sort(String.CASE_INSENSITIVE_ORDER);
+        return List.copyOf(names);
+    }
+
+    public boolean areTeamsAllied(String firstTeamName, String secondTeamName) {
+        if (!teamsLoaded || firstTeamName == null || secondTeamName == null) {
+            return false;
+        }
+        TeamData first = teamsByKey.get(key(firstTeamName));
+        TeamData second = teamsByKey.get(key(secondTeamName));
+        return first != null
+            && second != null
+            && first.allies.contains(second.key)
+            && second.allies.contains(first.key);
+    }
+
+    public boolean beginAllianceHomeMutation(String firstTeamName, String secondTeamName) {
+        String firstKey = key(firstTeamName);
+        String secondKey = key(secondTeamName);
+        if (firstKey.isBlank() || secondKey.isBlank() || firstKey.equals(secondKey)) {
+            return false;
+        }
+        if (!renamingTeamKeys.add(firstKey)) {
+            return false;
+        }
+        if (!renamingTeamKeys.add(secondKey)) {
+            renamingTeamKeys.remove(firstKey);
+            return false;
+        }
+        return true;
+    }
+
+    public void endAllianceHomeMutation(String firstTeamName, String secondTeamName) {
+        renamingTeamKeys.remove(key(firstTeamName));
+        renamingTeamKeys.remove(key(secondTeamName));
+    }
+
     public Component tabTeamLabel(UUID playerId) {
         TeamData team = teamOf(playerId);
         return team == null ? null : Component.text(team.displayName, team.color.textColor);
@@ -1870,6 +2249,150 @@ public final class TeamManager implements Listener {
         return first != null && first.allies.contains(secondTeam);
     }
 
+    public boolean shouldBlockFriendlyDamage(UUID attackerId, UUID victimId) {
+        if (attackerId == null || victimId == null || attackerId.equals(victimId) || !teamsLoaded) {
+            return false;
+        }
+        String attackerTeamKey = teamByPlayer.get(attackerId);
+        String victimTeamKey = teamByPlayer.get(victimId);
+        if (attackerTeamKey == null || victimTeamKey == null) {
+            return false;
+        }
+        TeamData attackerTeam = teamsByKey.get(attackerTeamKey);
+        if (attackerTeam == null) {
+            return false;
+        }
+        if (attackerTeamKey.equals(victimTeamKey)) {
+            return blocksFriendlyDamage(true, false, attackerTeam.friendlyFireEnabled, attackerTeam.friendlyFireEnabled);
+        }
+        boolean allied = attackerTeam.allies.contains(victimTeamKey);
+        TeamData victimTeam = teamsByKey.get(victimTeamKey);
+        return blocksFriendlyDamage(
+            false,
+            allied,
+            attackerTeam.friendlyFireEnabled,
+            victimTeam != null && victimTeam.friendlyFireEnabled
+        );
+    }
+
+    static boolean blocksFriendlyDamage(
+        boolean sameTeam,
+        boolean allied,
+        boolean attackerTeamDamageEnabled,
+        boolean victimTeamDamageEnabled
+    ) {
+        if (sameTeam) {
+            return !attackerTeamDamageEnabled;
+        }
+        return allied && (!attackerTeamDamageEnabled || !victimTeamDamageEnabled);
+    }
+
+    public boolean blocksPlayerKillProgress(UUID killerId, UUID victimId) {
+        return playerKillProgressBlockRemainingMillis(killerId, victimId) > 0L;
+    }
+
+    public long playerKillProgressBlockRemainingMillis(UUID killerId, UUID victimId) {
+        if (killerId == null || victimId == null || killerId.equals(victimId)) {
+            return Long.MAX_VALUE;
+        }
+        if (!teamsLoaded) {
+            return Long.MAX_VALUE;
+        }
+        if (sameTeam(killerId, victimId)) {
+            return Long.MAX_VALUE;
+        }
+
+        PlayerPair pair = PlayerPair.of(killerId, victimId);
+        if (pair == null) {
+            return Long.MAX_VALUE;
+        }
+        Long blockedUntil = formerTeammateKillProgressBlocks.get(pair);
+        if (blockedUntil == null) {
+            return 0L;
+        }
+        long now = System.currentTimeMillis();
+        if (isActiveKillProgressBlock(blockedUntil, now)) {
+            return blockedUntil - now;
+        }
+        formerTeammateKillProgressBlocks.remove(pair, blockedUntil);
+        return 0L;
+    }
+
+    public long teamJoinLockRemainingMillis(UUID playerId) {
+        if (playerId == null) {
+            return 0L;
+        }
+        Long lockedUntil = teamJoinLockedUntil.get(playerId);
+        if (lockedUntil == null) {
+            return 0L;
+        }
+        long now = System.currentTimeMillis();
+        if (lockedUntil <= now) {
+            teamJoinLockedUntil.remove(playerId, lockedUntil);
+            return 0L;
+        }
+        return lockedUntil - now;
+    }
+
+    private void rememberTeamJoinLock(UUID playerId, long lockedUntil) {
+        if (playerId != null && lockedUntil > System.currentTimeMillis()) {
+            teamJoinLockedUntil.merge(playerId, lockedUntil, Math::max);
+        }
+    }
+
+    private static String teamJoinLockMessage(long remainingMillis) {
+        return "You changed teams too often. You cannot join or create a team for <white>"
+            + formatTeamJoinLock(remainingMillis) + "</white>.";
+    }
+
+    static String formatTeamJoinLock(long millis) {
+        long totalMinutes = Math.max(1L, (millis + 59_999L) / 60_000L);
+        long hours = totalMinutes / 60L;
+        long minutes = totalMinutes % 60L;
+        return hours > 0L ? hours + "h " + minutes + "m" : minutes + "m";
+    }
+
+    static long formerTeammateBlockUntil(long now) {
+        return now + FORMER_TEAMMATE_KILL_PROGRESS_BLOCK_MS;
+    }
+
+    static boolean isActiveKillProgressBlock(long blockedUntil, long now) {
+        return blockedUntil > now;
+    }
+
+    static String persistentPlayerPairKey(UUID first, UUID second) {
+        PlayerPair pair = PlayerPair.of(first, second);
+        return pair == null ? "" : pair.low() + ":" + pair.high();
+    }
+
+    private void rememberFormerTeammatePairs(UUID leavingPlayer, Collection<UUID> formerTeammates, long blockedUntil) {
+        if (leavingPlayer == null || formerTeammates == null) {
+            return;
+        }
+        for (UUID formerTeammate : formerTeammates) {
+            rememberFormerTeammatePair(leavingPlayer, formerTeammate, blockedUntil);
+        }
+    }
+
+    private void rememberFormerTeammatePairs(Collection<UUID> formerMembers, long blockedUntil) {
+        if (formerMembers == null || formerMembers.size() < 2) {
+            return;
+        }
+        List<UUID> members = formerMembers.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        for (int first = 0; first < members.size(); first++) {
+            for (int second = first + 1; second < members.size(); second++) {
+                rememberFormerTeammatePair(members.get(first), members.get(second), blockedUntil);
+            }
+        }
+    }
+
+    private void rememberFormerTeammatePair(UUID first, UUID second, long blockedUntil) {
+        PlayerPair pair = PlayerPair.of(first, second);
+        if (pair != null && isActiveKillProgressBlock(blockedUntil, System.currentTimeMillis())) {
+            formerTeammateKillProgressBlocks.merge(pair, blockedUntil, Math::max);
+        }
+    }
+
     public void notifyPlayerTeam(UUID playerId, Component message) {
         if (playerId == null || message == null || !teamsLoaded) {
             return;
@@ -1912,11 +2435,17 @@ public final class TeamManager implements Listener {
             "<gray><white>/team color <color></white> - Change team color (owner)</gray>",
             "<gray><white>/team rename \"name\"</white> - Rename your team (owner)</gray>",
             "<gray><white>/team invite <player></white> - Invite a player</gray>",
+            "<gray><white>/team damage [on|off]</white> - Toggle teammate and ally damage (owner/captain)</gray>",
+            "<gray><white>/team captain add|remove <member></white> - Manage captains (owner)</gray>",
             "<gray><white>/team accept</white> / <white>/team deny</white> - Handle invites</gray>",
             "<gray><white>/team ally add <team></white> - Request an alliance (owner)</gray>",
             "<gray><white>/team ally accept <team></white> / <white>/team ally deny <team></white> - Handle alliance requests</gray>",
-            "<gray><white>/team ally remove <team></white> - End an alliance (owner)</gray>",
+            "<gray><white>/team ally remove <team></white> - End an alliance (owner/captain)</gray>",
             "<gray><white>/team allies</white> - View your team's allies</gray>",
+            "<gray><white>/allysethome <name> [ally]</white> - Set a shared home (owner)</gray>",
+            "<gray><white>/allyhome <name> [ally]</white> - Visit a shared alliance home</gray>",
+            "<gray><white>/allyhomes</white> - List shared alliance homes</gray>",
+            "<gray><white>/allydelhome <name> [ally]</white> - Delete one (owner)</gray>",
             "<gray><white>/team leave</white> - Leave your team</gray>",
             "<gray><white>/team disband</white> - Disband your team (owner)</gray>",
             "<gray><white>/team info</white> - View your team info</gray>",
@@ -1989,6 +2518,62 @@ public final class TeamManager implements Listener {
     private TeamData teamOf(UUID playerId) {
         String teamKey = teamByPlayer.get(playerId);
         return teamKey == null ? null : teamsByKey.get(teamKey);
+    }
+
+    private boolean canManageCaptainOperations(TeamData team, UUID playerId) {
+        return team != null && playerId != null
+            && hasCaptainAuthority(team.owner.equals(playerId), team.captains.contains(playerId));
+    }
+
+    static boolean hasCaptainAuthority(boolean owner, boolean captain) {
+        return owner || captain;
+    }
+
+    private UUID findTeamMember(TeamData team, String rawMember) {
+        if (team == null || rawMember == null || rawMember.isBlank()) {
+            return null;
+        }
+        String expected = rawMember.trim();
+        for (UUID memberId : team.members) {
+            String name = Bukkit.getOfflinePlayer(memberId).getName();
+            if (expected.equalsIgnoreCase(name) || expected.equalsIgnoreCase(memberId.toString())) {
+                return memberId;
+            }
+        }
+        return null;
+    }
+
+    private List<String> memberNames(Collection<UUID> members) {
+        List<String> names = new ArrayList<>();
+        if (members != null) {
+            for (UUID memberId : members) {
+                names.add(playerName(memberId));
+            }
+        }
+        names.sort(String.CASE_INSENSITIVE_ORDER);
+        return names;
+    }
+
+    private Player resolvePlayerAttacker(Entity damager) {
+        if (damager instanceof Player player) {
+            return player;
+        }
+        if (damager instanceof Projectile projectile) {
+            ProjectileSource source = projectile.getShooter();
+            if (source instanceof Player player) {
+                return player;
+            }
+        }
+        if (damager instanceof AreaEffectCloud cloud && cloud.getSource() instanceof Player player) {
+            return player;
+        }
+        if (damager instanceof TNTPrimed tnt && tnt.getSource() != null) {
+            return resolvePlayerAttacker(tnt.getSource());
+        }
+        if (damager instanceof Tameable tameable && tameable.getOwner() instanceof Player player) {
+            return player;
+        }
+        return null;
     }
 
     private CompletableFuture<TeamVaultSession> loadTeamVault(TeamData team) {
@@ -2783,6 +3368,8 @@ public final class TeamManager implements Listener {
         private UUID owner;
         private final Set<UUID> members = ConcurrentHashMap.newKeySet();
         private final Set<String> allies = ConcurrentHashMap.newKeySet();
+        private final Set<UUID> captains = ConcurrentHashMap.newKeySet();
+        private volatile boolean friendlyFireEnabled;
 
         private TeamData(String key, String displayName, UUID owner, TeamColor color) {
             this.key = key;
@@ -2831,6 +3418,25 @@ public final class TeamManager implements Listener {
                 }
             }
             return null;
+        }
+    }
+
+    private record TeamLoadSnapshot(
+        List<DatabaseManager.TeamRecord> teams,
+        List<DatabaseManager.TeamKillProgressCooldownRecord> cooldowns,
+        List<DatabaseManager.TeamJoinLockRecord> joinLocks
+    ) {}
+
+    private record DisbandOutcome(String error, long joinLockedUntil) {}
+
+    private record PlayerPair(UUID low, UUID high) {
+        private static PlayerPair of(UUID first, UUID second) {
+            if (first == null || second == null || first.equals(second)) {
+                return null;
+            }
+            return first.toString().compareTo(second.toString()) <= 0
+                ? new PlayerPair(first, second)
+                : new PlayerPair(second, first);
         }
     }
 

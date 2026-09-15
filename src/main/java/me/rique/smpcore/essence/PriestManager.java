@@ -509,6 +509,9 @@ public final class PriestManager implements Listener {
         }
         equipPriest(armorStand);
         armorStand.getPersistentDataContainer().set(keyNpc, PersistentDataType.BYTE, (byte) 1);
+        if (plugin.getGuideNpcManager() != null) {
+            plugin.getGuideNpcManager().trackNpc(armorStand, armorStand.getLocation());
+        }
     }
 
     private void equipPriest(ArmorStand armorStand) {

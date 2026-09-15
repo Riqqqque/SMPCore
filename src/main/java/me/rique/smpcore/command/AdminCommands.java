@@ -9,6 +9,7 @@ import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import io.papermc.paper.ban.BanListType;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
+import io.papermc.paper.command.brigadier.argument.resolvers.PlayerProfileListResolver;
 import io.papermc.paper.command.brigadier.argument.resolvers.selector.PlayerSelectorArgumentResolver;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.audit.ItemAuditManager;
@@ -25,6 +26,7 @@ import me.rique.smpcore.item.ReforgeManager;
 import me.rique.smpcore.item.RewardLanternListener;
 import me.rique.smpcore.item.SalvagingDepotListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
+import me.rique.smpcore.item.VelocityNullifierListener;
 import me.rique.smpcore.item.XpLecternListener;
 import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.legendary.MythicForgeListener;
@@ -33,7 +35,10 @@ import me.rique.smpcore.power.SuperpowerType;
 import me.rique.smpcore.quest.MinerManager;
 import me.rique.smpcore.season.SeasonRelicManager;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.OfflinePlayer;
@@ -42,9 +47,11 @@ import org.bukkit.Sound;
 import org.bukkit.command.CommandSender;
 import org.bukkit.ban.ProfileBanList;
 import org.bukkit.entity.Player;
+import org.bukkit.event.player.PlayerKickEvent;
 import org.bukkit.inventory.ItemStack;
 
 import com.destroystokyo.paper.profile.PlayerProfile;
+import java.util.Collection;
 import java.util.List;
 import java.util.LinkedHashSet;
 import java.util.Locale;
@@ -67,6 +74,7 @@ public final class AdminCommands {
     private static final String MYTHIC_FORGE_ITEM_ID = MythicForgeListener.MYTHIC_FORGE_ITEM_ID;
     private static final String ASCENDANT_CORE_ITEM_ID = MythicForgeListener.ASCENDANT_CORE_ITEM_ID;
     private static final String TALISMAN_OF_SUSTENANCE_ITEM_ID = SustenanceTalismanListener.ITEM_ID;
+    private static final String VELOCITY_NULLIFIER_ITEM_ID = VelocityNullifierListener.ITEM_ID;
     private static final String SALVAGING_DEPOT_ITEM_ID = SalvagingDepotListener.ITEM_ID;
     private static final String AGRICULTURAL_PYLON_ITEM_ID = AgriculturalPylonListener.ITEM_ID;
     private static final String XP_LECTERN_ITEM_ID = XpLecternListener.ITEM_ID;
@@ -80,6 +88,9 @@ public final class AdminCommands {
     private static final String CORRUPTION_ANCHOR_ITEM_ID = CorruptionManager.STATION_ITEM_ID;
     private static final String FIRST_DRAGON_SIGIL_ITEM_ID = FirstDragonSigilListener.ITEM_ID;
     private static final String VEINWAKE_PICK_ITEM_ID = "veinwake_pick";
+    private static final String DEFAULT_BAN_REASON = "No reason provided.";
+    private static final String DEFAULT_KICK_REASON = "No reason provided.";
+    private static final int MAX_MODERATION_REASON_LENGTH = 256;
     private static final Set<String> ABSOLUTE_OWNER_ACCOUNTS = Set.of("riqqqque");
     private static final List<String> CUSTOM_ITEM_IDS = List.of(
         BACKPACK_ITEM_ID,
@@ -91,6 +102,7 @@ public final class AdminCommands {
         MYTHIC_FORGE_ITEM_ID,
         ASCENDANT_CORE_ITEM_ID,
         TALISMAN_OF_SUSTENANCE_ITEM_ID,
+        VELOCITY_NULLIFIER_ITEM_ID,
         SALVAGING_DEPOT_ITEM_ID,
         AGRICULTURAL_PYLON_ITEM_ID,
         XP_LECTERN_ITEM_ID,
@@ -108,12 +120,14 @@ public final class AdminCommands {
         CustomToolListener.GRAPPLE_HOOK_ID,
         CustomToolListener.SPELUNKER_LANTERN_ID,
         CustomToolListener.SURVEYORS_LENS_ID,
-        CustomToolListener.MENDERS_KIT_ID
+        CustomToolListener.MENDERS_KIT_ID,
+        CustomToolListener.RESTOCK_TOKEN_ID
     );
 
     private AdminCommands() {}
 
     public static void register(Commands commands, SMPCore plugin) {
+        registerStaffMode(commands, plugin);
         registerFly(commands, plugin);
         registerVanish(commands, plugin);
         registerHeal(commands, plugin);
@@ -126,6 +140,8 @@ public final class AdminCommands {
         registerAnnounce(commands);
         registerSmite(commands);
         registerFreeze(commands, plugin);
+        registerBan(commands, plugin);
+        registerKick(commands, plugin);
         registerUnban(commands);
         registerReplenishBook(commands, plugin);
         registerDelicateBook(commands, plugin);
@@ -141,6 +157,48 @@ public final class AdminCommands {
         registerAbsoluteOwnerCommands(commands, plugin);
         registerCustomItemCommand(commands, plugin);
         registerItemAudit(commands, plugin);
+    }
+
+    private static void registerStaffMode(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("staffmode")
+                .requires(src -> src.getSender().hasPermission("smpcore.staffmode"))
+                .executes(ctx -> setStaffMode(ctx.getSource().getSender(), plugin, null))
+                .then(Commands.literal("on")
+                    .executes(ctx -> setStaffMode(ctx.getSource().getSender(), plugin, true)))
+                .then(Commands.literal("off")
+                    .executes(ctx -> setStaffMode(ctx.getSource().getSender(), plugin, false)))
+                .then(Commands.literal("status")
+                    .executes(ctx -> setStaffMode(ctx.getSource().getSender(), plugin, null)))
+                .build(),
+            "Temporarily enable passive staff gameplay bypasses",
+            List.of("opmode")
+        );
+    }
+
+    private static int setStaffMode(org.bukkit.command.CommandSender sender, SMPCore plugin, Boolean enabled) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(MessageUtil.error("Must be a player."));
+            return 0;
+        }
+        if (enabled == null) {
+            boolean active = OperatorGameplayMode.isStaffModeEnabled(player);
+            player.sendMessage(active
+                ? MessageUtil.warn("Staff mode is <white>ON</white>. Use <white>/staffmode off</white> to return to normal gameplay.")
+                : MessageUtil.info("Staff mode is <white>OFF</white>. OP follows normal gameplay rules."));
+            return Command.SINGLE_SUCCESS;
+        }
+        OperatorGameplayMode.setStaffMode(player, enabled);
+        if (plugin.getPlayerManager() != null) {
+            plugin.getPlayerManager().refreshVanishForViewer(player);
+        }
+        if (plugin.getPlayerVisualListener() != null) {
+            plugin.getPlayerVisualListener().refreshPlayerFinderDefense();
+        }
+        player.sendMessage(enabled
+            ? MessageUtil.warn("Staff mode <white>ON</white> for this session. Passive admin bypasses are active.")
+            : MessageUtil.success("Staff mode <white>OFF</white>. You now follow normal gameplay rules."));
+        return Command.SINGLE_SUCCESS;
     }
 
     // /fly [player]
@@ -186,18 +244,74 @@ public final class AdminCommands {
         commands.register(
             Commands.literal("vanish")
                 .requires(src -> src.getSender().hasPermission("smpcore.vanish"))
-                .executes(ctx -> {
-                    if (!(ctx.getSource().getSender() instanceof Player self)) {
-                        ctx.getSource().getSender().sendMessage(MessageUtil.error("Must be a player.")); return 0;
-                    }
-                    boolean now = plugin.getPlayerManager().toggleVanish(self);
-                    self.sendMessage(MessageUtil.success("Vanish <white>" + (now ? "ON" : "OFF") + "</white>."));
-                    return Command.SINGLE_SUCCESS;
-                })
+                .executes(ctx -> toggleVanish(plugin, ctx.getSource().getSender()))
+                .then(Commands.literal("on")
+                    .executes(ctx -> setVanish(plugin, ctx.getSource().getSender(), false)))
+                .then(Commands.literal("off")
+                    .executes(ctx -> disableVanish(plugin, ctx.getSource().getSender())))
+                .then(Commands.literal("spectator")
+                    .executes(ctx -> setVanish(plugin, ctx.getSource().getSender(), true)))
+                .then(Commands.literal("status")
+                    .executes(ctx -> vanishStatus(plugin, ctx.getSource().getSender())))
                 .build(),
             "Toggle vanish mode",
-            List.of("v")
+            List.of("v", "svanish", "specvanish")
         );
+    }
+
+    private static int toggleVanish(SMPCore plugin, CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(MessageUtil.error("Must be a player."));
+            return 0;
+        }
+        boolean enabled = plugin.getPlayerManager().toggleVanish(player);
+        player.sendMessage(enabled
+            ? MessageUtil.success("Vanish <white>ON</white>. You are hidden from players and public player counts.")
+            : MessageUtil.success("Vanish <white>OFF</white>."));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int setVanish(SMPCore plugin, CommandSender sender, boolean spectator) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(MessageUtil.error("Must be a player."));
+            return 0;
+        }
+        if (spectator) {
+            plugin.getPlayerManager().setSpectatorVanished(player);
+            player.sendMessage(MessageUtil.success("Spectator vanish <white>ON</white>. Use <white>/vanish off</white> to return."));
+        } else {
+            plugin.getPlayerManager().setVanished(player, true);
+            player.sendMessage(MessageUtil.success("Vanish <white>ON</white>. Use <white>/vanish spectator</white> for trace-free flight."));
+        }
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int disableVanish(SMPCore plugin, CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(MessageUtil.error("Must be a player."));
+            return 0;
+        }
+        if (!plugin.getPlayerManager().setVanished(player, false)) {
+            player.sendMessage(MessageUtil.info("Vanish is already off."));
+            return 0;
+        }
+        player.sendMessage(MessageUtil.success("Vanish <white>OFF</white>."));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int vanishStatus(SMPCore plugin, CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(MessageUtil.error("Must be a player."));
+            return 0;
+        }
+        if (plugin.getPlayerManager().isSpectatorVanished(player.getUniqueId())) {
+            player.sendMessage(MessageUtil.info("Vanish: <white>spectator</white>."));
+        } else if (plugin.getPlayerManager().isVanished(player.getUniqueId())) {
+            player.sendMessage(MessageUtil.info("Vanish: <white>hidden</white>."));
+        } else {
+            player.sendMessage(MessageUtil.info("Vanish: <white>off</white>."));
+        }
+        return Command.SINGLE_SUCCESS;
     }
 
     // /heal [player]
@@ -578,6 +692,52 @@ public final class AdminCommands {
         );
     }
 
+    private static void registerBan(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("ban")
+                .requires(src -> src.getSender().hasPermission("smpcore.ban"))
+                .then(Commands.argument("targets", ArgumentTypes.playerProfiles())
+                    .executes(ctx -> executeBan(
+                        plugin,
+                        ctx.getSource().getSender(),
+                        ctx.getArgument("targets", PlayerProfileListResolver.class).resolve(ctx.getSource()),
+                        null
+                    ))
+                    .then(Commands.argument("reason", StringArgumentType.greedyString())
+                        .executes(ctx -> executeBan(
+                            plugin,
+                            ctx.getSource().getSender(),
+                            ctx.getArgument("targets", PlayerProfileListResolver.class).resolve(ctx.getSource()),
+                            StringArgumentType.getString(ctx, "reason")
+                        ))))
+                .build(),
+            "Permanently ban one or more player profiles"
+        );
+    }
+
+    private static void registerKick(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("kick")
+                .requires(src -> src.getSender().hasPermission("smpcore.kick"))
+                .then(Commands.argument("targets", ArgumentTypes.players())
+                    .executes(ctx -> executeKick(
+                        plugin,
+                        ctx.getSource().getSender(),
+                        ctx.getArgument("targets", PlayerSelectorArgumentResolver.class).resolve(ctx.getSource()),
+                        null
+                    ))
+                    .then(Commands.argument("reason", StringArgumentType.greedyString())
+                        .executes(ctx -> executeKick(
+                            plugin,
+                            ctx.getSource().getSender(),
+                            ctx.getArgument("targets", PlayerSelectorArgumentResolver.class).resolve(ctx.getSource()),
+                            StringArgumentType.getString(ctx, "reason")
+                        ))))
+                .build(),
+            "Disconnect one or more online players"
+        );
+    }
+
     private static void registerAbsoluteOwnerTeamVaultView(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("viewteamvault")
@@ -854,6 +1014,40 @@ public final class AdminCommands {
                         1
                     );
                 })
+                .then(Commands.argument("level", IntegerArgumentType.integer(1, 3))
+                    .executes(ctx -> {
+                        if (!(ctx.getSource().getSender() instanceof Player self)) {
+                            ctx.getSource().getSender().sendMessage(MessageUtil.error("Console must specify a target."));
+                            return 0;
+                        }
+                        int level = IntegerArgumentType.getInteger(ctx, "level");
+                        return giveManagedEnchantBook(
+                            plugin,
+                            ctx.getSource().getSender(),
+                            self,
+                            "Dash " + romanNumeral(level),
+                            ManagedEnchantBook.DASH,
+                            level
+                        );
+                    })
+                    .then(Commands.argument("target", ArgumentTypes.player())
+                        .executes(ctx -> {
+                            List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
+                                .resolve(ctx.getSource());
+                            if (targets.isEmpty()) {
+                                ctx.getSource().getSender().sendMessage(MessageUtil.error("Player not found."));
+                                return 0;
+                            }
+                            int level = IntegerArgumentType.getInteger(ctx, "level");
+                            return giveManagedEnchantBook(
+                                plugin,
+                                ctx.getSource().getSender(),
+                                targets.get(0),
+                                "Dash " + romanNumeral(level),
+                                ManagedEnchantBook.DASH,
+                                level
+                            );
+                        })))
                 .then(Commands.argument("target", ArgumentTypes.player())
                     .executes(ctx -> {
                         List<Player> targets = ctx.getArgument("target", PlayerSelectorArgumentResolver.class)
@@ -999,7 +1193,7 @@ public final class AdminCommands {
             case SMELTING_TOUCH -> listener.createSmeltingTouchBook();
             case WISE -> listener.createWiseBook(level);
             case DOUBLE_JUMP -> listener.createDoubleJumpBook();
-            case DASH -> listener.createDashBook();
+            case DASH -> listener.createDashBook(level);
         };
         ItemAuditManager audit = plugin.getItemAuditManager();
         if (audit != null) {
@@ -1169,6 +1363,7 @@ public final class AdminCommands {
             case MYTHIC_FORGE_ITEM_ID -> createMythicForgeAdminItem(plugin, sender);
             case ASCENDANT_CORE_ITEM_ID -> createAscendantCoreAdminItem(plugin, sender);
             case TALISMAN_OF_SUSTENANCE_ITEM_ID -> createTalismanOfSustenanceAdminItem(plugin, sender);
+            case VELOCITY_NULLIFIER_ITEM_ID -> createVelocityNullifierAdminItem(plugin, sender);
             case SALVAGING_DEPOT_ITEM_ID -> createSalvagingDepotAdminItem(plugin, sender);
             case AGRICULTURAL_PYLON_ITEM_ID -> createAgriculturalPylonAdminItem(plugin, sender);
             case XP_LECTERN_ITEM_ID -> createXpLecternAdminItem(plugin, sender);
@@ -1176,7 +1371,7 @@ public final class AdminCommands {
             case WARDEN_HEART_ITEM_ID -> createWardenHeartAdminItem(plugin, sender);
             case MOTHER_NATURE_STICK_ITEM_ID -> createMotherNatureStickAdminItem(plugin, sender);
             case THE_WORLD_CLOCK_ITEM_ID -> createTheWorldClockAdminItem(plugin, sender);
-            case DRUID_GRIMOIRE_ITEM_ID -> createDruidGrimoireAdminItem(plugin, sender);
+            case DRUID_GRIMOIRE_ITEM_ID -> createDruidGrimoireAdminItem(plugin, sender, target);
             case DOMINION_CORE_ITEM_ID -> createDominionCoreAdminItem(plugin, sender);
             case REFORGE_STONE_ITEM_ID -> createReforgeStoneAdminItem(plugin, sender, itemId);
             case CORRUPTION_ANCHOR_ITEM_ID -> createCorruptionAnchorAdminItem(plugin, sender);
@@ -1186,7 +1381,8 @@ public final class AdminCommands {
                  CustomToolListener.GRAPPLE_HOOK_ID,
                  CustomToolListener.SPELUNKER_LANTERN_ID,
                  CustomToolListener.SURVEYORS_LENS_ID,
-                 CustomToolListener.MENDERS_KIT_ID ->
+                 CustomToolListener.MENDERS_KIT_ID,
+                 CustomToolListener.RESTOCK_TOKEN_ID ->
                 createCustomToolAdminItem(plugin, sender, itemId);
             default -> createSeasonRelicAdminItem(plugin, sender, itemId);
         };
@@ -1304,6 +1500,15 @@ public final class AdminCommands {
         return new AdminGiveItem(talisman.createTalismanItem(), "Talisman of Sustenance");
     }
 
+    private static AdminGiveItem createVelocityNullifierAdminItem(SMPCore plugin, CommandSender sender) {
+        VelocityNullifierListener nullifier = plugin.getVelocityNullifierListener();
+        if (nullifier == null) {
+            sender.sendMessage(MessageUtil.error("Velocity Nullifier system is not ready yet."));
+            return null;
+        }
+        return new AdminGiveItem(nullifier.createItem(), "Velocity Nullifier");
+    }
+
     private static AdminGiveItem createSalvagingDepotAdminItem(SMPCore plugin, CommandSender sender) {
         SalvagingDepotListener depot = plugin.getSalvagingDepotListener();
         if (depot == null) {
@@ -1367,13 +1572,17 @@ public final class AdminCommands {
         return new AdminGiveItem(powers.createTheWorldClockItem(), "World Clock");
     }
 
-    private static AdminGiveItem createDruidGrimoireAdminItem(SMPCore plugin, CommandSender sender) {
+    private static AdminGiveItem createDruidGrimoireAdminItem(SMPCore plugin, CommandSender sender, Player target) {
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers == null) {
             sender.sendMessage(MessageUtil.error("Class system is not ready yet."));
             return null;
         }
-        return new AdminGiveItem(powers.createDruidGrimoireItem(), "Druid's Grimoire");
+        if (powers.powerOf(target) != SuperpowerType.DRUID) {
+            sender.sendMessage(MessageUtil.error("Druid's Grimoire can only be given to a player with the Druid class."));
+            return null;
+        }
+        return new AdminGiveItem(powers.createDruidGrimoireItem(target), "Druid's Grimoire");
     }
 
     private static AdminGiveItem createDominionCoreAdminItem(SMPCore plugin, CommandSender sender) {
@@ -1516,6 +1725,146 @@ public final class AdminCommands {
         return Bukkit.getOfflinePlayer(rawName);
     }
 
+    private static int executeBan(
+        SMPCore plugin,
+        CommandSender sender,
+        Collection<PlayerProfile> targets,
+        String rawReason
+    ) {
+        String reason = normalizeModerationReason(rawReason, DEFAULT_BAN_REASON);
+        if (!validateModerationReason(sender, reason)) {
+            return 0;
+        }
+        if (targets == null || targets.isEmpty()) {
+            sender.sendMessage(MessageUtil.error("No matching players were found."));
+            return 0;
+        }
+
+        ProfileBanList banList = Bukkit.getServer().getBanList(BanListType.PROFILE);
+        int banned = 0;
+        for (PlayerProfile profile : targets) {
+            String displayName = displayName(profile);
+            if (banList.isBanned(profile)) {
+                sender.sendMessage(MessageUtil.prefixedRaw(
+                    "<yellow><target> is already banned.</yellow>",
+                    MessageUtil.placeholder("target", displayName)
+                ));
+                continue;
+            }
+
+            banList.addBan(profile, reason, (java.util.Date) null, sender.getName());
+            Player online = findOnlinePlayer(profile);
+            if (online != null) {
+                online.kick(moderationDisconnectMessage("You are banned from this server.", reason), PlayerKickEvent.Cause.BANNED);
+            }
+
+            sender.sendMessage(MessageUtil.prefixedRaw(
+                "<green>Banned <white><target></white>. <gray>Reason: <reason></gray></green>",
+                MessageUtil.placeholder("target", displayName),
+                MessageUtil.placeholder("reason", reason)
+            ));
+            plugin.getLogger().info(sender.getName() + " banned " + displayName + ": " + reason);
+            banned++;
+        }
+        return banned == 0 ? 0 : banned;
+    }
+
+    private static int executeKick(
+        SMPCore plugin,
+        CommandSender sender,
+        Collection<Player> targets,
+        String rawReason
+    ) {
+        String reason = normalizeModerationReason(rawReason, DEFAULT_KICK_REASON);
+        if (!validateModerationReason(sender, reason)) {
+            return 0;
+        }
+        if (targets == null || targets.isEmpty()) {
+            sender.sendMessage(MessageUtil.error("No matching online players were found."));
+            return 0;
+        }
+
+        int kicked = 0;
+        for (Player target : new LinkedHashSet<>(targets)) {
+            if (!target.isOnline()) {
+                continue;
+            }
+            String displayName = target.getName();
+            target.kick(moderationDisconnectMessage("You were kicked from the server.", reason), PlayerKickEvent.Cause.KICKED);
+            sender.sendMessage(MessageUtil.prefixedRaw(
+                "<green>Kicked <white><target></white>. <gray>Reason: <reason></gray></green>",
+                MessageUtil.placeholder("target", displayName),
+                MessageUtil.placeholder("reason", reason)
+            ));
+            plugin.getLogger().info(sender.getName() + " kicked " + displayName + ": " + reason);
+            kicked++;
+        }
+        return kicked == 0 ? 0 : kicked;
+    }
+
+    static String normalizeModerationReason(String rawReason, String fallback) {
+        String source = rawReason == null || rawReason.isBlank() ? fallback : rawReason;
+        StringBuilder normalized = new StringBuilder(source.length());
+        boolean previousWhitespace = false;
+        for (int codePoint : source.codePoints().toArray()) {
+            if (Character.isISOControl(codePoint) && !Character.isWhitespace(codePoint)) {
+                continue;
+            }
+            if (Character.isWhitespace(codePoint)) {
+                if (!previousWhitespace && !normalized.isEmpty()) {
+                    normalized.append(' ');
+                }
+                previousWhitespace = true;
+                continue;
+            }
+            normalized.appendCodePoint(codePoint);
+            previousWhitespace = false;
+        }
+        int length = normalized.length();
+        if (length > 0 && normalized.charAt(length - 1) == ' ') {
+            normalized.setLength(length - 1);
+        }
+        return normalized.isEmpty() ? fallback : normalized.toString();
+    }
+
+    static boolean isModerationReasonTooLong(String reason) {
+        return reason.codePointCount(0, reason.length()) > MAX_MODERATION_REASON_LENGTH;
+    }
+
+    private static boolean validateModerationReason(CommandSender sender, String reason) {
+        if (!isModerationReasonTooLong(reason)) {
+            return true;
+        }
+        sender.sendMessage(MessageUtil.error(
+            "Reasons can be at most <white>" + MAX_MODERATION_REASON_LENGTH + "</white> characters."
+        ));
+        return false;
+    }
+
+    private static Component moderationDisconnectMessage(String title, String reason) {
+        return Component.text(title, NamedTextColor.RED)
+            .append(Component.newline())
+            .append(Component.text("Reason: ", NamedTextColor.GRAY))
+            .append(Component.text(reason, NamedTextColor.WHITE));
+    }
+
+    private static Player findOnlinePlayer(PlayerProfile profile) {
+        if (profile.getId() != null) {
+            Player byId = Bukkit.getPlayer(profile.getId());
+            if (byId != null) {
+                return byId;
+            }
+        }
+        return profile.getName() == null ? null : Bukkit.getPlayerExact(profile.getName());
+    }
+
+    private static String displayName(PlayerProfile profile) {
+        String name = profile.getName();
+        return name == null || name.isBlank()
+            ? profile.getId() == null ? "unknown profile" : profile.getId().toString()
+            : name;
+    }
+
     private static int executeUnban(CommandSender sender, String rawName) {
         String targetName = rawName == null ? "" : rawName.trim();
         if (targetName.isEmpty()) {
@@ -1578,6 +1927,7 @@ public final class AdminCommands {
                 case CustomToolListener.SPELUNKER_LANTERN_ID -> "spelunkers_lantern";
                 case CustomToolListener.SURVEYORS_LENS_ID -> "surveyors_lens";
                 case CustomToolListener.MENDERS_KIT_ID -> "menders_kit";
+                case CustomToolListener.RESTOCK_TOKEN_ID -> "restock_token";
                 case XP_LECTERN_ITEM_ID -> "xp_lectern";
                 default -> id;
             };
@@ -1650,6 +2000,7 @@ public final class AdminCommands {
             case "lantern", "spelunker", "spelunkers", "spelunker_lantern", "spelunkers_lantern", "spelunkerslantern" -> CustomToolListener.SPELUNKER_LANTERN_ID;
             case "lens", "surveyor", "surveyors", "surveyor_lens", "surveyors_lens", "surveyorslens", "ore_scanner", "orescanner" -> CustomToolListener.SURVEYORS_LENS_ID;
             case "mender", "menders", "mender_kit", "menders_kit", "menderskit", "repair_kit", "repairkit" -> CustomToolListener.MENDERS_KIT_ID;
+            case "restock", "restocktoken", "restock_token", "villager_restock", "villagerrestock" -> CustomToolListener.RESTOCK_TOKEN_ID;
             case "mythicforge", "mythic_forge", "forge" -> MYTHIC_FORGE_ITEM_ID;
             case "mothernature", "mother_nature", "mothernaturestick", "mother_nature_stick", "naturestick" -> MOTHER_NATURE_STICK_ITEM_ID;
             case "orb", "mystic_orb", "orb_of_mystics", "orb_of_the_mystic", "orbofthemystics" -> ORB_OF_THE_MYSTICS_ITEM_ID;
@@ -1661,6 +2012,7 @@ public final class AdminCommands {
             case "agricultural", "agriculturalpylon", "agricultural_pylon", "farm_pylon", "farmpylon", "pylon", "rootguard" -> AGRICULTURAL_PYLON_ITEM_ID;
             case "xp", "xplectern", "xp_lectern", "experiencelectern", "experience_lectern", "levelbank", "level_bank" -> XP_LECTERN_ITEM_ID;
             case "talisman", "sustenance_talisman", "talisman_of_sustenance" -> TALISMAN_OF_SUSTENANCE_ITEM_ID;
+            case "nullifier", "velocitynullifier", "velocity_nullifier", "mace_nullifier" -> VELOCITY_NULLIFIER_ITEM_ID;
             case "theworld", "the_world", "worldclock", "world_clock", "clock" -> THE_WORLD_CLOCK_ITEM_ID;
             case "wardenheart", "warden_heart" -> WARDEN_HEART_ITEM_ID;
             case "dragonsigil", "dragon_sigil", "firstdragon", "first_dragon", "firstdragonsigil", "first_dragon_sigil" -> FIRST_DRAGON_SIGIL_ITEM_ID;
@@ -1707,7 +2059,7 @@ public final class AdminCommands {
         return out.toString();
     }
 
-    private static boolean hasAbsoluteOwnerRights(CommandSender sender) {
+    static boolean hasAbsoluteOwnerRights(CommandSender sender) {
         if (!(sender instanceof Player player)) {
             return true;
         }

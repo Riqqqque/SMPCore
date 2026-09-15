@@ -1,6 +1,7 @@
 package me.rique.smpcore.boss;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.command.MainMenuCommand;
 import me.rique.smpcore.season.SeasonRelicManager;
 import me.rique.smpcore.database.DatabaseManager;
 import me.rique.smpcore.essence.PriestManager;
@@ -14,6 +15,7 @@ import me.rique.smpcore.util.VisualRangeUtil;
 import io.papermc.paper.event.entity.EntityKnockbackEvent;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.kyori.adventure.title.Title;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
@@ -111,7 +113,10 @@ import java.util.concurrent.ThreadLocalRandom;
 public final class BossManager implements Listener {
 
     public static final String DOMINION_CORE_ITEM_ID = "dominion_core";
+    static final Material THALASSA_RITUAL_FOCUS = Material.PRISMARINE_BRICKS;
+    static final Material THALASSA_RITUAL_CATALYST = Material.WATER_BUCKET;
     private static final MiniMessage MM = MiniMessage.miniMessage();
+    private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final Component MENU_TITLE = MM.deserialize("<gradient:#ff5e5b:#ff914d><bold>Boss Control</bold></gradient>");
     private static final Component RITUAL_MENU_TITLE = MM.deserialize("<gradient:#f97316:#dc2626><bold>Boss Rituals</bold></gradient>");
     private static final int[] BOSS_SLOTS = {
@@ -138,6 +143,7 @@ public final class BossManager implements Listener {
     private static final double PLAYER_ARENA_ESCAPE_BUFFER = 1.75D;
     private static final int BOSS_ENTRANCE_DURATION_TICKS = 44;
     private static final long BOSS_ATTACK_VISUAL_COOLDOWN_MS = 325L;
+    static final double BOSS_ARMOR_REWARD_CHANCE = 0.02D;
 
     private final SMPCore plugin;
     private final NamespacedKey keyBossId;
@@ -152,6 +158,7 @@ public final class BossManager implements Listener {
     private final NamespacedKey keyBossStoryLowHealth;
     private final NamespacedKey keyBossMinionMarker;
     private final NamespacedKey keyBossMinionOwner;
+    private final NamespacedKey keyBossMinionExpiresAt;
     private final NamespacedKey keyBossScaledPlayerCount;
     private final NamespacedKey keyBossDisplayMaxHealth;
     private final NamespacedKey keyBossArenaHazardCooldown;
@@ -159,6 +166,7 @@ public final class BossManager implements Listener {
     private final NamespacedKey keyDominionCoreItem;
     private final NamespacedKey keyBossLootChest;
     private final NamespacedKey keyBossLootOwner;
+    private final NamespacedKey keyBossArmorReward;
     private final NamespacedKey keyBossLootHologram;
     private final NamespacedKey keyBossLootHologramBlock;
 
@@ -170,6 +178,7 @@ public final class BossManager implements Listener {
     private final Map<UUID, Set<UUID>> bossArenaPlayers = new ConcurrentHashMap<>();
     private final Map<UUID, BossFightState> bossFightStates = new ConcurrentHashMap<>();
     private final Map<UUID, ActiveBossMechanic> activeBossMechanics = new ConcurrentHashMap<>();
+    private final Map<UUID, BossExposure> bossExposures = new ConcurrentHashMap<>();
     private final Set<UUID> bossMechanicDamageTargets = new HashSet<>();
     private final Set<UUID> bossMechanicFailureTargets = new HashSet<>();
     private final Set<UUID> allowedBossTeleports = ConcurrentHashMap.newKeySet();
@@ -194,6 +203,7 @@ public final class BossManager implements Listener {
         this.keyBossStoryLowHealth = new NamespacedKey(plugin, "boss_story_low_health");
         this.keyBossMinionMarker = new NamespacedKey(plugin, "boss_minion_marker");
         this.keyBossMinionOwner = new NamespacedKey(plugin, "boss_minion_owner");
+        this.keyBossMinionExpiresAt = new NamespacedKey(plugin, "boss_minion_expires_at");
         this.keyBossScaledPlayerCount = new NamespacedKey(plugin, "boss_scaled_player_count");
         this.keyBossDisplayMaxHealth = new NamespacedKey(plugin, "boss_display_max_health");
         this.keyBossArenaHazardCooldown = new NamespacedKey(plugin, "boss_arena_hazard_cd");
@@ -201,6 +211,7 @@ public final class BossManager implements Listener {
         this.keyDominionCoreItem = new NamespacedKey(plugin, DOMINION_CORE_ITEM_ID);
         this.keyBossLootChest = new NamespacedKey(plugin, "boss_loot_chest");
         this.keyBossLootOwner = new NamespacedKey(plugin, "boss_loot_owner");
+        this.keyBossArmorReward = new NamespacedKey(plugin, "boss_armor_reward");
         this.keyBossLootHologram = new NamespacedKey(plugin, "boss_loot_hologram");
         this.keyBossLootHologramBlock = new NamespacedKey(plugin, "boss_loot_hologram_block");
     }
@@ -241,6 +252,7 @@ public final class BossManager implements Listener {
         bossArenaPlayers.clear();
         bossFightStates.clear();
         activeBossMechanics.clear();
+        bossExposures.clear();
         bossMechanicDamageTargets.clear();
         bossMechanicFailureTargets.clear();
         allowedBossTeleports.clear();
@@ -374,7 +386,7 @@ public final class BossManager implements Listener {
 
     public void openRitualMenu(Player player) {
         if (plugin.getBossDungeonManager() != null) {
-            plugin.getBossDungeonManager().openBossCatalog(player);
+            plugin.getBossDungeonManager().openBossCatalogFromMainMenu(player);
             return;
         }
         Inventory inventory = Bukkit.createInventory(
@@ -405,6 +417,39 @@ public final class BossManager implements Listener {
         for (int i = 0; i < types.size() && i < RITUAL_SLOTS.length; i++) {
             inventory.setItem(RITUAL_SLOTS[i], createRitualEntryItem(player, types.get(i)));
         }
+        player.openInventory(inventory);
+    }
+
+    public void openDropCatalogMenuFromMainMenu(Player player) {
+        Inventory inventory = Bukkit.createInventory(
+            new BossDropCatalogMenuHolder(),
+            54,
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize("<gradient:#f97316:#dc2626><bold>Boss Drops</bold></gradient>"),
+                "Boss Drops"
+            )
+        );
+        ItemStack filler = menuItem(Material.BLACK_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            if (isFrameSlot(slot, inventory.getSize())) {
+                inventory.setItem(slot, filler);
+            }
+        }
+
+        inventory.setItem(4, menuItem(
+            Material.CHEST,
+            "<gradient:#facc15:#f97316><bold>Boss Drop Tables</bold></gradient>",
+            List.of(
+                "<gray>Choose a boss to inspect every known drop.</gray>",
+                "<dark_gray>This menu cannot summon bosses or move you to the arena.</dark_gray>"
+            )
+        ));
+        List<BossType> types = BossType.progressionOrder();
+        for (int i = 0; i < types.size() && i < RITUAL_SLOTS.length; i++) {
+            inventory.setItem(RITUAL_SLOTS[i], createDropCatalogEntryItem(player, types.get(i)));
+        }
+        inventory.setItem(49, menuItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to /menu.</gray>")));
         player.openInventory(inventory);
     }
 
@@ -454,7 +499,9 @@ public final class BossManager implements Listener {
 
     public int despawnBossesInWorld(World world) {
         if (world == null) return 0;
-        return despawnBossRecords(record -> world.getName().equals(record.world()));
+        int removed = despawnBossRecords(record -> world.getName().equals(record.world()));
+        despawnBossMinionsInWorld(world);
+        return removed;
     }
 
     private BossActionResult spawnBoss(BossType type, Location location, Player summoner, boolean fromRitual) {
@@ -554,6 +601,16 @@ public final class BossManager implements Listener {
         return record == null ? null : record.bossId();
     }
 
+    public int bossEncounterTier(Entity entity) {
+        BossRecord record = bossRecord(entity);
+        if (record == null && isBossMinion(entity)) {
+            UUID ownerBossId = bossMinionOwner(entity);
+            record = ownerBossId == null ? null : trackedBosses.get(ownerBossId);
+        }
+        BossType type = record == null ? null : BossType.fromId(record.bossId());
+        return type == null ? 0 : type.progressionTier();
+    }
+
     public boolean isBossEncounterEntity(Entity entity) {
         return bossRecord(entity) != null || isBossMinion(entity);
     }
@@ -599,6 +656,10 @@ public final class BossManager implements Listener {
 
     public boolean isLethalBossMechanicDamage(Player player) {
         return player != null && bossMechanicFailureTargets.contains(player.getUniqueId());
+    }
+
+    public boolean isBossMechanicDamage(Player player) {
+        return player != null && bossMechanicDamageTargets.contains(player.getUniqueId());
     }
 
     public boolean isBossOwnedProjectile(Projectile projectile) {
@@ -793,6 +854,21 @@ public final class BossManager implements Listener {
                     }
                     addBossDrop(rewardDrops, killer, drop, dropMultiplier, "Dropped from " + type.plainDisplayName() + ".");
                 }
+                if (rollsBossArmorReward(ThreadLocalRandom.current().nextDouble())) {
+                    ItemStack armorReward = plugin.getSeasonRelicManager().createRandomBossArmorReward(type.progressionTier());
+                    if (armorReward != null && !armorReward.getType().isAir()) {
+                        markBossArmorReward(armorReward, type);
+                        List<ItemStack> priorityReward = new ArrayList<>(1);
+                        addBossDrop(
+                            priorityReward,
+                            killer,
+                            armorReward,
+                            1,
+                            "Rare 2% armor reward from " + type.plainDisplayName() + "."
+                        );
+                        rewardDrops.addAll(0, priorityReward);
+                    }
+                }
             }
             if (rewardDrops.isEmpty() && type != BossType.CORRUPTED_OATHKEEPER) {
                 addBossDrop(rewardDrops, killer, guaranteedBossFallbackDrop(type), dropMultiplier, "Guaranteed fallback drop from " + (type == null ? "a custom boss" : type.plainDisplayName()) + ".");
@@ -821,10 +897,10 @@ public final class BossManager implements Listener {
         }
 
         if (isBossMinion(entity)) {
+            UUID ownerBossId = bossMinionOwner(entity);
             event.getDrops().clear();
             event.setDroppedExp(0);
-            entity.getPersistentDataContainer().remove(keyBossMinionMarker);
-            entity.getPersistentDataContainer().remove(keyBossMinionOwner);
+            handleBossMinionDefeat(entity, ownerBossId);
         }
     }
 
@@ -988,6 +1064,42 @@ public final class BossManager implements Listener {
         }
     }
 
+    static boolean rollsBossArmorReward(double roll) {
+        return Double.isFinite(roll) && roll >= 0.0D && roll < BOSS_ARMOR_REWARD_CHANCE;
+    }
+
+    private void markBossArmorReward(ItemStack item, BossType sourceBoss) {
+        if (item == null || item.getType().isAir() || sourceBoss == null) {
+            return;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return;
+        }
+        meta.getPersistentDataContainer().set(keyBossArmorReward, PersistentDataType.STRING, sourceBoss.id());
+        item.setItemMeta(meta);
+    }
+
+    public BossArmorRewardReveal consumeBossArmorReward(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return null;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return null;
+        }
+        String bossId = meta.getPersistentDataContainer().get(keyBossArmorReward, PersistentDataType.STRING);
+        if (bossId == null || bossId.isBlank()) {
+            return null;
+        }
+        String itemName = meta.hasDisplayName() && meta.displayName() != null
+            ? PLAIN.serialize(meta.displayName())
+            : item.getType().name().toLowerCase(Locale.ROOT).replace('_', ' ');
+        meta.getPersistentDataContainer().remove(keyBossArmorReward);
+        item.setItemMeta(meta);
+        return new BossArmorRewardReveal(bossId, itemName);
+    }
+
     private List<ItemStack> multipliedDrops(ItemStack source, int multiplier) {
         if (source == null || source.getType().isAir()) {
             return List.of();
@@ -1060,9 +1172,15 @@ public final class BossManager implements Listener {
         Block block = findBossLootChestBlock(location);
         Chest chest = placeBossLootChest(block);
         if (chest == null) {
-            dropBossLootNaturally(location, rewards);
-            plugin.getLogger().warning("Dropped boss loot naturally because no loot chest spot could be prepared at "
-                + location.getWorld().getName() + " " + location.getBlockX() + "," + location.getBlockY() + "," + location.getBlockZ() + ".");
+            if (dungeonOwner != null && plugin.getBossDungeonManager() != null) {
+                plugin.getBossDungeonManager().secureDungeonRewards(dungeonOwner, rewards);
+                plugin.getLogger().warning("Secured boss loot for its owner because no loot chest spot could be prepared at "
+                    + location.getWorld().getName() + " " + location.getBlockX() + "," + location.getBlockY() + "," + location.getBlockZ() + ".");
+            } else {
+                dropBossLootNaturally(location, rewards);
+                plugin.getLogger().warning("Dropped boss loot naturally because no loot chest spot could be prepared at "
+                    + location.getWorld().getName() + " " + location.getBlockX() + "," + location.getBlockY() + "," + location.getBlockZ() + ".");
+            }
             return null;
         }
 
@@ -1076,8 +1194,12 @@ public final class BossManager implements Listener {
 
         Inventory inventory = chest.getBlockInventory();
         Map<Integer, ItemStack> leftovers = inventory.addItem(rewards.stream().map(ItemStack::clone).toArray(ItemStack[]::new));
-        Block lootBlock = block;
-        leftovers.values().forEach(leftover -> lootBlock.getWorld().dropItemNaturally(lootBlock.getLocation().add(0.5, 1.0, 0.5), leftover));
+        if (dungeonOwner != null && plugin.getBossDungeonManager() != null) {
+            plugin.getBossDungeonManager().secureDungeonRewards(dungeonOwner, leftovers.values());
+        } else {
+            Block lootBlock = block;
+            leftovers.values().forEach(leftover -> lootBlock.getWorld().dropItemNaturally(lootBlock.getLocation().add(0.5, 1.0, 0.5), leftover));
+        }
         spawnBossLootHologram(block, bossName);
         World world = block.getWorld();
         Location center = block.getLocation().add(0.5, 0.9, 0.5);
@@ -1252,6 +1374,9 @@ public final class BossManager implements Listener {
         block.setType(Material.AIR, false);
     }
 
+    public record BossArmorRewardReveal(String bossId, String itemName) {
+    }
+
     private String bossLootBlockKey(Block block) {
         return block.getWorld().getUID() + ":" + block.getX() + ":" + block.getY() + ":" + block.getZ();
     }
@@ -1325,6 +1450,7 @@ public final class BossManager implements Listener {
         }
         applyBossWardDamageBonus(event);
         scaleBossIncomingDamage(entity, type, event);
+        applyBossExposureDamage(entity, event);
         if (type == BossType.IRON_SAINT
             && mechanic != null
             && (mechanic.kind == BossMechanicKind.SAINTS_STAGGER
@@ -1752,9 +1878,44 @@ public final class BossManager implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBossDropCatalogMenuClick(InventoryClickEvent event) {
+        Inventory top = event.getView().getTopInventory();
+        if (!(top.getHolder(false) instanceof BossDropCatalogMenuHolder)) {
+            return;
+        }
+        event.setCancelled(true);
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+        if (event.getClick() != ClickType.LEFT && event.getClick() != ClickType.RIGHT) {
+            return;
+        }
+        int rawSlot = event.getRawSlot();
+        if (rawSlot < 0 || rawSlot >= top.getSize() || !MenuItemUtil.isVisibleItem(event.getCurrentItem())) {
+            return;
+        }
+        if (rawSlot == 49) {
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (player.isOnline()) {
+                    MainMenuCommand.openMenu(plugin, player);
+                }
+            });
+            return;
+        }
+        BossType type = ritualBossTypeForSlot(rawSlot);
+        if (type != null) {
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (player.isOnline()) {
+                    openBossDropPreviewMenu(player, type, BossDropBackTarget.DROP_CATALOG);
+                }
+            });
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBossDropPreviewMenuClick(InventoryClickEvent event) {
         Inventory top = event.getView().getTopInventory();
-        if (!(top.getHolder(false) instanceof BossDropPreviewMenuHolder)) {
+        if (!(top.getHolder(false) instanceof BossDropPreviewMenuHolder holder)) {
             return;
         }
         event.setCancelled(true);
@@ -1774,7 +1935,11 @@ public final class BossManager implements Listener {
         if (rawSlot == 40) {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (player.isOnline()) {
-                    openRitualMenu(player);
+                    if (holder.backTarget() == BossDropBackTarget.DROP_CATALOG) {
+                        openDropCatalogMenuFromMainMenu(player);
+                    } else {
+                        openRitualMenu(player);
+                    }
                 }
             });
         }
@@ -1782,7 +1947,8 @@ public final class BossManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBossRitualMenuDrag(InventoryDragEvent event) {
-        if (!(event.getView().getTopInventory().getHolder(false) instanceof BossRitualMenuHolder)) {
+        InventoryHolder holder = event.getView().getTopInventory().getHolder(false);
+        if (!(holder instanceof BossRitualMenuHolder) && !(holder instanceof BossDropCatalogMenuHolder)) {
             return;
         }
         int topSize = event.getView().getTopInventory().getSize();
@@ -2883,7 +3049,25 @@ public final class BossManager implements Listener {
         return menuItem(ritual.icon(), type.displayName(), lore);
     }
 
+    private ItemStack createDropCatalogEntryItem(Player player, BossType type) {
+        List<String> lore = new ArrayList<>();
+        lore.add("<gray>Progression:</gray> <white>Tier " + type.progressionTier() + " of " + BossType.values().length + "</white>");
+        lore.add("<gray>Health:</gray> <red><bold>" + trimNumber(type.maxHealth()) + "</bold></red>");
+        lore.add("<gray>Known drops:</gray> <white>" + dropPreviewText(player, type) + "</white>");
+        lore.add("<dark_gray> ");
+        lore.add("<yellow>Click to view the full drop table.</yellow>");
+        return menuItem(type.menuIcon(), type.displayName(), lore);
+    }
+
     private void addBossDangerLore(List<String> lore, BossType type) {
+        int requiredArmorTier = BossBalance.requiredArmorPathTier(type.progressionTier());
+        if (requiredArmorTier > 0) {
+            int extraDamagePercent = (int) Math.round(
+                (BossBalance.missingArmorDamageMultiplier(type.progressionTier(), false) - 1.0) * 100.0
+            );
+            lore.add("<red>Armor check:</red> <white>4 Tier " + requiredArmorTier + "+ Veil set pieces</white>");
+            lore.add("<dark_red>Missing armor: +" + extraDamagePercent + "% boss damage taken.</dark_red>");
+        }
         if (type.progressionTier() < 2) {
             return;
         }
@@ -2895,8 +3079,12 @@ public final class BossManager implements Listener {
     }
 
     private void openBossDropPreviewMenu(Player player, BossType type) {
+        openBossDropPreviewMenu(player, type, BossDropBackTarget.RITUALS);
+    }
+
+    private void openBossDropPreviewMenu(Player player, BossType type, BossDropBackTarget backTarget) {
         Inventory inventory = Bukkit.createInventory(
-            new BossDropPreviewMenuHolder(type),
+            new BossDropPreviewMenuHolder(type, backTarget),
             45,
             BedrockCompat.menuTitle(player, MM.deserialize("<gradient:#f97316:#dc2626><bold>" + type.plainDisplayName() + " Drops</bold></gradient>"), "Boss Drops")
         );
@@ -2918,7 +3106,11 @@ public final class BossManager implements Listener {
         for (int i = 0; i < drops.size() && i < slots.length; i++) {
             inventory.setItem(slots[i], dropPreviewItem(player, drops.get(i)));
         }
-        inventory.setItem(40, menuItem(Material.ARROW, "<yellow><bold>Back</bold></yellow>", List.of("<gray>Return to boss rituals.</gray>")));
+        inventory.setItem(40, menuItem(
+            Material.ARROW,
+            "<yellow><bold>Back</bold></yellow>",
+            List.of("<gray>Return to " + (backTarget == BossDropBackTarget.DROP_CATALOG ? "boss drops" : "boss rituals") + ".</gray>")
+        ));
         player.openInventory(inventory);
         player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 0.45f, 1.25f);
     }
@@ -3034,11 +3226,9 @@ public final class BossManager implements Listener {
             }
             case KAEL_THE_ASHEN -> {
                 addRelicDrop(drops, "solar_ember", 4, "Guaranteed Cinderveil Embers.");
-                addRelicDrop(drops, "titan_gear", 1, "30% chance.");
             }
             case VESPER_THE_WIDOW_QUEEN -> {
                 addRelicDrop(drops, "widow_silk", 4, "Guaranteed Gloam Silk.");
-                addRelicDrop(drops, "verdant_heart", 1, "35% chance.");
             }
             case VORALITH_THE_CRIMSON_WARDEN -> {
                 drops.add(new DropPreview(Material.ECHO_SHARD, "Veil Core", "Guaranteed repair core.", null, 1, 1.0D));
@@ -3048,15 +3238,17 @@ public final class BossManager implements Listener {
             case AURELION_THE_RIFT_SERAPH -> {
                 addRelicDrop(drops, "rift_lens", 4, "Guaranteed Riftglass Lenses.");
                 addRelicDrop(drops, "void_halo", 1, "35% chance.");
-                addRelicDrop(drops, "awakening_shard", 1, formatPercent(plugin.getConfigManager().awakeningTableRiftSeraphShardDropChance) + " chance.");
-                drops.add(new DropPreview(
-                    Material.ENCHANTING_TABLE,
-                    "Awakening Table",
-                    formatPercent(plugin.getConfigManager().awakeningTableRiftSeraphDropChance) + " chance.",
-                    null,
-                    1,
-                    plugin.getConfigManager().awakeningTableRiftSeraphDropChance
-                ));
+                if (plugin.getConfigManager().awakeningTableEnabled) {
+                    addRelicDrop(drops, "awakening_shard", 1, formatPercent(plugin.getConfigManager().awakeningTableRiftSeraphShardDropChance) + " chance.");
+                    drops.add(new DropPreview(
+                        Material.ENCHANTING_TABLE,
+                        "Awakening Table",
+                        formatPercent(plugin.getConfigManager().awakeningTableRiftSeraphDropChance) + " chance.",
+                        null,
+                        1,
+                        plugin.getConfigManager().awakeningTableRiftSeraphDropChance
+                    ));
+                }
             }
             case MORVESSA_THE_RUNEBLOOM_WITCH -> {
                 addRelicDrop(drops, "rift_lens", 2, "Guaranteed Riftglass Lenses.");
@@ -3064,7 +3256,7 @@ public final class BossManager implements Listener {
             }
             case NEREIDA_THE_ABYSS_MOTHER -> {
                 addRelicDrop(drops, "abyssal_pearl", 4, "Guaranteed Depthveil Pearls.");
-                addRelicDrop(drops, "tideheart", 1, "40% chance.");
+                addRelicDrop(drops, "tideheart", 1, formatPercent(BossBalance.TIDEVEIL_HEART_DROP_CHANCE) + " chance.");
             }
             case IRON_SAINT -> {
                 addRelicDrop(drops, "titan_gear", 4, "Guaranteed Argent Gears.");
@@ -3072,12 +3264,26 @@ public final class BossManager implements Listener {
             }
             case MIREWOOD_THE_ROOT_TYRANT -> {
                 addRelicDrop(drops, "living_bark", 4, "Guaranteed Briarwake Bark.");
-                addRelicDrop(drops, "verdant_heart", 1, "40% chance.");
+                addRelicDrop(drops, "verdant_heart", 1, formatPercent(BossBalance.BRIARHEART_DROP_CHANCE) + " chance.");
             }
             case CORRUPTED_OATHKEEPER -> {
                 addRelicDrop(drops, "corrupted_essence", 2, "2 guaranteed, with a 25% chance for a third.");
                 addRelicDrop(drops, "soul_imprint", 1, "0.5% chance.");
             }
+        }
+        for (BossBalance.MiscDrop miscDrop : BossBalance.miscDrops(type.id())) {
+            int minimum = miscDrop.minimumAmount();
+            int maximum = miscDrop.maximumAmount();
+            String amount = minimum == maximum ? Integer.toString(minimum) : minimum + "-" + maximum;
+            String chance = miscDrop.chance() >= 1.0D ? "Guaranteed" : formatPercent(miscDrop.chance()) + " chance";
+            drops.add(new DropPreview(
+                miscDrop.material(),
+                prettyBossName(miscDrop.material().name()),
+                chance + "; drops " + amount + ".",
+                null,
+                minimum,
+                miscDrop.chance()
+            ));
         }
         return drops;
     }
@@ -3414,6 +3620,33 @@ public final class BossManager implements Listener {
             return;
         }
         event.setDamage(Math.max(0.0, scaledBaseDamage));
+    }
+
+    private void applyBossExposureDamage(LivingEntity boss, EntityDamageEvent event) {
+        BossExposure exposure = bossExposures.get(boss.getUniqueId());
+        if (exposure == null) {
+            return;
+        }
+        if (System.currentTimeMillis() >= exposure.endsAt()) {
+            bossExposures.remove(boss.getUniqueId(), exposure);
+            return;
+        }
+        event.setDamage(event.getDamage() * exposure.damageMultiplier());
+    }
+
+    private boolean isBossExposed(LivingEntity boss) {
+        if (boss == null) {
+            return false;
+        }
+        BossExposure exposure = bossExposures.get(boss.getUniqueId());
+        if (exposure == null) {
+            return false;
+        }
+        if (System.currentTimeMillis() >= exposure.endsAt()) {
+            bossExposures.remove(boss.getUniqueId(), exposure);
+            return false;
+        }
+        return true;
     }
 
     private void applyBossWardDamageBonus(EntityDamageEvent event) {
@@ -3880,8 +4113,9 @@ public final class BossManager implements Listener {
         Component explanation = MM.deserialize(
             "<gold><bold>MECHANIC: " + notice.title() + "</bold></gold> <white>" + notice.instruction() + "</white>"
         );
-        String consequence = mechanicConsequence(mechanic.kind, type.progressionTier());
+        String consequence = mechanicConsequence(mechanic.kind, type.progressionTier(), mechanic.phase);
         BossMechanics.SuccessReward successReward = BossMechanics.successReward(mechanic.kind.name(), type.progressionTier());
+        BossMechanics.OffensiveWindow offensiveWindow = BossMechanics.offensiveWindow(mechanic.kind.name(), type.progressionTier());
         Component stakes = MM.deserialize(
             "<red>" + consequence + "</red>"
                 + (suppressesHealing(mechanic.kind, mechanic.phase)
@@ -3890,6 +4124,9 @@ public final class BossManager implements Listener {
                 + (successReward == BossMechanics.SuccessReward.NONE
                     ? ""
                     : " <green>" + successReward.description() + "</green>")
+                + (offensiveWindow.active()
+                    ? " <green>A perfect team clear exposes the boss for +" + offensiveWindow.bonusPercent() + "% damage.</green>"
+                    : "")
         );
         Title.Times times = Title.Times.times(Duration.ofMillis(150), Duration.ofMillis(1_650), Duration.ofMillis(300));
         for (Player player : eligibleMechanicPlayers(boss, type, mechanic)) {
@@ -3948,13 +4185,19 @@ public final class BossManager implements Listener {
         };
     }
 
-    private String mechanicConsequence(BossMechanicKind kind, int tier) {
+    private String mechanicConsequence(BossMechanicKind kind, int tier, int phase) {
         int failurePercent = (int) Math.round(BossBalance.mechanicFailureHealthRatio(tier) * 100.0);
         int hazardPercent = (int) Math.round(BossBalance.mechanicHazardHealthRatio(tier) * 100.0);
         return switch (kind) {
             case MARSHAL_STACK -> "Anyone except the marked player inside the blue circle takes damage.";
             case WIDOWS_TRAIL, PETALSTORM -> "Contact removes " + hazardPercent + "% max health per hit.";
             case IRON_COUNTERSTANCE -> "Attacking reflects " + hazardPercent + "% and marks you for a " + failurePercent + "% failure hit.";
+            case OATH_RINGS -> {
+                int oathPercent = (int) Math.round(BossMechanics.oathRingFailureHealthRatio(phase) * 100.0);
+                yield phase >= 3
+                    ? "Each missed ring removes " + oathPercent + "% max health. Missing both is fatal."
+                    : "Failure removes " + oathPercent + "% of max health.";
+            }
             default -> "Failure removes " + failurePercent + "% of max health.";
         };
     }
@@ -4153,6 +4396,16 @@ public final class BossManager implements Listener {
         punishMechanicPenalty(player, boss, type, BossBalance.mechanicFailureHealthRatio(type.progressionTier()), true);
     }
 
+    private void punishOathRingFailure(Player player, LivingEntity boss, int phase) {
+        punishMechanicPenalty(
+            player,
+            boss,
+            BossType.CORRUPTED_OATHKEEPER,
+            BossMechanics.oathRingFailureHealthRatio(phase),
+            true
+        );
+    }
+
     private void punishMechanicHazard(Player player, LivingEntity boss, BossType type) {
         punishMechanicPenalty(player, boss, type, BossBalance.mechanicHazardHealthRatio(type.progressionTier()), false);
     }
@@ -4229,6 +4482,54 @@ public final class BossManager implements Listener {
         player.sendActionBar(MM.deserialize("<green><bold>MECHANIC CLEARED</bold></green> <dark_gray>|</dark_gray> " + rewardText));
         player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 0.65f, 1.45f);
         player.spawnParticle(Particle.HAPPY_VILLAGER, player.getLocation().clone().add(0.0, 1.0, 0.0), 7, 0.3, 0.45, 0.3, 0.02);
+    }
+
+    private void exposeBossAfterMechanic(LivingEntity boss, BossType type, BossMechanicKind kind) {
+        if (boss == null || type == null || kind == null || boss.isDead() || !boss.isValid()) {
+            return;
+        }
+        BossMechanics.OffensiveWindow window = BossMechanics.offensiveWindow(kind.name(), type.progressionTier());
+        if (!window.active()) {
+            return;
+        }
+
+        long endsAt = System.currentTimeMillis() + window.durationMillis();
+        bossExposures.merge(
+            boss.getUniqueId(),
+            new BossExposure(window.damageMultiplier(), endsAt),
+            (current, next) -> new BossExposure(
+                Math.max(current.damageMultiplier(), next.damageMultiplier()),
+                Math.max(current.endsAt(), next.endsAt())
+            )
+        );
+        int durationTicks = (int) Math.max(1L, Math.min(Integer.MAX_VALUE, (window.durationMillis() + 49L) / 50L));
+        boss.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, durationTicks, 1, false, true, true));
+        announceMechanicUpdate(
+            boss,
+            "<green><bold>DEFENSES SHATTERED</bold></green>",
+            "<green>Boss exposed: +" + window.bonusPercent() + "% damage for "
+                + compactDuration(window.durationMillis()) + "s.</green>",
+            "<green><bold>BOSS EXPOSED - +" + window.bonusPercent() + "% DAMAGE</bold></green>",
+            Sound.ENTITY_ZOMBIE_ATTACK_IRON_DOOR,
+            1.35f
+        );
+        Location center = boss.getLocation().clone().add(0.0, Math.max(1.0, boss.getHeight() * 0.55), 0.0);
+        boss.getWorld().spawnParticle(Particle.ENCHANTED_HIT, center, 48, 0.7, 0.8, 0.7, 0.16);
+        boss.getWorld().spawnParticle(
+            Particle.DUST,
+            center,
+            36,
+            0.8,
+            0.8,
+            0.8,
+            0.0,
+            new Particle.DustOptions(Color.fromRGB(80, 235, 135), 1.2f)
+        );
+    }
+
+    private String compactDuration(long durationMillis) {
+        double seconds = Math.max(0L, durationMillis) / 1_000.0;
+        return seconds == Math.rint(seconds) ? Integer.toString((int) seconds) : trimNumber(seconds);
     }
 
     private boolean suppressesHealing(BossMechanicKind kind, int phase) {
@@ -4388,6 +4689,7 @@ public final class BossManager implements Listener {
         );
         if (intruders.isEmpty()) {
             marked.sendActionBar(MM.deserialize("<green><bold>BLUE ISOLATION CLEARED</bold></green>"));
+            exposeBossAfterMechanic(boss, BossType.YULE_THE_MINION, mechanic.kind);
         }
         boss.getWorld().playSound(marked.getLocation(), Sound.ITEM_SHIELD_BLOCK, 1.2f, intruders.isEmpty() ? 1.35f : 0.72f);
         return true;
@@ -4411,6 +4713,7 @@ public final class BossManager implements Listener {
             return false;
         }
 
+        Set<UUID> failedPlayers = new HashSet<>();
         for (Map.Entry<UUID, Location> marker : centers.entrySet()) {
             Location center = marker.getValue();
             boss.getWorld().spawnParticle(Particle.EXPLOSION, center.clone().add(0.0, 0.5, 0.0), 3, 0.45, 0.2, 0.45, 0.02);
@@ -4423,9 +4726,19 @@ public final class BossManager implements Listener {
                 )) {
                     continue;
                 }
-                punishMechanicFailure(player, boss, BossType.KAEL_THE_ASHEN);
-                player.setFireTicks(Math.max(player.getFireTicks(), mechanic.phase >= 2 ? 100 : 50));
+                failedPlayers.add(player.getUniqueId());
             }
+        }
+        for (UUID failedPlayerId : failedPlayers) {
+            Player player = Bukkit.getPlayer(failedPlayerId);
+            if (!isEligibleMechanicTarget(boss, BossType.KAEL_THE_ASHEN, player)) {
+                continue;
+            }
+            punishMechanicFailure(player, boss, BossType.KAEL_THE_ASHEN);
+            player.setFireTicks(Math.max(player.getFireTicks(), mechanic.phase >= 2 ? 100 : 50));
+        }
+        if (failedPlayers.isEmpty()) {
+            exposeBossAfterMechanic(boss, BossType.KAEL_THE_ASHEN, mechanic.kind);
         }
         boss.getWorld().playSound(boss.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_BLAST, 1.2f, 0.72f);
         return true;
@@ -4531,6 +4844,7 @@ public final class BossManager implements Listener {
 
     private boolean tickWidowsWebbreak(LivingEntity boss, ActiveBossMechanic mechanic, long now) {
         boolean hasTarget = false;
+        boolean allBroken = true;
         for (int i = 0; i < mechanic.targets.size() && i < mechanic.points.size(); i++) {
             UUID targetId = mechanic.targets.get(i);
             Player target = Bukkit.getPlayer(targetId);
@@ -4541,6 +4855,7 @@ public final class BossManager implements Listener {
             Location anchor = mechanic.points.get(i);
             boolean broken = mechanic.hitCooldowns.containsKey(targetId)
                 || horizontalDistanceSquared(target.getLocation(), anchor) >= mechanic.radius * mechanic.radius;
+            allBroken &= broken;
             if (broken && !mechanic.hitCooldowns.containsKey(targetId)) {
                 mechanic.hitCooldowns.put(targetId, Long.MAX_VALUE);
                 target.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, 60, 0, false, true, true));
@@ -4573,6 +4888,9 @@ public final class BossManager implements Listener {
             target.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 80, 4, false, true, true));
             target.addPotionEffect(new PotionEffect(PotionEffectType.DARKNESS, 80, 0, false, true, true));
             target.getWorld().spawnParticle(Particle.SQUID_INK, target.getLocation().clone().add(0.0, 1.0, 0.0), 32, 0.45, 0.55, 0.45, 0.04);
+        }
+        if (allBroken) {
+            exposeBossAfterMechanic(boss, BossType.VESPER_THE_WIDOW_QUEEN, mechanic.kind);
         }
         boss.getWorld().playSound(mechanic.origin, Sound.ENTITY_SPIDER_DEATH, 1.25f, 0.55f);
         return true;
@@ -4607,6 +4925,7 @@ public final class BossManager implements Listener {
                     player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 60, 0, false, true, true));
                 }
             }
+            exposeBossAfterMechanic(boss, BossType.MIREWOOD_THE_ROOT_TYRANT, mechanic.kind);
             announceMechanicUpdate(
                 boss,
                 "<green><bold>WARDS SATISFIED</bold></green>",
@@ -4725,18 +5044,24 @@ public final class BossManager implements Listener {
             return false;
         }
 
-        for (Player player : eligibleMechanicPlayers(boss, BossType.NEREIDA_THE_ABYSS_MOTHER, mechanic)) {
+        List<Player> players = eligibleMechanicPlayers(boss, BossType.NEREIDA_THE_ABYSS_MOTHER, mechanic);
+        boolean perfectClear = !players.isEmpty();
+        for (Player player : players) {
             double dx = player.getLocation().getX() - mechanic.origin.getX();
             double dz = player.getLocation().getZ() - mechanic.origin.getZ();
             if (BossMechanics.isOnSafeSide(dx, dz, mechanic.angle)) {
                 grantMechanicSuccessReward(player, BossType.NEREIDA_THE_ABYSS_MOTHER, mechanic.kind);
                 continue;
             }
+            perfectClear = false;
             punishMechanicFailure(player, boss, BossType.NEREIDA_THE_ABYSS_MOTHER);
             player.addPotionEffect(new PotionEffect(PotionEffectType.DARKNESS, 100, 0, false, true, true));
             player.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 100, 2, false, true, true));
             player.addPotionEffect(new PotionEffect(PotionEffectType.MINING_FATIGUE, 100, 1, false, true, true));
             player.getWorld().spawnParticle(Particle.SPLASH, player.getLocation().clone().add(0.0, 0.8, 0.0), 44, 0.5, 0.6, 0.5, 0.15);
+        }
+        if (perfectClear) {
+            exposeBossAfterMechanic(boss, BossType.NEREIDA_THE_ABYSS_MOTHER, mechanic.kind);
         }
         boss.getWorld().playSound(mechanic.origin, Sound.ENTITY_ELDER_GUARDIAN_CURSE, 1.3f, 0.55f);
         return true;
@@ -4746,14 +5071,22 @@ public final class BossManager implements Listener {
         if (mechanic.stage == 0) {
             drawMechanicCircle(boss.getWorld(), boss.getLocation(), 4.2, Color.fromRGB(235, 190, 65));
             int percent = (int) Math.min(100.0, Math.round(mechanic.progress * 100.0 / Math.max(1.0, mechanic.threshold)));
-            sendMechanicActionBar(boss, "<yellow><bold>BREAK THE SAINT'S GUARD: " + percent + "%</bold></yellow>");
-            if (now < mechanic.warningEndsAt) {
-                return false;
-            }
-            if (mechanic.progress >= mechanic.threshold) {
+            int seconds = BossMechanics.secondsRemaining(mechanic.warningEndsAt, now);
+            sendMechanicActionBar(
+                boss,
+                "<yellow><bold>BREAK THE SAINT'S GUARD: " + percent + "% | " + seconds + "s</bold></yellow>"
+            );
+            if (BossMechanics.canBreakSaintsGuard(mechanic.progress, mechanic.threshold, now - mechanic.startedAt)) {
                 mechanic.stage = 1;
-                mechanic.nextStepAt = now + 5_000L;
-                boss.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 110, 10, false, true, true));
+                mechanic.nextStepAt = now + BossMechanics.SAINTS_STAGGER_EXPOSURE_MILLIS;
+                boss.addPotionEffect(new PotionEffect(
+                    PotionEffectType.SLOWNESS,
+                    (int) (BossMechanics.SAINTS_STAGGER_EXPOSURE_MILLIS / 50L) + 10,
+                    10,
+                    false,
+                    true,
+                    true
+                ));
                 announceMechanicUpdate(
                     boss,
                     "<green><bold>GUARD BROKEN</bold></green>",
@@ -4763,6 +5096,9 @@ public final class BossManager implements Listener {
                     0.7f
                 );
                 boss.getWorld().spawnParticle(Particle.CRIT, boss.getLocation().clone().add(0.0, 1.2, 0.0), 60, 0.8, 0.6, 0.8, 0.12);
+                return false;
+            }
+            if (now < mechanic.warningEndsAt) {
                 return false;
             }
 
@@ -4785,6 +5121,11 @@ public final class BossManager implements Listener {
         }
 
         boss.getWorld().spawnParticle(Particle.CRIT, boss.getLocation().clone().add(0.0, 1.0, 0.0), 5, 0.45, 0.5, 0.45, 0.05);
+        sendMechanicActionBar(
+            boss,
+            "<green><bold>GUARD BROKEN - 25% MORE DAMAGE | "
+                + BossMechanics.secondsRemaining(mechanic.nextStepAt, now) + "s</bold></green>"
+        );
         return now >= mechanic.nextStepAt;
     }
 
@@ -4792,9 +5133,10 @@ public final class BossManager implements Listener {
         if (mechanic.stage == 0) {
             drawMechanicCircle(boss.getWorld(), boss.getLocation(), 4.5, Color.fromRGB(235, 70, 55));
             boss.getWorld().spawnParticle(Particle.ENCHANTED_HIT, boss.getLocation().clone().add(0.0, 1.35, 0.0), 7, 0.45, 0.65, 0.45, 0.04);
+            int seconds = BossMechanics.secondsRemaining(mechanic.warningEndsAt, now);
             sendMechanicActionBar(boss, mechanic.progress <= 0.0
-                ? "<red><bold>COUNTERSTANCE - STOP ATTACKING</bold></red>"
-                : "<dark_red><bold>THE SAINT HAS MARKED YOUR GREED</bold></dark_red>");
+                ? "<red><bold>COUNTERSTANCE - STOP ATTACKING | " + seconds + "s</bold></red>"
+                : "<dark_red><bold>GREED MARKED - STOP ATTACKING | " + seconds + "s</bold></dark_red>");
             if (now < mechanic.warningEndsAt) {
                 return false;
             }
@@ -4818,8 +5160,15 @@ public final class BossManager implements Listener {
                 return true;
             }
             mechanic.stage = 1;
-            mechanic.nextStepAt = now + 4_000L;
-            boss.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 90, 10, false, true, true));
+            mechanic.nextStepAt = now + BossMechanics.IRON_COUNTERSTANCE_EXPOSURE_MILLIS;
+            boss.addPotionEffect(new PotionEffect(
+                PotionEffectType.SLOWNESS,
+                (int) (BossMechanics.IRON_COUNTERSTANCE_EXPOSURE_MILLIS / 50L) + 10,
+                10,
+                false,
+                true,
+                true
+            ));
             announceMechanicUpdate(
                 boss,
                 "<green><bold>STANCE BROKEN</bold></green>",
@@ -4832,6 +5181,11 @@ public final class BossManager implements Listener {
         }
 
         boss.getWorld().spawnParticle(Particle.CRIT, boss.getLocation().clone().add(0.0, 1.1, 0.0), 6, 0.45, 0.55, 0.45, 0.08);
+        sendMechanicActionBar(
+            boss,
+            "<green><bold>STANCE BROKEN - 25% MORE DAMAGE | "
+                + BossMechanics.secondsRemaining(mechanic.nextStepAt, now) + "s</bold></green>"
+        );
         return now >= mechanic.nextStepAt;
     }
 
@@ -4842,7 +5196,9 @@ public final class BossManager implements Listener {
             return false;
         }
 
-        for (Player player : eligibleMechanicPlayers(boss, BossType.AURELION_THE_RIFT_SERAPH, mechanic)) {
+        List<Player> players = eligibleMechanicPlayers(boss, BossType.AURELION_THE_RIFT_SERAPH, mechanic);
+        boolean perfectClear = !players.isEmpty();
+        for (Player player : players) {
             double dx = player.getLocation().getX() - mechanic.origin.getX();
             double dz = player.getLocation().getZ() - mechanic.origin.getZ();
             double angle = Math.atan2(dz, dx);
@@ -4851,12 +5207,16 @@ public final class BossManager implements Listener {
                 grantMechanicSuccessReward(player, BossType.AURELION_THE_RIFT_SERAPH, mechanic.kind);
                 continue;
             }
+            perfectClear = false;
             punishMechanicFailure(player, boss, BossType.AURELION_THE_RIFT_SERAPH);
             player.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 80, 1, false, true, true));
             Vector pull = mechanic.origin.toVector().subtract(player.getLocation().toVector());
             if (pull.lengthSquared() > 1.0E-6) {
                 player.setVelocity(player.getVelocity().add(pull.normalize().multiply(0.55).setY(0.16)));
             }
+        }
+        if (perfectClear) {
+            exposeBossAfterMechanic(boss, BossType.AURELION_THE_RIFT_SERAPH, mechanic.kind);
         }
         boss.getWorld().spawnParticle(Particle.REVERSE_PORTAL, mechanic.origin.clone().add(0.0, 0.7, 0.0), 90, 1.2, 0.6, 1.2, 0.22);
         boss.getWorld().playSound(mechanic.origin, Sound.BLOCK_END_PORTAL_SPAWN, 1.0f, 1.25f);
@@ -4901,6 +5261,7 @@ public final class BossManager implements Listener {
                     grantMechanicSuccessReward(player, BossType.MORVESSA_THE_RUNEBLOOM_WITCH, mechanic.kind);
                 }
             }
+            exposeBossAfterMechanic(boss, BossType.MORVESSA_THE_RUNEBLOOM_WITCH, mechanic.kind);
         } else {
             for (Player player : players) {
                 punishMechanicFailure(player, boss, BossType.MORVESSA_THE_RUNEBLOOM_WITCH);
@@ -4959,14 +5320,20 @@ public final class BossManager implements Listener {
             return false;
         }
 
-        for (Player player : eligibleMechanicPlayers(boss, BossType.VORALITH_THE_CRIMSON_WARDEN, mechanic)) {
+        List<Player> players = eligibleMechanicPlayers(boss, BossType.VORALITH_THE_CRIMSON_WARDEN, mechanic);
+        boolean perfectClear = !players.isEmpty();
+        for (Player player : players) {
             if (!isLookingAtBoss(player, boss)) {
                 continue;
             }
+            perfectClear = false;
             punishMechanicFailure(player, boss, BossType.VORALITH_THE_CRIMSON_WARDEN);
             player.addPotionEffect(new PotionEffect(PotionEffectType.DARKNESS, 130, 0, false, true, true));
             player.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 80, 1, false, true, true));
             player.getWorld().spawnParticle(Particle.SONIC_BOOM, player.getLocation().clone().add(0.0, 1.0, 0.0), 1);
+        }
+        if (perfectClear) {
+            exposeBossAfterMechanic(boss, BossType.VORALITH_THE_CRIMSON_WARDEN, mechanic.kind);
         }
         boss.getWorld().playSound(boss.getLocation(), Sound.ENTITY_WARDEN_SONIC_BOOM, 1.6f, 0.62f);
         return true;
@@ -5014,8 +5381,7 @@ public final class BossManager implements Listener {
                 successfulPlayers.add(player.getUniqueId());
                 continue;
             }
-            punishMechanicFailure(player, boss, BossType.CORRUPTED_OATHKEEPER);
-            player.setFireTicks(Math.max(player.getFireTicks(), mechanic.phase >= 3 ? 120 : 80));
+            punishOathRingFailure(player, boss, mechanic.phase);
             player.addPotionEffect(new PotionEffect(PotionEffectType.WEAKNESS, 80, 0, false, true, true));
         }
         if (mechanic.phase >= 3) {
@@ -5029,6 +5395,7 @@ public final class BossManager implements Listener {
                 for (Player player : players) {
                     if (!player.getUniqueId().equals(targetId)
                         && horizontalDistanceSquared(player.getLocation(), center) <= 3.1 * 3.1) {
+                        brandVictims.add(targetId);
                         brandVictims.add(player.getUniqueId());
                     }
                 }
@@ -5039,7 +5406,7 @@ public final class BossManager implements Listener {
                 if (victim == null || victim.isDead() || victim.getWorld() != boss.getWorld()) {
                     continue;
                 }
-                punishMechanicFailure(victim, boss, BossType.CORRUPTED_OATHKEEPER);
+                punishOathRingFailure(victim, boss, mechanic.phase);
                 victim.addPotionEffect(new PotionEffect(PotionEffectType.DARKNESS, 90, 0, false, true, true));
                 victim.addPotionEffect(new PotionEffect(PotionEffectType.MINING_FATIGUE, 100, 1, false, true, true));
                 victim.addPotionEffect(new PotionEffect(PotionEffectType.WEAKNESS, 100, 1, false, true, true));
@@ -5051,13 +5418,15 @@ public final class BossManager implements Listener {
                 grantMechanicSuccessReward(player, BossType.CORRUPTED_OATHKEEPER, mechanic.kind);
             }
         }
+        mechanic.groupSuccess &= successfulPlayers.size() == players.size();
         boss.getWorld().spawnParticle(Particle.FLAME, mechanic.origin.clone().add(0.0, 0.5, 0.0), 75, mechanic.radius * 0.3, 0.3, mechanic.radius * 0.3, 0.06);
         boss.getWorld().playSound(mechanic.origin, Sound.BLOCK_RESPAWN_ANCHOR_DEPLETE, 1.25f, mechanic.insideSafe ? 1.1f : 0.65f);
 
         if (mechanic.phase >= 3 && mechanic.stage == 0) {
             mechanic.stage = 1;
             mechanic.insideSafe = !mechanic.insideSafe;
-            mechanic.warningEndsAt = now + 2_500L;
+            mechanic.warningEndsAt = now + BossMechanics.oathRingWarningMillis(mechanic.phase, mechanic.stage);
+            mechanic.failedTargets.clear();
             mechanic.targets.clear();
             List<Player> survivors = eligibleMechanicPlayers(boss, BossType.CORRUPTED_OATHKEEPER, mechanic);
             int targetCount = BossMechanics.scaledObjectiveCount(survivors.size(), 2);
@@ -5074,6 +5443,9 @@ public final class BossManager implements Listener {
                 mechanic.insideSafe ? 1.25f : 0.62f
             );
             return false;
+        }
+        if (mechanic.groupSuccess) {
+            exposeBossAfterMechanic(boss, BossType.CORRUPTED_OATHKEEPER, mechanic.kind);
         }
         return true;
     }
@@ -6059,8 +6431,8 @@ public final class BossManager implements Listener {
             BossMechanicKind.SAINTS_STAGGER,
             phase,
             now,
-            now + 5_000L,
-            now + 10_000L,
+            now + BossMechanics.SAINTS_STAGGER_RESPONSE_MILLIS,
+            now + BossMechanics.SAINTS_STAGGER_RESPONSE_MILLIS + BossMechanics.SAINTS_STAGGER_EXPOSURE_MILLIS,
             boss.getLocation().clone()
         );
         double maxHealth = boss.getAttribute(Attribute.MAX_HEALTH) == null ? boss.getHealth() : boss.getAttribute(Attribute.MAX_HEALTH).getValue();
@@ -6069,7 +6441,7 @@ public final class BossManager implements Listener {
             boss,
             mechanic,
             keyBossSecondaryCooldown,
-            phase >= 2 ? 16_000L : 19_000L,
+            phase >= 2 ? 19_000L : 22_000L,
             "<yellow><bold>SAINT'S STAGGER - BREAK HIS GUARD</bold></yellow>",
             Sound.ITEM_SHIELD_BLOCK,
             0.55f
@@ -6082,15 +6454,15 @@ public final class BossManager implements Listener {
             BossMechanicKind.IRON_COUNTERSTANCE,
             2,
             now,
-            now + 3_000L,
-            now + 7_000L,
+            now + BossMechanics.IRON_COUNTERSTANCE_RESPONSE_MILLIS,
+            now + BossMechanics.IRON_COUNTERSTANCE_RESPONSE_MILLIS + BossMechanics.IRON_COUNTERSTANCE_EXPOSURE_MILLIS,
             boss.getLocation().clone()
         );
         return beginBossMechanic(
             boss,
             mechanic,
             keyBossPrimaryCooldown,
-            16_000L,
+            20_000L,
             "<red><bold>COUNTERSTANCE - STOP ATTACKING | HEALING SEALED</bold></red>",
             Sound.ITEM_SHIELD_BLOCK,
             0.42f
@@ -6199,12 +6571,13 @@ public final class BossManager implements Listener {
     private boolean startOathRings(LivingEntity boss, int phase) {
         long now = System.currentTimeMillis();
         Location center = bossMechanicCenter(boss);
+        long firstWarningMillis = BossMechanics.oathRingWarningMillis(phase, 0);
         ActiveBossMechanic mechanic = new ActiveBossMechanic(
             BossMechanicKind.OATH_RINGS,
             phase,
             now,
-            now + 3_000L,
-            now + (phase >= 3 ? 5_500L : 3_000L),
+            now + firstWarningMillis,
+            now + BossMechanics.oathRingDurationMillis(phase),
             center
         );
         mechanic.radius = scaledBossAbilityRadius(boss, phase >= 3 ? 8.0 : phase >= 2 ? 7.0 : 6.0);
@@ -6217,7 +6590,7 @@ public final class BossManager implements Listener {
             boss,
             mechanic,
             keyBossPrimaryCooldown,
-            phase >= 3 ? 9_000L : phase >= 2 ? 11_500L : 14_000L,
+            BossMechanics.oathRingCooldownMillis(phase),
             phase >= 3
                 ? (mechanic.insideSafe
                     ? "<green><bold>GET IN</bold></green> <red><bold>+ SPREAD</bold></red> <dark_red>| NO HEALING</dark_red>"
@@ -6567,12 +6940,9 @@ public final class BossManager implements Listener {
         );
         world.playSound(entity.getLocation(), Sound.ENTITY_WARDEN_SONIC_BOOM, 1.7f, phase >= 2 ? 0.72f : 0.9f);
 
-        for (Entity nearby : entity.getNearbyEntities(radius, 2.5, radius)) {
-            if (!(nearby instanceof LivingEntity target) || target.equals(entity) || target.isDead() || !target.isValid()) {
-                continue;
-            }
-            if (target instanceof Player player
-                && (player.getGameMode() == org.bukkit.GameMode.CREATIVE || player.getGameMode() == org.bukkit.GameMode.SPECTATOR)) {
+        for (Player target : eligibleBossPlayers(entity, BossType.VORALITH_THE_CRIMSON_WARDEN)) {
+            if (Math.abs(target.getLocation().getY() - entity.getLocation().getY()) > 2.5
+                || horizontalDistanceSquared(target.getLocation(), entity.getLocation()) > radius * radius) {
                 continue;
             }
 
@@ -6633,7 +7003,7 @@ public final class BossManager implements Listener {
             return;
         }
         int phase = bossPhase(entity);
-        if (bossCooldownReady(entity, keyBossPrimaryCooldown)) {
+        if (!isBossExposed(entity) && bossCooldownReady(entity, keyBossPrimaryCooldown)) {
             riftStepAroundTarget(entity, target, phase);
         }
         if (bossCooldownReady(entity, keyBossSecondaryCooldown)) {
@@ -6693,8 +7063,7 @@ public final class BossManager implements Listener {
             return;
         }
 
-        if (phase >= 2 && bossCooldownReady(entity, keyBossPrimaryCooldown)
-            && countNearbyBossMinions(entity, 28.0) < 2) {
+        if (phase >= 2 && bossCooldownReady(entity, keyBossPrimaryCooldown)) {
             summonRunebloomFamiliars(entity, phase);
         }
         if (bossCooldownReady(entity, keyBossPressureCooldown)) {
@@ -6724,7 +7093,12 @@ public final class BossManager implements Listener {
             return;
         }
 
-        int count = scaledBossMinionCount(boss, 2);
+        int activeCount = activeOwnedBossMinionCount(boss, record.entityUuid());
+        int count = BossMechanics.runebloomFamiliarSpawnCount(activeCount, scaledBossPlayerCount(boss));
+        if (count <= 0) {
+            setBossCooldown(boss, keyBossPrimaryCooldown, 26_000L);
+            return;
+        }
         LivingEntity currentTarget = currentBossTarget(boss);
         World world = boss.getWorld();
         Location origin = boss.getLocation();
@@ -6745,7 +7119,7 @@ public final class BossManager implements Listener {
             setAttributeBase(familiar, Attribute.MOVEMENT_SPEED, 0.38);
             setAttributeBase(familiar, Attribute.FOLLOW_RANGE, 32.0);
             setAttributeBase(familiar, Attribute.KNOCKBACK_RESISTANCE, 0.30);
-            markBossMinion(familiar, record.entityUuid());
+            markBossMinion(familiar, record.entityUuid(), BossMechanics.runebloomFamiliarLifetimeMillis());
             if (currentTarget != null && currentTarget.isValid() && !currentTarget.isDead()) {
                 familiar.setTarget(currentTarget);
             }
@@ -6753,20 +7127,6 @@ public final class BossManager implements Listener {
         }
         world.playSound(origin, Sound.ENTITY_EVOKER_PREPARE_SUMMON, 0.95f, 1.15f);
         setBossCooldown(boss, keyBossPrimaryCooldown, 26_000L);
-    }
-
-    private int countNearbyBossMinions(LivingEntity boss, double radius) {
-        BossRecord record = bossRecord(boss);
-        if (record == null) {
-            return 0;
-        }
-        int count = 0;
-        for (Entity nearby : boss.getNearbyEntities(radius, radius, radius)) {
-            if (record.entityUuid().equals(bossMinionOwner(nearby))) {
-                count++;
-            }
-        }
-        return count;
     }
 
     private void tickNereidaTheAbyssMother(LivingEntity entity) {
@@ -6858,16 +7218,21 @@ public final class BossManager implements Listener {
             return;
         }
 
-        double brandRange = scaledBossAbilityRadius(entity, phase >= 3 ? 24.0 : phase >= 2 ? 20.0 : 16.0);
-        if (bossCooldownReady(entity, keyBossSecondaryCooldown) && distanceSquared <= brandRange * brandRange) {
+        double usableArenaRadius = bossMechanicArenaRadius(entity, BossType.CORRUPTED_OATHKEEPER.ritual().arenaRadius() - 1.5);
+        double brandRadius = BossMechanics.corruptedBrandRadius(phase, usableArenaRadius);
+        double brandActivationRange = Math.min(usableArenaRadius, brandRadius + 3.5);
+        if (phase >= 2
+            && bossCooldownReady(entity, keyBossSecondaryCooldown)
+            && distanceSquared <= brandActivationRange * brandActivationRange) {
             int brandPhase = phase;
+            Location brandCenter = entity.getLocation().clone();
             if (telegraphAreaAbility(
                 entity,
-                "Corrupted brand - spread from the center!",
-                scaledBossAbilityRadius(entity, phase >= 3 ? 20.0 : phase >= 2 ? 17.0 : 14.0),
-                28L,
+                "CORRUPTED BRAND - LEAVE THE PURPLE CIRCLE!",
+                brandRadius,
+                BossMechanics.corruptedBrandTelegraphTicks(phase),
                 Color.fromRGB(185, 45, 220),
-                () -> unleashCorruptedBrand(entity, brandPhase)
+                () -> unleashCorruptedBrand(entity, brandPhase, brandCenter, brandRadius)
             )) {
                 return;
             }
@@ -6898,11 +7263,19 @@ public final class BossManager implements Listener {
         world.spawnParticle(Particle.DUST, center, phase >= 3 ? 90 : 58, 2.4, 1.4, 2.4, 0.0, new Particle.DustOptions(color, 1.6f));
         world.playSound(entity.getLocation(), phase >= 3 ? Sound.ENTITY_WITHER_SPAWN : Sound.ENTITY_MAGMA_CUBE_SQUISH, 1.7f, phase >= 3 ? 0.62f : 0.55f);
 
+        entity.removePotionEffect(PotionEffectType.RESISTANCE);
         if (phase >= 3) {
+            despawnBossMinions(entity.getUniqueId());
+            setBossCooldown(entity, keyBossPrimaryCooldown, 6_000L);
+            setBossCooldown(entity, keyBossSecondaryCooldown, 8_500L);
+            setBossCooldown(entity, keyBossTertiaryCooldown, 7_000L);
             entity.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH, Integer.MAX_VALUE, 2, false, true, true));
-            entity.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, Integer.MAX_VALUE, 1, false, true, true));
+            entity.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, Integer.MAX_VALUE, 0, false, true, true));
             entity.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, Integer.MAX_VALUE, 1, false, true, true));
         } else {
+            setBossCooldown(entity, keyBossPrimaryCooldown, 4_000L);
+            setBossCooldown(entity, keyBossSecondaryCooldown, 6_000L);
+            setBossCooldown(entity, keyBossTertiaryCooldown, 8_000L);
             entity.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH, Integer.MAX_VALUE, 1, false, true, true));
             entity.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, Integer.MAX_VALUE, 0, false, true, true));
         }
@@ -6952,22 +7325,24 @@ public final class BossManager implements Listener {
         }
     }
 
-    private void unleashCorruptedBrand(LivingEntity entity, int phase) {
-        double radius = scaledBossAbilityRadius(entity, phase >= 3 ? 20.0 : phase >= 2 ? 17.0 : 14.0);
+    private void unleashCorruptedBrand(LivingEntity entity, int phase, Location center, double radius) {
+        if (center == null || center.getWorld() != entity.getWorld()) {
+            return;
+        }
         double damage = scaledBossAbilityDamage(entity, phase >= 3 ? 14.0 : phase >= 2 ? 10.0 : 7.0);
         Location eye = entity.getEyeLocation();
         World world = entity.getWorld();
         int hit = 0;
 
         for (Player player : world.getPlayers()) {
-            if (!isEligibleBossVictim(entity, player) || player.getLocation().distanceSquared(entity.getLocation()) > radius * radius) {
+            if (!isEligibleBossVictim(entity, player) || horizontalDistanceSquared(player.getLocation(), center) > radius * radius) {
                 continue;
             }
             drawCorruptedBrandBeam(world, eye, player.getLocation().clone().add(0.0, 1.0, 0.0), phase);
             player.damage(damage, entity);
             player.addPotionEffect(new PotionEffect(PotionEffectType.DARKNESS, phase >= 3 ? 130 : 90, 0, false, true, true));
             player.addPotionEffect(new PotionEffect(PotionEffectType.MINING_FATIGUE, phase >= 3 ? 110 : 70, 0, false, true, true));
-            Vector pull = entity.getLocation().toVector().subtract(player.getLocation().toVector());
+            Vector pull = center.toVector().subtract(player.getLocation().toVector());
             if (pull.lengthSquared() > 1.0E-6) {
                 player.setVelocity(player.getVelocity().add(pull.normalize().multiply(phase >= 3 ? 0.72 : 0.48).setY(0.22)));
             }
@@ -6980,7 +7355,7 @@ public final class BossManager implements Listener {
             world.spawnParticle(Particle.REVERSE_PORTAL, entity.getLocation().clone().add(0.0, 2.4, 0.0), 80, 1.1, 0.75, 1.1, 0.15);
         }
 
-        setBossCooldown(entity, keyBossSecondaryCooldown, phase >= 3 ? 8200L : phase >= 2 ? 9800L : 12_000L);
+        setBossCooldown(entity, keyBossSecondaryCooldown, BossMechanics.corruptedBrandCooldownMillis(phase));
     }
 
     private void drawCorruptedBrandBeam(World world, Location from, Location to, int phase) {
@@ -7012,15 +7387,21 @@ public final class BossManager implements Listener {
         World world = bossEntity.getWorld();
         Location origin = bossEntity.getLocation();
         LivingEntity currentTarget = currentBossTarget(bossEntity);
-        int count = scaledBossMinionCount(bossEntity, phase >= 3 ? 3 : 2);
-        double minionHealth = scaledBossSummonHealth(bossEntity, phase >= 3 ? 90.0 : 60.0);
-        double minionDamage = scaledBossAbilityDamage(bossEntity, phase >= 3 ? 11.0 : 8.0);
+        int cap = BossMechanics.corruptedEmberCap(phase, scaledBossPlayerCount(bossEntity));
+        int count = Math.max(0, cap - activeOwnedBossMinionCount(bossEntity, record.entityUuid()));
+        if (count <= 0) {
+            setBossCooldown(bossEntity, keyBossTertiaryCooldown, BossMechanics.corruptedEmberCooldownMillis(phase));
+            return;
+        }
+        double minionHealth = scaledBossSummonHealth(bossEntity, BossMechanics.corruptedEmberBaseHealth(phase));
+        double minionDamage = scaledBossAbilityDamage(bossEntity, phase >= 3 ? 8.0 : 6.0);
+        long lifetimeMillis = BossMechanics.corruptedEmberLifetimeMillis(phase);
         for (int i = 0; i < count; i++) {
             double angle = ((Math.PI * 2.0) / count) * i + ThreadLocalRandom.current().nextDouble(0.35);
             Location spawn = origin.clone().add(Math.cos(angle) * 4.0, 0.0, Math.sin(angle) * 4.0);
             spawn = findGroundedSpawn(world, spawn);
             MagmaCube minion = world.spawn(spawn, MagmaCube.class, magma -> {
-                magma.setSize(phase >= 3 ? 3 : 2);
+                magma.setSize(2);
                 magma.setPersistent(true);
                 magma.setRemoveWhenFarAway(false);
                 magma.setCanPickupItems(false);
@@ -7030,10 +7411,10 @@ public final class BossManager implements Listener {
             setAttributeBase(minion, Attribute.MAX_HEALTH, minionHealth);
             minion.setHealth(minionHealth);
             setAttributeBase(minion, Attribute.ATTACK_DAMAGE, minionDamage);
-            setAttributeBase(minion, Attribute.MOVEMENT_SPEED, 0.34);
+            setAttributeBase(minion, Attribute.MOVEMENT_SPEED, phase >= 3 ? 0.32 : 0.29);
             setAttributeBase(minion, Attribute.FOLLOW_RANGE, 32.0);
-            setAttributeBase(minion, Attribute.KNOCKBACK_RESISTANCE, 0.45);
-            markBossMinion(minion, record.entityUuid());
+            setAttributeBase(minion, Attribute.KNOCKBACK_RESISTANCE, 0.30);
+            markBossMinion(minion, record.entityUuid(), lifetimeMillis);
             if (currentTarget != null && currentTarget.isValid() && !currentTarget.isDead()) {
                 minion.setTarget(currentTarget);
             }
@@ -7041,7 +7422,12 @@ public final class BossManager implements Listener {
             world.spawnParticle(Particle.DUST, minion.getLocation().clone().add(0.0, 0.8, 0.0), 14, 0.32, 0.32, 0.32, 0.0, new Particle.DustOptions(Color.fromRGB(210, 40, 30), 1.0f));
         }
         world.playSound(origin, Sound.ENTITY_MAGMA_CUBE_SQUISH, 1.1f, 0.45f);
-        setBossCooldown(bossEntity, keyBossTertiaryCooldown, phase >= 3 ? 22_000L : 30_000L);
+        for (Player player : eligibleBossPlayers(bossEntity, BossType.CORRUPTED_OATHKEEPER)) {
+            player.sendActionBar(MM.deserialize(
+                "<gold><bold>CORRUPTED EMBERS</bold></gold> <white>Break them to expose the Oathkeeper.</white>"
+            ));
+        }
+        setBossCooldown(bossEntity, keyBossTertiaryCooldown, BossMechanics.corruptedEmberCooldownMillis(phase));
     }
 
     private boolean isEligibleBossVictim(LivingEntity source, LivingEntity target) {
@@ -7216,6 +7602,7 @@ public final class BossManager implements Listener {
                     continue;
                 }
                 destroyBossVisuals(record.entityUuid());
+                despawnBossMinions(record.entityUuid());
                 entity.remove();
                 removed++;
                 untrackRecord(record.entityUuid());
@@ -7288,11 +7675,104 @@ public final class BossManager implements Listener {
         }
     }
 
+    private int activeOwnedBossMinionCount(LivingEntity boss, UUID ownerBossId) {
+        if (boss == null || ownerBossId == null || boss.getWorld() == null) {
+            return 0;
+        }
+        double radius = Math.max(30.0, BossType.CORRUPTED_OATHKEEPER.ritual().arenaRadius() + 8.0);
+        long now = System.currentTimeMillis();
+        int count = 0;
+        for (Entity entity : boss.getNearbyEntities(radius, 18.0, radius)) {
+            if (!ownerBossId.equals(bossMinionOwner(entity))) {
+                continue;
+            }
+            Long expiresAt = entity.getPersistentDataContainer().get(keyBossMinionExpiresAt, PersistentDataType.LONG);
+            if (expiresAt == null) {
+                expiresAt = now + BossMechanics.corruptedEmberLifetimeMillis(3);
+                entity.getPersistentDataContainer().set(keyBossMinionExpiresAt, PersistentDataType.LONG, expiresAt);
+            }
+            if (expiresAt != null && expiresAt <= now) {
+                entity.remove();
+                continue;
+            }
+            if (entity.isValid() && !entity.isDead()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     private void markBossMinion(LivingEntity entity, UUID ownerBossId) {
+        markBossMinion(entity, ownerBossId, 0L);
+    }
+
+    private void markBossMinion(LivingEntity entity, UUID ownerBossId, long lifetimeMillis) {
         PersistentDataContainer pdc = entity.getPersistentDataContainer();
         pdc.set(keyBossMinionMarker, PersistentDataType.BYTE, (byte) 1);
         pdc.set(keyBossMinionOwner, PersistentDataType.STRING, ownerBossId.toString());
+        if (lifetimeMillis > 0L) {
+            long expiresAt = System.currentTimeMillis() + lifetimeMillis;
+            pdc.set(keyBossMinionExpiresAt, PersistentDataType.LONG, expiresAt);
+            long lifetimeTicks = Math.max(1L, (lifetimeMillis + 49L) / 50L);
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                if (entity.isValid()
+                    && !entity.isDead()
+                    && ownerBossId.equals(bossMinionOwner(entity))
+                    && entity.getPersistentDataContainer().getOrDefault(
+                        keyBossMinionExpiresAt,
+                        PersistentDataType.LONG,
+                        Long.MAX_VALUE
+                    ) <= System.currentTimeMillis()) {
+                    entity.remove();
+                }
+            }, lifetimeTicks);
+        }
         entity.addScoreboardTag(SCOREBOARD_TAG + "_minion");
+    }
+
+    private void handleBossMinionDefeat(Entity minion, UUID ownerBossId) {
+        if (!(minion instanceof MagmaCube) || ownerBossId == null) {
+            return;
+        }
+        Entity owner = Bukkit.getEntity(ownerBossId);
+        if (!(owner instanceof LivingEntity boss) || boss.isDead() || !boss.isValid()) {
+            return;
+        }
+        BossRecord ownerRecord = bossRecord(boss);
+        if (ownerRecord == null || BossType.fromId(ownerRecord.bossId()) != BossType.CORRUPTED_OATHKEEPER) {
+            return;
+        }
+
+        BossMechanics.OffensiveWindow window = BossMechanics.corruptedEmberExposure(bossPhase(boss));
+        long endsAt = System.currentTimeMillis() + window.durationMillis();
+        bossExposures.merge(
+            ownerBossId,
+            new BossExposure(window.damageMultiplier(), endsAt),
+            (current, next) -> new BossExposure(
+                Math.max(current.damageMultiplier(), next.damageMultiplier()),
+                Math.max(current.endsAt(), next.endsAt())
+            )
+        );
+        String duration = compactDuration(window.durationMillis());
+        for (Player player : eligibleBossPlayers(boss, BossType.CORRUPTED_OATHKEEPER)) {
+            player.sendActionBar(MM.deserialize(
+                "<green><bold>EMBER BROKEN</bold></green> <white>Oathkeeper exposed: +"
+                    + window.bonusPercent() + "% damage for " + duration + "s.</white>"
+            ));
+        }
+        Location center = minion.getLocation().clone().add(0.0, 0.8, 0.0);
+        boss.getWorld().spawnParticle(Particle.ENCHANTED_HIT, center, 28, 0.5, 0.45, 0.5, 0.12);
+        boss.getWorld().spawnParticle(
+            Particle.DUST,
+            boss.getLocation().clone().add(0.0, Math.max(1.0, boss.getHeight() * 0.55), 0.0),
+            22,
+            0.8,
+            0.8,
+            0.8,
+            0.0,
+            new Particle.DustOptions(Color.fromRGB(80, 235, 135), 1.1f)
+        );
+        boss.getWorld().playSound(center, Sound.BLOCK_RESPAWN_ANCHOR_DEPLETE, 0.8f, 1.35f);
     }
 
     private boolean isBossMinion(Entity entity) {
@@ -7329,9 +7809,19 @@ public final class BossManager implements Listener {
     }
 
     private void cleanupOrphanBossMinions(Chunk chunk) {
+        long now = System.currentTimeMillis();
         for (Entity entity : chunk.getEntities()) {
+            if (!isBossMinionCleanupCandidate(entity)) {
+                continue;
+            }
             UUID ownerBossId = bossMinionOwner(entity);
             if (ownerBossId == null) {
+                entity.remove();
+                continue;
+            }
+            Long expiresAt = entity.getPersistentDataContainer().get(keyBossMinionExpiresAt, PersistentDataType.LONG);
+            if (expiresAt != null && expiresAt <= now) {
+                entity.remove();
                 continue;
             }
             Entity owner = Bukkit.getEntity(ownerBossId);
@@ -7340,6 +7830,46 @@ public final class BossManager implements Listener {
             }
             entity.remove();
         }
+    }
+
+    public int despawnBossMinionsInWorld(World world) {
+        if (world == null) {
+            return 0;
+        }
+        int removed = 0;
+        for (Entity entity : new ArrayList<>(world.getEntities())) {
+            if (!isBossMinionCleanupCandidate(entity)) {
+                continue;
+            }
+            entity.remove();
+            removed++;
+        }
+        return removed;
+    }
+
+    private boolean isBossMinionCleanupCandidate(Entity entity) {
+        if (entity == null) {
+            return false;
+        }
+        Component customName = entity.customName();
+        boolean corruptedEmberName = plugin.getBossDungeonManager() != null
+            && plugin.getBossDungeonManager().isDungeonWorld(entity.getWorld())
+            && entity instanceof MagmaCube
+            && customName != null
+            && "Corrupted Ember".equalsIgnoreCase(PLAIN.serialize(customName).trim());
+        return shouldCleanupBossMinion(
+            isBossMinion(entity),
+            entity.getScoreboardTags().contains(SCOREBOARD_TAG + "_minion"),
+            corruptedEmberName
+        );
+    }
+
+    static boolean shouldCleanupBossMinion(
+        boolean persistentMarker,
+        boolean scoreboardMarker,
+        boolean corruptedEmberName
+    ) {
+        return persistentMarker || scoreboardMarker || corruptedEmberName;
     }
 
     private boolean sameRecord(BossRecord left, BossRecord right) {
@@ -7396,6 +7926,7 @@ public final class BossManager implements Listener {
         bossFightStates.remove(entityUuid);
         bossArenaPlayers.remove(entityUuid);
         activeBossMechanics.remove(entityUuid);
+        bossExposures.remove(entityUuid);
         telegraphingBosses.remove(entityUuid);
         bossEntranceAnimations.remove(entityUuid);
         bossAttackVisualCooldowns.remove(entityUuid);
@@ -7494,6 +8025,9 @@ public final class BossManager implements Listener {
         private static BossLootScale solo() {
             return new BossLootScale(1, 1.0);
         }
+    }
+
+    private record BossExposure(double damageMultiplier, long endsAt) {
     }
 
     private record DropPreview(Material icon, String name, String note, String relicId, int amount, double chance) {
@@ -7961,19 +8495,18 @@ public final class BossManager implements Listener {
                 "<gray>A drowned Veil matron that turns rain and water into a battlefield.</gray>",
                 "<gray>Phase One:</gray> <white>Undertow pulls followed by an escape check</white>",
                 "<gray>Phase Two:</gray> <white>Tidal Divide floods one half while the green half stays safe</white>",
-                "<gray>Drops Depthveil Pearls and rare Tideveil Hearts.</gray>"
+                "<gray>Drops Depthveil Pearls and often a Tideveil Heart.</gray>"
             ),
             new BossRitual(
                 "Drowned Veil Baptism",
-                Material.CONDUIT,
-                Material.HEART_OF_THE_SEA,
-                Material.CONDUIT,
+                THALASSA_RITUAL_FOCUS,
+                THALASSA_RITUAL_CATALYST,
+                Material.WATER_BUCKET,
                 List.of(
                     "<gold><bold>Build Guide</bold></gold>",
-                    "<gray>1. Put a <white>Prismarine</white> block on the ground.</gray>",
-                    "<gray>2. Place a <white>Conduit</white> directly on top of the Prismarine.</gray>",
-                    "<gray>3. Put <white>Sea Lanterns</white> touching the Prismarine north, south, east, and west.</gray>",
-                    "<gray>4. Hold a <white>Heart of the Sea</white> and right-click the Conduit or any shrine block.</gray>",
+                    "<gray>1. Put <white>Prismarine Bricks</white> on the ground.</gray>",
+                    "<gray>2. Put <white>Sea Lanterns</white> touching it north, south, east, and west.</gray>",
+                    "<gray>3. Hold a <white>Water Bucket</white> and right-click the Prismarine Bricks.</gray>",
                     "<dark_gray>The shrine works on land or underwater.</dark_gray>"
                 ),
                 68L,
@@ -8041,7 +8574,7 @@ public final class BossManager implements Listener {
                 "<gray>A briar-crowned tyrant wearing a corpse as a throne.</gray>",
                 "<gray>Phase One:</gray> <white>fill every Root Ward before the roots close</white>",
                 "<gray>Phase Two:</gray> <white>Briar Lattice roots the red crossing lanes and leaves the corners safe</white>",
-                "<gray>Drops Briarwake Bark and rare Briarhearts.</gray>"
+                "<gray>Drops Briarwake Bark and often a Briarheart.</gray>"
             ),
             new BossRitual(
                 "Briarveil Wake",
@@ -8091,8 +8624,8 @@ public final class BossManager implements Listener {
             List.of(
                 "<gray>The strongest Veil boss yet: a huge corrupted magma oath made flesh.</gray>",
                 "<gray>Phase One:</gray> <white>heavy melee and readable IN or OUT Oath Rings</white>",
-                "<gray>Phase Two:</gray> <white>brand pulls, tighter rings, and corrupted embers</white>",
-                "<gray>Phase Three:</gray> <white>back-to-back reversed rings overlap with moving spread brands</white>",
+                "<gray>Phase Two:</gray> <white>escape Corrupted Brand and break capped Ember waves</white>",
+                "<gray>Phase Three:</gray> <white>reversed rings, spread marks, and earned exposure windows</white>",
                 "<gray>Drops <white>Corrupted Essence</white> for future item corruption.</gray>"
             ),
             new BossRitual(
@@ -8344,6 +8877,7 @@ public final class BossManager implements Listener {
         private double progress;
         private double threshold;
         private boolean insideSafe;
+        private boolean groupSuccess = true;
 
         private ActiveBossMechanic(
             BossMechanicKind kind,
@@ -8376,10 +8910,22 @@ public final class BossManager implements Listener {
         }
     }
 
-    private record BossDropPreviewMenuHolder(BossType type) implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
+    private record BossDropCatalogMenuHolder() implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;
         }
+    }
+
+    private record BossDropPreviewMenuHolder(BossType type, BossDropBackTarget backTarget) implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
+    private enum BossDropBackTarget {
+        RITUALS,
+        DROP_CATALOG
     }
 }

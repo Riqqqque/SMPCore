@@ -600,7 +600,7 @@ public final class MayorQuestManager implements Listener {
 
     private void tickPets() {
         for (Player player : Bukkit.getOnlinePlayers()) {
-            if (!hasPetUnlocked(player) || isPetHidden(player) || player.isDead()) {
+            if (!hasPetUnlocked(player) || isPetHidden(player) || player.isDead() || isOwnerVanished(player)) {
                 removePet(player.getUniqueId());
                 continue;
             }
@@ -629,7 +629,7 @@ public final class MayorQuestManager implements Listener {
     }
 
     private void spawnPetIfUnlocked(Player player) {
-        if (player == null || !player.isOnline() || !hasPetUnlocked(player) || isPetHidden(player)) {
+        if (player == null || !player.isOnline() || !hasPetUnlocked(player) || isPetHidden(player) || isOwnerVanished(player)) {
             return;
         }
         if (currentPet(player) != null) {
@@ -997,13 +997,20 @@ public final class MayorQuestManager implements Listener {
     }
 
     public boolean hasActiveVeilWisp(Player player) {
-        if (player == null || !player.isOnline() || player.isDead() || !hasPetUnlocked(player) || isPetHidden(player)) {
+        if (player == null || !player.isOnline() || player.isDead() || isOwnerVanished(player)
+            || !hasPetUnlocked(player) || isPetHidden(player)) {
             return false;
         }
         if (currentPet(player) == null) {
             spawnPetIfUnlocked(player);
         }
         return currentPet(player) != null;
+    }
+
+    private boolean isOwnerVanished(Player player) {
+        return player != null
+            && plugin.getPlayerManager() != null
+            && plugin.getPlayerManager().isVanished(player.getUniqueId());
     }
 
     public int activeVeilWispCount(Collection<UUID> playerIds) {

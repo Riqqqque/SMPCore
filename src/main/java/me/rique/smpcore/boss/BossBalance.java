@@ -1,10 +1,15 @@
 package me.rique.smpcore.boss;
 
+import org.bukkit.Material;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public final class BossBalance {
+    public static final double BRIARHEART_DROP_CHANCE = 0.70;
+    public static final double TIDEVEIL_HEART_DROP_CHANCE = 0.70;
     public static final double RUNEBLOOM_WITCH_ORB_DROP_CHANCE = 0.05;
     private static final double GROUP_LOOT_DAMAGE_SHARE = 0.025;
     private static final double GROUP_LOOT_MINIMUM_DAMAGE = 10.0;
@@ -46,6 +51,74 @@ public final class BossBalance {
             throw new IllegalArgumentException("No boss balance profile for " + bossId);
         }
         return profile;
+    }
+
+    public static List<MiscDrop> miscDrops(String bossId) {
+        if (bossId == null) {
+            return List.of();
+        }
+        return switch (bossId) {
+            case "yule_the_minion" -> List.of(
+                new MiscDrop(Material.GOLD_INGOT, 6, 10, 1.0)
+            );
+            case "kael_the_ashen" -> List.of(
+                new MiscDrop(Material.ARROW, 16, 24, 1.0),
+                new MiscDrop(Material.GUNPOWDER, 4, 6, 0.50)
+            );
+            case "vesper_the_widow_queen" -> List.of(
+                new MiscDrop(Material.COBWEB, 3, 5, 1.0),
+                new MiscDrop(Material.EMERALD, 3, 5, 0.50)
+            );
+            case "mirewood_the_root_tyrant" -> List.of(
+                new MiscDrop(Material.GOLDEN_CARROT, 8, 12, 1.0),
+                new MiscDrop(Material.BONE_BLOCK, 4, 6, 0.50)
+            );
+            case "nereida_the_abyss_mother" -> List.of(
+                new MiscDrop(Material.PRISMARINE_CRYSTALS, 8, 12, 1.0),
+                new MiscDrop(Material.NAUTILUS_SHELL, 1, 2, 0.50)
+            );
+            case "iron_saint" -> List.of(
+                new MiscDrop(Material.IRON_BLOCK, 3, 5, 1.0),
+                new MiscDrop(Material.DIAMOND, 2, 3, 0.50)
+            );
+            case "aurelion_the_rift_seraph" -> List.of(
+                new MiscDrop(Material.ENDER_PEARL, 8, 12, 1.0),
+                new MiscDrop(Material.SHULKER_SHELL, 1, 2, 0.50)
+            );
+            case "morvessa_the_runebloom_witch" -> List.of(
+                new MiscDrop(Material.EXPERIENCE_BOTTLE, 12, 18, 1.0),
+                new MiscDrop(Material.GHAST_TEAR, 2, 4, 0.50)
+            );
+            case "voralith_the_crimson_warden" -> List.of(
+                new MiscDrop(Material.ECHO_SHARD, 3, 5, 1.0),
+                new MiscDrop(Material.DIAMOND, 4, 6, 0.50)
+            );
+            case "corrupted_oathkeeper" -> List.of(
+                new MiscDrop(Material.NETHERITE_SCRAP, 2, 3, 1.0),
+                new MiscDrop(Material.ENCHANTED_GOLDEN_APPLE, 1, 1, 0.20)
+            );
+            default -> List.of();
+        };
+    }
+
+    public static boolean allowsRelicDrop(String bossId, String relicId) {
+        if (bossId == null || relicId == null) {
+            return false;
+        }
+        Set<String> allowed = switch (bossId) {
+            case "yule_the_minion" -> Set.of("gilded_skull", "oathbound_plate");
+            case "kael_the_ashen" -> Set.of("solar_ember");
+            case "vesper_the_widow_queen" -> Set.of("widow_silk");
+            case "voralith_the_crimson_warden" -> Set.of("crimson_rib", "sculk_heart");
+            case "aurelion_the_rift_seraph" -> Set.of("rift_lens", "void_halo", "awakening_shard");
+            case "morvessa_the_runebloom_witch" -> Set.of("rift_lens", "runebloom_orb");
+            case "nereida_the_abyss_mother" -> Set.of("abyssal_pearl", "tideheart");
+            case "iron_saint" -> Set.of("titan_gear", "saint_alloy");
+            case "mirewood_the_root_tyrant" -> Set.of("living_bark", "verdant_heart");
+            case "corrupted_oathkeeper" -> Set.of("corrupted_essence", "soul_imprint");
+            default -> Set.of();
+        };
+        return allowed.contains(relicId);
     }
 
     public static double mechanicFailureHealthRatio(int tier) {
@@ -117,6 +190,26 @@ public final class BossBalance {
         return 0.90;
     }
 
+    public static int requiredArmorPathTier(int bossTier) {
+        return switch (Math.max(1, bossTier)) {
+            case 1, 2, 3 -> 0;
+            case 4, 5 -> 3;
+            case 6 -> 5;
+            case 7 -> 6;
+            case 8, 9 -> 7;
+            default -> 9;
+        };
+    }
+
+    public static double missingArmorDamageMultiplier(int bossTier, boolean hasRequiredArmor) {
+        int requiredTier = requiredArmorPathTier(bossTier);
+        if (requiredTier <= 0 || hasRequiredArmor) {
+            return 1.0;
+        }
+        int clampedTier = Math.max(4, Math.min(10, bossTier));
+        return 1.0 + (clampedTier - 1) * 0.05;
+    }
+
     public static double reportedDamage(double currentHealth, double actualDamage, double actualMaxHealth, double displayMaxHealth) {
         if (!Double.isFinite(currentHealth)
             || !Double.isFinite(actualDamage)
@@ -135,5 +228,8 @@ public final class BossBalance {
     }
 
     public record Profile(String bossId, int tier, double maxHealth, double attackDamage, String recommendedGear) {
+    }
+
+    public record MiscDrop(Material material, int minimumAmount, int maximumAmount, double chance) {
     }
 }

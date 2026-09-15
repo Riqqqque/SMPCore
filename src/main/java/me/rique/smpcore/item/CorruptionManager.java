@@ -7,6 +7,7 @@ import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -271,7 +272,7 @@ public final class CorruptionManager implements Listener {
         if (!isStationItem(event.getItemInHand())) {
             return;
         }
-        if (!event.getPlayer().hasPermission("smpcore.corruption.admin")) {
+        if (!OperatorGameplayMode.allowsPassiveBypass(event.getPlayer(), "smpcore.corruption.admin")) {
             event.setCancelled(true);
             event.getPlayer().sendMessage(MessageUtil.warn("Only admins can place Corruption Anchors."));
             return;
@@ -284,7 +285,7 @@ public final class CorruptionManager implements Listener {
         if (!isStationBlock(event.getBlock())) {
             return;
         }
-        if (!event.getPlayer().hasPermission("smpcore.corruption.admin")) {
+        if (!OperatorGameplayMode.allowsPassiveBypass(event.getPlayer(), "smpcore.corruption.admin")) {
             event.setCancelled(true);
             event.getPlayer().sendMessage(MessageUtil.warn("Only admins can break Corruption Anchors."));
             return;
@@ -439,7 +440,7 @@ public final class CorruptionManager implements Listener {
         Bukkit.getScheduler().runTask(plugin, () -> refreshCorruptedInventory(player));
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onKick(PlayerKickEvent event) {
         returnOpenCorruptionInputs(event.getPlayer());
     }

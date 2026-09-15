@@ -10,6 +10,7 @@ import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
@@ -216,7 +217,8 @@ public final class GoblinHuntManager implements Listener {
     private void syncAdminVisionViewers() {
         for (UUID playerId : new ArrayList<>(adminVisionEnabled)) {
             Player player = Bukkit.getPlayer(playerId);
-            if (player == null || !player.isOnline() || !player.hasPermission("smpcore.goblins.admin")) {
+            if (player == null || !player.isOnline()
+                || !OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.goblins.admin")) {
                 adminVisionEnabled.remove(playerId);
                 removeAdminVisionMarkers(playerId);
                 continue;
@@ -358,7 +360,7 @@ public final class GoblinHuntManager implements Listener {
 
     public void openMenu(Player player) {
         if (!player.getPersistentDataContainer().has(introducedKey, PersistentDataType.BYTE)
-            && !player.hasPermission("smpcore.goblins.admin")) {
+            && !OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.goblins.admin")) {
             player.sendMessage(MessageUtil.warn("Speak with Grikk the Goblin Hunter first."));
             return;
         }
@@ -472,7 +474,7 @@ public final class GoblinHuntManager implements Listener {
         BlockKey key = BlockKey.of(event.getBlock());
         Integer id = placements.get(key);
         if (id == null) return;
-        if (!event.getPlayer().hasPermission("smpcore.goblins.admin")) {
+        if (!OperatorGameplayMode.allowsPassiveBypass(event.getPlayer(), "smpcore.goblins.admin")) {
             event.setCancelled(true);
             event.getPlayer().sendMessage(MessageUtil.warn("This hidden goblin is part of the hunt."));
             return;

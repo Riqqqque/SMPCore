@@ -163,6 +163,65 @@ public final class DatabaseManager {
             ON team_allies(ally_name)
             """;
 
+        String allianceHomes = """
+            CREATE TABLE IF NOT EXISTS alliance_homes (
+                first_team  TEXT NOT NULL COLLATE NOCASE,
+                second_team TEXT NOT NULL COLLATE NOCASE,
+                name        TEXT NOT NULL COLLATE NOCASE,
+                world       TEXT NOT NULL,
+                x           REAL NOT NULL,
+                y           REAL NOT NULL,
+                z           REAL NOT NULL,
+                yaw         REAL NOT NULL DEFAULT 0,
+                pitch       REAL NOT NULL DEFAULT 0,
+                updated_at  INTEGER NOT NULL,
+                PRIMARY KEY (first_team, second_team, name)
+            )""";
+
+        String allianceHomesBySecondTeam = """
+            CREATE INDEX IF NOT EXISTS idx_alliance_homes_second_team
+            ON alliance_homes(second_team)
+            """;
+
+        String teamSettings = """
+            CREATE TABLE IF NOT EXISTS team_settings (
+                team_name     TEXT PRIMARY KEY COLLATE NOCASE,
+                friendly_fire INTEGER NOT NULL DEFAULT 0
+            )""";
+
+        String teamCaptains = """
+            CREATE TABLE IF NOT EXISTS team_captains (
+                team_name   TEXT NOT NULL COLLATE NOCASE,
+                player_uuid TEXT NOT NULL,
+                PRIMARY KEY (team_name, player_uuid)
+            )""";
+
+        String teamKillProgressCooldowns = """
+            CREATE TABLE IF NOT EXISTS team_kill_progress_cooldowns (
+                player_low    TEXT    NOT NULL,
+                player_high   TEXT    NOT NULL,
+                blocked_until INTEGER NOT NULL,
+                PRIMARY KEY (player_low, player_high)
+            )""";
+
+        String teamKillProgressCooldownsByExpiry = """
+            CREATE INDEX IF NOT EXISTS idx_team_kill_progress_cooldowns_expiry
+            ON team_kill_progress_cooldowns(blocked_until)
+            """;
+
+        String teamLeaveActivity = """
+            CREATE TABLE IF NOT EXISTS team_leave_activity (
+                player_uuid      TEXT    PRIMARY KEY,
+                window_started_at INTEGER NOT NULL,
+                leave_count       INTEGER NOT NULL,
+                join_locked_until INTEGER NOT NULL DEFAULT 0
+            )""";
+
+        String teamLeaveActivityByLock = """
+            CREATE INDEX IF NOT EXISTS idx_team_leave_activity_lock
+            ON team_leave_activity(join_locked_until)
+            """;
+
         String teamVaults = """
             CREATE TABLE IF NOT EXISTS team_vaults (
                 team_name TEXT PRIMARY KEY COLLATE NOCASE,
@@ -479,6 +538,16 @@ public final class DatabaseManager {
             stmt.executeUpdate(teamMembers);
             stmt.executeUpdate(teamAllies);
             stmt.executeUpdate(teamAlliesByAlly);
+            stmt.executeUpdate(allianceHomes);
+            stmt.executeUpdate(allianceHomesBySecondTeam);
+            stmt.executeUpdate(teamSettings);
+            stmt.executeUpdate(teamCaptains);
+            stmt.executeUpdate(teamKillProgressCooldowns);
+            stmt.executeUpdate(teamKillProgressCooldownsByExpiry);
+            stmt.executeUpdate("DELETE FROM team_kill_progress_cooldowns WHERE blocked_until <= "
+                + System.currentTimeMillis());
+            stmt.executeUpdate(teamLeaveActivity);
+            stmt.executeUpdate(teamLeaveActivityByLock);
             stmt.executeUpdate(teamVaults);
             stmt.executeUpdate(teamVaultBackups);
             stmt.executeUpdate("""
@@ -487,6 +556,43 @@ public final class DatabaseManager {
                 FROM team_vaults
                 """);
             migrateTeamMemberships(conn);
+            stmt.executeUpdate("""
+                DELETE FROM alliance_homes
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM team_allies
+                    WHERE team_allies.team_name = alliance_homes.first_team COLLATE NOCASE
+                      AND team_allies.ally_name = alliance_homes.second_team COLLATE NOCASE
+                )
+                """);
+            stmt.executeUpdate("""
+                INSERT OR IGNORE INTO team_settings (team_name, friendly_fire)
+                SELECT name, 0
+                FROM teams
+                """);
+            stmt.executeUpdate("""
+                DELETE FROM team_settings
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM teams
+                    WHERE teams.name = team_settings.team_name COLLATE NOCASE
+                )
+                """);
+            stmt.executeUpdate("""
+                DELETE FROM team_captains
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM team_members
+                    WHERE team_members.team_name = team_captains.team_name COLLATE NOCASE
+                      AND team_members.player_uuid = team_captains.player_uuid
+                )
+                   OR EXISTS (
+                    SELECT 1
+                    FROM teams
+                    WHERE teams.name = team_captains.team_name COLLATE NOCASE
+                      AND teams.owner_uuid = team_captains.player_uuid
+                )
+                """);
             stmt.executeUpdate("DROP INDEX IF EXISTS idx_team_members_player");
             stmt.executeUpdate(teamMembersByPlayer);
             stmt.executeUpdate(waystones);
@@ -819,6 +925,137 @@ public final class DatabaseManager {
         );
     }
 
+    public CompletableFuture<List<AllianceHomeRecord>> loadAllAllianceHomes() {
+        return CompletableFuture.supplyAsync(() -> {
+            List<AllianceHomeRecord> homes = new ArrayList<>();
+            String sql = """
+                SELECT first_team, second_team, name, world, x, y, z, yaw, pitch
+                FROM alliance_homes
+                ORDER BY lower(first_team), lower(second_team), lower(name)
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql);
+                 ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    homes.add(new AllianceHomeRecord(
+                        rs.getString("first_team"),
+                        rs.getString("second_team"),
+                        homeFromRs(rs)
+                    ));
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadAllAllianceHomes: " + e.getMessage());
+                throw new RuntimeException("loadAllAllianceHomes failed", e);
+            }
+            return homes;
+        }, executor);
+    }
+
+    public CompletableFuture<Boolean> saveAllianceHome(
+        String firstTeam,
+        String secondTeam,
+        HomeEntry home
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            String updateSql = """
+                UPDATE alliance_homes
+                SET world=?, x=?, y=?, z=?, yaw=?, pitch=?, updated_at=?
+                WHERE name=? AND (
+                    (first_team=? AND second_team=?)
+                    OR (first_team=? AND second_team=?)
+                )
+                """;
+            String insertSql = """
+                INSERT INTO alliance_homes (
+                    first_team, second_team, name, world, x, y, z, yaw, pitch, updated_at
+                )
+                SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                WHERE EXISTS (
+                    SELECT 1 FROM team_allies
+                    WHERE team_name=? AND ally_name=?
+                )
+                """;
+            try (Connection conn = connection()) {
+                boolean oldAutoCommit = conn.getAutoCommit();
+                conn.setAutoCommit(false);
+                try {
+                    long now = System.currentTimeMillis();
+                    int updated;
+                    try (PreparedStatement ps = conn.prepareStatement(updateSql)) {
+                        ps.setString(1, home.world());
+                        ps.setDouble(2, home.x());
+                        ps.setDouble(3, home.y());
+                        ps.setDouble(4, home.z());
+                        ps.setFloat(5, home.yaw());
+                        ps.setFloat(6, home.pitch());
+                        ps.setLong(7, now);
+                        ps.setString(8, home.name());
+                        ps.setString(9, firstTeam);
+                        ps.setString(10, secondTeam);
+                        ps.setString(11, secondTeam);
+                        ps.setString(12, firstTeam);
+                        updated = ps.executeUpdate();
+                    }
+                    if (updated == 0) {
+                        try (PreparedStatement ps = conn.prepareStatement(insertSql)) {
+                            ps.setString(1, firstTeam);
+                            ps.setString(2, secondTeam);
+                            ps.setString(3, home.name());
+                            ps.setString(4, home.world());
+                            ps.setDouble(5, home.x());
+                            ps.setDouble(6, home.y());
+                            ps.setDouble(7, home.z());
+                            ps.setFloat(8, home.yaw());
+                            ps.setFloat(9, home.pitch());
+                            ps.setLong(10, now);
+                            ps.setString(11, firstTeam);
+                            ps.setString(12, secondTeam);
+                            updated = ps.executeUpdate();
+                        }
+                    }
+                    conn.commit();
+                    return updated > 0;
+                } catch (SQLException e) {
+                    conn.rollback();
+                    throw e;
+                } finally {
+                    conn.setAutoCommit(oldAutoCommit);
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("saveAllianceHome: " + e.getMessage());
+                throw new RuntimeException("saveAllianceHome failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Boolean> deleteAllianceHome(
+        String firstTeam,
+        String secondTeam,
+        String name
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            String sql = """
+                DELETE FROM alliance_homes
+                WHERE name=? AND (
+                    (first_team=? AND second_team=?)
+                    OR (first_team=? AND second_team=?)
+                )
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, name);
+                ps.setString(2, firstTeam);
+                ps.setString(3, secondTeam);
+                ps.setString(4, secondTeam);
+                ps.setString(5, firstTeam);
+                return ps.executeUpdate() > 0;
+            } catch (SQLException e) {
+                plugin.getLogger().severe("deleteAllianceHome: " + e.getMessage());
+                throw new RuntimeException("deleteAllianceHome failed", e);
+            }
+        }, executor);
+    }
+
     // —— Waystone Queries ———————————————————————————————————————————————————————————————————————
 
     public CompletableFuture<List<WaystoneEntry>> loadAllWaystones() {
@@ -1017,13 +1254,29 @@ public final class DatabaseManager {
         return CompletableFuture.supplyAsync(() -> {
             Map<String, TeamRecord> byName = new LinkedHashMap<>();
             try (Connection conn = connection()) {
-                try (PreparedStatement ps = conn.prepareStatement("SELECT name, owner_uuid, color FROM teams");
+                try (PreparedStatement ps = conn.prepareStatement("""
+                         SELECT teams.name, teams.owner_uuid, teams.color,
+                                COALESCE(team_settings.friendly_fire, 0) AS friendly_fire
+                         FROM teams
+                         LEFT JOIN team_settings ON team_settings.team_name = teams.name COLLATE NOCASE
+                         """);
                      ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         String name = rs.getString("name");
                         UUID owner = UUID.fromString(rs.getString("owner_uuid"));
                         String color = rs.getString("color");
-                        byName.put(name.toLowerCase(Locale.ROOT), new TeamRecord(name, owner, color, new LinkedHashSet<>(), new LinkedHashSet<>()));
+                        byName.put(
+                            name.toLowerCase(Locale.ROOT),
+                            new TeamRecord(
+                                name,
+                                owner,
+                                color,
+                                new LinkedHashSet<>(),
+                                new LinkedHashSet<>(),
+                                new LinkedHashSet<>(),
+                                rs.getInt("friendly_fire") != 0
+                            )
+                        );
                     }
                 }
 
@@ -1050,6 +1303,18 @@ public final class DatabaseManager {
                         }
                     }
                 }
+
+                try (PreparedStatement ps = conn.prepareStatement("SELECT team_name, player_uuid FROM team_captains");
+                     ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        String teamName = rs.getString("team_name");
+                        UUID captain = parseUuid(rs.getString("player_uuid"));
+                        TeamRecord record = byName.get(teamName.toLowerCase(Locale.ROOT));
+                        if (record != null && captain != null) {
+                            record.captains().add(captain);
+                        }
+                    }
+                }
             } catch (SQLException e) {
                 plugin.getLogger().severe("loadTeams: " + e.getMessage());
                 throw new RuntimeException("loadTeams failed", e);
@@ -1059,15 +1324,75 @@ public final class DatabaseManager {
         }, executor);
     }
 
+    public CompletableFuture<List<TeamKillProgressCooldownRecord>> loadActiveTeamKillProgressCooldowns(long now) {
+        return CompletableFuture.supplyAsync(() -> {
+            List<TeamKillProgressCooldownRecord> records = new ArrayList<>();
+            String sql = """
+                SELECT player_low, player_high, blocked_until
+                FROM team_kill_progress_cooldowns
+                WHERE blocked_until > ?
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setLong(1, now);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        UUID low = parseUuid(rs.getString("player_low"));
+                        UUID high = parseUuid(rs.getString("player_high"));
+                        if (low != null && high != null && !low.equals(high)) {
+                            records.add(new TeamKillProgressCooldownRecord(
+                                low,
+                                high,
+                                rs.getLong("blocked_until")
+                            ));
+                        }
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadActiveTeamKillProgressCooldowns: " + e.getMessage());
+                throw new RuntimeException("loadActiveTeamKillProgressCooldowns failed", e);
+            }
+            return records;
+        }, executor);
+    }
+
+    public CompletableFuture<List<TeamJoinLockRecord>> loadActiveTeamJoinLocks(long now) {
+        return CompletableFuture.supplyAsync(() -> {
+            List<TeamJoinLockRecord> records = new ArrayList<>();
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement("""
+                     SELECT player_uuid, join_locked_until
+                     FROM team_leave_activity
+                     WHERE join_locked_until > ?
+                     """)) {
+                ps.setLong(1, now);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        UUID playerId = parseUuid(rs.getString("player_uuid"));
+                        if (playerId != null) {
+                            records.add(new TeamJoinLockRecord(playerId, rs.getLong("join_locked_until")));
+                        }
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe("loadActiveTeamJoinLocks: " + e.getMessage());
+                throw new RuntimeException("loadActiveTeamJoinLocks failed", e);
+            }
+            return records;
+        }, executor);
+    }
+
     public CompletableFuture<TeamCreateResult> createTeam(String name, UUID ownerUuid, String color) {
         return CompletableFuture.supplyAsync(() -> {
             String insertTeam = "INSERT INTO teams (name, owner_uuid, color, created_at) VALUES (?, ?, ?, ?)";
             String insertOwner = "INSERT INTO team_members (team_name, player_uuid) VALUES (?, ?)";
+            String insertSettings = "INSERT INTO team_settings (team_name, friendly_fire) VALUES (?, 0)";
             try (Connection conn = connection()) {
                 boolean oldAutoCommit = conn.getAutoCommit();
                 conn.setAutoCommit(false);
                 try (PreparedStatement psTeam = conn.prepareStatement(insertTeam);
-                     PreparedStatement psOwner = conn.prepareStatement(insertOwner)) {
+                     PreparedStatement psOwner = conn.prepareStatement(insertOwner);
+                     PreparedStatement psSettings = conn.prepareStatement(insertSettings)) {
                     psTeam.setString(1, name);
                     psTeam.setString(2, ownerUuid.toString());
                     psTeam.setString(3, color == null || color.isBlank() ? "gold" : color);
@@ -1077,6 +1402,9 @@ public final class DatabaseManager {
                     psOwner.setString(1, name);
                     psOwner.setString(2, ownerUuid.toString());
                     psOwner.executeUpdate();
+
+                    psSettings.setString(1, name);
+                    psSettings.executeUpdate();
                     conn.commit();
                     return TeamCreateResult.CREATED;
                 } catch (SQLException e) {
@@ -1120,26 +1448,89 @@ public final class DatabaseManager {
     }
 
     public CompletableFuture<Void> deleteTeam(String name) {
-        return CompletableFuture.runAsync(() -> {
+        return deleteTeamInternal(name, 0L, null, 0L, 0L, 0, 0L).thenApply(ignored -> null);
+    }
+
+    public CompletableFuture<Void> deleteTeam(String name, long killProgressBlockedUntil) {
+        return deleteTeamInternal(name, killProgressBlockedUntil, null, 0L, 0L, 0, 0L)
+            .thenApply(ignored -> null);
+    }
+
+    public CompletableFuture<Long> deleteTeamForOwner(
+        String name,
+        long killProgressBlockedUntil,
+        UUID ownerId,
+        long leaveAt,
+        long leaveWindowMillis,
+        int leaveThreshold,
+        long joinLockMillis
+    ) {
+        return deleteTeamInternal(
+            name,
+            killProgressBlockedUntil,
+            ownerId,
+            leaveAt,
+            leaveWindowMillis,
+            leaveThreshold,
+            joinLockMillis
+        );
+    }
+
+    private CompletableFuture<Long> deleteTeamInternal(
+        String name,
+        long killProgressBlockedUntil,
+        UUID leavingOwnerId,
+        long leaveAt,
+        long leaveWindowMillis,
+        int leaveThreshold,
+        long joinLockMillis
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
             try (Connection conn = connection()) {
                 conn.setAutoCommit(false);
-                try (PreparedStatement psMembers = conn.prepareStatement("DELETE FROM team_members WHERE team_name=?");
+                try {
+                    List<UUID> members = selectTeamMembers(conn, name);
+                    recordFormerTeammatePairs(conn, members, killProgressBlockedUntil);
+                    long joinLockedUntil = leavingOwnerId == null || !members.contains(leavingOwnerId)
+                        ? 0L
+                        : recordTeamLeaveActivity(
+                            conn,
+                            leavingOwnerId,
+                            leaveAt,
+                            leaveWindowMillis,
+                            leaveThreshold,
+                            joinLockMillis
+                        );
+                    try (PreparedStatement psMembers = conn.prepareStatement("DELETE FROM team_members WHERE team_name=?");
                      PreparedStatement psAllies = conn.prepareStatement("DELETE FROM team_allies WHERE team_name=? OR ally_name=?");
+                     PreparedStatement psAllianceHomes = conn.prepareStatement(
+                         "DELETE FROM alliance_homes WHERE first_team=? OR second_team=?");
+                     PreparedStatement psCaptains = conn.prepareStatement("DELETE FROM team_captains WHERE team_name=?");
+                     PreparedStatement psSettings = conn.prepareStatement("DELETE FROM team_settings WHERE team_name=?");
                      PreparedStatement psVault = conn.prepareStatement("DELETE FROM team_vaults WHERE team_name=?");
                      PreparedStatement psVaultBackup = conn.prepareStatement("DELETE FROM team_vault_backups WHERE team_name=?");
                      PreparedStatement psTeam = conn.prepareStatement("DELETE FROM teams WHERE name=?")) {
-                    psMembers.setString(1, name);
-                    psMembers.executeUpdate();
-                    psAllies.setString(1, name);
-                    psAllies.setString(2, name);
-                    psAllies.executeUpdate();
-                    psVault.setString(1, name);
-                    psVault.executeUpdate();
-                    psVaultBackup.setString(1, name);
-                    psVaultBackup.executeUpdate();
-                    psTeam.setString(1, name);
-                    psTeam.executeUpdate();
-                    conn.commit();
+                        psMembers.setString(1, name);
+                        psMembers.executeUpdate();
+                        psAllies.setString(1, name);
+                        psAllies.setString(2, name);
+                        psAllies.executeUpdate();
+                        psAllianceHomes.setString(1, name);
+                        psAllianceHomes.setString(2, name);
+                        psAllianceHomes.executeUpdate();
+                        psCaptains.setString(1, name);
+                        psCaptains.executeUpdate();
+                        psSettings.setString(1, name);
+                        psSettings.executeUpdate();
+                        psVault.setString(1, name);
+                        psVault.executeUpdate();
+                        psVaultBackup.setString(1, name);
+                        psVaultBackup.executeUpdate();
+                        psTeam.setString(1, name);
+                        psTeam.executeUpdate();
+                        conn.commit();
+                    }
+                    return joinLockedUntil;
                 } catch (SQLException e) {
                     conn.rollback();
                     throw e;
@@ -1182,7 +1573,70 @@ public final class DatabaseManager {
         }, executor);
     }
 
-    public CompletableFuture<TeamLeaveRecord> leaveTeam(String teamName, UUID playerUuid) {
+    public CompletableFuture<Boolean> setTeamFriendlyFire(String teamName, boolean enabled) {
+        return CompletableFuture.supplyAsync(() -> {
+            String sql = """
+                INSERT INTO team_settings (team_name, friendly_fire)
+                SELECT name, ? FROM teams WHERE name = ?
+                ON CONFLICT(team_name) DO UPDATE SET friendly_fire=excluded.friendly_fire
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setInt(1, enabled ? 1 : 0);
+                ps.setString(2, teamName);
+                return ps.executeUpdate() > 0;
+            } catch (SQLException e) {
+                plugin.getLogger().severe("setTeamFriendlyFire: " + e.getMessage());
+                throw new RuntimeException("setTeamFriendlyFire failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Boolean> addTeamCaptain(String teamName, UUID playerUuid) {
+        return CompletableFuture.supplyAsync(() -> {
+            String sql = """
+                INSERT INTO team_captains (team_name, player_uuid)
+                SELECT team_name, player_uuid
+                FROM team_members
+                WHERE team_name=? AND player_uuid=?
+                ON CONFLICT DO NOTHING
+                """;
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, teamName);
+                ps.setString(2, playerUuid.toString());
+                return ps.executeUpdate() > 0;
+            } catch (SQLException e) {
+                plugin.getLogger().severe("addTeamCaptain: " + e.getMessage());
+                throw new RuntimeException("addTeamCaptain failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<Boolean> removeTeamCaptain(String teamName, UUID playerUuid) {
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = connection();
+                 PreparedStatement ps = conn.prepareStatement(
+                     "DELETE FROM team_captains WHERE team_name=? AND player_uuid=?")) {
+                ps.setString(1, teamName);
+                ps.setString(2, playerUuid.toString());
+                return ps.executeUpdate() > 0;
+            } catch (SQLException e) {
+                plugin.getLogger().severe("removeTeamCaptain: " + e.getMessage());
+                throw new RuntimeException("removeTeamCaptain failed", e);
+            }
+        }, executor);
+    }
+
+    public CompletableFuture<TeamLeaveRecord> leaveTeam(
+        String teamName,
+        UUID playerUuid,
+        long killProgressBlockedUntil,
+        long leaveAt,
+        long leaveWindowMillis,
+        int leaveThreshold,
+        long joinLockMillis
+    ) {
         return CompletableFuture.supplyAsync(() -> {
             String deleteMember = "DELETE FROM team_members WHERE team_name=? AND player_uuid=?";
             String selectOwner = "SELECT owner_uuid FROM teams WHERE name=?";
@@ -1196,6 +1650,7 @@ public final class DatabaseManager {
                 boolean oldAutoCommit = conn.getAutoCommit();
                 conn.setAutoCommit(false);
                 try {
+                    List<UUID> formerTeammates = selectTeamMembers(conn, teamName);
                     int removed;
                     try (PreparedStatement ps = conn.prepareStatement(deleteMember)) {
                         ps.setString(1, teamName);
@@ -1204,8 +1659,28 @@ public final class DatabaseManager {
                     }
                     if (removed == 0) {
                         conn.rollback();
-                        return new TeamLeaveRecord(false, false, null);
+                        return new TeamLeaveRecord(false, false, null, 0L);
                     }
+                    try (PreparedStatement ps = conn.prepareStatement(
+                        "DELETE FROM team_captains WHERE team_name=? AND player_uuid=?")) {
+                        ps.setString(1, teamName);
+                        ps.setString(2, playerUuid.toString());
+                        ps.executeUpdate();
+                    }
+                    recordFormerTeammatePairs(
+                        conn,
+                        formerTeammates.stream().filter(member -> !member.equals(playerUuid)).toList(),
+                        playerUuid,
+                        killProgressBlockedUntil
+                    );
+                    long joinLockedUntil = recordTeamLeaveActivity(
+                        conn,
+                        playerUuid,
+                        leaveAt,
+                        leaveWindowMillis,
+                        leaveThreshold,
+                        joinLockMillis
+                    );
 
                     UUID currentOwner = null;
                     try (PreparedStatement ps = conn.prepareStatement(selectOwner)) {
@@ -1230,7 +1705,7 @@ public final class DatabaseManager {
                     if (nextOwner == null || currentOwner == null) {
                         deleteTeamRows(conn, teamName);
                         conn.commit();
-                        return new TeamLeaveRecord(true, true, null);
+                        return new TeamLeaveRecord(true, true, null, joinLockedUntil);
                     }
 
                     if (currentOwner.equals(playerUuid)) {
@@ -1239,11 +1714,17 @@ public final class DatabaseManager {
                             ps.setString(2, teamName);
                             ps.executeUpdate();
                         }
+                        try (PreparedStatement ps = conn.prepareStatement(
+                            "DELETE FROM team_captains WHERE team_name=? AND player_uuid=?")) {
+                            ps.setString(1, teamName);
+                            ps.setString(2, nextOwner.toString());
+                            ps.executeUpdate();
+                        }
                         currentOwner = nextOwner;
                     }
 
                     conn.commit();
-                    return new TeamLeaveRecord(true, false, currentOwner);
+                    return new TeamLeaveRecord(true, false, currentOwner, joinLockedUntil);
                 } catch (SQLException | RuntimeException e) {
                     conn.rollback();
                     throw e;
@@ -1263,6 +1744,10 @@ public final class DatabaseManager {
     private static void deleteTeamRows(Connection conn, String teamName) throws SQLException {
         try (PreparedStatement psMembers = conn.prepareStatement("DELETE FROM team_members WHERE team_name=?");
              PreparedStatement psAllies = conn.prepareStatement("DELETE FROM team_allies WHERE team_name=? OR ally_name=?");
+             PreparedStatement psAllianceHomes = conn.prepareStatement(
+                 "DELETE FROM alliance_homes WHERE first_team=? OR second_team=?");
+             PreparedStatement psCaptains = conn.prepareStatement("DELETE FROM team_captains WHERE team_name=?");
+             PreparedStatement psSettings = conn.prepareStatement("DELETE FROM team_settings WHERE team_name=?");
              PreparedStatement psVault = conn.prepareStatement("DELETE FROM team_vaults WHERE team_name=?");
              PreparedStatement psVaultBackup = conn.prepareStatement("DELETE FROM team_vault_backups WHERE team_name=?");
              PreparedStatement psTeam = conn.prepareStatement("DELETE FROM teams WHERE name=?")) {
@@ -1271,6 +1756,13 @@ public final class DatabaseManager {
             psAllies.setString(1, teamName);
             psAllies.setString(2, teamName);
             psAllies.executeUpdate();
+            psAllianceHomes.setString(1, teamName);
+            psAllianceHomes.setString(2, teamName);
+            psAllianceHomes.executeUpdate();
+            psCaptains.setString(1, teamName);
+            psCaptains.executeUpdate();
+            psSettings.setString(1, teamName);
+            psSettings.executeUpdate();
             psVault.setString(1, teamName);
             psVault.executeUpdate();
             psVaultBackup.setString(1, teamName);
@@ -1278,6 +1770,165 @@ public final class DatabaseManager {
             psTeam.setString(1, teamName);
             psTeam.executeUpdate();
         }
+    }
+
+    private static List<UUID> selectTeamMembers(Connection conn, String teamName) throws SQLException {
+        List<UUID> members = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(
+            "SELECT player_uuid FROM team_members WHERE team_name=? ORDER BY player_uuid ASC")) {
+            ps.setString(1, teamName);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    UUID member = parseUuid(rs.getString("player_uuid"));
+                    if (member != null) {
+                        members.add(member);
+                    }
+                }
+            }
+        }
+        return members;
+    }
+
+    private static void recordFormerTeammatePairs(
+        Connection conn,
+        Collection<UUID> members,
+        long blockedUntil
+    ) throws SQLException {
+        if (members == null || members.size() < 2 || blockedUntil <= 0L) {
+            return;
+        }
+        List<UUID> ordered = members.stream().filter(Objects::nonNull).distinct().toList();
+        for (int first = 0; first < ordered.size(); first++) {
+            for (int second = first + 1; second < ordered.size(); second++) {
+                upsertTeamKillProgressCooldown(conn, ordered.get(first), ordered.get(second), blockedUntil);
+            }
+        }
+    }
+
+    private static void recordFormerTeammatePairs(
+        Connection conn,
+        Collection<UUID> formerTeammates,
+        UUID leavingPlayer,
+        long blockedUntil
+    ) throws SQLException {
+        if (formerTeammates == null || leavingPlayer == null || blockedUntil <= 0L) {
+            return;
+        }
+        for (UUID teammate : formerTeammates) {
+            if (teammate != null && !teammate.equals(leavingPlayer)) {
+                upsertTeamKillProgressCooldown(conn, leavingPlayer, teammate, blockedUntil);
+            }
+        }
+    }
+
+    private static void upsertTeamKillProgressCooldown(
+        Connection conn,
+        UUID first,
+        UUID second,
+        long blockedUntil
+    ) throws SQLException {
+        String firstText = first.toString();
+        String secondText = second.toString();
+        String low = firstText.compareTo(secondText) <= 0 ? firstText : secondText;
+        String high = firstText.compareTo(secondText) <= 0 ? secondText : firstText;
+        String sql = """
+            INSERT INTO team_kill_progress_cooldowns (player_low, player_high, blocked_until)
+            VALUES (?, ?, ?)
+            ON CONFLICT(player_low, player_high) DO UPDATE SET
+                blocked_until = MAX(blocked_until, excluded.blocked_until)
+            """;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, low);
+            ps.setString(2, high);
+            ps.setLong(3, blockedUntil);
+            ps.executeUpdate();
+        }
+    }
+
+    private static long recordTeamLeaveActivity(
+        Connection conn,
+        UUID playerId,
+        long leaveAt,
+        long leaveWindowMillis,
+        int leaveThreshold,
+        long joinLockMillis
+    ) throws SQLException {
+        if (playerId == null || leaveAt <= 0L || leaveWindowMillis <= 0L
+            || leaveThreshold <= 0 || joinLockMillis <= 0L) {
+            return 0L;
+        }
+
+        long windowStartedAt = leaveAt;
+        int leaveCount = 0;
+        long joinLockedUntil = 0L;
+        try (PreparedStatement ps = conn.prepareStatement("""
+            SELECT window_started_at, leave_count, join_locked_until
+            FROM team_leave_activity
+            WHERE player_uuid=?
+            """)) {
+            ps.setString(1, playerId.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    windowStartedAt = rs.getLong("window_started_at");
+                    leaveCount = Math.max(0, rs.getInt("leave_count"));
+                    joinLockedUntil = Math.max(0L, rs.getLong("join_locked_until"));
+                }
+            }
+        }
+
+        TeamLeaveActivityState next = nextTeamLeaveActivity(
+            windowStartedAt,
+            leaveCount,
+            joinLockedUntil,
+            leaveAt,
+            leaveWindowMillis,
+            leaveThreshold,
+            joinLockMillis
+        );
+        windowStartedAt = next.windowStartedAt();
+        leaveCount = next.leaveCount();
+        joinLockedUntil = next.joinLockedUntil();
+
+        try (PreparedStatement ps = conn.prepareStatement("""
+            INSERT INTO team_leave_activity (player_uuid, window_started_at, leave_count, join_locked_until)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(player_uuid) DO UPDATE SET
+                window_started_at=excluded.window_started_at,
+                leave_count=excluded.leave_count,
+                join_locked_until=excluded.join_locked_until
+            """)) {
+            ps.setString(1, playerId.toString());
+            ps.setLong(2, windowStartedAt);
+            ps.setInt(3, leaveCount);
+            ps.setLong(4, joinLockedUntil);
+            ps.executeUpdate();
+        }
+        return joinLockedUntil;
+    }
+
+    static TeamLeaveActivityState nextTeamLeaveActivity(
+        long windowStartedAt,
+        int leaveCount,
+        long joinLockedUntil,
+        long leaveAt,
+        long leaveWindowMillis,
+        int leaveThreshold,
+        long joinLockMillis
+    ) {
+        long nextWindowStartedAt = windowStartedAt;
+        int nextLeaveCount;
+        if (windowStartedAt <= 0L || leaveAt < windowStartedAt
+            || leaveAt - windowStartedAt >= leaveWindowMillis) {
+            nextWindowStartedAt = leaveAt;
+            nextLeaveCount = 1;
+        } else {
+            nextLeaveCount = Math.max(0, leaveCount) + 1;
+        }
+        long nextJoinLockedUntil = Math.max(0L, joinLockedUntil);
+        if (nextLeaveCount >= Math.max(1, leaveThreshold)) {
+            nextJoinLockedUntil = Math.max(nextJoinLockedUntil, leaveAt + Math.max(1L, joinLockMillis));
+        }
+        return new TeamLeaveActivityState(nextWindowStartedAt, nextLeaveCount, nextJoinLockedUntil);
     }
 
     public CompletableFuture<Void> setTeamColor(String teamName, String color) {
@@ -1327,17 +1978,37 @@ public final class DatabaseManager {
 
     public CompletableFuture<Void> removeTeamAlliance(String firstTeamName, String secondTeamName) {
         return CompletableFuture.runAsync(() -> {
-            String sql = """
+            String allianceSql = """
                 DELETE FROM team_allies
                 WHERE (team_name=? AND ally_name=?) OR (team_name=? AND ally_name=?)
                 """;
-            try (Connection conn = connection();
-                 PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, firstTeamName);
-                ps.setString(2, secondTeamName);
-                ps.setString(3, secondTeamName);
-                ps.setString(4, firstTeamName);
-                ps.executeUpdate();
+            String homesSql = """
+                DELETE FROM alliance_homes
+                WHERE (first_team=? AND second_team=?) OR (first_team=? AND second_team=?)
+                """;
+            try (Connection conn = connection()) {
+                boolean oldAutoCommit = conn.getAutoCommit();
+                conn.setAutoCommit(false);
+                try (PreparedStatement homes = conn.prepareStatement(homesSql);
+                     PreparedStatement alliance = conn.prepareStatement(allianceSql)) {
+                    homes.setString(1, firstTeamName);
+                    homes.setString(2, secondTeamName);
+                    homes.setString(3, secondTeamName);
+                    homes.setString(4, firstTeamName);
+                    homes.executeUpdate();
+
+                    alliance.setString(1, firstTeamName);
+                    alliance.setString(2, secondTeamName);
+                    alliance.setString(3, secondTeamName);
+                    alliance.setString(4, firstTeamName);
+                    alliance.executeUpdate();
+                    conn.commit();
+                } catch (SQLException e) {
+                    conn.rollback();
+                    throw e;
+                } finally {
+                    conn.setAutoCommit(oldAutoCommit);
+                }
             } catch (SQLException e) {
                 plugin.getLogger().severe("removeTeamAlliance: " + e.getMessage());
                 throw new RuntimeException("removeTeamAlliance failed", e);
@@ -1351,10 +2022,16 @@ public final class DatabaseManager {
                 conn.setAutoCommit(false);
                 try (PreparedStatement psTeam = conn.prepareStatement("UPDATE teams SET name=? WHERE name=?");
                      PreparedStatement psMembers = conn.prepareStatement("UPDATE team_members SET team_name=? WHERE team_name=?");
+                     PreparedStatement psCaptains = conn.prepareStatement("UPDATE team_captains SET team_name=? WHERE team_name=?");
+                     PreparedStatement psSettings = conn.prepareStatement("UPDATE team_settings SET team_name=? WHERE team_name=?");
                      PreparedStatement psVault = conn.prepareStatement("UPDATE team_vaults SET team_name=? WHERE team_name=?");
                      PreparedStatement psVaultBackup = conn.prepareStatement("UPDATE team_vault_backups SET team_name=? WHERE team_name=?");
                      PreparedStatement psAlliesTeam = conn.prepareStatement("UPDATE team_allies SET team_name=? WHERE team_name=?");
-                     PreparedStatement psAlliesAlly = conn.prepareStatement("UPDATE team_allies SET ally_name=? WHERE ally_name=?")) {
+                     PreparedStatement psAlliesAlly = conn.prepareStatement("UPDATE team_allies SET ally_name=? WHERE ally_name=?");
+                     PreparedStatement psAllianceHomesFirst = conn.prepareStatement(
+                         "UPDATE alliance_homes SET first_team=? WHERE first_team=?");
+                     PreparedStatement psAllianceHomesSecond = conn.prepareStatement(
+                         "UPDATE alliance_homes SET second_team=? WHERE second_team=?")) {
                     psTeam.setString(1, newName);
                     psTeam.setString(2, oldName);
                     int updated = psTeam.executeUpdate();
@@ -1366,6 +2043,14 @@ public final class DatabaseManager {
                     psMembers.setString(1, newName);
                     psMembers.setString(2, oldName);
                     psMembers.executeUpdate();
+
+                    psCaptains.setString(1, newName);
+                    psCaptains.setString(2, oldName);
+                    psCaptains.executeUpdate();
+
+                    psSettings.setString(1, newName);
+                    psSettings.setString(2, oldName);
+                    psSettings.executeUpdate();
 
                     psVault.setString(1, newName);
                     psVault.setString(2, oldName);
@@ -1382,6 +2067,14 @@ public final class DatabaseManager {
                     psAlliesAlly.setString(1, newName);
                     psAlliesAlly.setString(2, oldName);
                     psAlliesAlly.executeUpdate();
+
+                    psAllianceHomesFirst.setString(1, newName);
+                    psAllianceHomesFirst.setString(2, oldName);
+                    psAllianceHomesFirst.executeUpdate();
+
+                    psAllianceHomesSecond.setString(1, newName);
+                    psAllianceHomesSecond.setString(2, oldName);
+                    psAllianceHomesSecond.executeUpdate();
 
                     conn.commit();
                     return true;
@@ -2984,7 +3677,19 @@ public final class DatabaseManager {
         return "23000".equals(state) || e.getMessage().toLowerCase(Locale.ROOT).contains("constraint");
     }
 
-    public record TeamRecord(String name, UUID ownerUuid, String color, Set<UUID> members, Set<String> allies) {}
+    public record TeamRecord(
+        String name,
+        UUID ownerUuid,
+        String color,
+        Set<UUID> members,
+        Set<String> allies,
+        Set<UUID> captains,
+        boolean friendlyFireEnabled
+    ) {}
+    public record AllianceHomeRecord(String firstTeam, String secondTeam, HomeEntry home) {}
+    public record TeamKillProgressCooldownRecord(UUID firstPlayer, UUID secondPlayer, long blockedUntil) {}
+    public record TeamJoinLockRecord(UUID playerId, long joinLockedUntil) {}
+    record TeamLeaveActivityState(long windowStartedAt, int leaveCount, long joinLockedUntil) {}
     public record LegendaryClaimedInstanceRecord(String instanceId, String legendaryId, UUID ownerUuid, String sourceKey) {}
     public record ManagedItemInstanceRecord(
         String instanceId,
@@ -3087,7 +3792,8 @@ public final class DatabaseManager {
     public record TeamLeaveRecord(
         boolean membershipRemoved,
         boolean teamDeleted,
-        UUID ownerUuid
+        UUID ownerUuid,
+        long joinLockedUntil
     ) {}
     public enum TeamCreateResult {
         CREATED,

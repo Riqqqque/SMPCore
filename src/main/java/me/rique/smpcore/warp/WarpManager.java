@@ -4,6 +4,7 @@ import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.AtomicYamlFile;
 import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import me.rique.smpcore.util.PluginCommandRoots;
 import me.rique.smpcore.util.ScheduledDimensionPolicy;
 import org.bukkit.Bukkit;
@@ -199,7 +200,8 @@ public final class WarpManager {
             pendingTeleports.remove(player.getUniqueId());
             return;
         }
-        if (!player.hasPermission("smpcore.warp.admin") && !world.getWorldBorder().isInside(destination)) {
+        if (!OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.warp.admin")
+            && !world.getWorldBorder().isInside(destination)) {
             pendingTeleports.remove(player.getUniqueId());
             player.sendMessage(MessageUtil.warn("That warp is outside the current world border."));
             return;
@@ -254,7 +256,8 @@ public final class WarpManager {
                 player.sendMessage(MessageUtil.error("That warp is blocked or unsafe. Tell an admin to move it."));
                 return;
             }
-            if (!player.hasPermission("smpcore.warp.admin") && !world.getWorldBorder().isInside(safe)) {
+            if (!OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.warp.admin")
+                && !world.getWorldBorder().isInside(safe)) {
                 pendingTeleports.remove(player.getUniqueId());
                 player.sendMessage(MessageUtil.warn("That warp is outside the current world border."));
                 return;
@@ -388,7 +391,7 @@ public final class WarpManager {
         World.Environment from = player.getWorld().getEnvironment();
         World.Environment to = destination.getEnvironment();
         if (to != World.Environment.NETHER && to != World.Environment.THE_END) return false;
-        boolean bypass = player.hasPermission("smpcore.startsmp.bypass-dimension-lock");
+        boolean bypass = OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.startsmp.bypass-dimension-lock");
         boolean unlocked = plugin.getSmpStartManager() == null || plugin.getSmpStartManager().isDimensionUnlocked(to);
         if (!ScheduledDimensionPolicy.blocksTravel(from, to, bypass, unlocked)) return false;
         String dimension = to == World.Environment.NETHER ? "Nether" : "End";

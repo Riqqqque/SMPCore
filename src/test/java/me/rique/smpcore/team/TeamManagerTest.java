@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -60,6 +61,54 @@ class TeamManagerTest {
         truncated.putInt(1);
         truncated.putInt(20);
         assertThrows(IOException.class, () -> TeamManager.deserializeTeamVaultData(truncated.array(), 54));
+    }
+
+    @Test
+    void formerTeammateKillBlockLastsThirtyDaysAndResetsAfterAnotherLeave() {
+        long firstLeave = 1_000_000L;
+        long firstExpiry = TeamManager.formerTeammateBlockUntil(firstLeave);
+        assertEquals(firstLeave + (30L * 24L * 60L * 60L * 1000L), firstExpiry);
+        assertTrue(TeamManager.isActiveKillProgressBlock(firstExpiry, firstExpiry - 1L));
+        assertFalse(TeamManager.isActiveKillProgressBlock(firstExpiry, firstExpiry));
+
+        long secondLeave = firstLeave + 5_000L;
+        long resetExpiry = TeamManager.formerTeammateBlockUntil(secondLeave);
+        assertTrue(resetExpiry > firstExpiry);
+    }
+
+    @Test
+    void formerTeammatePairKeyIsSymmetricAndRejectsSelfKills() {
+        UUID first = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        UUID second = UUID.fromString("00000000-0000-0000-0000-000000000002");
+        assertEquals(
+            TeamManager.persistentPlayerPairKey(first, second),
+            TeamManager.persistentPlayerPairKey(second, first)
+        );
+        assertEquals("", TeamManager.persistentPlayerPairKey(first, first));
+    }
+
+    @Test
+    void teamJoinLockShowsTheFullRemainingDay() {
+        assertEquals("24h 0m", TeamManager.formatTeamJoinLock(24L * 60L * 60L * 1000L));
+        assertEquals("1m", TeamManager.formatTeamJoinLock(1L));
+    }
+
+    @Test
+    void friendlyDamageNeedsConsentFromEveryAffectedTeam() {
+        assertTrue(TeamManager.blocksFriendlyDamage(true, false, false, false));
+        assertFalse(TeamManager.blocksFriendlyDamage(true, false, true, true));
+        assertTrue(TeamManager.blocksFriendlyDamage(false, true, true, false));
+        assertTrue(TeamManager.blocksFriendlyDamage(false, true, false, true));
+        assertFalse(TeamManager.blocksFriendlyDamage(false, true, true, true));
+        assertFalse(TeamManager.blocksFriendlyDamage(false, false, false, false));
+    }
+
+    @Test
+    void ownerAndCaptainsHaveCaptainLevelAuthority() {
+        assertTrue(TeamManager.hasCaptainAuthority(true, false));
+        assertTrue(TeamManager.hasCaptainAuthority(false, true));
+        assertTrue(TeamManager.hasCaptainAuthority(true, true));
+        assertFalse(TeamManager.hasCaptainAuthority(false, false));
     }
 
     private byte[] emptyVaultPayload(int storedSlots, int trailingBytes) {

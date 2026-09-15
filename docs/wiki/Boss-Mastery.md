@@ -10,11 +10,13 @@ Mogrik the Bossbroker runs a permanent boss-hunting ledger. Place him with `/bos
 - Each boss has five cumulative ranks at 1, 3, 6, 10, and 15 victories.
 - Ranks must be claimed in order. A full inventory leaves the reward waiting instead of dropping or consuming the claim.
 
-Ranks pay Essence, common boss materials, a guaranteed utility relic, a permanent Huntmark, and a unique mastery item. Mogrik never awards rare progression materials. The Oathkeeper's material rank pays Essence instead of Corrupted Essence.
+Ranks pay scaling Essence, 5-10 common boss materials, a guaranteed utility relic, a permanent Huntmark, and a unique mastery item with a second Essence payout. Mogrik never awards rare progression materials. The Oathkeeper's material rank pays 600 Essence instead of Corrupted Essence.
+
+Every item reward can be inspected before it is unlocked. Select the reward itself to open an exact read-only preview with its real amount, enchants, stats, abilities, and lore. Claiming uses the separate button below the reward, so previewing can never spend or claim anything by accident.
 
 ## Huntmarks
 
-Rank IV for each boss awards that boss's Huntmark. Claiming it permanently adds 4% damage against that specific boss. The compass is a keepsake; the bonus remains active while it is stored and duplicate marks do not stack.
+Rank IV for each boss awards that boss's Huntmark. Claiming it permanently adds 5% damage against that specific boss. The compass is a keepsake; the bonus remains active while it is stored and duplicate marks do not stack.
 
 Players who claimed an older Rank IV automatically receive its Huntmark the next time they open that boss's ledger page. The permanent bonus is based on claimed mastery progress, so it does not depend on keeping the item in an inventory.
 
@@ -22,7 +24,7 @@ The ten final items follow the boss path, including the four-piece **Bossbroker'
 
 ## Bossbroker's Pursuit
 
-The Gloam Matriarch through Argent Confessor mastery paths award the hood, coat, leggings, and boots. Wearing all four gives 15% more damage against custom bosses and reduces ordinary boss attacks by 12%. Failed boss mechanics ignore the defense bonus.
+The Gloam Matriarch through Argent Confessor mastery paths award the hood, coat, leggings, and boots. Wearing any one piece gives 15% more damage against custom bosses, so the set can be mixed with other armor. Wearing all four reduces ordinary boss attacks by 12%. Failed boss mechanics ignore the defense bonus.
 
 ## The Eleventh Bell
 

@@ -70,7 +70,8 @@ wild:
   enabled: true
   # /wild always targets this Overworld, even when used from another dimension.
   world: "world"
-  cooldown-seconds: 300
+  cooldown-seconds: 30
+  cooldown-30-seconds-migrated: true
   # Landing blocks stay this far inside the live vanilla world border.
   border-padding: 32
   minimum-spawn-distance: 600
@@ -465,6 +466,7 @@ custom-enchants:
     hunger-cost: 2
   dash:
     cooldown-seconds: 15
+    hunger-cost: 2
     horizontal-boost: 1.85
     vertical-boost: 0.42
 
@@ -493,3 +495,17 @@ talisman-of-sustenance:
 
 reward-soul-lantern:
   cooldown-seconds: 1800
+# SMPCore-native portable villagers. These defaults preserve the behavior of
+# the previous ClickVillagers installation while making stock server-owned.
+villagers:
+  infinite-trades: true
+  claimed-damage: false
+  claimed-zombies-passive: true
+  claimed-immune-kill-command: true
+  allow-zombie-villagers: true
+  claimed-villagers-bypass-permissions: false
+  validate-partner-names: true
+  show-trades: true
+  enable-dispensers: false
+  cooldown-seconds: 2
+  partner-limit: 10

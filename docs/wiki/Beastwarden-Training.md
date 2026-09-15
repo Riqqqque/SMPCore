@@ -27,6 +27,7 @@ The full four-piece set:
 - Reduces incoming damage from ordinary creatures by 35%.
 - Tames supported animals with one valid item.
 - Unlocks the selected recalled steed through `/steed`.
+- Accepts vanilla armor trims without losing its set identity, lore, enchants, or upgrades.
 
 These bonuses never apply against players, custom bosses, boss minions, NPCs, familiars, or recalled steeds.
 

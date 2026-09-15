@@ -55,4 +55,25 @@ final class SpawnerDataTest {
         assertEquals(32, SpawnerManager.clampSugarCount(Integer.MAX_VALUE, 32));
         assertEquals(330, SpawnerManager.breakExperience(Integer.MAX_VALUE, 64));
     }
+
+    @Test
+    void stackedSpawnerScalingStaysBounded() {
+        SpawnerData data = new SpawnerData("world", 0, 64, 0, "ZOMBIE", 64, 32, false, false);
+
+        SpawnerManager.SpawnerBlockSettings settings = SpawnerManager.calculateBlockSettings(
+            data, 32, 16.0, 40, 32, 96
+        );
+
+        assertEquals(40, settings.minDelay());
+        assertEquals(50, settings.maxDelay());
+        assertEquals(32, settings.spawnCount());
+        assertEquals(96, settings.maxNearbyEntities());
+    }
+
+    @Test
+    void chunkRefreshPreservesAnActiveCountdownInsideTheConfiguredRange() {
+        assertEquals(250, SpawnerManager.clampActiveDelay(250, 200, 800));
+        assertEquals(200, SpawnerManager.clampActiveDelay(20, 200, 800));
+        assertEquals(800, SpawnerManager.clampActiveDelay(900, 200, 800));
+    }
 }

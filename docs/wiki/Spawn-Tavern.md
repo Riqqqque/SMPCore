@@ -53,7 +53,7 @@ A perfect 150-point round awards 10 Essence.
 
 The final score screen includes **Play Again** for another three throws without reopening the dartboard.
 
-Real wins are announced only to players within 16 blocks of that game. Slots announce 3x and jackpot wins, Crown & Casks announces the pot winner, and darts announces perfect rounds. Winners and losers receive distinct sound feedback.
+Real wins are announced to players within 16 blocks of the game. Slots announce every paid spin, Crown & Casks announces the pot winner, and darts announces perfect rounds. Blackjack, roulette, and spin-bet wins use the same nearby range. Results appear in both chat and above the hotbar on Java and Bedrock, while winners and losers receive distinct sound feedback.
 
 ## Blackjack
 

@@ -21,7 +21,7 @@ public final class ShopCommands {
                 .requires(source -> source.getSender().hasPermission("smpcore.shop")
                     || source.getSender().hasPermission("smpcore.shop.admin"))
                 .executes(ctx -> {
-                    sendHelp(ctx.getSource().getSender(), plugin);
+                    openMenuOrSendHelp(ctx.getSource().getSender(), plugin);
                     return Command.SINGLE_SUCCESS;
                 })
                 .then(Commands.literal("collect")
@@ -30,22 +30,26 @@ public final class ShopCommands {
                     .executes(ctx -> balance(ctx.getSource().getSender(), plugin)))
                 .then(Commands.literal("help")
                     .executes(ctx -> {
-                        sendHelp(ctx.getSource().getSender(), plugin);
+                        openMenuOrSendHelp(ctx.getSource().getSender(), plugin);
                         return Command.SINGLE_SUCCESS;
                     }))
                 .build(),
-            "Show player shop setup help",
+            "Open the player shop menu",
             List.of("shop")
         );
     }
 
-    private static void sendHelp(CommandSender sender, SMPCore plugin) {
+    private static void openMenuOrSendHelp(CommandSender sender, SMPCore plugin) {
         if (!plugin.getConfigManager().playerShopsEnabled) {
             sender.sendMessage(MessageUtil.warn("Player shops are currently disabled."));
             return;
         }
         if (plugin.getPlayerShopListener() == null) {
             sender.sendMessage(MessageUtil.error("Player shops are not ready yet."));
+            return;
+        }
+        if (sender instanceof Player player) {
+            plugin.getPlayerShopListener().openShopHub(player);
             return;
         }
         sender.sendMessage(MessageUtil.prefixedRaw("<gradient:#22c55e:#facc15><bold>Player Shops</bold></gradient>"));

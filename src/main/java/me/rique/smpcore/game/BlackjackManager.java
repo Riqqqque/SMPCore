@@ -2,6 +2,7 @@ package me.rique.smpcore.game;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.BedrockCompat;
+import me.rique.smpcore.util.GameAnnouncementUtil;
 import me.rique.smpcore.util.ItemEscrowService;
 import me.rique.smpcore.util.ItemEscrowService.EscrowedItem;
 import me.rique.smpcore.util.MenuDupeGuardListener;
@@ -11,6 +12,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Particle;
 import org.bukkit.Sound;
@@ -142,7 +144,9 @@ public final class BlackjackManager implements Listener {
             return false;
         }
 
-        BlackjackGame game = new BlackjackGame(gameId, player.getUniqueId(), player.getName(), wager, shuffledDeck());
+        BlackjackGame game = new BlackjackGame(
+            gameId, player.getUniqueId(), player.getName(), wager, shuffledDeck(), player.getLocation().clone()
+        );
         game.inventory = createInventory(game, player);
         games.put(player.getUniqueId(), game);
         player.openInventory(game.inventory);
@@ -354,6 +358,9 @@ public final class BlackjackManager implements Listener {
         }
 
         if (!canNotify) {
+            if (result == Result.WIN) {
+                announceNearbyWin(game, null, material, payout);
+            }
             plugin.getLogger().info("Blackjack " + game.gameId() + " settled while " + game.playerName()
                 + " was offline: " + result.name().toLowerCase(Locale.ROOT) + ".");
             scheduleClose(game);
@@ -366,6 +373,7 @@ public final class BlackjackManager implements Listener {
                     ? MessageUtil.success("You won blackjack. Use <white>/blackjack claim</white> for the payout.")
                     : MessageUtil.success("You won blackjack: " + payout + " " + currencyName(material, payout) + "."));
                 playWinEffects(player);
+                announceNearbyWin(game, player, material, payout);
                 announceTeamResult(player, material, result, payout);
             }
             case PUSH -> {
@@ -630,6 +638,20 @@ public final class BlackjackManager implements Listener {
             case LOSE -> MessageUtil.warn(playerName + " lost " + value + " in blackjack.");
         };
         plugin.getTeamManager().notifyPlayerTeamGameResult(player.getUniqueId(), message);
+    }
+
+    private void announceNearbyWin(BlackjackGame game, Player player, Material material, int amount) {
+        Component message = MessageUtil.success(
+            "<white>" + miniEscape(game.playerName()) + "</white> won <white>"
+                + amount + " " + currencyName(material, amount) + "</white> in blackjack."
+        );
+        int recipients = GameAnnouncementUtil.announceNearby(
+            game.origin, player, message, Sound.ENTITY_FIREWORK_ROCKET_TWINKLE, 0.55F, 1.2F,
+            Set.of(game.playerId())
+        );
+        if (recipients == 0 && player != null && player.isOnline()) {
+            plugin.getLogger().warning("Could not deliver the nearby blackjack win announcement for " + game.playerName() + ".");
+        }
     }
 
     private boolean isReady(Player player) {
@@ -1086,7 +1108,7 @@ public final class BlackjackManager implements Listener {
         handleLeave(event.getPlayer(), "player quit");
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerKick(PlayerKickEvent event) {
         handleLeave(event.getPlayer(), "player kicked");
     }
@@ -1131,6 +1153,7 @@ public final class BlackjackManager implements Listener {
         private final String playerName;
         private final EscrowedItem wager;
         private final List<Card> deck;
+        private final Location origin;
         private final List<Card> playerCards = new ArrayList<>();
         private final List<Card> dealerCards = new ArrayList<>();
         private Inventory inventory;
@@ -1141,12 +1164,20 @@ public final class BlackjackManager implements Listener {
         private boolean settled;
         private boolean committed;
 
-        private BlackjackGame(UUID gameId, UUID playerId, String playerName, EscrowedItem wager, List<Card> deck) {
+        private BlackjackGame(
+            UUID gameId,
+            UUID playerId,
+            String playerName,
+            EscrowedItem wager,
+            List<Card> deck,
+            Location origin
+        ) {
             this.gameId = gameId;
             this.playerId = playerId;
             this.playerName = playerName;
             this.wager = wager;
             this.deck = deck;
+            this.origin = origin;
         }
 
         private UUID gameId() {

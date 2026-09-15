@@ -40,8 +40,10 @@ import org.bukkit.event.world.TimeSkipEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -64,6 +66,7 @@ public final class LegendaryAltarManager implements Listener {
     private final NamespacedKey keyAltarDisplayType;
     private final Map<String, ClaimedLegendaryInstance> claimedLegendaryInstances = new ConcurrentHashMap<>();
     private final Set<String> createdLegendaryIds = ConcurrentHashMap.newKeySet();
+    private final Map<String, java.util.UUID> createdLegendaryOwners = new ConcurrentHashMap<>();
     private final Set<String> durableCreatedLegendaryIds = ConcurrentHashMap.newKeySet();
     private final Set<String> dirtyLegendaryInstanceIds = ConcurrentHashMap.newKeySet();
     private final Map<String, CompletableFuture<Void>> legendaryInstanceWriteChains = new ConcurrentHashMap<>();
@@ -157,6 +160,68 @@ public final class LegendaryAltarManager implements Listener {
 
     public boolean areLegendaryClaimsReady() {
         return claimedLegendaryIdsReady;
+    }
+
+    public LegendaryClaimStatus legendaryClaimStatus(String legendaryId) {
+        String normalized = normalizeLegendaryId(legendaryId);
+        if (normalized == null || !claimedLegendaryIdsReady) {
+            return LegendaryClaimStatus.loading();
+        }
+
+        Set<String> teamNames = new LinkedHashSet<>();
+        Set<java.util.UUID> ownerIds = new LinkedHashSet<>();
+        for (ClaimedLegendaryInstance instance : claimedLegendaryInstances.values()) {
+            if (!normalized.equals(instance.legendaryId())) {
+                continue;
+            }
+            if (instance.ownerId() != null) {
+                ownerIds.add(instance.ownerId());
+            }
+            String teamKey = teamKeyFromSource(instance.sourceKey());
+            if (teamKey != null && plugin.getTeamManager() != null) {
+                String teamName = plugin.getTeamManager().teamDisplayNameByKey(teamKey);
+                if (teamName != null && !teamName.isBlank()) {
+                    teamNames.add(teamName);
+                }
+            }
+        }
+
+        java.util.UUID originalOwner = createdLegendaryOwners.get(normalized);
+        if (originalOwner != null) {
+            ownerIds.add(originalOwner);
+        }
+        if (plugin.getTeamManager() != null) {
+            for (java.util.UUID ownerId : ownerIds) {
+                String teamName = plugin.getTeamManager().teamDisplayName(ownerId);
+                if (teamName != null && !teamName.isBlank()) {
+                    teamNames.add(teamName);
+                }
+            }
+        }
+
+        String claimerName = null;
+        if (originalOwner != null) {
+            claimerName = Bukkit.getOfflinePlayer(originalOwner).getName();
+        }
+        List<String> sortedTeams = new ArrayList<>(teamNames);
+        sortedTeams.sort(String.CASE_INSENSITIVE_ORDER);
+        return new LegendaryClaimStatus(
+            true,
+            isLegendaryClaimed(normalized),
+            activeLegendaryCount(normalized),
+            maxServerCopies(normalized),
+            List.copyOf(sortedTeams),
+            claimerName
+        );
+    }
+
+    static String teamKeyFromSource(String sourceKey) {
+        String normalized = normalizeSourceKey(sourceKey);
+        String prefix = "team_vault:";
+        if (normalized == null || !normalized.startsWith(prefix) || normalized.length() == prefix.length()) {
+            return null;
+        }
+        return normalized.substring(prefix.length());
     }
 
     public boolean isLegendaryInstanceOwnedBy(String instanceId, java.util.UUID ownerId) {
@@ -706,9 +771,12 @@ public final class LegendaryAltarManager implements Listener {
     private void loadState() {
         CompletableFuture<DatabaseManager.LegendaryAltarRecord> altarFuture = plugin.getDatabase().loadLegendaryAltar();
         CompletableFuture<Set<String>> createdLegendaryIdsFuture = plugin.getDatabase().loadClaimedLegendaryIds();
+        CompletableFuture<Map<String, java.util.UUID>> createdLegendaryOwnersFuture =
+            plugin.getDatabase().loadClaimedLegendaryOwners();
         CompletableFuture<Map<String, DatabaseManager.LegendaryClaimedInstanceRecord>> claimedInstancesFuture =
             plugin.getDatabase().loadClaimedLegendaryInstances();
-        CompletableFuture.allOf(altarFuture, createdLegendaryIdsFuture, claimedInstancesFuture).whenComplete((ignored, throwable) -> {
+        CompletableFuture.allOf(altarFuture, createdLegendaryIdsFuture, createdLegendaryOwnersFuture, claimedInstancesFuture)
+            .whenComplete((ignored, throwable) -> {
             if (!plugin.isEnabled()) return;
             Bukkit.getScheduler().runTask(plugin, () -> {
                 DatabaseManager.LegendaryAltarRecord record = DatabaseManager.LegendaryAltarRecord.empty();
@@ -720,6 +788,7 @@ public final class LegendaryAltarManager implements Listener {
 
                 claimedLegendaryInstances.clear();
                 createdLegendaryIds.clear();
+                createdLegendaryOwners.clear();
                 durableCreatedLegendaryIds.clear();
                 claimedLegendaryIdsReady = false;
                 boolean claimDataLoaded = false;
@@ -730,6 +799,13 @@ public final class LegendaryAltarManager implements Listener {
                         if (normalized != null) {
                             createdLegendaryIds.add(normalized);
                             durableCreatedLegendaryIds.add(normalized);
+                        }
+                    }
+
+                    for (Map.Entry<String, java.util.UUID> entry : createdLegendaryOwnersFuture.join().entrySet()) {
+                        String normalized = normalizeLegendaryId(entry.getKey());
+                        if (normalized != null && entry.getValue() != null) {
+                            createdLegendaryOwners.put(normalized, entry.getValue());
                         }
                     }
 
@@ -1321,6 +1397,9 @@ public final class LegendaryAltarManager implements Listener {
         }
 
         createdLegendaryIds.add(normalized);
+        if (ownerId != null) {
+            createdLegendaryOwners.putIfAbsent(normalized, ownerId);
+        }
         if (!durableCreatedLegendaryIds.contains(normalized)) {
             queueCreatedLegendaryWrite(normalized, ownerId);
         }
@@ -1341,7 +1420,7 @@ public final class LegendaryAltarManager implements Listener {
         return normalized.isBlank() ? null : normalized;
     }
 
-    private String normalizeSourceKey(String sourceKey) {
+    private static String normalizeSourceKey(String sourceKey) {
         if (sourceKey == null || sourceKey.isBlank()) {
             return null;
         }
@@ -1498,6 +1577,19 @@ public final class LegendaryAltarManager implements Listener {
 
         public static AdminActionResult failure(String message) {
             return new AdminActionResult(false, message);
+        }
+    }
+
+    public record LegendaryClaimStatus(
+        boolean ready,
+        boolean claimed,
+        int activeCopies,
+        int maxCopies,
+        List<String> teamNames,
+        String claimerName
+    ) {
+        private static LegendaryClaimStatus loading() {
+            return new LegendaryClaimStatus(false, false, 0, 1, List.of(), null);
         }
     }
 

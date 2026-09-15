@@ -38,7 +38,7 @@ public final class CustomLoreUtil {
         Map.entry("smelting_touch_enchant", new EnchantLine("Smelting Touch", 1)),
         Map.entry("wise_enchant", new EnchantLine("Wise", 3)),
         Map.entry("double_jump_enchant", new EnchantLine("Double Jump", 1)),
-        Map.entry("dash_enchant", new EnchantLine("Dash", 1)),
+        Map.entry("dash_enchant", new EnchantLine("Dash", 3)),
         Map.entry("frostbite_enchant", new EnchantLine("Frostbite", 2)),
         Map.entry("harvesting_enchant", new EnchantLine("Harvesting", 3)),
         Map.entry("bulwark_enchant", new EnchantLine("Bulwark", 3)),

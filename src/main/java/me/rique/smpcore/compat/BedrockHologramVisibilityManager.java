@@ -33,6 +33,7 @@ public final class BedrockHologramVisibilityManager implements Listener {
     private static final double SPAWN_VIEW_RANGE_BLOCKS = 24.0D;
     private static final double PRIVATE_VIEW_RANGE_BLOCKS = 12.0D;
     private static final double FAMILIAR_VIEW_RANGE_BLOCKS = 32.0D;
+    private static final double PLAYER_NAME_VIEW_RANGE_BLOCKS = 32.0D;
     private static final long VISIBILITY_INTERVAL_TICKS = 10L;
     private static final Set<String> OCCLUSION_SENSITIVE_KEYS = Set.of(
         "agricultural_pylon_hologram",
@@ -41,6 +42,7 @@ public final class BedrockHologramVisibilityManager implements Listener {
         "corruption_hologram",
         "familiar_name_hologram",
         "mythic_forge_hologram",
+        "player_name_hologram",
         "rare_drop_hologram",
         "reward_lantern_hologram",
         "salvaging_depot_hologram",
@@ -52,6 +54,7 @@ public final class BedrockHologramVisibilityManager implements Listener {
     private final SMPCore plugin;
     private final String namespace;
     private final NamespacedKey familiarNameKey;
+    private final NamespacedKey playerNameKey;
     private final Map<UUID, Set<UUID>> hiddenByPlayer = new ConcurrentHashMap<>();
     private BukkitTask visibilityTask;
 
@@ -59,6 +62,7 @@ public final class BedrockHologramVisibilityManager implements Listener {
         this.plugin = plugin;
         this.namespace = plugin.getName().toLowerCase(Locale.ROOT);
         this.familiarNameKey = new NamespacedKey(plugin, "familiar_name_hologram");
+        this.playerNameKey = new NamespacedKey(plugin, "player_name_hologram");
     }
 
     public void start() {
@@ -119,7 +123,7 @@ public final class BedrockHologramVisibilityManager implements Listener {
             }
             boolean inSpawn = plugin.getSpawnProtectionListener() != null
                 && plugin.getSpawnProtectionListener().isProtected(display.getLocation().clone().subtract(0.0D, 1.0D, 0.0D));
-            double maxDistance = viewDistance(inSpawn, isFamiliarName(display));
+            double maxDistance = viewDistance(inSpawn, isFamiliarName(display), isPlayerName(display));
             boolean visible = player.getWorld().equals(display.getWorld())
                 && player.getLocation().distanceSquared(display.getLocation()) <= maxDistance * maxDistance
                 && hasClearSight(player, display);
@@ -203,6 +207,10 @@ public final class BedrockHologramVisibilityManager implements Listener {
         return display.getPersistentDataContainer().has(familiarNameKey, PersistentDataType.BYTE);
     }
 
+    private boolean isPlayerName(TextDisplay display) {
+        return display.getPersistentDataContainer().has(playerNameKey, PersistentDataType.BYTE);
+    }
+
     private void restoreHiddenHolograms(Player player) {
         Set<UUID> hidden = hiddenByPlayer.remove(player.getUniqueId());
         if (hidden == null) {
@@ -225,6 +233,11 @@ public final class BedrockHologramVisibilityManager implements Listener {
     }
 
     static double viewDistance(boolean protectedSpawn, boolean familiarName) {
+        return viewDistance(protectedSpawn, familiarName, false);
+    }
+
+    static double viewDistance(boolean protectedSpawn, boolean familiarName, boolean playerName) {
+        if (playerName) return PLAYER_NAME_VIEW_RANGE_BLOCKS;
         if (familiarName) return FAMILIAR_VIEW_RANGE_BLOCKS;
         return protectedSpawn ? SPAWN_VIEW_RANGE_BLOCKS : PRIVATE_VIEW_RANGE_BLOCKS;
     }

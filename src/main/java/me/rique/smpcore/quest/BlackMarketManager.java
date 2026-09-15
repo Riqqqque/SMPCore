@@ -461,7 +461,7 @@ public final class BlackMarketManager implements Listener {
             Block anchor = displayAnchor(display);
             if (anchor == null || trophyBoss(anchor) == null) display.remove();
         }
-        for (BlockState state : chunk.getTileEntities()) {
+        for (BlockState state : chunk.getTileEntities(false)) {
             if (state instanceof TileState && trophyBoss(state.getBlock()) != null) {
                 ensureDisplay(state.getBlock());
             }

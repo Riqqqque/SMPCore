@@ -1,6 +1,9 @@
 package me.rique.smpcore.boss;
 
+import com.destroystokyo.paper.event.player.PlayerStartSpectatingEntityEvent;
+import io.papermc.paper.datacomponent.DataComponentTypes;
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.command.MainMenuCommand;
 import me.rique.smpcore.npc.GuideNpcManager.GuideNpcType;
 import me.rique.smpcore.util.AtomicYamlFile;
 import me.rique.smpcore.util.BedrockCompat;
@@ -8,6 +11,7 @@ import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -15,6 +19,7 @@ import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.title.Title;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
+import org.bukkit.FluidCollisionMode;
 import org.bukkit.GameMode;
 import org.bukkit.GameRules;
 import org.bukkit.Location;
@@ -37,9 +42,11 @@ import org.bukkit.entity.Item;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
 import org.bukkit.entity.TNTPrimed;
+import org.bukkit.event.Event;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.block.BlockBurnEvent;
@@ -118,6 +125,11 @@ public final class BossDungeonManager implements Listener {
     private static final int CANCEL_SLOT = 11;
     static final int BOSS_SPAWN_COUNTDOWN_SECONDS = 10;
     private static final long LOOT_WINDOW_TICKS = 120L * 20L;
+    private static final double KEEPER_POSITION_TOLERANCE_SQUARED = 0.0625D;
+    private static final double SPECTATOR_ROOM_HALF_EXTENT = 39.45D;
+    private static final double SPECTATOR_FLOOR_Y_OFFSET = -0.95D;
+    private static final double SPECTATOR_ROOF_Y_OFFSET = 59.95D;
+    private static final double SPECTATOR_MOVEMENT_EPSILON_SQUARED = 1.0E-8D;
     private static final MiniMessage MM = MiniMessage.miniMessage();
 
     private final SMPCore plugin;
@@ -126,8 +138,13 @@ public final class BossDungeonManager implements Listener {
     private final Map<UUID, Long> nextMenuActionAt = new ConcurrentHashMap<>();
     private final java.util.Set<UUID> dungeonDeaths = ConcurrentHashMap.newKeySet();
     private final Map<UUID, GameMode> restoredGameModes = new ConcurrentHashMap<>();
+    private final Map<UUID, FlightState> restoredFlightStates = new ConcurrentHashMap<>();
     private final Set<UUID> managedTeleports = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> managedSpectators = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, Long> nextSpectatorBoundaryNoticeAt = new ConcurrentHashMap<>();
     private final Map<UUID, Long> pendingEssenceRefunds = new ConcurrentHashMap<>();
+    private final Set<UUID> scheduledDropRecoveries = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> warnedAboutStoredDrops = ConcurrentHashMap.newKeySet();
     private final ArrayDeque<QueuedSummon> summonQueue = new ArrayDeque<>();
     private final File locationFile;
     private final YamlConfiguration locationConfig;
@@ -135,6 +152,8 @@ public final class BossDungeonManager implements Listener {
     private boolean summonPending;
     private DungeonEncounter encounter;
     private BukkitTask queueTask;
+    private BukkitTask keeperTask;
+    private BukkitTask spectatorTask;
     private BukkitTask countdownTask;
     private BukkitTask lootTask;
     private DungeonLocations locations;
@@ -161,11 +180,15 @@ public final class BossDungeonManager implements Listener {
         Bukkit.getScheduler().runTaskLater(plugin, this::ensureArenaKeeper, 40L);
         Bukkit.getScheduler().runTaskLater(plugin, this::resetOrphanedArena, 60L);
         queueTask = Bukkit.getScheduler().runTaskTimer(plugin, this::processQueue, 100L, 100L);
+        keeperTask = Bukkit.getScheduler().runTaskTimer(plugin, this::ensureArenaKeeper, 1_200L, 1_200L);
+        spectatorTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickManagedSpectators, 10L, 10L);
     }
 
     public void shutdown() {
         summonPending = false;
         if (queueTask != null) queueTask.cancel();
+        if (keeperTask != null) keeperTask.cancel();
+        if (spectatorTask != null) spectatorTask.cancel();
         cancelCountdownTask();
         if (lootTask != null) lootTask.cancel();
         if (encounter != null && !encounter.looting && encounter.paid) {
@@ -178,7 +201,10 @@ public final class BossDungeonManager implements Listener {
         nextMenuOpenAt.clear();
         nextMenuActionAt.clear();
         dungeonDeaths.clear();
+        managedSpectators.clear();
+        nextSpectatorBoundaryNoticeAt.clear();
         restoredGameModes.clear();
+        restoredFlightStates.clear();
         summonQueue.clear();
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (player.getOpenInventory().getTopInventory().getHolder(false) instanceof DungeonMenuHolder) {
@@ -211,11 +237,25 @@ public final class BossDungeonManager implements Listener {
     }
 
     public void openBossCatalog(Player player) {
+        openBossCatalog(
+            player,
+            isDungeonWorld(player == null ? null : player.getWorld())
+                ? CatalogBackTarget.LEAVE_DUNGEON
+                : CatalogBackTarget.ENTRANCE
+        );
+    }
+
+    public void openBossCatalogFromMainMenu(Player player) {
+        openBossCatalog(player, CatalogBackTarget.MAIN_MENU);
+    }
+
+    private void openBossCatalog(Player player, CatalogBackTarget backTarget) {
         if (player == null) {
             return;
         }
+        CatalogBackTarget resolvedBackTarget = backTarget == null ? CatalogBackTarget.ENTRANCE : backTarget;
         Inventory inventory = Bukkit.createInventory(
-            new DungeonMenuHolder(player.getUniqueId(), DungeonView.CATALOG, null),
+            new DungeonMenuHolder(player.getUniqueId(), DungeonView.CATALOG, null, resolvedBackTarget),
             54,
             BedrockCompat.menuTitle(player, MM.deserialize("<gradient:#7f1d1d:#a78bfa><bold>Boss Dungeon</bold></gradient>"), "Boss Dungeon")
         );
@@ -228,16 +268,17 @@ public final class BossDungeonManager implements Listener {
         for (int i = 0; i < bosses.size() && i < BOSS_SLOTS.length; i++) {
             inventory.setItem(BOSS_SLOTS[i], bossItem(player, bosses.get(i)));
         }
-        boolean inside = isDungeonWorld(player.getWorld());
-        inventory.setItem(EXIT_SLOT, inside
-            ? item(Material.IRON_DOOR, "<yellow><bold>Leave Dungeon</bold></yellow>", List.of("<gray>Return to server spawn.</gray>"))
-            : item(Material.ARROW, "<yellow><bold>Back</bold></yellow>", List.of("<gray>Return to the dungeon entrance.</gray>")));
+        inventory.setItem(EXIT_SLOT, switch (resolvedBackTarget) {
+            case MAIN_MENU -> item(Material.ARROW, "<yellow><bold>Back</bold></yellow>", List.of("<gray>Return to Bosses & Mythics.</gray>"));
+            case ENTRANCE -> item(Material.ARROW, "<yellow><bold>Back</bold></yellow>", List.of("<gray>Return to Malakar's entrance menu.</gray>"));
+            case LEAVE_DUNGEON -> item(Material.IRON_DOOR, "<yellow><bold>Leave Dungeon</bold></yellow>", List.of("<gray>Return to server spawn.</gray>"));
+        });
         player.openInventory(inventory);
     }
 
     private void openEntranceMenu(Player player) {
         Inventory inventory = Bukkit.createInventory(
-            new DungeonMenuHolder(player.getUniqueId(), DungeonView.ENTRANCE, null),
+            new DungeonMenuHolder(player.getUniqueId(), DungeonView.ENTRANCE, null, null),
             27,
             BedrockCompat.menuTitle(player, MM.deserialize("<dark_red><bold>The Boss Dungeon</bold></dark_red>"), "Boss Dungeon")
         );
@@ -246,13 +287,55 @@ public final class BossDungeonManager implements Listener {
             encounter == null ? "<gray>Travel to the protected boss arena.</gray>" : "<gray>Watch the current team without affecting combat.</gray>",
             "<dark_gray>Bosses cannot be summoned elsewhere.</dark_gray>"
         )));
+        inventory.setItem(13, item(Material.KNOWLEDGE_BOOK, "<aqua><bold>Boss Mechanics</bold></aqua>", List.of(
+            "<gray>Read Malakar's notes on every boss mechanic.</gray>",
+            "<yellow>Click to open the field guide.</yellow>"
+        )));
         inventory.setItem(15, item(Material.WRITABLE_BOOK, "<gold><bold>Summon Costs</bold></gold>", List.of("<gray>Preview every boss, Essence fee, and material cost.</gray>")));
         player.openInventory(inventory);
     }
 
-    private void openConfirmation(Player player, BossManager.BossType type) {
+    private void openMechanicsGuide(Player player) {
         Inventory inventory = Bukkit.createInventory(
-            new DungeonMenuHolder(player.getUniqueId(), DungeonView.CONFIRM, type),
+            new DungeonMenuHolder(player.getUniqueId(), DungeonView.MECHANICS, null, null),
+            54,
+            BedrockCompat.menuTitle(player, MM.deserialize("<gradient:#22d3ee:#a78bfa><bold>Malakar's Field Guide</bold></gradient>"), "Boss Mechanics")
+        );
+        fill(inventory);
+        inventory.setItem(4, item(Material.LECTERN, "<gradient:#22d3ee:#a78bfa><bold>Boss Mechanics</bold></gradient>", List.of(
+            "<gray>Every major mechanic and its safest counter.</gray>",
+            "<dark_gray>Read these before committing ritual materials.</dark_gray>"
+        )));
+        List<BossManager.BossType> bosses = BossManager.BossType.progressionOrder();
+        for (int i = 0; i < bosses.size() && i < BOSS_SLOTS.length; i++) {
+            BossManager.BossType type = bosses.get(i);
+            inventory.setItem(BOSS_SLOTS[i], item(type.menuIcon(), type.displayName(), bossGuideLore(type)));
+        }
+        inventory.setItem(EXIT_SLOT, item(
+            Material.ARROW,
+            "<yellow><bold>Back</bold></yellow>",
+            List.of("<gray>Return to Malakar's main menu.</gray>")
+        ));
+        player.openInventory(inventory);
+    }
+
+    static List<String> bossGuideLore(BossManager.BossType type) {
+        if (type == null) {
+            return List.of();
+        }
+        List<String> lore = new ArrayList<>();
+        lore.add("<gray>Tier <white>" + type.progressionTier() + "</white></gray>");
+        addArmorRequirementLore(lore, type);
+        for (BossMechanics.GuideMechanic mechanic : BossMechanics.guideMechanics(type.id())) {
+            lore.add("<gold>" + mechanic.phase() + " - <white>" + mechanic.displayName() + "</white></gold>");
+            lore.add("<gray>" + mechanic.counterplay() + "</gray>");
+        }
+        return List.copyOf(lore);
+    }
+
+    private void openConfirmation(Player player, BossManager.BossType type, CatalogBackTarget backTarget) {
+        Inventory inventory = Bukkit.createInventory(
+            new DungeonMenuHolder(player.getUniqueId(), DungeonView.CONFIRM, type, backTarget),
             27,
             BedrockCompat.menuTitle(player, MM.deserialize("<red><bold>Confirm Summon</bold></red>"), "Confirm Summon")
         );
@@ -307,16 +390,23 @@ public final class BossDungeonManager implements Listener {
             case ENTRANCE -> {
                 if (slot == 11) {
                     enterDungeon(player);
+                } else if (slot == 13) {
+                    openMechanicsGuide(player);
                 } else if (slot == 15) {
-                    openBossCatalog(player);
+                    openBossCatalog(player, CatalogBackTarget.ENTRANCE);
+                }
+            }
+            case MECHANICS -> {
+                if (slot == EXIT_SLOT) {
+                    openEntranceMenu(player);
                 }
             }
             case CATALOG -> {
                 if (slot == EXIT_SLOT) {
-                    if (isDungeonWorld(player.getWorld())) {
-                        leaveDungeon(player);
-                    } else {
-                        openEntranceMenu(player);
+                    switch (catalogBackDestination(holder.catalogBackTarget())) {
+                        case MAIN_MENU -> MainMenuCommand.openBossesMenu(plugin, player);
+                        case ENTRANCE -> openEntranceMenu(player);
+                        case LEAVE_DUNGEON -> leaveDungeon(player);
                     }
                     return;
                 }
@@ -328,19 +418,19 @@ public final class BossDungeonManager implements Listener {
                     player.sendMessage(MessageUtil.info("Enter the dungeon before summoning a boss."));
                     return;
                 }
-                openConfirmation(player, type);
+                openConfirmation(player, type, holder.catalogBackTarget());
             }
             case CONFIRM -> {
                 if (slot == CANCEL_SLOT) {
-                    openBossCatalog(player);
+                    openBossCatalog(player, holder.catalogBackTarget());
                 } else if (slot == CONFIRM_SLOT && holder.type() != null) {
-                    summon(player, holder.type());
+                    summon(player, holder.type(), holder.catalogBackTarget());
                 }
             }
         }
     }
 
-    private void summon(Player player, BossManager.BossType type) {
+    private void summon(Player player, BossManager.BossType type, CatalogBackTarget backTarget) {
         if (!isDungeonWorld(player.getWorld())) {
             player.closeInventory();
             player.sendMessage(MessageUtil.error("Bosses can only be summoned inside the dungeon."));
@@ -353,13 +443,13 @@ public final class BossDungeonManager implements Listener {
         Map<Material, Integer> costs = summonCosts(type);
         if (!InventoryRecipeUtil.hasPlainMaterials(plugin, player, costs)) {
             player.sendMessage(MessageUtil.warn("You do not have every required summon material."));
-            openConfirmation(player, type);
+            openConfirmation(player, type, backTarget);
             return;
         }
         long essenceCost = summonEssenceCost(type);
         if (!hasEssence(player, essenceCost)) {
             player.sendMessage(MessageUtil.warn("You need <white>" + essenceCost + " Essence</white> to summon this boss."));
-            openConfirmation(player, type);
+            openConfirmation(player, type, backTarget);
             return;
         }
         player.closeInventory();
@@ -416,12 +506,14 @@ public final class BossDungeonManager implements Listener {
         for (Player teammate : autoJoined) {
             prepareFighter(teammate);
             teammate.sendMessage(MessageUtil.success("Your teammate is summoning <white>" + encounter.type.plainDisplayName() + "</white>. You joined the preparation automatically."));
+            warnMissingBossArmor(teammate, type);
             teammate.playSound(teammate.getLocation(), Sound.BLOCK_BEACON_ACTIVATE, 0.9f, 1.15f);
         }
         inviteTeamAndAllies(owner);
         owner.sendMessage(MessageUtil.success(
             "Payment accepted. <white>" + type.plainDisplayName() + "</white> forms in <white>10 seconds</white>. Prepare now."
         ));
+        warnMissingBossArmor(owner, type);
         startBossCountdown(encounter);
         return true;
     }
@@ -564,6 +656,7 @@ public final class BossDungeonManager implements Listener {
         encounter.participants.add(admin.getUniqueId());
         prepareFighter(admin);
         admin.sendMessage(MessageUtil.success("Joined the active fight as a participant."));
+        warnMissingBossArmor(admin, encounter.type);
         return true;
     }
 
@@ -779,6 +872,7 @@ public final class BossDungeonManager implements Listener {
             "Joined <white>" + encounter.type.plainDisplayName() + "</white>. It appears in <white>" + remaining + " second"
                 + (remaining == 1 ? "" : "s") + "</white>."
         ));
+        warnMissingBossArmor(player, encounter.type);
     }
 
     public void leaveQueue(Player player) {
@@ -826,20 +920,207 @@ public final class BossDungeonManager implements Listener {
 
     private void prepareFighter(Player player) {
         player.closeInventory();
-        restoredGameModes.putIfAbsent(player.getUniqueId(), player.getGameMode() == GameMode.SPECTATOR ? GameMode.SURVIVAL : player.getGameMode());
+        managedSpectators.remove(player.getUniqueId());
+        nextSpectatorBoundaryNoticeAt.remove(player.getUniqueId());
+        if (player.getGameMode() == GameMode.SPECTATOR) {
+            player.setSpectatorTarget(null);
+        }
+        rememberPlayerState(player);
         player.setGameMode(GameMode.SURVIVAL);
         managedTeleport(player, fightSpawn());
     }
 
     private void makeSpectator(Player player) {
         player.closeInventory();
-        restoredGameModes.putIfAbsent(player.getUniqueId(), player.getGameMode() == GameMode.SPECTATOR ? GameMode.SURVIVAL : player.getGameMode());
+        rememberPlayerState(player);
+        managedSpectators.add(player.getUniqueId());
+        clearDungeonCombatState(player);
         player.setGameMode(GameMode.SPECTATOR);
-        managedTeleport(player, spectatorSpawn());
+        stabilizeSpectator(player);
+        managedTeleport(player, spectatorSpawn(), "spectator entry", success -> {
+            if (success && managedSpectators.contains(player.getUniqueId()) && isDungeonWorld(player.getWorld())) {
+                stabilizeSpectator(player);
+            }
+        });
+    }
+
+    private void tickManagedSpectators() {
+        if (managedSpectators.isEmpty()) {
+            return;
+        }
+        for (UUID playerId : List.copyOf(managedSpectators)) {
+            Player player = Bukkit.getPlayer(playerId);
+            if (player == null || !player.isOnline()) {
+                continue;
+            }
+            if (!isDungeonWorld(player.getWorld())) {
+                managedSpectators.remove(playerId);
+                nextSpectatorBoundaryNoticeAt.remove(playerId);
+                restoreGameMode(player);
+                continue;
+            }
+            stabilizeSpectator(player);
+        }
+    }
+
+    private void stabilizeSpectator(Player player) {
+        if (player.getGameMode() != GameMode.SPECTATOR) {
+            player.setGameMode(GameMode.SPECTATOR);
+        }
+        if (player.getSpectatorTarget() != null) {
+            player.setSpectatorTarget(null);
+        }
+        player.setAllowFlight(true);
+        player.setFlying(true);
+    }
+
+    private void rememberPlayerState(Player player) {
+        UUID playerId = player.getUniqueId();
+        GameMode currentMode = player.getGameMode();
+        GameMode restoredMode = currentMode == GameMode.SPECTATOR ? GameMode.SURVIVAL : currentMode;
+        restoredGameModes.putIfAbsent(playerId, restoredMode);
+        restoredFlightStates.putIfAbsent(
+            playerId,
+            currentMode == GameMode.SPECTATOR
+                ? new FlightState(false, false)
+                : new FlightState(player.getAllowFlight(), player.isFlying())
+        );
+    }
+
+    private boolean insideSpectatorZone(Location candidate) {
+        Location center = spectatorRoomCenter();
+        Location floor = spectatorFloorAnchor();
+        if (candidate == null || center == null || floor == null || candidate.getWorld() != center.getWorld()) {
+            return false;
+        }
+        return spectatorOffsetAllowed(
+            candidate.getX() - center.getX(),
+            candidate.getY() - floor.getY(),
+            candidate.getZ() - center.getZ()
+        );
+    }
+
+    static boolean spectatorOffsetAllowed(double xOffset, double yOffset, double zOffset) {
+        if (!Double.isFinite(xOffset) || !Double.isFinite(yOffset) || !Double.isFinite(zOffset)) {
+            return false;
+        }
+        return Math.abs(xOffset) <= SPECTATOR_ROOM_HALF_EXTENT
+            && Math.abs(zOffset) <= SPECTATOR_ROOM_HALF_EXTENT
+            && yOffset >= SPECTATOR_FLOOR_Y_OFFSET
+            && yOffset <= SPECTATOR_ROOF_Y_OFFSET;
+    }
+
+    private Location confinedSpectatorLocation(Location from, Location candidate) {
+        if (from == null || candidate == null || from.getWorld() == null || from.getWorld() != candidate.getWorld()
+            || !finiteLocation(from) || !finiteLocation(candidate)) {
+            return from == null ? candidate : from.clone();
+        }
+
+        Location target = insideSpectatorZone(candidate) ? candidate : clampToSpectatorRoom(candidate);
+        if (spectatorPathClear(from, target)) {
+            return target;
+        }
+
+        Location best = withSpectatorLook(from.clone(), candidate);
+        double bestDistanceSquared = 0.0D;
+        Location[] slides = {
+            spectatorCandidate(from, target, true, true, false),
+            spectatorCandidate(from, target, false, true, true),
+            spectatorCandidate(from, target, true, false, true),
+            spectatorCandidate(from, target, true, false, false),
+            spectatorCandidate(from, target, false, true, false),
+            spectatorCandidate(from, target, false, false, true)
+        };
+        for (Location slide : slides) {
+            double distanceSquared = slide.distanceSquared(from);
+            if (distanceSquared > bestDistanceSquared && insideSpectatorZone(slide) && spectatorPathClear(from, slide)) {
+                best = slide;
+                bestDistanceSquared = distanceSquared;
+            }
+        }
+        return best;
+    }
+
+    private Location clampToSpectatorRoom(Location candidate) {
+        Location center = spectatorRoomCenter();
+        Location floor = spectatorFloorAnchor();
+        return new Location(
+            candidate.getWorld(),
+            Math.clamp(candidate.getX(), center.getX() - SPECTATOR_ROOM_HALF_EXTENT, center.getX() + SPECTATOR_ROOM_HALF_EXTENT),
+            Math.clamp(candidate.getY(), floor.getY() + SPECTATOR_FLOOR_Y_OFFSET, floor.getY() + SPECTATOR_ROOF_Y_OFFSET),
+            Math.clamp(candidate.getZ(), center.getZ() - SPECTATOR_ROOM_HALF_EXTENT, center.getZ() + SPECTATOR_ROOM_HALF_EXTENT),
+            candidate.getYaw(),
+            candidate.getPitch()
+        );
+    }
+
+    private Location spectatorCandidate(Location from, Location target, boolean moveX, boolean moveY, boolean moveZ) {
+        return new Location(
+            from.getWorld(),
+            moveX ? target.getX() : from.getX(),
+            moveY ? target.getY() : from.getY(),
+            moveZ ? target.getZ() : from.getZ(),
+            target.getYaw(),
+            target.getPitch()
+        );
+    }
+
+    private Location withSpectatorLook(Location location, Location look) {
+        location.setYaw(look.getYaw());
+        location.setPitch(look.getPitch());
+        return location;
+    }
+
+    private boolean spectatorPathClear(Location from, Location to) {
+        if (from == null || to == null || from.getWorld() == null || from.getWorld() != to.getWorld()
+            || !finiteLocation(from) || !finiteLocation(to) || !insideSpectatorZone(to)) {
+            return false;
+        }
+        double dx = to.getX() - from.getX();
+        double dy = to.getY() - from.getY();
+        double dz = to.getZ() - from.getZ();
+        double distanceSquared = dx * dx + dy * dy + dz * dz;
+        if (distanceSquared <= SPECTATOR_MOVEMENT_EPSILON_SQUARED) {
+            return true;
+        }
+        double distance = Math.sqrt(distanceSquared);
+        Vector direction = new Vector(dx, dy, dz).multiply(1.0D / distance);
+        return from.getWorld().rayTraceBlocks(
+            from,
+            direction,
+            distance,
+            FluidCollisionMode.NEVER,
+            true
+        ) == null;
+    }
+
+    private Location spectatorRoomCenter() {
+        return locations == null ? bossSpawn() : locations.boss();
+    }
+
+    private Location spectatorFloorAnchor() {
+        return locations == null ? fightSpawn() : locations.fight();
+    }
+
+    private static boolean finiteLocation(Location location) {
+        return Double.isFinite(location.getX())
+            && Double.isFinite(location.getY())
+            && Double.isFinite(location.getZ())
+            && Float.isFinite(location.getYaw())
+            && Float.isFinite(location.getPitch());
+    }
+
+    private void warnSpectatorBoundary(Player player) {
+        long now = System.currentTimeMillis();
+        if (nextSpectatorBoundaryNoticeAt.getOrDefault(player.getUniqueId(), 0L) > now) {
+            return;
+        }
+        nextSpectatorBoundaryNoticeAt.put(player.getUniqueId(), now + 2_000L);
+        player.sendActionBar(MM.deserialize("<red>Stay inside the boss viewing area. Use /spawn to leave.</red>"));
     }
 
     public Map<Material, Integer> summonCosts(BossManager.BossType type) {
-        return summonCosts(type.id(), type.ritual().focusBlock(), type.ritual().catalyst());
+        return summonCosts(type.ritual().focusBlock(), type.ritual().catalyst());
     }
 
     public long summonEssenceCost(BossManager.BossType type) {
@@ -868,41 +1149,30 @@ public final class BossDungeonManager implements Listener {
         };
     }
 
-    static Map<Material, Integer> summonCosts(String bossId, Material focus, Material catalyst) {
-        LinkedHashMap<Material, Integer> costs = new LinkedHashMap<>();
-        add(costs, focus, 1);
-        add(costs, catalyst, 1);
-        switch (bossId) {
-            case "yule_the_minion" -> { add(costs, Material.SOUL_SAND, 1); add(costs, Material.GOLD_BLOCK, 2); }
-            case "kael_the_ashen" -> add(costs, Material.BONE_BLOCK, 3);
-            case "vesper_the_widow_queen" -> { add(costs, Material.MOSS_BLOCK, 1); add(costs, Material.BLACK_CANDLE, 2); }
-            case "voralith_the_crimson_warden" -> {
-                add(costs, Material.SCULK_CATALYST, 1);
-                add(costs, Material.REDSTONE_BLOCK, 1);
-                add(costs, Material.SOUL_LANTERN, 2);
-            }
-            case "aurelion_the_rift_seraph" -> { add(costs, Material.PURPUR_BLOCK, 1); add(costs, Material.END_STONE_BRICKS, 2); }
-            case "morvessa_the_runebloom_witch" -> { add(costs, Material.AMETHYST_BLOCK, 1); add(costs, Material.FLOWERING_AZALEA_LEAVES, 2); }
-            case "nereida_the_abyss_mother" -> { add(costs, Material.PRISMARINE, 1); add(costs, Material.SEA_LANTERN, 2); }
-            case "iron_saint" -> { add(costs, Material.SMITHING_TABLE, 1); add(costs, Material.IRON_BLOCK, 1); }
-            case "mirewood_the_root_tyrant" -> { add(costs, Material.MOSS_BLOCK, 1); add(costs, Material.OAK_SAPLING, 2); }
-            case "corrupted_oathkeeper" -> {
-                add(costs, Material.CRYING_OBSIDIAN, 1);
-                add(costs, Material.MAGMA_BLOCK, 2);
-                add(costs, Material.SCULK_CATALYST, 2);
-            }
-            default -> throw new IllegalArgumentException("Unknown boss id: " + bossId);
+    static Map<Material, Integer> summonCosts(Material focus, Material catalyst) {
+        if (focus == null || catalyst == null) {
+            throw new IllegalArgumentException("Boss summon materials cannot be null");
         }
+        if (focus == catalyst) {
+            throw new IllegalArgumentException("Boss summon focus and catalyst must be different materials");
+        }
+        LinkedHashMap<Material, Integer> costs = new LinkedHashMap<>();
+        costs.put(focus, 1);
+        costs.put(catalyst, 1);
         return Collections.unmodifiableMap(new LinkedHashMap<>(costs));
-    }
-
-    private static void add(Map<Material, Integer> costs, Material material, int amount) {
-        costs.merge(material, amount, Integer::sum);
     }
 
     private ItemStack bossItem(Player player, BossManager.BossType type) {
         List<String> lore = new ArrayList<>();
         lore.add("<gray>Tier <white>" + type.progressionTier() + "</white></gray>");
+        int requiredArmorTier = BossBalance.requiredArmorPathTier(type.progressionTier());
+        if (requiredArmorTier > 0) {
+            boolean ready = plugin.getSeasonRelicManager() != null
+                && plugin.getSeasonRelicManager().hasRequiredBossArmor(player, type.progressionTier());
+            lore.add((ready ? "<green>" : "<red>") + "Armor: 4 Tier " + requiredArmorTier + "+ Veil set pieces</"
+                + (ready ? "green>" : "red>"));
+            addMissingArmorPenaltyLore(lore, type);
+        }
         long essenceCost = summonEssenceCost(type);
         long essenceBalance = plugin.getEssenceManager() == null ? 0L : plugin.getEssenceManager().balance(player);
         boolean hasEssence = essenceBalance >= essenceCost;
@@ -915,6 +1185,39 @@ public final class BossDungeonManager implements Listener {
         lore.add("<dark_gray>Summoner pays once; teammates join free.</dark_gray>");
         lore.add("<yellow>Click to review and confirm.</yellow>");
         return item(type.menuIcon(), type.displayName(), lore);
+    }
+
+    private void warnMissingBossArmor(Player player, BossManager.BossType type) {
+        int requiredArmorTier = BossBalance.requiredArmorPathTier(type.progressionTier());
+        if (requiredArmorTier <= 0 || (plugin.getSeasonRelicManager() != null
+            && plugin.getSeasonRelicManager().hasRequiredBossArmor(player, type.progressionTier()))) {
+            return;
+        }
+        int extraDamagePercent = missingArmorDamagePercent(type);
+        player.sendMessage(MessageUtil.warn(
+            "Armor check: equip four <white>Tier " + requiredArmorTier
+                + "+ Veil set pieces</white> before the fight. Sets may be mixed; missing gear makes boss attacks deal <red>"
+                + extraDamagePercent + "% more damage</red>."
+        ));
+    }
+
+    private static void addArmorRequirementLore(List<String> lore, BossManager.BossType type) {
+        int requiredArmorTier = BossBalance.requiredArmorPathTier(type.progressionTier());
+        if (requiredArmorTier <= 0) {
+            return;
+        }
+        lore.add("<red>Armor:</red> <white>4 Tier " + requiredArmorTier + "+ Veil set pieces</white>");
+        addMissingArmorPenaltyLore(lore, type);
+    }
+
+    private static void addMissingArmorPenaltyLore(List<String> lore, BossManager.BossType type) {
+        lore.add("<dark_red>Missing armor: +" + missingArmorDamagePercent(type) + "% boss damage taken.</dark_red>");
+    }
+
+    private static int missingArmorDamagePercent(BossManager.BossType type) {
+        return (int) Math.round(
+            (BossBalance.missingArmorDamageMultiplier(type.progressionTier(), false) - 1.0) * 100.0
+        );
     }
 
     private BossManager.BossType bossForSlot(int slot) {
@@ -996,20 +1299,44 @@ public final class BossDungeonManager implements Listener {
         if (world == null || plugin.getGuideNpcManager() == null) {
             return;
         }
-        Location keeperLocation = keeperSpawn();
+        Location keeperLocation = plugin.getGuideNpcManager().normalizedSpawnLocation(keeperSpawn());
         world.getChunkAt(keeperLocation);
-        List<Location> arenaKeepers = arenaKeeperLocations();
+        List<Location> arenaKeepers = arenaKeeperLocations().stream()
+            .sorted(Comparator.comparingDouble(location -> location.distanceSquared(keeperLocation)))
+            .toList();
         int removed = 0;
-        while (arenaKeepers.size() > 1) {
-            int result = plugin.getGuideNpcManager().removeNearest(GuideNpcType.DUNGEON_KEEPER, keeperLocation, 512.0D);
-            if (result <= 0) {
-                break;
-            }
-            removed += result;
-            arenaKeepers = arenaKeeperLocations();
+        for (int index = arenaKeepers.size() - 1; index >= 1; index--) {
+            Location duplicate = arenaKeepers.get(index);
+            removed += plugin.getGuideNpcManager().removeNearest(
+                GuideNpcType.DUNGEON_KEEPER,
+                duplicate,
+                0.75D
+            );
         }
         if (removed > 0) {
             plugin.getLogger().warning("Removed " + removed + " duplicate boss-dungeon keeper NPC(s).");
+        }
+
+        arenaKeepers = arenaKeeperLocations();
+        if (arenaKeepers.size() == 1) {
+            Location current = arenaKeepers.getFirst();
+            if (current.distanceSquared(keeperLocation) > KEEPER_POSITION_TOLERANCE_SQUARED) {
+                int relocated = plugin.getGuideNpcManager().removeNearest(
+                    GuideNpcType.DUNGEON_KEEPER,
+                    current,
+                    0.75D
+                );
+                if (relocated > 0) {
+                    plugin.getLogger().warning(
+                        "Restoring Malakar to the configured boss-dungeon keeper point from "
+                            + locationSummary(current)
+                            + " to "
+                            + locationSummary(keeperLocation)
+                            + "."
+                    );
+                    arenaKeepers = List.of();
+                }
+            }
         }
         if (arenaKeepers.isEmpty()) {
             plugin.getGuideNpcManager().spawnNpc(GuideNpcType.DUNGEON_KEEPER, keeperLocation);
@@ -1036,7 +1363,16 @@ public final class BossDungeonManager implements Listener {
         locations = loadLocations();
         if ("entry".equals(key)) world.setSpawnLocation(locations.entry());
         keepArenaChunksLoaded();
+        if ("keeper".equals(key)) {
+            Bukkit.getScheduler().runTask(plugin, this::ensureArenaKeeper);
+        }
         return true;
+    }
+
+    private static String locationSummary(Location location) {
+        return location.getWorld().getName()
+            + " "
+            + String.format(java.util.Locale.ROOT, "%.2f, %.2f, %.2f", location.getX(), location.getY(), location.getZ());
     }
 
     public Map<String, Location> configuredLocations() {
@@ -1075,6 +1411,17 @@ public final class BossDungeonManager implements Listener {
         int maxChunkZ = (center.getBlockZ() + arenaRadius) >> 4;
         for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
             for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                world.addPluginChunkTicket(chunkX, chunkZ, plugin);
+            }
+        }
+        Location spectator = bossSpawn();
+        int spectatorRadius = (int) Math.ceil(SPECTATOR_ROOM_HALF_EXTENT) + 1;
+        int minSpectatorChunkX = (spectator.getBlockX() - spectatorRadius) >> 4;
+        int maxSpectatorChunkX = (spectator.getBlockX() + spectatorRadius) >> 4;
+        int minSpectatorChunkZ = (spectator.getBlockZ() - spectatorRadius) >> 4;
+        int maxSpectatorChunkZ = (spectator.getBlockZ() + spectatorRadius) >> 4;
+        for (int chunkX = minSpectatorChunkX; chunkX <= maxSpectatorChunkX; chunkX++) {
+            for (int chunkZ = minSpectatorChunkZ; chunkZ <= maxSpectatorChunkZ; chunkZ++) {
                 world.addPluginChunkTicket(chunkX, chunkZ, plugin);
             }
         }
@@ -1164,8 +1511,11 @@ public final class BossDungeonManager implements Listener {
         if (world == null) {
             return 0;
         }
-        int removed = 0;
+        int removed = plugin.getBossManager() == null ? 0 : plugin.getBossManager().despawnBossMinionsInWorld(world);
         for (Entity entity : new ArrayList<>(world.getEntities())) {
+            if (!entity.isValid()) {
+                continue;
+            }
             boolean transientEntity = entity instanceof Projectile
                 || entity instanceof AreaEffectCloud
                 || entity instanceof EvokerFangs
@@ -1188,7 +1538,7 @@ public final class BossDungeonManager implements Listener {
         }
         int removed = 0;
         for (Chunk chunk : world.getLoadedChunks()) {
-            for (BlockState state : chunk.getTileEntities()) {
+            for (BlockState state : chunk.getTileEntities(false)) {
                 if (!plugin.getBossManager().isDungeonLootChest(state.getBlock())) {
                     continue;
                 }
@@ -1232,6 +1582,9 @@ public final class BossDungeonManager implements Listener {
     }
 
     private void deliverOrStore(UUID ownerId, ItemStack item) {
+        if (ownerId == null || item == null || item.getType().isAir()) {
+            return;
+        }
         Player owner = Bukkit.getPlayer(ownerId);
         if (owner != null && owner.isOnline()) {
             Map<Integer, ItemStack> leftovers = owner.getInventory().addItem(item);
@@ -1250,16 +1603,75 @@ public final class BossDungeonManager implements Listener {
         });
     }
 
+    public void secureDungeonRewards(UUID ownerId, java.util.Collection<ItemStack> rewards) {
+        if (ownerId == null || rewards == null || rewards.isEmpty()) {
+            return;
+        }
+        int secured = 0;
+        for (ItemStack reward : rewards) {
+            if (reward == null || reward.getType().isAir()) {
+                continue;
+            }
+            if (plugin.getBossManager() != null) {
+                plugin.getBossManager().consumeBossArmorReward(reward);
+            }
+            deliverOrStore(ownerId, reward.clone());
+            secured++;
+        }
+        Player owner = Bukkit.getPlayer(ownerId);
+        if (secured > 0 && owner != null && owner.isOnline()) {
+            owner.sendMessage(MessageUtil.warn(
+                secured + " boss reward" + (secured == 1 ? " was" : "s were")
+                    + " secured because the loot chest had no safe space."
+            ));
+            scheduleStoredDropRecovery(owner, 20L);
+        }
+    }
+
     private void recoverStoredDrops(Player player) {
-        if (world == null) return;
+        if (world == null || player == null || !player.isOnline()) return;
         String owner = player.getUniqueId().toString();
+        boolean remaining = false;
         for (Entity entity : new ArrayList<>(world.getEntities())) {
             if (!(entity instanceof Item item)) continue;
             if (!owner.equals(item.getPersistentDataContainer().get(droppedItemOwnerKey, PersistentDataType.STRING))) continue;
             ItemStack stack = item.getItemStack().clone();
-            item.remove();
-            InventoryRecipeUtil.giveOrDrop(player, stack);
+            Map<Integer, ItemStack> leftovers = player.getInventory().addItem(stack);
+            if (leftovers.isEmpty()) {
+                item.remove();
+                continue;
+            }
+            java.util.Iterator<ItemStack> iterator = leftovers.values().iterator();
+            item.setItemStack(iterator.next());
+            while (iterator.hasNext()) {
+                storeOwnedDrop(player.getUniqueId(), iterator.next());
+            }
+            remaining = true;
         }
+        if (remaining) {
+            if (warnedAboutStoredDrops.add(player.getUniqueId())) {
+                player.sendMessage(MessageUtil.warn(
+                    "Protected dungeon loot is waiting for inventory space. It will be claimed automatically when space opens."
+                ));
+            }
+            scheduleStoredDropRecovery(player, 100L);
+        } else {
+            warnedAboutStoredDrops.remove(player.getUniqueId());
+        }
+    }
+
+    private void scheduleStoredDropRecovery(Player player, long delayTicks) {
+        if (player == null || !player.isOnline() || !scheduledDropRecoveries.add(player.getUniqueId())) {
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            scheduledDropRecoveries.remove(playerId);
+            Player online = Bukkit.getPlayer(playerId);
+            if (online != null && online.isOnline()) {
+                recoverStoredDrops(online);
+            }
+        }, Math.max(1L, delayTicks));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -1270,7 +1682,58 @@ public final class BossDungeonManager implements Listener {
         if (!encounter.participants.contains(player.getUniqueId()) || encounter.eliminated.contains(player.getUniqueId())) {
             event.setCancelled(true);
             player.sendMessage(MessageUtil.warn("Only surviving fight participants can open this chest."));
+            return;
         }
+        Block chestBlock = chest.getBlock();
+        Bukkit.getScheduler().runTask(plugin, () -> revealBossArmorReward(player, chestBlock));
+    }
+
+    private void revealBossArmorReward(Player player, Block chestBlock) {
+        if (encounter == null || !encounter.looting || player == null || !player.isOnline()
+            || chestBlock == null
+            || !(player.getOpenInventory().getTopInventory().getHolder(false) instanceof Chest openChest)
+            || !openChest.getBlock().equals(chestBlock)
+            || !(chestBlock.getState() instanceof Chest chest)
+            || !plugin.getBossManager().isDungeonLootChest(chestBlock)) {
+            return;
+        }
+        BossManager.BossArmorRewardReveal reveal = null;
+        Inventory inventory = chest.getBlockInventory();
+        for (int slot = 0; slot < inventory.getSize(); slot++) {
+            ItemStack item = inventory.getItem(slot);
+            reveal = plugin.getBossManager().consumeBossArmorReward(item);
+            if (reveal != null) {
+                inventory.setItem(slot, item);
+                break;
+            }
+        }
+        if (reveal == null) {
+            return;
+        }
+        BossManager.BossType source = BossManager.BossType.fromId(reveal.bossId());
+        String bossName = source == null ? "a Veil boss" : source.plainDisplayName();
+        String playerName = escapeMini(player.getName());
+        String itemName = escapeMini(reveal.itemName());
+        Bukkit.broadcast(MessageUtil.prefixedRaw(
+            "<gradient:#facc15:#f97316><bold>2% ARMOR FIND!</bold></gradient> <white>"
+                + playerName + "</white> <gray>opened the chest and found</gray> <gold><bold>"
+                + itemName + "</bold></gold> <gray>from " + escapeMini(bossName) + ".</gray>"
+        ));
+        player.showTitle(Title.title(
+            MM.deserialize("<gradient:#facc15:#f97316><bold>RARE ARMOR!</bold></gradient>"),
+            MM.deserialize("<gold>" + itemName + "</gold>"),
+            Title.Times.times(Duration.ofMillis(350), Duration.ofSeconds(3), Duration.ofMillis(700))
+        ));
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            online.playSound(online.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, online.equals(player) ? 1.0F : 0.55F, 1.15F);
+        }
+        Location effect = chestBlock.getLocation().add(0.5D, 1.0D, 0.5D);
+        chestBlock.getWorld().spawnParticle(org.bukkit.Particle.TOTEM_OF_UNDYING, effect, 55, 0.55D, 0.55D, 0.55D, 0.04D);
+        chestBlock.getWorld().spawnParticle(org.bukkit.Particle.END_ROD, effect, 35, 0.45D, 0.45D, 0.45D, 0.025D);
+    }
+
+    private static String escapeMini(String raw) {
+        return raw == null ? "" : raw.replace("\\", "\\\\").replace("<", "\\<");
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -1322,28 +1785,44 @@ public final class BossDungeonManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBreak(BlockBreakEvent event) {
-        if (isDungeonWorld(event.getBlock().getWorld()) && !event.getPlayer().hasPermission("smpcore.dungeon.admin")) {
+        if (isDungeonWorld(event.getBlock().getWorld())
+            && !OperatorGameplayMode.allowsPassiveBypass(event.getPlayer(), "smpcore.dungeon.admin")) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPlace(BlockPlaceEvent event) {
-        if (isDungeonWorld(event.getBlock().getWorld()) && !event.getPlayer().hasPermission("smpcore.dungeon.admin")) {
+        if (isDungeonWorld(event.getBlock().getWorld())
+            && !OperatorGameplayMode.allowsPassiveBypass(event.getPlayer(), "smpcore.dungeon.admin")) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onInteract(PlayerInteractEvent event) {
-        if (event.getClickedBlock() == null || !isDungeonWorld(event.getClickedBlock().getWorld()) || event.getPlayer().hasPermission("smpcore.dungeon.admin")) return;
+        if (event.getClickedBlock() == null || !isDungeonWorld(event.getClickedBlock().getWorld())
+            || OperatorGameplayMode.allowsPassiveBypass(event.getPlayer(), "smpcore.dungeon.admin")) return;
         if (plugin.getBossManager().isDungeonLootChest(event.getClickedBlock())) return;
+        if (allowsProtectedDungeonFoodUse(
+            event.getAction(),
+            event.getItem() != null && event.getItem().hasData(DataComponentTypes.FOOD)
+        )) {
+            event.setUseInteractedBlock(Event.Result.DENY);
+            event.setUseItemInHand(Event.Result.ALLOW);
+            return;
+        }
         event.setCancelled(true);
+    }
+
+    static boolean allowsProtectedDungeonFoodUse(Action action, boolean hasFoodComponent) {
+        return action == Action.RIGHT_CLICK_BLOCK && hasFoodComponent;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onArmorStandManipulate(PlayerArmorStandManipulateEvent event) {
-        if (isDungeonWorld(event.getRightClicked().getWorld()) && !event.getPlayer().hasPermission("smpcore.dungeon.admin")) {
+        if (isDungeonWorld(event.getRightClicked().getWorld())
+            && !OperatorGameplayMode.allowsPassiveBypass(event.getPlayer(), "smpcore.dungeon.admin")) {
             event.setCancelled(true);
         }
     }
@@ -1360,12 +1839,14 @@ public final class BossDungeonManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBucketEmpty(PlayerBucketEmptyEvent event) {
-        if (isDungeonWorld(event.getBlock().getWorld()) && !event.getPlayer().hasPermission("smpcore.dungeon.admin")) event.setCancelled(true);
+        if (isDungeonWorld(event.getBlock().getWorld())
+            && !OperatorGameplayMode.allowsPassiveBypass(event.getPlayer(), "smpcore.dungeon.admin")) event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBucketFill(PlayerBucketFillEvent event) {
-        if (isDungeonWorld(event.getBlock().getWorld()) && !event.getPlayer().hasPermission("smpcore.dungeon.admin")) event.setCancelled(true);
+        if (isDungeonWorld(event.getBlock().getWorld())
+            && !OperatorGameplayMode.allowsPassiveBypass(event.getPlayer(), "smpcore.dungeon.admin")) event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -1375,12 +1856,14 @@ public final class BossDungeonManager implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onEntityPlace(EntityPlaceEvent event) {
-        if (isDungeonWorld(event.getEntity().getWorld()) && (event.getPlayer() == null || !event.getPlayer().hasPermission("smpcore.dungeon.admin"))) event.setCancelled(true);
+        if (isDungeonWorld(event.getEntity().getWorld()) && (event.getPlayer() == null
+            || !OperatorGameplayMode.allowsPassiveBypass(event.getPlayer(), "smpcore.dungeon.admin"))) event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onHangingPlace(HangingPlaceEvent event) {
-        if (isDungeonWorld(event.getEntity().getWorld()) && (event.getPlayer() == null || !event.getPlayer().hasPermission("smpcore.dungeon.admin"))) event.setCancelled(true);
+        if (isDungeonWorld(event.getEntity().getWorld()) && (event.getPlayer() == null
+            || !OperatorGameplayMode.allowsPassiveBypass(event.getPlayer(), "smpcore.dungeon.admin"))) event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -1426,6 +1909,15 @@ public final class BossDungeonManager implements Listener {
     public void onMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
         if (!isDungeonWorld(player.getWorld())) {
+            return;
+        }
+        if (managedSpectators.contains(player.getUniqueId())) {
+            Location safe = confinedSpectatorLocation(event.getFrom(), event.getTo());
+            if (safe != event.getTo()) {
+                player.setSpectatorTarget(null);
+                player.setFallDistance(0.0F);
+                event.setTo(safe);
+            }
             return;
         }
         if (encounter != null && encounter.participants.contains(player.getUniqueId())
@@ -1490,6 +1982,15 @@ public final class BossDungeonManager implements Listener {
         if (managedTeleports.contains(player.getUniqueId())) return;
         boolean fromDungeon = event.getFrom().getWorld() != null && isDungeonWorld(event.getFrom().getWorld());
         boolean toDungeon = event.getTo().getWorld() != null && isDungeonWorld(event.getTo().getWorld());
+        if (managedSpectators.contains(player.getUniqueId()) && toDungeon
+            && (!insideSpectatorZone(event.getTo()) || !spectatorPathClear(event.getFrom(), event.getTo()))) {
+            event.setCancelled(true);
+            player.setSpectatorTarget(null);
+            player.setVelocity(new Vector());
+            player.setFallDistance(0.0F);
+            warnSpectatorBoundary(player);
+            return;
+        }
         boolean activeParticipant = encounter != null && encounter.participants.contains(player.getUniqueId());
         if (fromDungeon && !toDungeon && activeParticipant) {
             event.setCancelled(true);
@@ -1524,6 +2025,8 @@ public final class BossDungeonManager implements Listener {
         UUID playerId = event.getPlayer().getUniqueId();
         nextMenuOpenAt.remove(playerId);
         nextMenuActionAt.remove(playerId);
+        managedSpectators.remove(playerId);
+        nextSpectatorBoundaryNoticeAt.remove(playerId);
         managedTeleports.remove(playerId);
         if (encounter != null && encounter.participants.contains(event.getPlayer().getUniqueId())) {
             encounter.eliminated.add(playerId);
@@ -1618,9 +2121,31 @@ public final class BossDungeonManager implements Listener {
     }
 
     private void restoreGameMode(Player player) {
+        managedSpectators.remove(player.getUniqueId());
+        nextSpectatorBoundaryNoticeAt.remove(player.getUniqueId());
+        if (player.getGameMode() == GameMode.SPECTATOR) {
+            player.setSpectatorTarget(null);
+        }
         GameMode mode = restoredGameModes.remove(player.getUniqueId());
         if (mode != null) player.setGameMode(mode);
         else if (player.getGameMode() == GameMode.SPECTATOR) player.setGameMode(GameMode.SURVIVAL);
+        FlightState flightState = restoredFlightStates.remove(player.getUniqueId());
+        if (flightState != null) {
+            boolean modeAllowsFlight = player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR;
+            boolean allowFlight = modeAllowsFlight || flightState.allowFlight();
+            player.setAllowFlight(allowFlight);
+            player.setFlying(allowFlight && flightState.flying());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onStartSpectatingEntity(PlayerStartSpectatingEntityEvent event) {
+        if (!managedSpectators.contains(event.getPlayer().getUniqueId())) {
+            return;
+        }
+        event.setCancelled(true);
+        event.getPlayer().setSpectatorTarget(null);
+        warnSpectatorBoundary(event.getPlayer());
     }
 
     private World provisionAndLoadWorld() {
@@ -1772,11 +2297,25 @@ public final class BossDungeonManager implements Listener {
         return out.toString();
     }
 
-    private enum DungeonView { ENTRANCE, CATALOG, CONFIRM }
+    static CatalogBackDestination catalogBackDestination(CatalogBackTarget target) {
+        return switch (target == null ? CatalogBackTarget.ENTRANCE : target) {
+            case MAIN_MENU -> CatalogBackDestination.MAIN_MENU;
+            case ENTRANCE -> CatalogBackDestination.ENTRANCE;
+            case LEAVE_DUNGEON -> CatalogBackDestination.LEAVE_DUNGEON;
+        };
+    }
+
+    enum CatalogBackTarget { MAIN_MENU, ENTRANCE, LEAVE_DUNGEON }
+
+    enum CatalogBackDestination { MAIN_MENU, ENTRANCE, LEAVE_DUNGEON }
+
+    private enum DungeonView { ENTRANCE, MECHANICS, CATALOG, CONFIRM }
 
     private record QueuedSummon(UUID ownerId, BossManager.BossType type, long queuedAt) { }
 
     private record DungeonLocations(Location entry, Location fight, Location spectator, Location boss, Location keeper) { }
+
+    private record FlightState(boolean allowFlight, boolean flying) { }
 
     private static final class DungeonEncounter {
         private final UUID ownerId;
@@ -1806,7 +2345,12 @@ public final class BossDungeonManager implements Listener {
         }
     }
 
-    private record DungeonMenuHolder(UUID playerId, DungeonView view, BossManager.BossType type)
+    private record DungeonMenuHolder(
+        UUID playerId,
+        DungeonView view,
+        BossManager.BossType type,
+        CatalogBackTarget catalogBackTarget
+    )
         implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override public Inventory getInventory() { return null; }
     }

@@ -5,6 +5,7 @@ import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.AtomicYamlFile;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
@@ -167,7 +168,7 @@ public final class MarketStallManager implements Listener {
 
     public boolean allowsSpawnInteraction(PlayerInteractEvent event) {
         if (event == null || event.getClickedBlock() == null) return false;
-        if (isSelectionWand(event.getItem()) && isAdmin(event.getPlayer())) return true;
+        if (isSelectionWand(event.getItem()) && isPassiveAdmin(event.getPlayer())) return true;
         Block block = event.getClickedBlock();
         if (isPurchaseSign(block)) return true;
         Stall stall = stallAt(block.getLocation());
@@ -199,7 +200,7 @@ public final class MarketStallManager implements Listener {
         Block block = event.getSign().getBlock();
         if (plugin.getPlayerShopListener() != null && plugin.getPlayerShopListener().isShopPurchaseSign(block)) return;
         Stall stall = stallAt(block.getLocation());
-        if (stall == null || canEditStallSign(isAdmin(event.getPlayer()), isPurchaseSign(block), stall.canManage(event.getPlayer()))) {
+        if (stall == null || canEditStallSign(isPassiveAdmin(event.getPlayer()), isPurchaseSign(block), stall.canManage(event.getPlayer()))) {
             return;
         }
         event.setCancelled(true);
@@ -212,7 +213,7 @@ public final class MarketStallManager implements Listener {
     public void onStallSignChange(SignChangeEvent event) {
         if (plugin.getPlayerShopListener() != null && plugin.getPlayerShopListener().isShopPurchaseSign(event.getBlock())) return;
         Stall stall = stallAt(event.getBlock().getLocation());
-        if (stall == null || canEditStallSign(isAdmin(event.getPlayer()), isPurchaseSign(event.getBlock()), stall.canManage(event.getPlayer()))) {
+        if (stall == null || canEditStallSign(isPassiveAdmin(event.getPlayer()), isPurchaseSign(event.getBlock()), stall.canManage(event.getPlayer()))) {
             return;
         }
         event.setCancelled(true);
@@ -231,7 +232,7 @@ public final class MarketStallManager implements Listener {
             return;
         }
         Stall stall = stallAt(block.getLocation());
-        if (stall == null || isAdmin(event.getPlayer()) || stall.canManage(event.getPlayer())) return;
+        if (stall == null || isPassiveAdmin(event.getPlayer()) || stall.canManage(event.getPlayer())) return;
         event.setCancelled(true);
         event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
         event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
@@ -248,7 +249,7 @@ public final class MarketStallManager implements Listener {
         event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
         if (event.getHand() == EquipmentSlot.OFF_HAND) return;
         Player player = event.getPlayer();
-        if (!isAdmin(player)) {
+        if (!isPassiveAdmin(player)) {
             player.sendMessage(MessageUtil.warn("Only market admins can use that wand."));
             return;
         }
@@ -291,7 +292,7 @@ public final class MarketStallManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onPlace(BlockPlaceEvent event) {
         Stall stall = stallAt(event.getBlockPlaced().getLocation());
-        if (stall == null || isAdmin(event.getPlayer())) return;
+        if (stall == null || isPassiveAdmin(event.getPlayer())) return;
         if (!stall.canManage(event.getPlayer())) {
             deny(event.getPlayer(), event, "Only this stall's owner or a trusted manager can place shop fixtures here.");
             return;
@@ -309,7 +310,7 @@ public final class MarketStallManager implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlaceComplete(BlockPlaceEvent event) {
-        if (isAdmin(event.getPlayer())) return;
+        if (isPassiveAdmin(event.getPlayer())) return;
         Stall stall = stallAt(event.getBlockPlaced().getLocation());
         if (stall == null || !stall.canManage(event.getPlayer()) || !isAllowedPlacement(stall, event.getBlockPlaced())) return;
         if (stall.placedBlocks.add(blockKey(event.getBlockPlaced())) && !save()) {
@@ -322,7 +323,7 @@ public final class MarketStallManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onBreak(BlockBreakEvent event) {
         Stall stall = stallAt(event.getBlock().getLocation());
-        if (stall == null || isAdmin(event.getPlayer())) return;
+        if (stall == null || isPassiveAdmin(event.getPlayer())) return;
         boolean placedByOwner = stall.placedBlocks.contains(blockKey(event.getBlock()));
         boolean editableFixture = isOwnerEditableMaterial(event.getBlock().getType());
         boolean chestShopSign = isWallSignAttachedToStorageInStall(stall, event.getBlock());
@@ -347,7 +348,7 @@ public final class MarketStallManager implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onBreakComplete(BlockBreakEvent event) {
-        if (isAdmin(event.getPlayer())) return;
+        if (isPassiveAdmin(event.getPlayer())) return;
         Stall stall = stallAt(event.getBlock().getLocation());
         if (stall != null && stall.placedBlocks.remove(blockKey(event.getBlock())) && !save()) {
             plugin.getLogger().warning("Retrying a market-stall fixture save after a block break.");
@@ -359,7 +360,7 @@ public final class MarketStallManager implements Listener {
     public void onInventoryOpen(InventoryOpenEvent event) {
         Location location = event.getInventory().getLocation();
         Stall stall = stallAt(location);
-        if (stall == null || !(event.getPlayer() instanceof Player player) || isAdmin(player) || stall.canManage(player)) return;
+        if (stall == null || !(event.getPlayer() instanceof Player player) || isPassiveAdmin(player) || stall.canManage(player)) return;
         event.setCancelled(true);
         player.sendMessage(MessageUtil.warn("Buy from a chest shop sign. Only the stall owner or a trusted manager can open its storage."));
     }
@@ -1246,6 +1247,10 @@ public final class MarketStallManager implements Listener {
 
     private boolean isAdmin(Player player) {
         return player != null && (player.isOp() || player.hasPermission("smpcore.stall.admin"));
+    }
+
+    private boolean isPassiveAdmin(Player player) {
+        return OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.stall.admin");
     }
 
     private void deny(Player player, org.bukkit.event.Cancellable event, String message) {

@@ -45,6 +45,7 @@ import me.rique.smpcore.command.LegendaryCommands;
 import me.rique.smpcore.command.MainMenuCommand;
 import me.rique.smpcore.command.MarketStallCommand;
 import me.rique.smpcore.command.MayorPetCommand;
+import me.rique.smpcore.command.NpcHomeCommand;
 import me.rique.smpcore.command.PlayerCommands;
 import me.rique.smpcore.command.PriestCommand;
 import me.rique.smpcore.command.ReforgeCommand;
@@ -58,21 +59,27 @@ import me.rique.smpcore.command.SpawnProtectionCommand;
 import me.rique.smpcore.command.SpawnLifeCommand;
 import me.rique.smpcore.command.SmpStartCommand;
 import me.rique.smpcore.command.StoryCommand;
+import me.rique.smpcore.command.StaffManagerMenu;
 import me.rique.smpcore.command.TeamCommands;
 import me.rique.smpcore.command.TavernCommand;
 import me.rique.smpcore.command.WarpCommand;
 import me.rique.smpcore.command.WildCommand;
 import me.rique.smpcore.command.WikiCommand;
+import me.rique.smpcore.command.VillagerCommand;
 import me.rique.smpcore.config.ConfigManager;
+import me.rique.smpcore.combat.MaceDamageListener;
+import me.rique.smpcore.combat.TntMinecartDamageListener;
 import me.rique.smpcore.database.DatabaseManager;
 import me.rique.smpcore.death.DeathChestListener;
 import me.rique.smpcore.death.DeathInventoryManager;
 import me.rique.smpcore.duel.DuelManager;
+import me.rique.smpcore.event.TimedLocatorBarEvent;
 import me.rique.smpcore.essence.EssenceManager;
 import me.rique.smpcore.essence.PriestManager;
 import me.rique.smpcore.game.BlackjackManager;
 import me.rique.smpcore.game.RouletteManager;
 import me.rique.smpcore.game.SpinBetManager;
+import me.rique.smpcore.home.AllianceHomeManager;
 import me.rique.smpcore.home.HomeManager;
 import me.rique.smpcore.warp.WarpManager;
 import me.rique.smpcore.wild.WildTeleportManager;
@@ -90,6 +97,7 @@ import me.rique.smpcore.item.SalvagingDepotListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
 import me.rique.smpcore.item.VeilOrbManager;
 import me.rique.smpcore.item.VeinMinerListener;
+import me.rique.smpcore.item.VelocityNullifierListener;
 import me.rique.smpcore.item.XpLecternListener;
 import me.rique.smpcore.legendary.LegendaryAltarManager;
 import me.rique.smpcore.legendary.LegendaryListener;
@@ -109,6 +117,8 @@ import me.rique.smpcore.player.PlayerSettingsManager;
 import me.rique.smpcore.player.PlayerVisualListener;
 import me.rique.smpcore.player.SpawnProtectionListener;
 import me.rique.smpcore.player.TabListManager;
+import me.rique.smpcore.player.VanishListener;
+import me.rique.smpcore.player.VillagerManager;
 import me.rique.smpcore.player.WorldRulesListener;
 import me.rique.smpcore.quest.MayorQuestManager;
 import me.rique.smpcore.quest.GoblinHuntManager;
@@ -153,6 +163,7 @@ public final class SMPCore extends JavaPlugin {
     private DatabaseManager databaseManager;
     private SpawnerManager spawnerManager;
     private HomeManager homeManager;
+    private AllianceHomeManager allianceHomeManager;
     private WarpManager warpManager;
     private WildTeleportManager wildTeleportManager;
     private PlayerManager playerManager;
@@ -189,6 +200,7 @@ public final class SMPCore extends JavaPlugin {
     private XpLecternListener xpLecternListener;
     private BossPotionListener bossPotionListener;
     private SustenanceTalismanListener sustenanceTalismanListener;
+    private VelocityNullifierListener velocityNullifierListener;
     private VeinMinerListener veinMinerListener;
     private CraftingRulesListener craftingRulesListener;
     private WorldRulesListener worldRulesListener;
@@ -230,6 +242,9 @@ public final class SMPCore extends JavaPlugin {
     private BossMasteryManager bossMasteryManager;
     private StoryService storyService;
     private LaunchAccessManager launchAccessManager;
+    private StaffManagerMenu staffManagerMenu;
+    private TimedLocatorBarEvent timedLocatorBarEvent;
+    private VillagerManager villagerManager;
 
     @Override
     public void onEnable() {
@@ -253,6 +268,7 @@ public final class SMPCore extends JavaPlugin {
         homeManager = new HomeManager(this);
         warpManager = new WarpManager(this);
         teamManager = new TeamManager(this);
+        allianceHomeManager = new AllianceHomeManager(this);
         waystoneManager = new WaystoneManager(this);
 
         try {
@@ -264,6 +280,15 @@ public final class SMPCore extends JavaPlugin {
             return;
         }
         teamManager.loadFromDatabaseBlocking();
+        try {
+            allianceHomeManager.loadAllBlocking();
+        } catch (Exception e) {
+            Throwable cause = e.getCause() == null ? e : e.getCause();
+            getLogger().severe("Failed to load alliance homes: " + cause.getMessage());
+            getLogger().severe("Disabling SMPCore to prevent alliance-home data loss.");
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
         try {
             waystoneManager.loadAll().join();
         } catch (Exception e) {
@@ -284,7 +309,9 @@ public final class SMPCore extends JavaPlugin {
     @Override
     public void onDisable() {
         if (wildTeleportManager != null) wildTeleportManager.shutdown();
+        if (timedLocatorBarEvent != null) timedLocatorBarEvent.shutdown();
         if (warpManager != null) warpManager.shutdown();
+        if (allianceHomeManager != null) allianceHomeManager.shutdown();
         if (homeManager != null) homeManager.shutdown();
         if (deathChestListener != null) deathChestListener.shutdown();
         if (sustenanceTalismanListener != null) sustenanceTalismanListener.shutdown();
@@ -351,6 +378,7 @@ public final class SMPCore extends JavaPlugin {
         if (beastwardenManager != null) beastwardenManager.shutdown();
         if (blackMarketManager != null) blackMarketManager.shutdown();
         if (bossMasteryManager != null) bossMasteryManager.shutdown();
+        if (villagerManager != null) villagerManager.shutdown();
         if (storyService != null) storyService.shutdown();
         if (duelManager != null) duelManager.shutdown();
         if (essenceManager != null) essenceManager.shutdown();
@@ -373,10 +401,13 @@ public final class SMPCore extends JavaPlugin {
         pm.registerEvents(new MotdListener(this), this);
         pm.registerEvents(new PluginActivityLogger(this), this);
         pm.registerEvents(new MainMenuCommand(this), this);
+        staffManagerMenu = new StaffManagerMenu(this);
+        pm.registerEvents(staffManagerMenu, this);
         playerSettingsManager = new PlayerSettingsManager(this);
         pm.registerEvents(playerSettingsManager, this);
         playerControlListener = new PlayerControlListener(this);
         pm.registerEvents(playerControlListener, this);
+        pm.registerEvents(new VanishListener(this), this);
         craftingRulesListener = new CraftingRulesListener(this);
         pm.registerEvents(craftingRulesListener, this);
         combatLogListener = new CombatLogListener(this);
@@ -396,6 +427,9 @@ public final class SMPCore extends JavaPlugin {
         spawnProtectionListener = new SpawnProtectionListener(this);
         pm.registerEvents(spawnProtectionListener, this);
         spawnProtectionListener.start();
+        velocityNullifierListener = new VelocityNullifierListener(this);
+        pm.registerEvents(velocityNullifierListener, this);
+        velocityNullifierListener.start();
         smpStartManager = new SmpStartManager(this);
         pm.registerEvents(smpStartManager, this);
         smpStartManager.applyConfiguredState();
@@ -508,6 +542,13 @@ public final class SMPCore extends JavaPlugin {
         marketStallManager = new MarketStallManager(this);
         pm.registerEvents(marketStallManager, this);
         marketStallManager.start();
+        pm.registerEvents(new MaceDamageListener(), this);
+        pm.registerEvents(new TntMinecartDamageListener(), this);
+        villagerManager = new VillagerManager(this);
+        pm.registerEvents(villagerManager, this);
+        timedLocatorBarEvent = new TimedLocatorBarEvent(this);
+        pm.registerEvents(timedLocatorBarEvent, this);
+        timedLocatorBarEvent.start();
         duelManager = new DuelManager(this);
         pm.registerEvents(duelManager, this);
         duelManager.start();
@@ -610,6 +651,7 @@ public final class SMPCore extends JavaPlugin {
             WikiCommand.register(commands, this);
             ChangelogCommand.register(commands, this);
             MainMenuCommand.register(commands, this);
+            StaffManagerMenu.register(commands, this);
             SpawnProtectionCommand.register(commands, this);
             BlackjackCommand.register(commands, this);
             RouletteCommand.register(commands, this);
@@ -623,6 +665,7 @@ public final class SMPCore extends JavaPlugin {
             EssenceCommand.register(commands, this);
             PriestCommand.register(commands, this);
             GuideNpcCommand.register(commands, this);
+            NpcHomeCommand.register(commands, this);
             SpawnLifeCommand.register(commands, this);
             TavernCommand.register(commands, this);
             GoblinHuntCommand.register(commands, this);
@@ -632,16 +675,19 @@ public final class SMPCore extends JavaPlugin {
             CrossplayManager.registerCommands(commands, this);
             BedrockSkullCommand.register(commands, this);
             StoryCommand.register(commands, this);
+            VillagerCommand.register(commands, this);
 
             SMPCoreCommand.register(commands, this);
         });
     }
 
     public ConfigManager getConfigManager() { return configManager; }
+    public StaffManagerMenu getStaffManagerMenu() { return staffManagerMenu; }
     public ChangelogManager getChangelogManager() { return changelogManager; }
     public DatabaseManager getDatabase() { return databaseManager; }
     public SpawnerManager getSpawnerManager() { return spawnerManager; }
     public HomeManager getHomeManager() { return homeManager; }
+    public AllianceHomeManager getAllianceHomeManager() { return allianceHomeManager; }
     public WarpManager getWarpManager() { return warpManager; }
     public WildTeleportManager getWildTeleportManager() { return wildTeleportManager; }
     public PlayerManager getPlayerManager() { return playerManager; }
@@ -664,6 +710,7 @@ public final class SMPCore extends JavaPlugin {
     public BedrockSkullManager getBedrockSkullManager() { return bedrockSkullManager; }
     public BedrockFamiliarVisibilityManager getBedrockFamiliarVisibilityManager() { return bedrockFamiliarVisibilityManager; }
     public CombatLogListener getCombatLogListener() { return combatLogListener; }
+    public VillagerManager getVillagerManager() { return villagerManager; }
     public DeathChestListener getDeathChestListener() { return deathChestListener; }
     public DeathInventoryManager getDeathInventoryManager() { return deathInventoryManager; }
     public DamageNumberListener getDamageNumberListener() { return damageNumberListener; }
@@ -689,6 +736,7 @@ public final class SMPCore extends JavaPlugin {
     public XpLecternListener getXpLecternListener() { return xpLecternListener; }
     public BossPotionListener getBossPotionListener() { return bossPotionListener; }
     public SustenanceTalismanListener getSustenanceTalismanListener() { return sustenanceTalismanListener; }
+    public VelocityNullifierListener getVelocityNullifierListener() { return velocityNullifierListener; }
     public VeinMinerListener getVeinMinerListener() { return veinMinerListener; }
     public CraftingRulesListener getCraftingRulesListener() { return craftingRulesListener; }
     public WorldRulesListener getWorldRulesListener() { return worldRulesListener; }

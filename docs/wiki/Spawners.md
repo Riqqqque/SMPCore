@@ -46,6 +46,14 @@ When allowed, it gives a custom spawner item that preserves the tracked data ins
 - Stacked spawn count cap: 32.
 - Nearby entity cap: 96.
 
+## Performance
+
+- Stacked spawners scale by the square root of stack size instead of multiplying every spawn directly.
+- Spawn count and nearby-entity limits stay capped by the values under `spawner.performance` in `config.yml`.
+- Chunk loads preserve an active spawner countdown and skip tile-state writes when the saved settings already match.
+- Redstone clocks coalesce repeated hologram refreshes into one update per spawner per tick.
+- AI-nerfed mobs avoid pathfinding and targeting work while keeping normal farm physics.
+
 ## Common Problems
 
 - If a spawn egg does nothing, the player may not have `smpcore.spawner.use`.

@@ -20,6 +20,45 @@ dependencies:
       required: false
 
 permissions:
+  # Native portable villager compatibility
+  clickvillagers.pickup:
+    description: Pick up villagers with sneak-right-click
+    default: true
+  clickvillagers.place:
+    description: Place portable villagers
+    default: true
+  clickvillagers.hopper:
+    description: Use villager hoppers when enabled
+    default: true
+  clickvillagers.anchor:
+    description: Anchor villagers with shears
+    default: true
+  clickvillagers.claim:
+    description: Claim villagers with a shovel
+    default: true
+  clickvillagers.partner:
+    description: Manage villager trading partners
+    default: true
+  clickvillagers.change-biome:
+    description: Change a claimed villager's biome appearance
+    default: true
+  clickvillagers.bypass-claims:
+    description: Bypass villager ownership restrictions
+    default: op
+  clickvillagers.bypass-limits:
+    description: Bypass villager partner limits
+    default: op
+  clickvillagers.config:
+    description: Manage native villager settings and repairs
+    default: op
+  clickvillagers.bypass-cooldowns:
+    description: Bypass villager pickup and claim cooldowns
+    default: false
+
+  smpcore.manager:
+    description: Open the permission-aware staff command manager
+    default: op
+
   # Spawner
   smpcore.spawner.use:
     description: Silk-touch spawners and apply modifiers (sugar, redstone, eye of ender)
@@ -31,6 +70,9 @@ permissions:
   # Homes
   smpcore.home:
     description: Use /home, /sethome, /delhome, /homes
+    default: true
+  smpcore.allyhome:
+    description: Use alliance-shared homes
     default: true
   smpcore.home.multiple:
     description: Set more than one home (count controlled by config)
@@ -192,6 +234,9 @@ permissions:
     default: op
 
   # Admin
+  smpcore.staffmode:
+    description: Temporarily enable passive staff gameplay bypasses for the current session
+    default: op
   smpcore.dungeon.admin:
     description: Build inside the protected boss dungeon and use boss test loadouts
     default: op
@@ -214,7 +259,7 @@ permissions:
     description: Toggle fly for other players
     default: op
   smpcore.vanish:
-    description: Use /vanish
+    description: Use secure staff vanish and spectator vanish
     default: op
   smpcore.vanish.see:
     description: See vanished players
@@ -299,6 +344,12 @@ permissions:
     default: op
   smpcore.freeze:
     description: Use /freeze and /unfreeze
+    default: op
+  smpcore.ban:
+    description: Permanently ban player profiles with an optional reason
+    default: op
+  smpcore.kick:
+    description: Disconnect online players with an optional reason
     default: op
   smpcore.unban:
     description: Use /unban

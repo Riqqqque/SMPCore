@@ -6,6 +6,7 @@ import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.config.ConfigManager;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.GameMode;
@@ -125,8 +126,8 @@ public final class SpawnProtectionListener implements Listener {
     private static final String FLAG_WEATHER_LOCK = "weather-lock";
     private static final String FLAG_ENTITY_EDIT = "entity-edit";
     private static final long MESSAGE_THROTTLE_MS = 2500L;
-    private static final long MOB_CLEANUP_INTERVAL_TICKS = 100L;
-    private static final long[] MOB_CLEANUP_RECHECK_DELAYS_TICKS = {1L, 20L, 100L};
+    private static final long MOB_CLEANUP_INTERVAL_TICKS = 600L;
+    private static final long MOB_CLEANUP_SCHEDULE_DELAY_TICKS = 1L;
     private static final long MOB_DEBUG_LOG_THROTTLE_MS = 250L;
     private static final int MOB_DEBUG_MARGIN_BLOCKS = 32;
     private static final long ADMIN_SPAWN_EGG_WINDOW_MS = 2000L;
@@ -151,6 +152,7 @@ public final class SpawnProtectionListener implements Listener {
     private final NamespacedKey adminPlacedMobKey;
     private final GsitSeatBridge gsitSeatBridge;
     private BukkitTask cleanupTask;
+    private BukkitTask scheduledCleanupTask;
     private long nextMobDebugLogAt;
     private int skippedMobDebugLogs;
 
@@ -173,10 +175,12 @@ public final class SpawnProtectionListener implements Listener {
         cleanupTask = Bukkit.getScheduler().runTaskTimer(
             plugin,
             () -> {
-                cleanupProtectedSpawnMobs();
+                if (scheduledCleanupTask == null) {
+                    cleanupProtectedSpawnMobs();
+                }
                 cleanupTransientAllowances();
             },
-            20L,
+            MOB_CLEANUP_INTERVAL_TICKS,
             MOB_CLEANUP_INTERVAL_TICKS
         );
         scheduleProtectedSpawnMobCleanup();
@@ -187,6 +191,10 @@ public final class SpawnProtectionListener implements Listener {
         if (cleanupTask != null) {
             cleanupTask.cancel();
             cleanupTask = null;
+        }
+        if (scheduledCleanupTask != null) {
+            scheduledCleanupTask.cancel();
+            scheduledCleanupTask = null;
         }
         nextMessageAt.clear();
         adminSpawnEggAllowances.clear();
@@ -371,9 +379,9 @@ public final class SpawnProtectionListener implements Listener {
         if (player == null) {
             return false;
         }
-        return canBypassSpawnProtection(player)
-            || player.hasPermission("smpcore.spawnprotect.admin")
-            || player.hasPermission("smpcore.spawnprotect.build")
+        return OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.spawnprotect.admin")
+            || OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.spawnprotect.build")
+            || canBypassSpawnProtection(player)
             || plugin.getConfigManager().isSpawnProtectionBuilder(
                 player.getName(),
                 player.getUniqueId().toString()
@@ -1328,7 +1336,7 @@ public final class SpawnProtectionListener implements Listener {
         for (var affected : event.getAffectedEntities()) {
             if (affected instanceof Player victim && (potionInSpawn || isProtected(victim.getLocation()))) {
                 if (plugin.getDuelManager() != null
-                    && plugin.getDuelManager().areOpponents(shooter.getUniqueId(), victim.getUniqueId())) continue;
+                    && plugin.getDuelManager().allowsDuelPotionEffect(shooter, victim, event.getPotion().getEffects())) continue;
                 event.setIntensity(victim, 0.0);
             }
         }
@@ -1734,7 +1742,7 @@ public final class SpawnProtectionListener implements Listener {
     }
 
     private boolean canBypassSpawnProtection(Player player) {
-        return player != null && (player.isOp() || player.hasPermission("smpcore.spawnprotect.bypass"));
+        return OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.spawnprotect.bypass");
     }
 
     private boolean shouldKeepOutOfSpawn(Entity entity) {
@@ -1771,12 +1779,14 @@ public final class SpawnProtectionListener implements Listener {
 
     private void scheduleProtectedSpawnMobCleanup(World world) {
         if (!shouldCleanProtectedSpawnMobs(plugin.getConfigManager())
-            || !isActiveProtectionWorld(world, plugin.getConfigManager())) {
+            || !isActiveProtectionWorld(world, plugin.getConfigManager())
+            || scheduledCleanupTask != null) {
             return;
         }
-        for (long delay : MOB_CLEANUP_RECHECK_DELAYS_TICKS) {
-            Bukkit.getScheduler().runTaskLater(plugin, () -> cleanupProtectedSpawnMobs(), delay);
-        }
+        scheduledCleanupTask = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            scheduledCleanupTask = null;
+            cleanupProtectedSpawnMobs();
+        }, MOB_CLEANUP_SCHEDULE_DELAY_TICKS);
     }
 
     private int cleanupProtectedSpawnMobsInChunk(Chunk chunk) {

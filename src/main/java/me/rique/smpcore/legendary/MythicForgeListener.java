@@ -731,7 +731,7 @@ public final class MythicForgeListener implements Listener {
         }
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onKick(PlayerKickEvent event) {
         returnOpenForgeInputs(event.getPlayer());
     }

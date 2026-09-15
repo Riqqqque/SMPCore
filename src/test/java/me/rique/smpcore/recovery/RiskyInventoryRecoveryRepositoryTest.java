@@ -1,5 +1,6 @@
 package me.rique.smpcore.recovery;
 
+import org.bukkit.Material;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -69,5 +70,29 @@ class RiskyInventoryRecoveryRepositoryTest {
             RiskyInventoryRecoveryManager.snapshotDigest(List.of(moved)));
         assertNotEquals(RiskyInventoryRecoveryManager.snapshotDigest(List.of(first)),
             RiskyInventoryRecoveryManager.snapshotDigest(List.of(changed)));
+    }
+
+    @Test
+    void shulkersFlushImmediatelyAndSnapshotDedupeExpires() {
+        assertTrue(RiskyInventoryRecoveryManager.isShulkerMaterial(Material.SHULKER_BOX));
+        assertTrue(RiskyInventoryRecoveryManager.isShulkerMaterial(Material.RED_SHULKER_BOX));
+        assertFalse(RiskyInventoryRecoveryManager.isShulkerMaterial(Material.CHEST));
+
+        var previous = new RiskyInventoryRecoveryManager.SnapshotFingerprint("same", 10_000L);
+        assertTrue(RiskyInventoryRecoveryManager.shouldSkipDuplicateSnapshot(previous, "same", 14_999L));
+        assertFalse(RiskyInventoryRecoveryManager.shouldSkipDuplicateSnapshot(previous, "same", 15_000L));
+        assertFalse(RiskyInventoryRecoveryManager.shouldSkipDuplicateSnapshot(previous, "different", 10_001L));
+        assertFalse(RiskyInventoryRecoveryManager.shouldSkipDuplicateSnapshot(previous, "same", 9_999L));
+    }
+
+    @Test
+    void claimChecksRequireAnExactSerializedItemMatch() {
+        assertTrue(RiskyInventoryRecoveryManager.serializedItemsMatch(
+            new byte[] {1, 2, 3}, new byte[] {1, 2, 3}
+        ));
+        assertFalse(RiskyInventoryRecoveryManager.serializedItemsMatch(
+            new byte[] {1, 2, 3}, new byte[] {1, 2, 4}
+        ));
+        assertFalse(RiskyInventoryRecoveryManager.serializedItemsMatch(null, new byte[] {1}));
     }
 }

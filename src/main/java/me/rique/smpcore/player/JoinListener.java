@@ -2,6 +2,7 @@ package me.rique.smpcore.player;
 
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
@@ -32,6 +33,7 @@ public final class JoinListener implements Listener {
         boolean firstJoin = !player.hasPlayedBefore();
         event.joinMessage(null);
 
+        OperatorGameplayMode.setStaffMode(player, false);
         plugin.getHomeManager().preload(player.getUniqueId());
         plugin.getPlayerManager().applyVanishToNewPlayer(player);
         boolean suppressFirstJoinAnnouncement = firstJoin
@@ -70,9 +72,15 @@ public final class JoinListener implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
-        String resolved = applyJoinPlaceholders(plugin.getConfigManager().quit, player.getName(), 0);
-        event.quitMessage(MessageUtil.prefixedRaw(resolved));
+        boolean vanished = plugin.getPlayerManager().isVanished(player.getUniqueId());
+        if (vanished) {
+            event.quitMessage(null);
+        } else {
+            String resolved = applyJoinPlaceholders(plugin.getConfigManager().quit, player.getName(), 0);
+            event.quitMessage(MessageUtil.prefixedRaw(resolved));
+        }
 
+        OperatorGameplayMode.setStaffMode(player, false);
         plugin.getPlayerManager().onDisconnect(player);
         plugin.getHomeManager().unload(player.getUniqueId());
         plugin.getWaystoneManager().unloadPlayer(player.getUniqueId());

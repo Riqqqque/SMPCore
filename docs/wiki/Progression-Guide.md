@@ -34,7 +34,7 @@ Boss health, damage, target counts, and mechanic pressure scale with the survivi
 ## Seasonal gear versus legendary gear
 
 - **Armory of the Veil gear** is the main PvE route. Its weapons deal extra damage in custom boss encounters and reduced damage to players.
-- **Boss armor** has high durability, per-piece boss defense, matching-set defenses, and a small full-set player-damage bonus.
+- **Boss armor** has high durability and mix-and-match utility and offense perks. Special damage mitigation is reserved for a matching four-piece set.
 - **Legendary and Mythic relics** are the main PvP chase. They are unique, tracked, and usually have cooldowns or conditional power.
 - **Boss Mastery** rewards repeated legitimate wins with Essence, useful materials, Huntmarks, armor pieces, and unique utilities.
 

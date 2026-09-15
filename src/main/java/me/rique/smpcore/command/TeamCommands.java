@@ -259,6 +259,58 @@ public final class TeamCommands {
                         player.sendMessage(plugin.getTeamManager().alliesMessage(player.getUniqueId()));
                         return Command.SINGLE_SUCCESS;
                     }))
+                .then(Commands.literal("damage")
+                    .executes(ctx -> updateTeamDamage((Player) ctx.getSource().getSender(), plugin, null))
+                    .then(Commands.literal("on")
+                        .executes(ctx -> updateTeamDamage((Player) ctx.getSource().getSender(), plugin, true)))
+                    .then(Commands.literal("off")
+                        .executes(ctx -> updateTeamDamage((Player) ctx.getSource().getSender(), plugin, false)))
+                    .then(Commands.literal("toggle")
+                        .executes(ctx -> updateTeamDamage((Player) ctx.getSource().getSender(), plugin, null)))
+                    .then(Commands.literal("status")
+                        .executes(ctx -> {
+                            Player player = (Player) ctx.getSource().getSender();
+                            player.sendMessage(plugin.getTeamManager().teamDamageStatusMessage(player.getUniqueId()));
+                            return Command.SINGLE_SUCCESS;
+                        })))
+                .then(Commands.literal("captain")
+                    .executes(ctx -> {
+                        Player player = (Player) ctx.getSource().getSender();
+                        player.sendMessage(plugin.getTeamManager().captainStatusMessage(player.getUniqueId()));
+                        return Command.SINGLE_SUCCESS;
+                    })
+                    .then(Commands.literal("list")
+                        .executes(ctx -> {
+                            Player player = (Player) ctx.getSource().getSender();
+                            player.sendMessage(plugin.getTeamManager().captainStatusMessage(player.getUniqueId()));
+                            return Command.SINGLE_SUCCESS;
+                        }))
+                    .then(Commands.literal("add")
+                        .then(Commands.argument("member", StringArgumentType.word())
+                            .suggests((ctx, builder) -> suggestTeamMembers(
+                                plugin,
+                                (Player) ctx.getSource().getSender(),
+                                builder
+                            ))
+                            .executes(ctx -> updateCaptain(
+                                (Player) ctx.getSource().getSender(),
+                                plugin,
+                                StringArgumentType.getString(ctx, "member"),
+                                true
+                            ))))
+                    .then(Commands.literal("remove")
+                        .then(Commands.argument("member", StringArgumentType.word())
+                            .suggests((ctx, builder) -> suggestTeamMembers(
+                                plugin,
+                                (Player) ctx.getSource().getSender(),
+                                builder
+                            ))
+                            .executes(ctx -> updateCaptain(
+                                (Player) ctx.getSource().getSender(),
+                                plugin,
+                                StringArgumentType.getString(ctx, "member"),
+                                false
+                            )))))
                 .then(Commands.literal("leave")
                     .executes(ctx -> {
                         Player player = (Player) ctx.getSource().getSender();
@@ -378,6 +430,44 @@ public final class TeamCommands {
         return Command.SINGLE_SUCCESS;
     }
 
+    private static int updateTeamDamage(Player player, SMPCore plugin, Boolean enabled) {
+        plugin.getTeamManager().setTeamDamage(player, enabled)
+            .thenAccept(error -> Bukkit.getScheduler().runTask(plugin, () -> {
+                if (player.isOnline() && error != null) {
+                    player.sendMessage(MessageUtil.error(error));
+                }
+            }))
+            .exceptionally(ex -> {
+                plugin.getLogger().severe("team damage failed: " + ex.getMessage());
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (player.isOnline()) {
+                        player.sendMessage(MessageUtil.error("Could not change team damage right now."));
+                    }
+                });
+                return null;
+            });
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int updateCaptain(Player player, SMPCore plugin, String member, boolean promote) {
+        plugin.getTeamManager().setCaptain(player, member, promote)
+            .thenAccept(error -> Bukkit.getScheduler().runTask(plugin, () -> {
+                if (player.isOnline() && error != null) {
+                    player.sendMessage(MessageUtil.error(error));
+                }
+            }))
+            .exceptionally(ex -> {
+                plugin.getLogger().severe("team captain failed: " + ex.getMessage());
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (player.isOnline()) {
+                        player.sendMessage(MessageUtil.error("Could not update that captain right now."));
+                    }
+                });
+                return null;
+            });
+        return Command.SINGLE_SUCCESS;
+    }
+
     private static CompletableFuture<Suggestions> suggestTeams(SMPCore plugin, SuggestionsBuilder builder) {
         String input = builder.getRemainingLowerCase();
         for (String name : plugin.getTeamManager().teamNames()) {
@@ -386,6 +476,17 @@ public final class TeamCommands {
             }
         }
         return builder.buildFuture();
+    }
+
+    private static CompletableFuture<Suggestions> suggestTeamMembers(
+        SMPCore plugin,
+        Player player,
+        SuggestionsBuilder builder
+    ) {
+        return CommandSuggestionUtil.suggestMatching(
+            builder,
+            plugin.getTeamManager().teamMemberNames(player.getUniqueId())
+        );
     }
 
     private static TeamCreateInput parseCreateInput(String raw, TeamManager teamManager) {

@@ -359,7 +359,7 @@ public final class CrossplayManager implements Listener {
         return material == Material.ANVIL || material == Material.CHIPPED_ANVIL || material == Material.DAMAGED_ANVIL;
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onCrossplayKick(PlayerKickEvent event) {
         returnOpenCrossplayAnvilInputs(event.getPlayer());
     }

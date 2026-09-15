@@ -4,49 +4,33 @@ The market stall's built-in sale sign is reserved for buying the stall. It canno
 
 Player shops sell items from a protected chest. The stock stays in the chest, while buyer payments are held safely outside it until the owner collects them.
 
-Use `/shops` or `/shop` in game for the short setup guide.
+Use `/shops` or `/shop` to open the shop hub and collect waiting payments.
 
 ## Quick Setup
 
 1. Place a chest or trapped chest. Make it a double chest now if you want more stock space.
 2. Put at least one copy of the item you want to sell inside.
-3. Shift-place a normal wall sign directly onto the chest.
-4. Enter these four lines:
-
-```text
-[shop]
-chest
-1
-5 diamond
-```
-
-That sells one copy of the first item in the chest for five diamonds.
+3. Shift-place a normal wall sign directly onto the chest. The sign can be blank.
+4. Right-click the sign.
+5. Choose the exact item, amount, price, and currency in the setup menu, then press **Create Shop**.
 
 Inside a rented market stall, signs can only be attached directly to a chest or trapped chest. Freestanding and hanging signs are blocked.
 
-## Sign Lines
+## Setup Menu
 
-- Line 1: `[shop]` (the `[shops]` alias also works)
-- Line 2: `chest` for the first item in the chest, or a vanilla item id.
-- Line 3: amount sold per purchase, from 1 to 64 by default.
-- Line 4: price followed by the currency.
+- The item row shows distinct item types currently in the stock chest. Use the page arrows when a chest has more than nine.
+- Tap an item to select the exact version being sold, including its name, lore, enchants, and durability.
+- Use the item buttons to set how many copies one purchase gives.
+- Use the price buttons and currency arrows to set the cost.
+- Press **Create Shop** only when the summary is correct.
 
-Use `chest` for custom, renamed, enchanted, or damaged items. It records the exact sample item. Legendary items cannot be sold through player shops.
+The selected item must remain in the chest until setup is saved. Legendary items cannot be sold through player shops.
 
 Enchanted-book shops show the book's enchantment and level on line 2. Books with several stored enchants show the first enchant plus the number of additional enchants. Existing generic `Enchanted Book` signs refresh the next time someone right-clicks them.
 
 ## Currencies
 
 Shops accept plain vanilla coal, copper ingots, iron ingots, gold ingots, redstone, lapis, emeralds, diamonds, netherite ingots, or Essence.
-
-Examples:
-
-```text
-5 coal
-12 iron
-8 emerald
-25 essence
-```
 
 Custom items that reuse one of those vanilla materials do not count as payment.
 
@@ -60,7 +44,9 @@ Custom items that reuse one of those vanilla materials do not count as payment.
 
 ## Buying
 
-Right-click the shop sign. The purchase only completes if the shop has stock, the buyer has enough currency, and the bought items fit after payment is removed. If a check fails, nothing moves.
+Right-click the shop sign to see its exact item, price, stock, and your available currency. Press **Buy Once** to confirm. The menu refreshes after each attempt, so you can keep buying without reopening it.
+
+The purchase only completes if the shop has stock, the buyer has enough currency, and the bought items fit after payment is removed. If a check fails, nothing moves.
 
 ## Rented Market Stalls
 
@@ -75,7 +61,7 @@ Inside an owned stall, its owner and trusted managers may:
 
 Players cannot modify cherry, pale, spruce, shelf, or trapdoor blocks. They cannot place signs anywhere except directly on shop chests. The rest of the premade stall stays protected from breaking, fire, explosions, flowing liquids, pistons, mobs, and hoppers.
 
-Only the stall owner, a trusted manager, or a shop admin can edit ordinary signs in an owned stall. Active shop signs and the stall's built-in sale sign are server-managed and cannot be rewritten, dyed, made glowing, or waxed; break and recreate an active player shop to change it.
+Only the stall owner, a trusted manager, or a shop admin can edit ordinary signs in an owned stall. Active shop signs and the stall's built-in sale sign are server-managed and cannot be rewritten, dyed, made glowing, or waxed. Right-click an active shop sign to use its management menu.
 
 Owners may toggle up to five trusted managers with `/stall manager <player>`. Managers can stock and open storage, place or remove approved fixtures, and create or rebuild chest shops. Shops they create still belong to and pay the stall owner. Managers cannot sell, transfer, restore, or change access, and they remain normal paying customers when using shop signs. Manager access is cleared automatically if ownership changes.
 
@@ -88,7 +74,7 @@ Useful commands:
 - `/stall manager` or `/stall managers` - list trusted managers.
 - `/stall transfer <player>` - offer the stall and its active shops to another player.
 - `/stall sell` - sell it back for 75% of its listed price after removing player fixtures.
-- `/shops` - show the chest-shop sign format.
+- `/shops` - open the chest-shop hub and collect payments.
 
 ## Admin Restore Tools
 
@@ -105,11 +91,13 @@ Do not edit the compressed template payload by hand. Keep a backup of `market-st
 
 ## Admin Shops
 
-Admins with `smpcore.shop.admin` can create infinite server shops by using `[adminshop]` or `[ashop]` on line 1. The other lines use the normal format. Admin shops do not consume stock, and buyer payments are removed from the game.
+Admins with `smpcore.shop.admin` can toggle **Admin Shop** in the setup menu. Admin shops do not consume stock, and buyer payments are removed from the game instead of being stored as an owner payout.
 
-## Editing Or Removing A Shop
+## Managing Or Removing A Shop
 
-- Break the sign and recreate it to change the item, amount, price, or currency.
+- Right-click an active sign to change the item, amount, price, or currency.
+- The same menu shows payment collection and a two-tap **Close Shop** control.
+- Closing a shop removes its protection and sale data but leaves every stock item in the chest.
 - The owner, trusted stall managers, OPs, and players with `smpcore.shop.admin` can break a shop.
 - Other players cannot open its stock chest.
 - A single chest cannot be expanded after the shop is created. Break the sign, make the double chest, and recreate the shop.
@@ -118,9 +106,8 @@ Admins with `smpcore.shop.admin` can create infinite server shops by using `[adm
 
 - `Attach the shop sign to the front of a chest or double chest.`: the wall sign is not attached directly to a chest.
 - `Inside your stall, attach a wall sign directly to a chest or trapped chest.`: the sign is outside your stall, not attached, or belongs to another stall.
-- `Line 3 must be the amount sold per purchase.`: use a number such as `1`, `8`, or `64`.
-- `Line 4 must be a price and supported currency.`: use a value such as `5 diamond` or `25 essence`.
-- `Put the sold item in the chest, then use 'chest' on line 2.`: no valid sample item was found.
+- `Put the item you want to sell in the chest first.`: the stock chest is empty.
+- `The selected item is no longer in the chest.`: put that exact item back before saving.
 - `That shop is out of stock.`: add more copies of the stored item.
 - `Clear inventory space before buying this.`: the purchase result will not fit safely.
 

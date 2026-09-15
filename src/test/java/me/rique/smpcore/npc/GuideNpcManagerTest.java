@@ -3,7 +3,10 @@ package me.rique.smpcore.npc;
 import org.junit.jupiter.api.Test;
 import org.bukkit.entity.EntityType;
 
+import java.util.Set;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GuideNpcManagerTest {
@@ -57,5 +60,20 @@ class GuideNpcManagerTest {
         assertTrue(GuideNpcManager.GuideNpcType.TAVERN_HOST.isSpawnLife());
         assertTrue(GuideNpcManager.GuideNpcType.TAVERN_REGULAR.isSpawnLife());
         assertTrue(GuideNpcManager.GuideNpcType.TAVERN_TIPSY.isSpawnLife());
+    }
+
+    @Test
+    void npcAnchorsRecognizeOnlySmpcoreManagedEntities() {
+        assertTrue(NpcAnchorStore.hasManagedNpcTag(Set.of("smpcore_npc", "smpcore_mayor_npc")));
+        assertFalse(NpcAnchorStore.hasManagedNpcTag(Set.of("NPC", "citizens_npc")));
+        assertFalse(NpcAnchorStore.hasManagedNpcTag(Set.of()));
+    }
+
+    @Test
+    void npcAnchorRestorationUsesATightToleranceAndRejectsInvalidDistances() {
+        assertFalse(GuideNpcManager.npcPositionNeedsRestore(0.0025D));
+        assertTrue(GuideNpcManager.npcPositionNeedsRestore(0.0026D));
+        assertTrue(GuideNpcManager.npcPositionNeedsRestore(Double.NaN));
+        assertTrue(GuideNpcManager.npcPositionNeedsRestore(Double.POSITIVE_INFINITY));
     }
 }

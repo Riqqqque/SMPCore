@@ -33,7 +33,7 @@ While summoned, Morrow grants:
 - Each thrown splash or lingering potion has a 5% chance to gain one valid vanilla level.
 - Already-maxed effects and boss potions are never upgraded.
 
-Boss materials cannot be inserted into a brewing stand until the Moonlit Thesis is complete. Hoppers and other automation cannot bypass the unlock.
+Boss Brew recipes can be previewed from the Bosses menu before the Moonlit Thesis is complete. Boss materials still cannot be inserted into a brewing stand until the lesson is complete, and hoppers or other automation cannot bypass the unlock. Every Strength effect made by a Boss Brew lasts eight minutes; its listed amplifier is unchanged.
 
 ## Familiar Rules
 

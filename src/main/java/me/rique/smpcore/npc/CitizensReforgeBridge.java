@@ -5,6 +5,7 @@ import me.rique.smpcore.item.ReforgeManager;
 import net.citizensnpcs.api.CitizensAPI;
 import net.citizensnpcs.api.event.DespawnReason;
 import net.citizensnpcs.api.event.NPCDespawnEvent;
+import net.citizensnpcs.api.event.NPCPushEvent;
 import net.citizensnpcs.api.event.NPCRightClickEvent;
 import net.citizensnpcs.api.event.NPCSpawnEvent;
 import net.citizensnpcs.api.event.SpawnReason;
@@ -171,6 +172,13 @@ public final class CitizensReforgeBridge implements ReforgeNpcBridge, Listener {
         Bukkit.getScheduler().runTask(plugin, () -> reforgeManager.openReforgeMenuFromNpc(clicker));
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onNpcPush(NPCPushEvent event) {
+        if (isReforgerNpc(event.getNPC())) {
+            event.setCancelled(true);
+        }
+    }
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onNpcSpawn(NPCSpawnEvent event) {
         if (isReforgerNpc(event.getNPC())) {
@@ -237,6 +245,9 @@ public final class CitizensReforgeBridge implements ReforgeNpcBridge, Listener {
         entity.getPersistentDataContainer().set(npcKey, PersistentDataType.BYTE, (byte) 1);
         entity.addScoreboardTag("smpcore_npc");
         entity.addScoreboardTag("smpcore_reforge_npc");
+        if (plugin.getGuideNpcManager() != null) {
+            plugin.getGuideNpcManager().trackNpc(entity, entity.getLocation());
+        }
         entity.setInvulnerable(true);
         entity.setSilent(true);
         if (entity instanceof LivingEntity living) {

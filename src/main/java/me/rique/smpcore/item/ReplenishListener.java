@@ -295,6 +295,14 @@ public final class ReplenishListener implements Listener {
         return hoe;
     }
 
+    public boolean removeReplenish(ItemStack item) {
+        if (!hasReplenish(item)) {
+            return false;
+        }
+        stripReplenish(item);
+        return true;
+    }
+
     public ItemStack preserveReplenish(ItemStack source, ItemStack result) {
         if (!hasReplenish(source) || result == null || result.getType().isAir() || !isHoe(result)) {
             return result;

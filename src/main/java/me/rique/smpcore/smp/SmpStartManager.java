@@ -3,6 +3,7 @@ package me.rique.smpcore.smp;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.config.ConfigManager;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import me.rique.smpcore.util.PluginCommandRoots;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -399,7 +400,8 @@ public final class SmpStartManager implements Listener {
         }
 
         Player player = event.getPlayer();
-        if (player.hasPermission("smpcore.startsmp.bypass-dimension-lock") || isDimensionUnlocked(destination)) {
+        if (OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.startsmp.bypass-dimension-lock")
+            || isDimensionUnlocked(destination)) {
             return;
         }
 
@@ -410,11 +412,14 @@ public final class SmpStartManager implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPreStartPluginCommand(PlayerCommandPreprocessEvent event) {
         Player player = event.getPlayer();
+        String root = commandRoot(event.getMessage());
+        if (root.equals("staffmode") || root.equals("opmode")) {
+            return;
+        }
         if (!shouldBlockPreStartCommand(player)) {
             return;
         }
 
-        String root = commandRoot(event.getMessage());
         boolean publicWarp = plugin.getWarpManager() != null && plugin.getWarpManager().isWarpCommand(root);
         if (!PluginCommandRoots.contains(root) && !publicWarp) {
             return;
@@ -650,7 +655,7 @@ public final class SmpStartManager implements Listener {
     private boolean isPreStartBarrierSubject(Player player) {
         return player != null
             && (preStartBarrierPreviewers.contains(player.getUniqueId())
-                || (!player.isOp() && !player.hasPermission("smpcore.startsmp.bypass-dimension-lock")));
+                || !OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.startsmp.bypass-dimension-lock"));
     }
 
     private void clearPreStartPlayerBorder(Player player) {
@@ -900,14 +905,14 @@ public final class SmpStartManager implements Listener {
 
     private boolean shouldBlockPreStartCommand(Player player) {
         return player != null
-            && !player.isOp()
+            && !OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.startsmp.bypass-dimension-lock")
             && plugin.getConfigManager().smpLockPluginCommandsBeforeStart
             && isPreStartLocked();
     }
 
     private boolean shouldBlockPreStartBlockEdit(Player player, World world) {
         return player != null
-            && !player.isOp()
+            && !OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.startsmp.bypass-dimension-lock")
             && plugin.getConfigManager().smpLockBlockEditsBeforeStart
             && isPreStartLocked()
             && isPreStartProtectedWorld(world);
@@ -915,7 +920,7 @@ public final class SmpStartManager implements Listener {
 
     private boolean isProtectedPreStartMember(Player player) {
         return player != null
-            && !player.isOp()
+            && !OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.startsmp.bypass-dimension-lock")
             && isPreStartLocked()
             && isInsidePreStartBarrier(player.getLocation());
     }

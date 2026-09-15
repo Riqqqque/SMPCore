@@ -1,6 +1,9 @@
 package me.rique.smpcore.boss;
 
+import org.bukkit.Material;
 import org.junit.jupiter.api.Test;
+
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -37,6 +40,49 @@ class BossBalanceTest {
         assertEquals("voralith_the_crimson_warden", bosses.get(8).bossId());
         assertEquals(27.0, bosses.get(7).attackDamage());
         assertEquals(0.05, BossBalance.RUNEBLOOM_WITCH_ORB_DROP_CHANCE);
+    }
+
+    @Test
+    void tierFourAndFiveSpecialMaterialsAreCommonWithoutBeingGuaranteed() {
+        assertEquals(0.70, BossBalance.BRIARHEART_DROP_CHANCE);
+        assertEquals(0.70, BossBalance.TIDEVEIL_HEART_DROP_CHANCE);
+        assertTrue(BossBalance.BRIARHEART_DROP_CHANCE < 1.0);
+        assertTrue(BossBalance.TIDEVEIL_HEART_DROP_CHANCE < 1.0);
+    }
+
+    @Test
+    void everyBossHasSeparateTieredMiscRewards() {
+        for (BossBalance.Profile boss : BossBalance.progression()) {
+            var drops = BossBalance.miscDrops(boss.bossId());
+            assertFalse(drops.isEmpty(), boss.bossId() + " should have miscellaneous rewards");
+            assertTrue(drops.stream().anyMatch(drop -> drop.chance() == 1.0),
+                boss.bossId() + " should always give one miscellaneous reward");
+            assertTrue(drops.stream().allMatch(drop ->
+                drop.minimumAmount() > 0
+                    && drop.maximumAmount() >= drop.minimumAmount()
+                    && drop.chance() > 0.0
+                    && drop.chance() <= 1.0
+                    && drop.maximumAmount() <= 64));
+        }
+
+        Set<Material> earlyRewards = BossBalance.progression().subList(0, 3).stream()
+            .flatMap(boss -> BossBalance.miscDrops(boss.bossId()).stream())
+            .map(BossBalance.MiscDrop::material)
+            .collect(java.util.stream.Collectors.toSet());
+        assertFalse(earlyRewards.contains(Material.DIAMOND));
+        assertFalse(earlyRewards.contains(Material.NETHERITE_SCRAP));
+        assertTrue(BossBalance.miscDrops("corrupted_oathkeeper").stream()
+            .anyMatch(drop -> drop.material() == Material.NETHERITE_SCRAP));
+    }
+
+    @Test
+    void signatureRelicsStayWithTheirIntendedBosses() {
+        assertTrue(BossBalance.allowsRelicDrop("vesper_the_widow_queen", "widow_silk"));
+        assertFalse(BossBalance.allowsRelicDrop("vesper_the_widow_queen", "verdant_heart"));
+        assertFalse(BossBalance.allowsRelicDrop("kael_the_ashen", "titan_gear"));
+        assertTrue(BossBalance.allowsRelicDrop("mirewood_the_root_tyrant", "verdant_heart"));
+        assertTrue(BossBalance.allowsRelicDrop("iron_saint", "titan_gear"));
+        assertFalse(BossBalance.allowsRelicDrop("unknown_boss", "verdant_heart"));
     }
 
     @Test
@@ -99,6 +145,29 @@ class BossBalanceTest {
         assertEquals(0.92, BossBalance.routineAbilityDamageScale(6));
         assertEquals(0.90, BossBalance.routineAbilityDamageScale(10));
         assertEquals(0.98, BossBalance.mechanicFailureHealthRatio(10));
+    }
+
+    @Test
+    void armorRequirementsFollowThePreviousCraftableBossSet() {
+        assertEquals(0, BossBalance.requiredArmorPathTier(1));
+        assertEquals(0, BossBalance.requiredArmorPathTier(3));
+        assertEquals(3, BossBalance.requiredArmorPathTier(4));
+        assertEquals(3, BossBalance.requiredArmorPathTier(5));
+        assertEquals(5, BossBalance.requiredArmorPathTier(6));
+        assertEquals(6, BossBalance.requiredArmorPathTier(7));
+        assertEquals(7, BossBalance.requiredArmorPathTier(8));
+        assertEquals(7, BossBalance.requiredArmorPathTier(9));
+        assertEquals(9, BossBalance.requiredArmorPathTier(10));
+    }
+
+    @Test
+    void missingArmorDamageRisesWithBossTierAndStopsAtTierTen() {
+        assertEquals(1.0, BossBalance.missingArmorDamageMultiplier(3, false));
+        assertEquals(1.15, BossBalance.missingArmorDamageMultiplier(4, false), 0.001);
+        assertEquals(1.30, BossBalance.missingArmorDamageMultiplier(7, false), 0.001);
+        assertEquals(1.45, BossBalance.missingArmorDamageMultiplier(10, false), 0.001);
+        assertEquals(1.45, BossBalance.missingArmorDamageMultiplier(20, false), 0.001);
+        assertEquals(1.0, BossBalance.missingArmorDamageMultiplier(10, true));
     }
 
     @Test

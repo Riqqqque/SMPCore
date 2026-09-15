@@ -705,7 +705,7 @@ public final class XpLecternListener implements Listener {
 
     private void syncChunkLecterns(Chunk chunk) {
         removeStaleChunkHolograms(chunk);
-        for (BlockState tile : chunk.getTileEntities()) {
+        for (BlockState tile : chunk.getTileEntities(false)) {
             Block block = tile.getBlock();
             if (isLecternBlock(block)) {
                 ensureHologram(block);

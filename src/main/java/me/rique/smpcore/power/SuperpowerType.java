@@ -21,12 +21,13 @@ public enum SuperpowerType {
     THE_WORLD("The World", 0.04, Material.CLOCK, null),
     ORACLE_EYE("Oracle Eye", 0.03, Material.SPYGLASS, "Use /xray"),
     PROSPECTOR("Prospector", 0.065, Material.DIAMOND_PICKAXE, null),
+    PHYSICALLY_GIFTED("Physically Gifted", 0.005, Material.MACE, null),
     TITAN("Titan", 0.075, Material.ANVIL, null),
     SKYBOUND("Skybound", 0.025, Material.FEATHER, null),
     TIDEBORN("Tideborn", 0.02, Material.HEART_OF_THE_SEA, null),
     ASHEN_SOUL("Ashen Soul", 0.02, Material.BLAZE_POWDER, null),
     VOIDWALKER("Voidwalker", 0.035, Material.ENDER_EYE, "Sneak-right-click with an empty hand to Voidstep; use /voidvision for night vision"),
-    SENTINEL("Sentinel", 0.05, Material.IRON_CHESTPLATE, null),
+    SENTINEL("Sentinel", 0.05, Material.IRON_CHESTPLATE, "Use /bulwark"),
     FROSTBORN("Frostborn", 0.05, Material.BLUE_ICE, null),
     DEADEYE("Deadeye", 0.05, Material.CROSSBOW, "Use /deadeyearrows"),
     RIFTWARDEN("Riftwarden", 0.035, Material.ENDER_CHEST, null),
@@ -95,6 +96,7 @@ public enum SuperpowerType {
         addAlias(lookup, THE_WORLD, "world", "theworld", "time stop", "timestop");
         addAlias(lookup, ORACLE_EYE, "xray vision", "xray", "x ray", "x-ray", "oracle");
         addAlias(lookup, PROSPECTOR, "miner");
+        addAlias(lookup, PHYSICALLY_GIFTED, "physical", "gifted", "physically gifted", "heavenly restriction");
         addAlias(lookup, TITAN, "giant");
         addAlias(lookup, SKYBOUND, "superman");
         addAlias(lookup, TIDEBORN, "waterman", "water man");

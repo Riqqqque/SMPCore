@@ -6,6 +6,7 @@ import me.rique.smpcore.npc.GuideNpcManager.GuideNpcType;
 import me.rique.smpcore.util.AtomicYamlFile;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.GameAnnouncementUtil;
 import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.ItemEscrowService;
 import me.rique.smpcore.util.ItemEscrowService.EscrowedItem;
@@ -1067,14 +1068,14 @@ public final class TavernManager implements Listener {
         return switch (currency) { case "essence" -> "Essence"; case "iron" -> "Iron Ingots"; case "gold" -> "Gold Ingots"; case "diamond" -> "Diamonds"; default -> currency; };
     }
 
-    private void announceGameResult(BlockKey station, String message, Sound sound, float pitch, Set<UUID> soundExclusions) {
+    private void announceGameResult(BlockKey station, Player fallbackPlayer, String message, Sound sound, float pitch, Set<UUID> soundExclusions) {
         Location location = station == null ? null : station.location();
-        if (location == null || location.getWorld() == null) return;
         Component component = MM.deserialize(message);
-        for (Player nearby : location.getWorld().getPlayers()) {
-            if (nearby.getLocation().distanceSquared(location) > 256.0D) continue;
-            BedrockCompat.sendGameMessage(nearby, component);
-            if (!soundExclusions.contains(nearby.getUniqueId())) nearby.playSound(location, sound, 0.7f, pitch);
+        int recipients = GameAnnouncementUtil.announceNearby(
+            location, fallbackPlayer, component, sound, 0.7f, pitch, soundExclusions
+        );
+        if (recipients == 0 && fallbackPlayer != null && fallbackPlayer.isOnline()) {
+            plugin.getLogger().warning("Could not deliver a nearby tavern win announcement for " + fallbackPlayer.getName() + ".");
         }
     }
 
@@ -1174,7 +1175,7 @@ public final class TavernManager implements Listener {
             session.inventory.setItem(22, button(Material.LIME_STAINED_GLASS_PANE, "<green><bold>" + session.multiplier + "x PAYOUT</bold></green>", List.of("<gray>Your winnings were delivered.</gray>"), null));
             BedrockCompat.sendGameMessage(player, MessageUtil.success(session.multiplier == 25 ? "Crown jackpot! You won <white>25x</white>." : "The reels pay <white>" + session.multiplier + "x</white>."));
             playResultSound(player, Sound.ENTITY_PLAYER_LEVELUP, 0.8f, session.multiplier == 25 ? 1.7f : 1.25f);
-            announceGameResult(playerGameStations.get(player.getUniqueId()), "<gold><bold>" + escapeMini(player.getName()) + " won " + session.multiplier + "x at Tavern Slots!</bold></gold>", Sound.ENTITY_FIREWORK_ROCKET_TWINKLE, session.multiplier == 25 ? 1.6f : 1.25f, Set.of(player.getUniqueId()));
+            announceGameResult(playerGameStations.get(player.getUniqueId()), player, "<gold><bold>" + escapeMini(player.getName()) + " won " + session.multiplier + "x at Tavern Slots!</bold></gold>", Sound.ENTITY_FIREWORK_ROCKET_TWINKLE, session.multiplier == 25 ? 1.6f : 1.25f, Set.of(player.getUniqueId()));
             incrementCardsharpProgress(player, 0);
             stopGameTimer(player.getUniqueId(), true);
         } else {
@@ -1593,7 +1594,7 @@ public final class TavernManager implements Listener {
         if (settledAsWin) {
             incrementCardsharpProgress(winner, 1);
             BedrockCompat.sendGameMessage(winner, MessageUtil.success("Winner takes the pot: <white>" + (Integer.parseInt(match.wager.amount) * match.contributors.size()) + " " + prettyMaterialName(match.wager.currency) + "</white>."));
-            announceGameResult(match.table, "<gold><bold>" + escapeMini(winner.getName()) + " won the Crown & Casks pot!</bold></gold>", Sound.ENTITY_FIREWORK_ROCKET_LARGE_BLAST, 1.2f, Set.copyOf(match.hands.keySet()));
+            announceGameResult(match.table, winner, "<gold><bold>" + escapeMini(winner.getName()) + " won the Crown & Casks pot!</bold></gold>", Sound.ENTITY_FIREWORK_ROCKET_LARGE_BLAST, 1.2f, Set.copyOf(match.hands.keySet()));
         }
         updateStationHologram(match.table);
     }
@@ -1632,7 +1633,7 @@ public final class TavernManager implements Listener {
             recentCardTables.put(winnerId, match.table);
             BedrockCompat.sendGameMessage(winner, MessageUtil.success("The other players left. You take the full pot."));
             winner.playSound(winner.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 0.8f, 1.2f);
-            announceGameResult(match.table, "<gold><bold>" + escapeMini(winner.getName()) + " won Crown & Casks by forfeit!</bold></gold>", Sound.ENTITY_FIREWORK_ROCKET_LARGE_BLAST, 1.1f, Set.of(winnerId));
+            announceGameResult(match.table, winner, "<gold><bold>" + escapeMini(winner.getName()) + " won Crown & Casks by forfeit!</bold></gold>", Sound.ENTITY_FIREWORK_ROCKET_LARGE_BLAST, 1.1f, Set.of(winnerId));
             openCardResult(winner, true, 0, false);
         } else {
             refundCardContributors(match);
@@ -1857,7 +1858,7 @@ public final class TavernManager implements Listener {
                 recordTavernStat(player, TavernGame.DARTS, 1, 0L);
                 BedrockCompat.sendGameMessage(player, MessageUtil.success("Perfect round! You earned <white>"
                     + DARTS_PERFECT_REWARD + " Essence</white>."));
-                announceGameResult(playerGameStations.get(player.getUniqueId()), "<gold><bold>" + escapeMini(player.getName()) + " threw a perfect 150 at Tavern Darts!</bold></gold>", Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.25f, Set.of(player.getUniqueId()));
+                announceGameResult(playerGameStations.get(player.getUniqueId()), player, "<gold><bold>" + escapeMini(player.getName()) + " threw a perfect 150 at Tavern Darts!</bold></gold>", Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.25f, Set.of(player.getUniqueId()));
             }
             finishDarts(session, player);
             player.sendMessage(MessageUtil.success("Darts total: <white>" + session.total + "</white>."));

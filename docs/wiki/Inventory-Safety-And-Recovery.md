@@ -40,10 +40,14 @@ Staff recovery flow:
 
 1. `/itemrecovery list <player> [page]`
 2. `/itemrecovery view <player> <latest|id>`
-3. Confirm the numbered item is actually missing.
-4. Have the player close every inventory, clear their cursor, and leave one completely empty inventory slot.
-5. `/itemrecovery restore <player> <id> <item-number>`
-6. Review the warning, then `/itemrecovery confirm` within 60 seconds.
+3. Keep the player online and run `/itemrecovery verify <player> <id> <item-number>`.
+4. If an exact copy is still in the player's inventory, armor, offhand, cursor, ender chest, or open menu, do not compensate it.
+5. Compare the nearby snapshots and confirm the numbered item is actually missing.
+6. Have the player close every inventory, clear their cursor, and leave one completely empty inventory slot.
+7. `/itemrecovery restore <player> <id> <item-number>`
+8. Review the warning, then `/itemrecovery confirm` within 60 seconds.
+
+Verification is an exact byte-for-byte comparison, so finding a live match blocks the restore automatically. Not finding one is useful evidence, but it does not by itself prove a claim; staff should still compare the surrounding records. Every check and approved recovery is written to the server log.
 
 Every numbered item is single-use. Delivery is journaled before the item enters the player's inventory and reconciles automatically after an interrupted save or restart. Identical copies recorded within the same five-minute transaction window retire together, preventing the same moved stack from being recovered through adjacent snapshots. Backpacks are refused here and must use `/backpackadmin` so their storage identity cannot be duplicated. The system deliberately does not snapshot button-only menus or duplicate the escrow files already used by gambling and wagering.
 

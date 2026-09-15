@@ -5,6 +5,7 @@ import me.rique.smpcore.npc.GuideNpcManager.GuideNpcType;
 import net.citizensnpcs.api.CitizensAPI;
 import net.citizensnpcs.api.event.DespawnReason;
 import net.citizensnpcs.api.event.NPCDespawnEvent;
+import net.citizensnpcs.api.event.NPCPushEvent;
 import net.citizensnpcs.api.event.NPCRightClickEvent;
 import net.citizensnpcs.api.event.NPCSpawnEvent;
 import net.citizensnpcs.api.event.SpawnReason;
@@ -438,6 +439,13 @@ public final class CitizensGuideBridge implements GuideNpcBridge, Listener {
         Bukkit.getScheduler().runTask(plugin, () -> guideNpcManager.openMenuFromNpc(clicker, type, interactionTarget));
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onNpcPush(NPCPushEvent event) {
+        if (typeOf(event.getNPC()) != null) {
+            event.setCancelled(true);
+        }
+    }
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onNpcSpawn(NPCSpawnEvent event) {
         GuideNpcType type = typeOf(event.getNPC());
@@ -515,6 +523,7 @@ public final class CitizensGuideBridge implements GuideNpcBridge, Listener {
         entity.getPersistentDataContainer().set(npcTypeKey, PersistentDataType.STRING, type.id());
         entity.addScoreboardTag("smpcore_npc");
         entity.addScoreboardTag(type.scoreboardTag());
+        guideNpcManager.trackNpc(entity, entity.getLocation());
         entity.setInvulnerable(true);
         entity.setSilent(true);
         if (entity instanceof LivingEntity living) {
@@ -572,6 +581,7 @@ public final class CitizensGuideBridge implements GuideNpcBridge, Listener {
         hitbox.addScoreboardTag(GuideNpcType.DEALER.scoreboardTag());
         hitbox.getPersistentDataContainer().set(npcTypeKey, PersistentDataType.STRING, GuideNpcType.DEALER.id());
         hitbox.getPersistentDataContainer().set(dealerHitboxOwnerKey, PersistentDataType.INTEGER, npc.getId());
+        guideNpcManager.trackNpc(hitbox, dealer.getLocation());
     }
 
     private List<Interaction> dealerHitboxes(int npcId) {

@@ -14,6 +14,7 @@ import me.rique.smpcore.item.ReforgeManager;
 import me.rique.smpcore.item.RewardLanternListener;
 import me.rique.smpcore.item.SalvagingDepotListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
+import me.rique.smpcore.item.VelocityNullifierListener;
 import me.rique.smpcore.item.XpLecternListener;
 import me.rique.smpcore.legendary.LegendaryListener;
 import me.rique.smpcore.legendary.MythicForgeListener;
@@ -70,6 +71,7 @@ public final class ItemAuditManager implements Listener {
     private static final long DUPLICATE_INSTANCE_COOLDOWN_MS = 24L * 60L * 60L * 1000L;
     private static final long PENDING_ACQUISITION_TTL_MS = 5L * 60L * 1000L;
     private static final int MAX_PENDING_ACQUISITIONS_PER_PLAYER = 96;
+    private static final int SCHEDULED_AUDITS_PER_TICK = 2;
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
         .withZone(ZoneId.systemDefault());
 
@@ -81,7 +83,10 @@ public final class ItemAuditManager implements Listener {
     private final Map<String, Long> anomalyCooldowns = new ConcurrentHashMap<>();
     private final Map<UUID, Deque<PendingAcquisition>> pendingAcquisitions = new ConcurrentHashMap<>();
     private final Set<UUID> scheduledAudits = ConcurrentHashMap.newKeySet();
+    private final Deque<UUID> scheduledScanQueue = new ArrayDeque<>();
+    private final Set<UUID> scheduledScanPlayers = new LinkedHashSet<>();
     private BukkitTask scanTask;
+    private BukkitTask scanBatchTask;
     private volatile boolean auditStateLoaded;
 
     public ItemAuditManager(SMPCore plugin) {
@@ -134,9 +139,15 @@ public final class ItemAuditManager implements Listener {
             scanTask.cancel();
             scanTask = null;
         }
+        if (scanBatchTask != null) {
+            scanBatchTask.cancel();
+            scanBatchTask = null;
+        }
         auditStateLoaded = false;
         pendingAcquisitions.clear();
         scheduledAudits.clear();
+        scheduledScanQueue.clear();
+        scheduledScanPlayers.clear();
         anomalyCooldowns.clear();
     }
 
@@ -303,6 +314,7 @@ public final class ItemAuditManager implements Listener {
         options.add("custom:mythic_forge");
         options.add("custom:reward_soul_lantern");
         options.add("custom:talisman_of_sustenance");
+        options.add("custom:" + VelocityNullifierListener.ITEM_ID);
         options.add("custom:salvaging_depot");
         options.add("custom:agricultural_pylon");
         options.add("custom:xp_lectern");
@@ -455,6 +467,22 @@ public final class ItemAuditManager implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onDropIdentity(PlayerDropItemEvent event) {
+        Item dropped = event.getItemDrop();
+        if (dropped == null) {
+            return;
+        }
+        ItemStack stack = dropped.getItemStack();
+        ManagedItemDescriptor descriptor = describe(stack);
+        if (descriptor == null || !descriptor.instanceTracked()) {
+            return;
+        }
+
+        ensureTrackedIdentity(stack, descriptor);
+        dropped.setItemStack(stack);
+    }
+
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onDrop(PlayerDropItemEvent event) {
         Item dropped = event.getItemDrop();
@@ -467,8 +495,10 @@ public final class ItemAuditManager implements Listener {
             return;
         }
 
-        String instanceId = ensureTrackedIdentity(stack, descriptor);
-        dropped.setItemStack(stack);
+        String instanceId = currentInstanceId(stack);
+        if (instanceId == null || instanceId.isBlank()) {
+            return;
+        }
         KnownInstanceState state = knownInstances.get(instanceId);
         if (state != null) {
             state.currentOwnerUuid = event.getPlayer().getUniqueId();
@@ -588,7 +618,30 @@ public final class ItemAuditManager implements Listener {
         }
         pruneTransientState();
         for (Player player : Bukkit.getOnlinePlayers()) {
-            auditPlayer(player, "scheduled");
+            UUID playerId = player.getUniqueId();
+            if (scheduledScanPlayers.add(playerId)) {
+                scheduledScanQueue.addLast(playerId);
+            }
+        }
+        if (scheduledScanQueue.isEmpty() || scanBatchTask != null) {
+            return;
+        }
+        scanBatchTask = Bukkit.getScheduler().runTaskTimer(plugin, this::scanScheduledBatch, 0L, 1L);
+    }
+
+    private void scanScheduledBatch() {
+        int remaining = SCHEDULED_AUDITS_PER_TICK;
+        while (remaining-- > 0 && !scheduledScanQueue.isEmpty()) {
+            UUID playerId = scheduledScanQueue.removeFirst();
+            scheduledScanPlayers.remove(playerId);
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null && player.isOnline()) {
+                auditPlayer(player, "scheduled");
+            }
+        }
+        if (scheduledScanQueue.isEmpty() && scanBatchTask != null) {
+            scanBatchTask.cancel();
+            scanBatchTask = null;
         }
     }
 
@@ -993,6 +1046,15 @@ public final class ItemAuditManager implements Listener {
             return new ManagedItemDescriptor("custom:talisman_of_sustenance", "Talisman of Sustenance", true);
         }
 
+        VelocityNullifierListener nullifiers = plugin.getVelocityNullifierListener();
+        if (nullifiers != null && nullifiers.isNullifier(item)) {
+            return new ManagedItemDescriptor(
+                "custom:" + VelocityNullifierListener.ITEM_ID,
+                "Velocity Nullifier",
+                true
+            );
+        }
+
         SalvagingDepotListener depot = plugin.getSalvagingDepotListener();
         if (depot != null && depot.isDepotItem(item)) {
             return new ManagedItemDescriptor("custom:salvaging_depot", "Salvaging Depot", false);
@@ -1116,6 +1178,7 @@ public final class ItemAuditManager implements Listener {
             || "custom:backpack".equals(itemKey)
             || "custom:mythic_forge".equals(itemKey)
             || "custom:talisman_of_sustenance".equals(itemKey)
+            || ("custom:" + VelocityNullifierListener.ITEM_ID).equals(itemKey)
             || "custom:salvaging_depot".equals(itemKey)
             || "custom:agricultural_pylon".equals(itemKey)
             || "custom:xp_lectern".equals(itemKey)
@@ -1388,6 +1451,7 @@ public final class ItemAuditManager implements Listener {
                 case "mythic_forge" -> "Mythic Forge";
                 case "reward_soul_lantern" -> "Reward Soul Lantern";
                 case "talisman_of_sustenance" -> "Talisman of Sustenance";
+                case VelocityNullifierListener.ITEM_ID -> "Velocity Nullifier";
                 case "salvaging_depot" -> "Salvaging Depot";
                 case "agricultural_pylon" -> "Agricultural Pylon";
                 case "xp_lectern" -> "XP Lectern";

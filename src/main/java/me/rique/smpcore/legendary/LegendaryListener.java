@@ -12,7 +12,9 @@ import me.rique.smpcore.item.CustomToolListener;
 import me.rique.smpcore.item.SalvagingDepotListener;
 import me.rique.smpcore.item.AgriculturalPylonListener;
 import me.rique.smpcore.item.SustenanceTalismanListener;
+import me.rique.smpcore.item.VelocityNullifierListener;
 import me.rique.smpcore.item.XpLecternListener;
+import me.rique.smpcore.npc.NpcAnchorStore;
 import me.rique.smpcore.power.SuperpowerManager;
 import me.rique.smpcore.season.SeasonRelicManager;
 import me.rique.smpcore.util.BedrockCompat;
@@ -153,6 +155,7 @@ public final class LegendaryListener implements Listener {
     private static final String MYTHIC_NEXUS_MENU_ID = "mythic_nexus";
     private static final String AWAKENING_TABLE_INFO_ID = "awakening_table_info";
     private static final String RELIQUARY_SECTION_PREFIX = "reliquary_section:";
+    private static final String RELIQUARY_PAGE_PREFIX = "reliquary_page:";
     private static final int[] RELIQUARY_CONTENT_SLOTS = {
         10, 11, 12, 13, 14, 15, 16,
         19, 20, 21, 22, 23, 24, 25,
@@ -342,6 +345,8 @@ public final class LegendaryListener implements Listener {
     private final NamespacedKey keyLifeStealerSeenPlayers;
     private final NamespacedKey keyLifeStealerSharpness;
     private final NamespacedKey keyStrengthSwordVictims;
+    private final NamespacedKey keyPlayerKillProgressRecords;
+    private final NamespacedKey keyPlayerKillProgressMigration;
     private final NamespacedKey keyMidasHealthModifier;
     private final NamespacedKey keyShadowBladeAttackSpeedModifier;
     private final NamespacedKey keyGodChestplateHealthModifier;
@@ -392,6 +397,7 @@ public final class LegendaryListener implements Listener {
     private final Map<UUID, Long> strengthSwordDomainCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> dashMaceCd = new ConcurrentHashMap<>();
     private final Map<UUID, Long> thorsHammerCd = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> killProgressWarningCd = new ConcurrentHashMap<>();
 
     private final Map<UUID, ChronoState> chronoStates = new ConcurrentHashMap<>();
     private final Map<UUID, FrostScytheFreezeState> frostScytheFrozen = new ConcurrentHashMap<>();
@@ -460,6 +466,8 @@ public final class LegendaryListener implements Listener {
         this.keyLifeStealerSeenPlayers = new NamespacedKey(plugin, "life_stealer_seen_players");
         this.keyLifeStealerSharpness = new NamespacedKey(plugin, "life_stealer_sharpness");
         this.keyStrengthSwordVictims = new NamespacedKey(plugin, "strength_sword_victims");
+        this.keyPlayerKillProgressRecords = new NamespacedKey(plugin, "player_kill_progress_records");
+        this.keyPlayerKillProgressMigration = new NamespacedKey(plugin, "player_kill_progress_migration");
         this.keyMidasHealthModifier = new NamespacedKey(plugin, "midas_sword_health");
         this.keyShadowBladeAttackSpeedModifier = new NamespacedKey(plugin, "shadow_blade_attack_speed");
         this.keyGodChestplateHealthModifier = new NamespacedKey(plugin, "god_chestplate_health");
@@ -490,6 +498,7 @@ public final class LegendaryListener implements Listener {
             cleanupTaggedEnderSwordSeats();
             for (Player online : Bukkit.getOnlinePlayers()) {
                 migratePlayerLegendaryItems(online);
+                sanitizePlayerKillProgressItems(online);
                 discoverNormalCraftingRecipes(online);
                 refreshMagnetTracking(online);
                 refreshWitherBladeLore(online);
@@ -515,6 +524,7 @@ public final class LegendaryListener implements Listener {
     public void onJoin(PlayerJoinEvent event) {
         cleanupExpiredLegendaryCooldowns();
         migratePlayerLegendaryItems(event.getPlayer());
+        sanitizePlayerKillProgressItems(event.getPlayer());
         discoverNormalCraftingRecipes(event.getPlayer());
         refreshMagnetTracking(event.getPlayer());
         refreshWitherBladeLore(event.getPlayer());
@@ -531,6 +541,7 @@ public final class LegendaryListener implements Listener {
         pendingMagnetRefresh.remove(id);
         pendingWitherBladeLoreRefresh.remove(id);
         pendingLifeStealerRefresh.remove(id);
+        killProgressWarningCd.remove(id);
         activeLifeStealerStates.remove(id);
         reliquaryReturnToMainMenuPlayers.remove(id);
         mythicFusionReturnToMainMenuPlayers.remove(id);
@@ -772,6 +783,7 @@ public final class LegendaryListener implements Listener {
 
         PersistentDataContainer sourcePdc = sourceMeta.getPersistentDataContainer();
         PersistentDataContainer resultPdc = resultMeta.getPersistentDataContainer();
+        copyPersistentItemMetadata(sourcePdc, resultPdc);
         String instanceId = sourcePdc.get(keyLegendaryInstance, PersistentDataType.STRING);
         if (instanceId == null || instanceId.isBlank()) {
             instanceId = UUID.randomUUID().toString();
@@ -793,6 +805,16 @@ public final class LegendaryListener implements Listener {
         applyLegendaryTypeState(resultMeta, type);
         updated.setItemMeta(resultMeta);
         return updated;
+    }
+
+    static void copyPersistentItemMetadata(
+        PersistentDataContainer source,
+        PersistentDataContainer target
+    ) {
+        if (source == null || target == null) {
+            return;
+        }
+        source.copyTo(target, true);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -875,8 +897,17 @@ public final class LegendaryListener implements Listener {
                         plugin.getSeasonRelicManager().openArmoryMenuFromReliquary(player, reliquaryReturnsToMainMenu(player));
                         return;
                     }
+                    if (section == ReliquarySection.ENCHANTS && plugin.getCustomEnchantListener() != null) {
+                        plugin.getCustomEnchantListener().openEnchantMenu(player);
+                        return;
+                    }
                     openReliquarySectionMenu(player, section);
                 }
+                return;
+            }
+            if (recipeId.startsWith(RELIQUARY_PAGE_PREFIX) && holder.section() != null) {
+                int pageDelta = "next".equals(recipeId.substring(RELIQUARY_PAGE_PREFIX.length())) ? 1 : -1;
+                openReliquarySectionMenu(player, holder.section(), holder.page() + pageDelta);
                 return;
             }
 
@@ -1038,6 +1069,19 @@ public final class LegendaryListener implements Listener {
             return;
         }
 
+        if (top.getHolder(false) instanceof VelocityNullifierRecipeHolder) {
+            event.setCancelled(true);
+            if (event.getSlot() == RECIPE_TRADE_SLOT) {
+                craftVelocityNullifierFromInventory(player);
+                Bukkit.getScheduler().runTask(plugin, () -> openVelocityNullifierRecipeDetails(player));
+                return;
+            }
+            if (event.getSlot() == 18) {
+                openCurrentReliquaryMenu(player);
+            }
+            return;
+        }
+
         if (top.getHolder(false) instanceof SalvagingDepotRecipeHolder) {
             event.setCancelled(true);
             if (event.getSlot() == RECIPE_TRADE_SLOT) {
@@ -1097,6 +1141,7 @@ public final class LegendaryListener implements Listener {
             || holder instanceof AscendantCoreRecipeHolder
             || holder instanceof BackpackRecipeHolder
             || holder instanceof TalismanRecipeHolder
+            || holder instanceof VelocityNullifierRecipeHolder
             || holder instanceof SalvagingDepotRecipeHolder
             || holder instanceof AgriculturalPylonRecipeHolder
             || holder instanceof XpLecternRecipeHolder
@@ -1110,11 +1155,16 @@ public final class LegendaryListener implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPickupItemMigration(EntityPickupItemEvent event) {
+        ItemStack item = event.getItem().getItemStack();
+        if (migrateLegendaryItemTree(item)) {
+            event.getItem().setItemStack(item);
+        }
+    }
+
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPickupItem(EntityPickupItemEvent event) {
-        if (migrateLegendaryItemTree(event.getItem().getItemStack())) {
-            event.getItem().setItemStack(event.getItem().getItemStack());
-        }
         if (event.getEntity() instanceof Player player) {
             completeLegendaryHandoff(player, event.getItem());
             queueMagnetTrackingRefresh(player);
@@ -1196,7 +1246,7 @@ public final class LegendaryListener implements Listener {
         openRecipeMenu(player, true);
     }
 
-    private void openCurrentReliquaryMenu(Player player) {
+    public void openCurrentReliquaryMenu(Player player) {
         openRecipeMenu(player, reliquaryReturnsToMainMenu(player));
     }
 
@@ -1213,7 +1263,7 @@ public final class LegendaryListener implements Listener {
         mythicFusionReturnToMainMenuPlayers.remove(player.getUniqueId());
 
         Inventory inv = Bukkit.createInventory(
-            new ReliquaryMenuHolder(null),
+            new ReliquaryMenuHolder(null, 0),
             54,
             BedrockCompat.menuTitle(player, MM.deserialize(GUI_TITLE_RECIPES), "Reliquary")
         );
@@ -1223,16 +1273,16 @@ public final class LegendaryListener implements Listener {
             Material.ENCHANTED_BOOK,
             "<gradient:#ffe066:#72f7ff><bold>Reliquary</bold></gradient>",
             List.of(
-                "<gray>Recipes and relic knowledge are sorted by category.</gray>",
-                "<gray>Pick a wing below, then choose the item you want to inspect.</gray>"
+                "<gray>Every custom gear path now lives in one place.</gray>",
+                "<gray>Choose a wing for recipes, upgrades, and item details.</gray>"
             )
         ));
         inv.setItem(20, createReliquarySectionItem(player, ReliquarySection.LEGENDARIES));
         inv.setItem(22, createReliquarySectionItem(player, ReliquarySection.MYTHICS));
         inv.setItem(24, createReliquarySectionItem(player, ReliquarySection.TOOLS));
-        inv.setItem(31, createReliquarySectionItem(player, ReliquarySection.UTILITY));
+        inv.setItem(30, createReliquarySectionItem(player, ReliquarySection.ENCHANTS));
         if (plugin.getSeasonRelicManager() != null) {
-            inv.setItem(13, createReliquarySectionItem(player, ReliquarySection.SEASON));
+            inv.setItem(32, createReliquarySectionItem(player, ReliquarySection.SEASON));
         }
         if (returnToMainMenu) {
             inv.setItem(49, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to /menu.</gray>")));
@@ -1242,8 +1292,19 @@ public final class LegendaryListener implements Listener {
     }
 
     private void openReliquarySectionMenu(Player player, ReliquarySection section) {
+        openReliquarySectionMenu(player, section, 0);
+    }
+
+    public void openReliquaryToolsMenu(Player player) {
+        openReliquarySectionMenu(player, ReliquarySection.TOOLS, 0);
+    }
+
+    private void openReliquarySectionMenu(Player player, ReliquarySection section, int requestedPage) {
+        List<CustomRecipeEntry> entries = reliquaryEntries(player, section);
+        int pageCount = Math.max(1, (entries.size() + RELIQUARY_CONTENT_SLOTS.length - 1) / RELIQUARY_CONTENT_SLOTS.length);
+        int page = Math.max(0, Math.min(requestedPage, pageCount - 1));
         Inventory inv = Bukkit.createInventory(
-            new ReliquaryMenuHolder(section),
+            new ReliquaryMenuHolder(section, page),
             54,
             BedrockCompat.menuTitle(player, MM.deserialize(section.title), section.plainTitle)
         );
@@ -1251,12 +1312,15 @@ public final class LegendaryListener implements Listener {
         decorateReliquaryInventory(inv);
         List<String> headerLore = new ArrayList<>(section.lore);
         headerLore.add("<dark_gray> ");
-        headerLore.add("<gray>Entries: <white>" + reliquaryEntries(player, section).size() + "</white></gray>");
+        headerLore.add("<gray>Entries: <white>" + entries.size() + "</white></gray>");
+        if (pageCount > 1) {
+            headerLore.add("<gray>Page: <white>" + (page + 1) + "/" + pageCount + "</white></gray>");
+        }
         inv.setItem(4, createGuiItem(section.icon, section.title, headerLore));
 
-        List<CustomRecipeEntry> entries = reliquaryEntries(player, section);
-        for (int i = 0; i < entries.size() && i < RELIQUARY_CONTENT_SLOTS.length; i++) {
-            CustomRecipeEntry entry = entries.get(i);
+        int firstEntry = page * RELIQUARY_CONTENT_SLOTS.length;
+        for (int i = 0; i < RELIQUARY_CONTENT_SLOTS.length && firstEntry + i < entries.size(); i++) {
+            CustomRecipeEntry entry = entries.get(firstEntry + i);
             ItemStack icon = entry.icon().clone();
             tagMenuLegendaryId(icon, entry.id());
             inv.setItem(RELIQUARY_CONTENT_SLOTS[i], icon);
@@ -1271,6 +1335,20 @@ public final class LegendaryListener implements Listener {
         }
 
         inv.setItem(49, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary hub</gray>")));
+        if (page > 0) {
+            ItemStack previous = createGuiItem(Material.SPECTRAL_ARROW, "<yellow>Previous Page</yellow>", List.of(
+                "<gray>Page " + page + " of " + pageCount + ".</gray>"
+            ));
+            tagMenuLegendaryId(previous, RELIQUARY_PAGE_PREFIX + "previous");
+            inv.setItem(45, previous);
+        }
+        if (page + 1 < pageCount) {
+            ItemStack next = createGuiItem(Material.SPECTRAL_ARROW, "<yellow>Next Page</yellow>", List.of(
+                "<gray>Page " + (page + 2) + " of " + pageCount + ".</gray>"
+            ));
+            tagMenuLegendaryId(next, RELIQUARY_PAGE_PREFIX + "next");
+            inv.setItem(53, next);
+        }
         player.openInventory(inv);
     }
 
@@ -1387,6 +1465,10 @@ public final class LegendaryListener implements Listener {
             openSustenanceTalismanRecipeDetails(player);
             return;
         }
+        if (VelocityNullifierListener.ITEM_ID.equals(recipeId)) {
+            openVelocityNullifierRecipeDetails(player);
+            return;
+        }
         if (SalvagingDepotListener.ITEM_ID.equals(recipeId)) {
             openSalvagingDepotRecipeDetails(player);
             return;
@@ -1430,6 +1512,10 @@ public final class LegendaryListener implements Listener {
                 inv.setItem(i, filler);
             }
         }
+        inv.setItem(0, createGuiItem(Material.YELLOW_STAINED_GLASS_PANE, "<dark_gray> ", List.of()));
+        inv.setItem(8, createGuiItem(Material.CYAN_STAINED_GLASS_PANE, "<dark_gray> ", List.of()));
+        inv.setItem(inv.getSize() - 9, createGuiItem(Material.YELLOW_STAINED_GLASS_PANE, "<dark_gray> ", List.of()));
+        inv.setItem(inv.getSize() - 1, createGuiItem(Material.CYAN_STAINED_GLASS_PANE, "<dark_gray> ", List.of()));
     }
 
     private boolean isFrameSlot(int slot, int size) {
@@ -1439,7 +1525,9 @@ public final class LegendaryListener implements Listener {
     private ItemStack createReliquarySectionItem(Player player, ReliquarySection section) {
         List<String> lore = new ArrayList<>(section.lore);
         lore.add("<dark_gray> ");
-        lore.add("<gray>Entries: <white>" + reliquaryEntries(player, section).size() + "</white></gray>");
+        if (section != ReliquarySection.ENCHANTS) {
+            lore.add("<gray>Entries: <white>" + reliquaryEntries(player, section).size() + "</white></gray>");
+        }
         lore.add("<dark_gray>" + BedrockCompat.menuActionWord(player) + " to open</dark_gray>");
         ItemStack item = createGuiItem(section.icon, section.title, lore);
         tagMenuLegendaryId(item, RELIQUARY_SECTION_PREFIX + section.id);
@@ -1479,8 +1567,6 @@ public final class LegendaryListener implements Listener {
                     }
                 }
                 entries.add(new CustomRecipeEntry(LegendaryType.FARADAYS_MAGNET.id, createFaradaysMagnetPreview(player)));
-            }
-            case UTILITY -> {
                 if (plugin.getAwakeningTableListener() != null) {
                     entries.add(new CustomRecipeEntry(AWAKENING_TABLE_INFO_ID, createAwakeningTablePreview(player)));
                 }
@@ -1490,6 +1576,16 @@ public final class LegendaryListener implements Listener {
                 if (plugin.getSustenanceTalismanListener() != null) {
                     entries.add(new CustomRecipeEntry(SustenanceTalismanListener.ITEM_ID, createSustenanceTalismanPreview(player)));
                 }
+                if (plugin.getVelocityNullifierListener() != null) {
+                    entries.add(new CustomRecipeEntry(VelocityNullifierListener.ITEM_ID, createVelocityNullifierPreview(player)));
+                }
+                if (plugin.getSeasonRelicManager() != null) {
+                    for (String relicId : plugin.getSeasonRelicManager().reliquaryUtilityRelicIds()) {
+                        entries.add(new CustomRecipeEntry(relicId, plugin.getSeasonRelicManager().createRelicPreview(player, relicId)));
+                    }
+                }
+            }
+            case ENCHANTS -> {
             }
             case SEASON -> {
                 if (plugin.getSeasonRelicManager() != null) {
@@ -2221,21 +2317,29 @@ public final class LegendaryListener implements Listener {
             : null;
         Player playerVictimEntity = event.getEntity() instanceof Player victimPlayer ? victimPlayer : null;
         boolean playerVictim = playerVictimEntity != null;
-        boolean teammateKill = playerVictim && sameTeamOrSelf(killer.getUniqueId(), playerVictimEntity.getUniqueId());
-        if (killerWeapon == LegendaryType.MIDAS_SWORD && !teammateKill) {
+        ItemStack heldWeapon = killer.getInventory().getItemInMainHand();
+        if (playerVictim && isPlayerKillProgressWeapon(killerWeapon)) {
+            sanitizePlayerKillProgressItem(heldWeapon, killer.getUniqueId());
+        }
+        boolean blockedPlayerKillProgress = playerVictim
+            && blocksPlayerKillProgress(killer.getUniqueId(), playerVictimEntity.getUniqueId());
+        if (blockedPlayerKillProgress && isPlayerKillProgressWeapon(killerWeapon)) {
+            notifyBlockedPlayerKillProgress(killer, playerVictimEntity);
+        }
+        if (killerWeapon == LegendaryType.MIDAS_SWORD && !blockedPlayerKillProgress) {
             event.getDrops().add(new ItemStack(Material.GOLD_NUGGET, MIDAS_SWORD_GOLD_NUGGETS));
             if (playerVictim) {
-                levelMidasSword(killer.getInventory().getItemInMainHand(), true);
+                levelMidasSword(heldWeapon, killer.getUniqueId(), playerVictimEntity.getUniqueId());
             }
         }
-        if (killerWeapon == LegendaryType.LIFE_STEALER && playerVictim && !teammateKill) {
-            grantLifeStealerKillBuff(killer, killer.getInventory().getItemInMainHand(), playerVictimEntity.getUniqueId());
+        if (killerWeapon == LegendaryType.LIFE_STEALER && playerVictim && !blockedPlayerKillProgress) {
+            grantLifeStealerKillBuff(killer, heldWeapon, playerVictimEntity.getUniqueId());
         }
-        if (killerWeapon == LegendaryType.STRENGTH_SWORD && playerVictim && !teammateKill) {
-            grantStrengthSwordKillProgress(killer.getInventory().getItemInMainHand(), playerVictimEntity.getUniqueId());
+        if (killerWeapon == LegendaryType.STRENGTH_SWORD && playerVictim && !blockedPlayerKillProgress) {
+            grantStrengthSwordKillProgress(heldWeapon, killer.getUniqueId(), playerVictimEntity.getUniqueId());
         }
         if (killerWeapon != LegendaryType.EMERALD_BLADE) return;
-        if (teammateKill) return;
+        if (blockedPlayerKillProgress) return;
         int amount = playerVictim ? 5 : ThreadLocalRandom.current().nextInt(1, 4);
         event.getDrops().add(new ItemStack(Material.EMERALD, amount));
     }
@@ -2499,7 +2603,7 @@ public final class LegendaryListener implements Listener {
             inv.setItem(matrixSlots[index++], ingredientItem);
         }
 
-        inv.setItem(16, createDisplayLegendaryItem(type, true));
+        inv.setItem(16, appendLegendaryClaimStatus(createDisplayLegendaryItem(type, true), type.id));
         inv.setItem(RECIPE_TRADE_SLOT, createTradeButton(player, type));
         inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
         player.openInventory(inv);
@@ -2913,6 +3017,47 @@ public final class LegendaryListener implements Listener {
         player.openInventory(inv);
     }
 
+    private void openVelocityNullifierRecipeDetails(Player player) {
+        VelocityNullifierListener nullifier = plugin.getVelocityNullifierListener();
+        if (nullifier == null) {
+            player.sendMessage(MessageUtil.error("Velocity Nullifier recipes are not ready yet."));
+            return;
+        }
+
+        Inventory inv = Bukkit.createInventory(
+            new VelocityNullifierRecipeHolder(),
+            27,
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize(GUI_TITLE_PREFIX_RECIPE + CustomLoreUtil.displayNameTag(CustomLoreUtil.Rarity.RARE, "Velocity Nullifier")),
+                "Recipe: Velocity Nullifier"
+            )
+        );
+
+        ItemStack filler = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, "<dark_gray> ", List.of());
+        for (int i = 0; i < inv.getSize(); i++) {
+            if (isFrameSlot(i, inv.getSize())) {
+                inv.setItem(i, filler);
+            }
+        }
+
+        int[] matrixSlots = {3, 4, 5, 12, 13, 14, 21, 22, 23};
+        ItemStack[] recipeMatrix = nullifier.recipeMatrix();
+        for (int i = 0; i < matrixSlots.length && i < recipeMatrix.length; i++) {
+            ItemStack ingredient = recipeMatrix[i];
+            if (ingredient != null && !ingredient.getType().isAir()) {
+                inv.setItem(matrixSlots[i], ingredient);
+            }
+        }
+
+        inv.setItem(16, nullifier.createItem());
+        inv.setItem(RECIPE_TRADE_SLOT, createInventoryCraftButton(
+            "Cancels one incoming mace smash, then recharges for 15 seconds."
+        ));
+        inv.setItem(18, createGuiItem(Material.ARROW, "<yellow>Back</yellow>", List.of("<gray>Return to the Reliquary</gray>")));
+        player.openInventory(inv);
+    }
+
     private void openSalvagingDepotRecipeDetails(Player player) {
         if (plugin.getSalvagingDepotListener() == null) {
             player.sendMessage(MessageUtil.error("Salvaging Depot recipes are not ready yet."));
@@ -3100,7 +3245,52 @@ public final class LegendaryListener implements Listener {
     }
 
     private ItemStack createPreviewItem(Player player, LegendaryType type) {
-        return appendRecipeMenuHint(player, createDisplayLegendaryItem(type, true));
+        return appendRecipeMenuHint(player, appendLegendaryClaimStatus(createDisplayLegendaryItem(type, true), type.id));
+    }
+
+    private ItemStack appendLegendaryClaimStatus(ItemStack item, String legendaryId) {
+        LegendaryAltarManager altar = plugin.getLegendaryAltarManager();
+        if (altar == null) {
+            return item;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+
+        List<Component> lore = meta.lore() == null ? new ArrayList<>() : new ArrayList<>(meta.lore());
+        lore.add(MM.deserialize("<dark_gray> "));
+        for (String line : legendaryClaimLore(altar.legendaryClaimStatus(legendaryId))) {
+            lore.add(MM.deserialize(line));
+        }
+        meta.lore(lore);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    static List<String> legendaryClaimLore(LegendaryAltarManager.LegendaryClaimStatus status) {
+        if (status == null || !status.ready()) {
+            return List.of("<yellow>Status:</yellow> <gray>Loading claim data...</gray>");
+        }
+        if (!status.claimed()) {
+            return List.of("<green>Status:</green> <white>Available to craft</white>");
+        }
+
+        List<String> lines = new ArrayList<>();
+        lines.add("<red>Status:</red> <white>Already crafted</white>");
+        if (!status.teamNames().isEmpty()) {
+            String label = status.teamNames().size() == 1 ? "Claimed team" : "Claimed teams";
+            String teams = status.teamNames().stream().map(MM::escapeTags).collect(java.util.stream.Collectors.joining(", "));
+            lines.add("<gray>" + label + ":</gray> <gold>" + teams + "</gold>");
+        } else if (status.claimerName() != null && !status.claimerName().isBlank()) {
+            lines.add("<gray>Claimed by:</gray> <white>" + MM.escapeTags(status.claimerName()) + "</white> <dark_gray>(no team)</dark_gray>");
+        } else {
+            lines.add("<gray>Claimed team:</gray> <dark_gray>Unknown or disbanded</dark_gray>");
+        }
+        if (status.maxCopies() > 1) {
+            lines.add("<gray>Active copies:</gray> <white>" + status.activeCopies() + "/" + status.maxCopies() + "</white>");
+        }
+        return List.copyOf(lines);
     }
 
     private ItemStack createCustomToolPreview(Player player, String toolId) {
@@ -3144,6 +3334,14 @@ public final class LegendaryListener implements Listener {
         }
 
         return appendRecipeMenuHint(player, plugin.getSustenanceTalismanListener().createTalismanItem());
+    }
+
+    private ItemStack createVelocityNullifierPreview(Player player) {
+        if (plugin.getVelocityNullifierListener() == null) {
+            return createGuiItem(Material.BARRIER, "<red>Unavailable</red>", List.of());
+        }
+
+        return appendRecipeMenuHint(player, plugin.getVelocityNullifierListener().createItem());
     }
 
     private ItemStack createSalvagingDepotPreview(Player player) {
@@ -3411,6 +3609,23 @@ public final class LegendaryListener implements Listener {
         );
     }
 
+    private boolean craftVelocityNullifierFromInventory(Player player) {
+        VelocityNullifierListener nullifier = plugin.getVelocityNullifierListener();
+        if (nullifier == null) {
+            player.sendMessage(MessageUtil.error("Velocity Nullifier recipes are not ready yet."));
+            return false;
+        }
+
+        return craftInventoryRecipe(
+            player,
+            "Velocity Nullifier",
+            InventoryRecipeUtil.plainMaterials(plugin, nullifier.recipeIngredients()),
+            nullifier.createItem(),
+            "velocity_nullifier_reliquary_craft",
+            "Crafted a Velocity Nullifier from the Reliquary."
+        );
+    }
+
     private boolean craftSalvagingDepotFromInventory(Player player) {
         SalvagingDepotListener depot = plugin.getSalvagingDepotListener();
         if (depot == null) {
@@ -3474,16 +3689,10 @@ public final class LegendaryListener implements Listener {
             player.sendMessage(MessageUtil.error("That recipe is not ready yet."));
             return false;
         }
-        for (InventoryRecipeUtil.Ingredient ingredient : ingredients) {
-            int available = InventoryRecipeUtil.countIngredient(player, ingredient);
-            if (available < ingredient.amount()) {
-                player.sendMessage(MessageUtil.error(
-                    "Missing <white>" + (ingredient.amount() - available) + "x " + ingredient.name()
-                        + "</white> <gray>(need <white>" + ingredient.amount()
-                        + "</white>, have <white>" + available + "</white>).</gray>"
-                ));
-                return false;
-            }
+        List<InventoryRecipeUtil.MissingIngredient> missing = InventoryRecipeUtil.missingIngredients(player, ingredients);
+        if (!missing.isEmpty()) {
+            player.sendMessage(MessageUtil.error(InventoryRecipeUtil.missingIngredientsMessage(missing)));
+            return false;
         }
         if (!InventoryRecipeUtil.canFitRewardAfterRemovingIngredients(player, ingredients, reward)) {
             player.sendMessage(MessageUtil.warn("Clear enough inventory space before crafting <white>" + displayName + "</white>."));
@@ -4655,6 +4864,61 @@ public final class LegendaryListener implements Listener {
         return plugin.getTeamManager() != null && plugin.getTeamManager().sameTeam(ownerId, targetId);
     }
 
+    private boolean blocksPlayerKillProgress(UUID killerId, UUID victimId) {
+        return plugin.getTeamManager() == null
+            || plugin.getTeamManager().blocksPlayerKillProgress(killerId, victimId);
+    }
+
+    private void notifyBlockedPlayerKillProgress(Player killer, Player victim) {
+        if (killer == null || victim == null || plugin.getTeamManager() == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        UUID killerId = killer.getUniqueId();
+        long warningReadyAt = killProgressWarningCd.getOrDefault(killerId, 0L);
+        if (warningReadyAt > now) {
+            return;
+        }
+        killProgressWarningCd.put(killerId, now + 10_000L);
+
+        long remaining = plugin.getTeamManager().playerKillProgressBlockRemainingMillis(
+            killerId,
+            victim.getUniqueId()
+        );
+        if (remaining == Long.MAX_VALUE) {
+            killer.sendMessage(MessageUtil.warn(
+                "Teammate and allied kills cannot improve player-kill weapons."
+            ));
+            return;
+        }
+        if (remaining > 0L) {
+            killer.sendMessage(MessageUtil.warn(
+                "Former-teammate kill progress is on a one-month cooldown. Remaining: <white>"
+                    + formatLongCooldown(remaining) + "</white>."
+            ));
+        }
+    }
+
+    static String formatLongCooldown(long millis) {
+        long totalMinutes = Math.max(1L, (millis + 59_999L) / 60_000L);
+        long days = totalMinutes / (24L * 60L);
+        long hours = (totalMinutes % (24L * 60L)) / 60L;
+        long minutes = totalMinutes % 60L;
+        if (days > 0L) {
+            return days + "d " + hours + "h";
+        }
+        if (hours > 0L) {
+            return hours + "h " + minutes + "m";
+        }
+        return minutes + "m";
+    }
+
+    private static boolean isPlayerKillProgressWeapon(LegendaryType type) {
+        return type == LegendaryType.MIDAS_SWORD
+            || type == LegendaryType.LIFE_STEALER
+            || type == LegendaryType.STRENGTH_SWORD;
+    }
+
     private void feedEmeraldBlade(Player player, ItemStack blade) {
         int current = emeraldLevel(blade);
         if (current >= EMERALD_BLADE_MAX_LEVEL) {
@@ -5446,9 +5710,17 @@ public final class LegendaryListener implements Listener {
     }
 
     private boolean canWitherBladeDamage(Player shooter, LivingEntity target) {
-        if (target.equals(shooter) || isBossEncounterEntity(target)) return false;
-        return !(target instanceof Player teammate)
-            || !sameTeamOrSelf(shooter.getUniqueId(), teammate.getUniqueId());
+        boolean teammate = target instanceof Player player
+            && sameTeamOrSelf(shooter.getUniqueId(), player.getUniqueId());
+        return canWitherBladeAffect(
+            target.equals(shooter) || isBossEncounterEntity(target),
+            NpcAnchorStore.isManagedNpc(target),
+            teammate
+        );
+    }
+
+    static boolean canWitherBladeAffect(boolean selfOrBoss, boolean managedNpc, boolean teammate) {
+        return !selfOrBoss && !managedNpc && !teammate;
     }
 
     private boolean canFrostScytheAffect(Player attacker, LivingEntity target) {
@@ -5873,13 +6145,19 @@ public final class LegendaryListener implements Listener {
         }
 
         LifeStealerState state = lifeStealerState(weapon);
-        if (!state.seenVictims().contains(victimId) && state.stacks() < LIFE_STEALER_MAX_STACKS) {
-            state = state.addVictim(victimId);
+        if (state.seenVictims().contains(victimId)) {
+            return;
         }
+        if (state.stacks() >= LIFE_STEALER_MAX_STACKS
+            && lifeStealerSharpness(weapon) >= LIFE_STEALER_MAX_SHARPNESS) {
+            return;
+        }
+        state = state.addVictim(victimId);
 
         ItemMeta meta = weapon.getItemMeta();
         if (meta != null) {
             setLifeStealerSharpness(meta, lifeStealerSharpness(meta) + 1);
+            appendPlayerKillProgressRecord(meta, killer.getUniqueId(), victimId);
             applyLifeStealerState(meta, state);
             weapon.setItemMeta(meta);
         }
@@ -5887,8 +6165,8 @@ public final class LegendaryListener implements Listener {
         refreshLifeStealerLore(killer);
     }
 
-    private void levelMidasSword(ItemStack sword, boolean playerKill) {
-        if (typeOf(sword) != LegendaryType.MIDAS_SWORD || !playerKill) {
+    private void levelMidasSword(ItemStack sword, UUID killerId, UUID victimId) {
+        if (typeOf(sword) != LegendaryType.MIDAS_SWORD || killerId == null || victimId == null) {
             return;
         }
 
@@ -5901,14 +6179,15 @@ public final class LegendaryListener implements Listener {
             return;
         }
 
+        appendPlayerKillProgressRecord(meta, killerId, victimId);
         meta.getPersistentDataContainer().set(keyMidasSharpness, PersistentDataType.INTEGER, nextLevel);
         setEnchantLevel(meta, enchantSharpness, nextLevel);
         meta.lore(buildMidasSwordLore(meta, nextLevel));
         sword.setItemMeta(meta);
     }
 
-    private void grantStrengthSwordKillProgress(ItemStack sword, UUID victimId) {
-        if (typeOf(sword) != LegendaryType.STRENGTH_SWORD || victimId == null) {
+    private void grantStrengthSwordKillProgress(ItemStack sword, UUID killerId, UUID victimId) {
+        if (typeOf(sword) != LegendaryType.STRENGTH_SWORD || killerId == null || victimId == null) {
             return;
         }
 
@@ -5920,11 +6199,15 @@ public final class LegendaryListener implements Listener {
         Set<UUID> victims = parseLifeStealerVictims(
             meta.getPersistentDataContainer().getOrDefault(keyStrengthSwordVictims, PersistentDataType.STRING, "")
         );
+        if (victims.size() >= STRENGTH_SWORD_STAGE_THREE_KILLS) {
+            return;
+        }
         if (!victims.add(victimId)) {
             return;
         }
 
         meta.getPersistentDataContainer().set(keyStrengthSwordVictims, PersistentDataType.STRING, joinLifeStealerVictims(victims));
+        appendPlayerKillProgressRecord(meta, killerId, victimId);
         meta.lore(buildStrengthSwordLore(meta, victims.size()));
         sword.setItemMeta(meta);
     }
@@ -6200,6 +6483,251 @@ public final class LegendaryListener implements Listener {
             out.append(victim);
         }
         return out.toString();
+    }
+
+    private void appendPlayerKillProgressRecord(ItemMeta meta, UUID killerId, UUID victimId) {
+        if (meta == null || killerId == null || victimId == null || killerId.equals(victimId)) {
+            return;
+        }
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        List<PlayerKillProgressRecord> records = parsePlayerKillProgressRecords(
+            pdc.getOrDefault(keyPlayerKillProgressRecords, PersistentDataType.STRING, "")
+        );
+        records.add(new PlayerKillProgressRecord(killerId, victimId));
+        pdc.set(keyPlayerKillProgressRecords, PersistentDataType.STRING, joinPlayerKillProgressRecords(records));
+        pdc.set(keyPlayerKillProgressMigration, PersistentDataType.INTEGER, 1);
+    }
+
+    private List<PlayerKillProgressRecord> parsePlayerKillProgressRecords(String raw) {
+        List<PlayerKillProgressRecord> records = new ArrayList<>();
+        if (raw == null || raw.isBlank()) {
+            return records;
+        }
+        for (String token : raw.split(";")) {
+            String[] pair = token.split(">", 2);
+            if (pair.length != 2) {
+                continue;
+            }
+            try {
+                UUID killerId = UUID.fromString(pair[0].trim());
+                UUID victimId = UUID.fromString(pair[1].trim());
+                if (!killerId.equals(victimId)) {
+                    records.add(new PlayerKillProgressRecord(killerId, victimId));
+                }
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        return records;
+    }
+
+    private String joinPlayerKillProgressRecords(List<PlayerKillProgressRecord> records) {
+        if (records == null || records.isEmpty()) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder();
+        for (PlayerKillProgressRecord record : records) {
+            if (record == null || record.killerId() == null || record.victimId() == null
+                || record.killerId().equals(record.victimId())) {
+                continue;
+            }
+            if (!out.isEmpty()) {
+                out.append(';');
+            }
+            out.append(record.killerId()).append('>').append(record.victimId());
+        }
+        return out.toString();
+    }
+
+    private void sanitizePlayerKillProgressItems(Player player) {
+        if (player == null) {
+            return;
+        }
+        UUID holderId = player.getUniqueId();
+        sanitizePlayerKillProgressInventory(player.getInventory(), holderId, 0);
+        sanitizePlayerKillProgressInventory(player.getEnderChest(), holderId, 0);
+        Inventory top = player.getOpenInventory().getTopInventory();
+        if (top != null && top != player.getInventory() && top != player.getEnderChest()) {
+            sanitizePlayerKillProgressInventory(top, holderId, 0);
+        }
+    }
+
+    private int sanitizePlayerKillProgressInventory(Inventory inventory, UUID holderId, int depth) {
+        if (inventory == null || depth > LEGENDARY_ITEM_SCAN_MAX_DEPTH) {
+            return 0;
+        }
+        int changed = 0;
+        ItemStack[] contents = inventory.getContents();
+        for (int slot = 0; slot < contents.length; slot++) {
+            ItemStack item = contents[slot];
+            if (!sanitizePlayerKillProgressTree(item, holderId, depth)) {
+                continue;
+            }
+            inventory.setItem(slot, item);
+            changed++;
+        }
+        return changed;
+    }
+
+    private boolean sanitizePlayerKillProgressTree(ItemStack item, UUID holderId, int depth) {
+        if (item == null || item.getType() == Material.AIR || depth > LEGENDARY_ITEM_SCAN_MAX_DEPTH) {
+            return false;
+        }
+        boolean changed = sanitizePlayerKillProgressItem(item, holderId);
+
+        if (depth < LEGENDARY_ITEM_SCAN_MAX_DEPTH
+            && plugin.getBackpackListener() != null
+            && plugin.getBackpackListener().isBackpack(item)) {
+            List<ItemStack> nested = plugin.getBackpackListener().auditContents(null, item);
+            if (!nested.isEmpty()) {
+                ItemStack[] nestedContents = nested.toArray(new ItemStack[0]);
+                boolean nestedChanged = false;
+                for (ItemStack nestedItem : nestedContents) {
+                    nestedChanged |= sanitizePlayerKillProgressTree(nestedItem, holderId, depth + 1);
+                }
+                if (nestedChanged && plugin.getBackpackListener().rewriteAuditContents(item, nestedContents)) {
+                    changed = true;
+                }
+            }
+        }
+
+        ItemMeta currentMeta = item.getItemMeta();
+        if (depth < LEGENDARY_ITEM_SCAN_MAX_DEPTH && currentMeta instanceof BundleMeta bundleMeta) {
+            List<ItemStack> contents = new ArrayList<>(bundleMeta.getItems());
+            boolean nestedChanged = false;
+            for (ItemStack nested : contents) {
+                nestedChanged |= sanitizePlayerKillProgressTree(nested, holderId, depth + 1);
+            }
+            if (nestedChanged) {
+                bundleMeta.setItems(nonEmptyCopies(contents));
+                item.setItemMeta(bundleMeta);
+                changed = true;
+            }
+            currentMeta = item.getItemMeta();
+        }
+
+        if (depth < LEGENDARY_ITEM_SCAN_MAX_DEPTH && currentMeta instanceof BlockStateMeta blockStateMeta) {
+            BlockState state = blockStateMeta.getBlockState();
+            if (state instanceof InventoryHolder holder
+                && sanitizePlayerKillProgressInventory(holder.getInventory(), holderId, depth + 1) > 0) {
+                blockStateMeta.setBlockState(state);
+                item.setItemMeta(blockStateMeta);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    private boolean sanitizePlayerKillProgressItem(ItemStack item, UUID legacyHolderId) {
+        LegendaryType type = typeOf(item);
+        if (!isPlayerKillProgressWeapon(type)) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        boolean migrated = pdc.getOrDefault(keyPlayerKillProgressMigration, PersistentDataType.INTEGER, 0) >= 1;
+        boolean initialMigration = !migrated;
+        boolean hadTrackedRecords = pdc.has(keyPlayerKillProgressRecords, PersistentDataType.STRING);
+        List<PlayerKillProgressRecord> records = parsePlayerKillProgressRecords(
+            pdc.getOrDefault(keyPlayerKillProgressRecords, PersistentDataType.STRING, "")
+        );
+        boolean changed = false;
+
+        if (!migrated) {
+            if (!hadTrackedRecords) {
+                if (type == LegendaryType.MIDAS_SWORD) {
+                    if (midasSharpness(meta) > MIDAS_SWORD_BASE_SHARPNESS) {
+                        records.clear();
+                        changed = true;
+                    }
+                } else {
+                    Set<UUID> legacyVictims = type == LegendaryType.LIFE_STEALER
+                        ? parseLifeStealerVictims(pdc.getOrDefault(keyLifeStealerSeenPlayers, PersistentDataType.STRING, ""))
+                        : parseLifeStealerVictims(pdc.getOrDefault(keyStrengthSwordVictims, PersistentDataType.STRING, ""));
+                    if (legacyHolderId != null) {
+                        for (UUID victimId : legacyVictims) {
+                            records.add(new PlayerKillProgressRecord(legacyHolderId, victimId));
+                        }
+                    } else if (!legacyVictims.isEmpty()) {
+                        records.clear();
+                    }
+                    changed |= !legacyVictims.isEmpty();
+                }
+            }
+            pdc.set(keyPlayerKillProgressMigration, PersistentDataType.INTEGER, 1);
+            changed = true;
+        }
+
+        if (initialMigration) {
+            int before = records.size();
+            records.removeIf(record -> blocksPlayerKillProgress(record.killerId(), record.victimId()));
+            if (records.size() != before) {
+                changed = true;
+            }
+        }
+
+        String encoded = joinPlayerKillProgressRecords(records);
+        String currentEncoded = pdc.getOrDefault(keyPlayerKillProgressRecords, PersistentDataType.STRING, "");
+        if (!encoded.equals(currentEncoded)) {
+            pdc.set(keyPlayerKillProgressRecords, PersistentDataType.STRING, encoded);
+            changed = true;
+        }
+
+        if (type == LegendaryType.MIDAS_SWORD) {
+            int expected = derivedKillProgressLevel(
+                MIDAS_SWORD_BASE_SHARPNESS,
+                MIDAS_SWORD_MAX_SHARPNESS,
+                records.size()
+            );
+            if (midasSharpness(meta) != expected) {
+                pdc.set(keyMidasSharpness, PersistentDataType.INTEGER, expected);
+                setEnchantLevel(meta, enchantSharpness, expected);
+                meta.lore(buildMidasSwordLore(meta, expected));
+                changed = true;
+            }
+        } else {
+            LinkedHashSet<UUID> validVictims = new LinkedHashSet<>();
+            for (PlayerKillProgressRecord record : records) {
+                validVictims.add(record.victimId());
+            }
+            if (type == LegendaryType.LIFE_STEALER) {
+                int expectedStacks = Math.min(LIFE_STEALER_MAX_STACKS, validVictims.size());
+                int expectedSharpness = derivedKillProgressLevel(3, LIFE_STEALER_MAX_SHARPNESS, validVictims.size());
+                LifeStealerState expectedState = expectedStacks <= 0
+                    ? LifeStealerState.empty()
+                    : new LifeStealerState(expectedStacks, Long.MAX_VALUE, validVictims);
+                if (!lifeStealerState(item).seenVictims().equals(validVictims)
+                    || lifeStealerState(item).stacks() != expectedStacks
+                    || lifeStealerSharpness(meta) != expectedSharpness) {
+                    setLifeStealerSharpness(meta, expectedSharpness);
+                    applyLifeStealerState(meta, expectedState);
+                    changed = true;
+                }
+            } else {
+                Set<UUID> currentVictims = parseLifeStealerVictims(
+                    pdc.getOrDefault(keyStrengthSwordVictims, PersistentDataType.STRING, "")
+                );
+                if (!currentVictims.equals(validVictims)) {
+                    pdc.set(keyStrengthSwordVictims, PersistentDataType.STRING, joinLifeStealerVictims(validVictims));
+                    meta.lore(buildStrengthSwordLore(meta, validVictims.size()));
+                    changed = true;
+                }
+            }
+        }
+
+        if (changed) {
+            item.setItemMeta(meta);
+        }
+        return changed;
+    }
+
+    static int derivedKillProgressLevel(int baseLevel, int maxLevel, int eligibleKills) {
+        int safeBase = Math.max(0, baseLevel);
+        int safeMax = Math.max(safeBase, maxLevel);
+        return Math.min(safeMax, safeBase + Math.max(0, eligibleKills));
     }
 
     private void tickLegendaryStates() {
@@ -6525,6 +7053,7 @@ public final class LegendaryListener implements Listener {
         cleanupExpiredCooldownMap(strengthSwordDomainCd, now);
         cleanupExpiredCooldownMap(dashMaceCd, now);
         cleanupExpiredCooldownMap(thorsHammerCd, now);
+        cleanupExpiredCooldownMap(killProgressWarningCd, now);
         cleanupExpiredCooldownMap(blinkDaggerStunnedUntil, now);
         cleanupExpiredCooldownMap(shadowBladeActiveUntil, now);
         rhittaBurns.entrySet().removeIf(entry -> entry.getValue() == null || entry.getValue().expiresAt() <= now);
@@ -7781,7 +8310,7 @@ public final class LegendaryListener implements Listener {
                 "Blood Alchemy",
                 "<gray>Unique player kills permanently build up to <white>Strength III</white>, <white>Speed III</white>, and</gray>",
                 "<gray><white>5 Absorption Hearts</white> while you carry the blade.</gray>",
-                "<gray>Every player kill also raises the sword by <white>+1 Sharpness</white> up to <white>" + LIFE_STEALER_MAX_SHARPNESS + "</white>.</gray>"
+                "<gray>Each unique eligible player kill also raises the sword by <white>+1 Sharpness</white> up to <white>" + LIFE_STEALER_MAX_SHARPNESS + "</white>.</gray>"
             )
         );
     }
@@ -8225,7 +8754,7 @@ public final class LegendaryListener implements Listener {
     private void collectLoadedWorldLegendaryCopies(Map<String, List<LegendaryCopy>> copiesByLegendaryId) {
         for (World world : Bukkit.getWorlds()) {
             for (Chunk chunk : world.getLoadedChunks()) {
-                for (BlockState state : chunk.getTileEntities()) {
+                for (BlockState state : chunk.getTileEntities(false)) {
                     if (!(state instanceof InventoryHolder holder)) {
                         continue;
                     }
@@ -8813,15 +9342,18 @@ public final class LegendaryListener implements Listener {
 
     private int migrateLegendaryItemsInChunk(Chunk chunk) {
         int migrated = 0;
-        for (BlockState state : chunk.getTileEntities()) {
+        for (BlockState state : chunk.getTileEntities(false)) {
             if (state instanceof InventoryHolder holder) {
                 migrated += migrateLegendaryItemsInInventory(holder.getInventory());
+                migrated += sanitizePlayerKillProgressInventory(holder.getInventory(), null, 0);
             }
         }
         for (Entity entity : chunk.getEntities()) {
             if (entity instanceof Item dropped) {
                 ItemStack stack = dropped.getItemStack();
-                if (migrateLegendaryItemTree(stack)) {
+                boolean changed = migrateLegendaryItemTree(stack);
+                changed |= sanitizePlayerKillProgressTree(stack, null, 0);
+                if (changed) {
                     dropped.setItemStack(stack);
                     migrated++;
                 }
@@ -8829,7 +9361,9 @@ public final class LegendaryListener implements Listener {
             }
             if (entity instanceof ItemFrame frame) {
                 ItemStack stack = frame.getItem();
-                if (migrateLegendaryItemTree(stack)) {
+                boolean changed = migrateLegendaryItemTree(stack);
+                changed |= sanitizePlayerKillProgressTree(stack, null, 0);
+                if (changed) {
                     frame.setItem(stack);
                     migrated++;
                 }
@@ -8837,7 +9371,9 @@ public final class LegendaryListener implements Listener {
             }
             if (entity instanceof Trident trident) {
                 ItemStack stack = trident.getItem();
-                if (migrateLegendaryItemTree(stack)) {
+                boolean changed = migrateLegendaryItemTree(stack);
+                changed |= sanitizePlayerKillProgressTree(stack, null, 0);
+                if (changed) {
                     trident.setItem(stack);
                     migrated++;
                 }
@@ -8850,6 +9386,7 @@ public final class LegendaryListener implements Listener {
             }
             if (entity instanceof InventoryHolder holder && !(entity instanceof Player)) {
                 migrated += migrateLegendaryItemsInInventory(holder.getInventory());
+                migrated += sanitizePlayerKillProgressInventory(holder.getInventory(), null, 0);
             }
         }
         return migrated;
@@ -9803,22 +10340,22 @@ public final class LegendaryListener implements Listener {
         ),
         TOOLS(
             "tools",
-            "Reliquary: Tools",
+            "Reliquary: Tools & Gear",
             Material.NETHERITE_PICKAXE,
             "<gradient:#72f7ff:#4dff88><bold>Tools & Gear</bold></gradient>",
             List.of(
-                "<gray>Craftable utility gear, backpacks, magnets, and custom tools.</gray>",
-                "<gray>Mostly normal crafting table recipes.</gray>"
+                "<gray>Backpacks, stations, custom tools, and support relics.</gray>",
+                "<gray>Seasonal utility relics are included here too.</gray>"
             )
         ),
-        UTILITY(
-            "utility",
-            "Reliquary: Utility",
-            Material.AMETHYST_SHARD,
-            "<gradient:#c77dff:#ff7ad9><bold>Utility Relics</bold></gradient>",
+        ENCHANTS(
+            "enchants",
+            "Reliquary: Enchants",
+            Material.ENCHANTED_BOOK,
+            "<gradient:#00d4ff:#73ff9d><bold>Custom Enchants</bold></gradient>",
             List.of(
-                "<gray>Support items that change classes, survival, or progression.</gray>",
-                "<gray>Good place to check non-weapon custom recipes.</gray>"
+                "<gray>Browse every custom enchant, compatible item,</gray>",
+                "<gray>effect, level, and craftable book recipe.</gray>"
             )
         ),
         SEASON(
@@ -9828,7 +10365,7 @@ public final class LegendaryListener implements Listener {
             "<gradient:#8b5cf6:#22d3ee><bold>Armory of the Veil</bold></gradient>",
             List.of(
                 "<gray>Boss trophies, weapons, armor sets,</gray>",
-                "<gray>standalone armor, and tactical utility relics.</gray>"
+                "<gray>standalone armor, and progression materials.</gray>"
             )
         );
 
@@ -9856,7 +10393,7 @@ public final class LegendaryListener implements Listener {
         }
     }
 
-    private record ReliquaryMenuHolder(ReliquarySection section) implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
+    private record ReliquaryMenuHolder(ReliquarySection section, int page) implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;
@@ -9892,6 +10429,13 @@ public final class LegendaryListener implements Listener {
     }
 
     private record TalismanRecipeHolder() implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+
+    private record VelocityNullifierRecipeHolder() implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
         @Override
         public Inventory getInventory() {
             return null;
@@ -10023,6 +10567,7 @@ public final class LegendaryListener implements Listener {
     private record LegendaryCopy(Player player, int amount, String instanceId, java.util.function.IntConsumer retainer) {}
 
     private record PendingLegendaryHandoff(String instanceId, UUID previousOwnerId, long expiresAt) {}
+    private record PlayerKillProgressRecord(UUID killerId, UUID victimId) {}
 
     private static final class RecipeOffhandHolder {
         private ItemStack item;

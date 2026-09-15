@@ -511,6 +511,10 @@ public final class RareDropVisualListener implements Listener {
             return new RareDropProfile(displayName, "EPIC", colorForRarity("EPIC"));
         }
 
+        if (plugin.getVelocityNullifierListener() != null && plugin.getVelocityNullifierListener().isNullifier(item)) {
+            return new RareDropProfile(displayName, "RARE", colorForRarity("RARE"));
+        }
+
         SuperpowerManager powers = plugin.getSuperpowerManager();
         if (powers != null) {
             if (powers.isAncientScroll(item)) {

@@ -246,6 +246,7 @@ public final class ConfigManager {
     public double doubleJumpForwardBoost;
     public int doubleJumpHungerCost;
     public int dashEnchantCooldownSeconds;
+    public int dashEnchantHungerCost;
     public double dashEnchantHorizontalBoost;
     public double dashEnchantVerticalBoost;
 
@@ -490,7 +491,12 @@ public final class ConfigManager {
         }
         wildEnabled = c.getBoolean("wild.enabled", true);
         wildWorld = nonBlank(c.getString("wild.world", spawnWorld), spawnWorld);
-        wildCooldownSeconds = clamp(c.getInt("wild.cooldown-seconds", 300), 0, 86_400);
+        if (!c.getBoolean("wild.cooldown-30-seconds-migrated", false)) {
+            c.set("wild.cooldown-seconds", 30);
+            c.set("wild.cooldown-30-seconds-migrated", true);
+            plugin.saveConfig();
+        }
+        wildCooldownSeconds = clamp(c.getInt("wild.cooldown-seconds", 30), 0, 86_400);
         wildBorderPadding = clamp(c.getInt("wild.border-padding", 32), 0, 512);
         wildMinimumSpawnDistance = clamp(c.getInt("wild.minimum-spawn-distance", 600), 0, 50_000);
         wildSearchAttempts = clamp(c.getInt("wild.search-attempts", 24), 1, 64);
@@ -926,6 +932,7 @@ public final class ConfigManager {
         doubleJumpForwardBoost = clamp(c.getDouble("custom-enchants.double-jump.forward-boost", 0.75), 0.0, 3.0);
         doubleJumpHungerCost = clamp(c.getInt("custom-enchants.double-jump.hunger-cost", 2), 0, 20);
         dashEnchantCooldownSeconds = clamp(c.getInt("custom-enchants.dash.cooldown-seconds", 15), 0, 3600);
+        dashEnchantHungerCost = clamp(c.getInt("custom-enchants.dash.hunger-cost", 2), 0, 20);
         dashEnchantHorizontalBoost = clamp(c.getDouble("custom-enchants.dash.horizontal-boost", 1.85), 0.1, 6.0);
         dashEnchantVerticalBoost = clamp(c.getDouble("custom-enchants.dash.vertical-boost", 0.42), 0.0, 3.0);
 

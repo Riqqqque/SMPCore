@@ -1141,9 +1141,27 @@ public final class BeastwardenManager implements Listener {
         return quest.kind == QuestKind.RIDE ? String.valueOf((int) Math.floor(progress)) : String.valueOf((int) progress);
     }
 
+    public boolean isWildboundArmor(ItemStack item) {
+        if (item == null || item.getType().isAir() || !item.hasItemMeta()) return false;
+        String piece = item.getItemMeta().getPersistentDataContainer().get(armorPieceKey, PersistentDataType.STRING);
+        return isValidWildboundArmorPiece(item.getType(), piece);
+    }
+
+    public static boolean isValidWildboundArmorPiece(Material material, String piece) {
+        if (material == null || piece == null) return false;
+        return switch (piece) {
+            case "helm" -> material == Material.NETHERITE_HELMET;
+            case "chestplate" -> material == Material.NETHERITE_CHESTPLATE;
+            case "leggings" -> material == Material.NETHERITE_LEGGINGS;
+            case "boots" -> material == Material.NETHERITE_BOOTS;
+            default -> false;
+        };
+    }
+
     private boolean isArmorPiece(ItemStack item, String piece) {
         if (item == null || item.getType().isAir() || !item.hasItemMeta()) return false;
-        return piece.equals(item.getItemMeta().getPersistentDataContainer().get(armorPieceKey, PersistentDataType.STRING));
+        return piece.equals(item.getItemMeta().getPersistentDataContainer().get(armorPieceKey, PersistentDataType.STRING))
+            && isValidWildboundArmorPiece(item.getType(), piece);
     }
 
     private ItemStack item(Material material, String name, List<String> lore, String action) {

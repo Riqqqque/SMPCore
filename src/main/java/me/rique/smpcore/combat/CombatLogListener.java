@@ -3,6 +3,7 @@ package me.rique.smpcore.combat;
 import com.destroystokyo.paper.event.player.PlayerElytraBoostEvent;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
@@ -285,7 +286,7 @@ public final class CombatLogListener implements Listener {
     }
 
     private boolean bypassesNakedPvpGuard(Player player) {
-        return player.hasPermission("smpcore.pvpguard.bypass");
+        return OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.pvpguard.bypass");
     }
 
     private void watchArmorState() {

@@ -1,9 +1,12 @@
 package me.rique.smpcore.item;
 
 import me.rique.smpcore.SMPCore;
+import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
 import me.rique.smpcore.util.InventoryRecipeUtil;
 import me.rique.smpcore.util.ItemModelUtil;
+import me.rique.smpcore.util.MenuDupeGuardListener;
+import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
@@ -44,11 +47,13 @@ import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.CraftItemEvent;
+import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.inventory.InventoryPickupItemEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
+import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareItemCraftEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
@@ -75,6 +80,7 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -91,13 +97,66 @@ public final class SalvagingDepotListener implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final long LOADED_DEPOT_RECONCILE_TICKS = 20L * 60L * 5L;
-    private static final long KNOWN_DEPOT_SCAN_TICKS = 20L * 5L;
+    private static final long KNOWN_DEPOT_SCAN_TICKS = 20L * 30L;
+    private static final double SETTINGS_RANGE_SQUARED = 64.0D;
     private static final BlockFace[] HORIZONTAL_FACES = {
         BlockFace.NORTH,
         BlockFace.EAST,
         BlockFace.SOUTH,
         BlockFace.WEST
     };
+
+    private enum DepotScanResult {
+        NONE,
+        QUEUED,
+        TRASH_QUEUED,
+        STARTED,
+        COMPLETED,
+        DISCARDED,
+        RESTORED
+    }
+
+    enum HopperInputMode {
+        SALVAGE_ONLY("salvage_only", "Salvageable Gear Only"),
+        ACCEPT_ALL("accept_all", "Accept Everything"),
+        GUARDED_TRASH("guarded_trash", "Guarded Trash");
+
+        private final String id;
+        private final String displayName;
+
+        HopperInputMode(String id, String displayName) {
+            this.id = id;
+            this.displayName = displayName;
+        }
+
+        static HopperInputMode fromId(String id) {
+            if (id != null) {
+                for (HopperInputMode mode : values()) {
+                    if (mode.id.equalsIgnoreCase(id)) {
+                        return mode;
+                    }
+                }
+            }
+            return SALVAGE_ONLY;
+        }
+    }
+
+    enum HopperInputDisposition {
+        SALVAGEABLE,
+        DELETABLE,
+        PROTECTED
+    }
+
+    static boolean acceptsHopperInput(HopperInputMode mode, HopperInputDisposition disposition) {
+        if (mode == null || disposition == null) {
+            return false;
+        }
+        return switch (mode) {
+            case SALVAGE_ONLY -> disposition == HopperInputDisposition.SALVAGEABLE;
+            case ACCEPT_ALL -> true;
+            case GUARDED_TRASH -> disposition != HopperInputDisposition.PROTECTED;
+        };
+    }
 
     private final SMPCore plugin;
     private final NamespacedKey keyDepotItem;
@@ -107,12 +166,23 @@ public final class SalvagingDepotListener implements Listener {
     private final NamespacedKey keyProcessingId;
     private final NamespacedKey keyProcessingReadyAt;
     private final NamespacedKey keyQueueReadyAt;
+    private final NamespacedKey keyTrashReadyAt;
+    private final NamespacedKey keySalvageOutput;
+    private final NamespacedKey keyHopperInputMode;
+    private final NamespacedKey keyResultsOnlyBelow;
+    private final NamespacedKey keySettingsAction;
     private final NamespacedKey recipeKey;
     private final Map<String, UUID> hologramsByBlock = new ConcurrentHashMap<>();
     private final Set<String> knownDepotBlocks = ConcurrentHashMap.newKeySet();
     private final Set<String> pendingDepotBlocks = ConcurrentHashMap.newKeySet();
     private final Map<Inventory, String> depotBlocksByInventory = Collections.synchronizedMap(new IdentityHashMap<>());
-    private final Map<UUID, BukkitTask> processingTasks = new ConcurrentHashMap<>();
+    private final Map<String, BukkitTask> immediateScanTasks = new HashMap<>();
+    private final Map<String, BukkitTask> settledScanTasks = new HashMap<>();
+    private final Map<String, BukkitTask> queueScanTasks = new HashMap<>();
+    private final Map<String, Long> queueScanReadyAt = new HashMap<>();
+    private final Map<String, BukkitTask> completionScanTasks = new HashMap<>();
+    private final Map<String, Long> completionScanReadyAt = new HashMap<>();
+    private final Set<String> pendingOutputTransfers = ConcurrentHashMap.newKeySet();
     private BukkitTask maintenanceTask;
     private BukkitTask quickScanTask;
 
@@ -125,6 +195,11 @@ public final class SalvagingDepotListener implements Listener {
         this.keyProcessingId = new NamespacedKey(plugin, "salvage_processing_id");
         this.keyProcessingReadyAt = new NamespacedKey(plugin, "salvage_ready_at");
         this.keyQueueReadyAt = new NamespacedKey(plugin, "salvage_queue_ready_at");
+        this.keyTrashReadyAt = new NamespacedKey(plugin, "salvage_trash_ready_at");
+        this.keySalvageOutput = new NamespacedKey(plugin, "salvage_output");
+        this.keyHopperInputMode = new NamespacedKey(plugin, "salvage_hopper_input_mode");
+        this.keyResultsOnlyBelow = new NamespacedKey(plugin, "salvage_results_only_below");
+        this.keySettingsAction = new NamespacedKey(plugin, "salvage_settings_action");
         this.recipeKey = new NamespacedKey(plugin, ITEM_ID);
     }
 
@@ -149,10 +224,12 @@ public final class SalvagingDepotListener implements Listener {
             quickScanTask.cancel();
             quickScanTask = null;
         }
-        for (BukkitTask task : processingTasks.values()) {
-            task.cancel();
-        }
-        processingTasks.clear();
+        cancelTasks(immediateScanTasks);
+        cancelTasks(settledScanTasks);
+        cancelTasks(queueScanTasks);
+        cancelTasks(completionScanTasks);
+        queueScanReadyAt.clear();
+        completionScanReadyAt.clear();
         for (UUID displayId : new ArrayList<>(hologramsByBlock.values())) {
             Entity entity = Bukkit.getEntity(displayId);
             if (entity != null && entity.isValid()) {
@@ -162,7 +239,20 @@ public final class SalvagingDepotListener implements Listener {
         hologramsByBlock.clear();
         knownDepotBlocks.clear();
         pendingDepotBlocks.clear();
+        pendingOutputTransfers.clear();
         depotBlocksByInventory.clear();
+    }
+
+    private void cancelTasks(Map<?, BukkitTask> tasks) {
+        for (BukkitTask task : tasks.values()) {
+            task.cancel();
+        }
+        tasks.clear();
+    }
+
+    private void cancelTask(Map<String, BukkitTask> tasks, String blockKey) {
+        BukkitTask task = tasks.remove(blockKey);
+        if (task != null) task.cancel();
     }
 
     public ItemStack createDepotItem() {
@@ -181,7 +271,8 @@ public final class SalvagingDepotListener implements Listener {
             List.of(
                 "<gray>Break old gear down into raw materials.</gray>",
                 "<gray>Works with manual inserts and hoppers.</gray>",
-                "<gray>Place two together for <white>54 slots</white>.</gray>"
+                "<gray>Place two together for <white>54 slots</white>.</gray>",
+                "<gray>Sneak-right-click for hopper settings.</gray>"
             ),
             List.of(
                 CustomLoreUtil.section(
@@ -196,7 +287,8 @@ public final class SalvagingDepotListener implements Listener {
                     "Safety",
                     "No Relic Recycling",
                     "<gray>Unique relics, legendaries, backpacks, stations, and class items are ignored.</gray>",
-                    "<gray>Processing items cannot be pulled out by players or hoppers.</gray>"
+                    "<gray>Processing items cannot be pulled out by players or hoppers.</gray>",
+                    "<gray>Guarded Trash rejects valuable, custom, named, enchanted, and data-bearing items.</gray>"
                 )
             )
         ));
@@ -233,10 +325,6 @@ public final class SalvagingDepotListener implements Listener {
         return cancelWindowSeconds() * 1000L;
     }
 
-    private long cancelWindowTicks() {
-        return cancelWindowSeconds() * 20L;
-    }
-
     private int processingSeconds() {
         return plugin.getConfigManager() == null
             ? 6
@@ -245,10 +333,6 @@ public final class SalvagingDepotListener implements Listener {
 
     private long processingMillis() {
         return processingSeconds() * 1000L;
-    }
-
-    private long processingTicks() {
-        return processingSeconds() * 20L;
     }
 
     private double returnRate() {
@@ -290,7 +374,7 @@ public final class SalvagingDepotListener implements Listener {
         }
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onKick(PlayerKickEvent event) {
         purgeQueuedItemsOutsideDepot(event.getPlayer());
     }
@@ -361,6 +445,23 @@ public final class SalvagingDepotListener implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onSettingsInteract(PlayerInteractEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND
+            || event.getAction() != Action.RIGHT_CLICK_BLOCK
+            || !event.getPlayer().isSneaking()
+            || event.getClickedBlock() == null
+            || !isDepotBlock(event.getClickedBlock())) {
+            return;
+        }
+
+        event.setCancelled(true);
+        Block canonical = canonicalDepotBlock(event.getClickedBlock());
+        synchronizeDepotSettings(canonical);
+        openSettingsMenu(event.getPlayer(), canonical);
+        scheduleBlockScan(canonical);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBreak(BlockBreakEvent event) {
         Block block = event.getBlock();
         if (!isDepotBlock(block)) {
@@ -398,6 +499,10 @@ public final class SalvagingDepotListener implements Listener {
     public void onInventoryClick(InventoryClickEvent event) {
         Inventory top = event.getView().getTopInventory();
         Player player = event.getWhoClicked() instanceof Player clickedPlayer ? clickedPlayer : null;
+        if (top.getHolder() instanceof DepotSettingsHolder holder) {
+            handleSettingsClick(event, player, holder);
+            return;
+        }
         if (!resolveDepotInventory(top)) {
             if (player != null && cleanEscapedDepotState(event)) {
                 Bukkit.getScheduler().runTask(plugin, () -> purgeQueuedItemsOutsideDepot(player, true));
@@ -424,7 +529,7 @@ public final class SalvagingDepotListener implements Listener {
                 scheduleScan(top);
                 return;
             }
-            if (isQueued(current)) {
+            if (isQueued(current) || isTrashQueued(current) || isSalvageOutput(current)) {
                 event.setCurrentItem(cleanDepotState(current));
                 scheduleScan(top);
                 if (player != null) {
@@ -437,15 +542,19 @@ public final class SalvagingDepotListener implements Listener {
         scheduleScan(top);
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onInventoryDrag(InventoryDragEvent event) {
         Inventory top = event.getView().getTopInventory();
+        if (top.getHolder() instanceof DepotSettingsHolder) {
+            event.setCancelled(true);
+            return;
+        }
         if (resolveDepotInventory(top)) {
             scheduleScan(top);
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onInventoryClose(InventoryCloseEvent event) {
         if (resolveDepotInventory(event.getInventory())) {
             scanDepot(event.getInventory());
@@ -462,26 +571,162 @@ public final class SalvagingDepotListener implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onInventoryMoveItem(InventoryMoveItemEvent event) {
         if (isDepotInventory(event.getSource())) {
-            if (isProcessing(event.getItem()) || isQueued(event.getItem()) || !salvageOutputs(event.getItem()).isEmpty()) {
+            Block block = depotBlock(event.getSource());
+            ItemStack moved = event.getItem();
+            boolean markedOutput = isSalvageOutput(moved);
+            boolean locked = isProcessing(moved)
+                || isQueued(moved)
+                || isTrashQueued(moved)
+                || (!markedOutput && !salvageOutputs(moved).isEmpty());
+            boolean restrictedOutput = block != null && resultsOnlyBelow(block);
+            boolean validOutputPath = !restrictedOutput || (markedOutput && isHopperDirectlyBelow(event.getDestination(), block));
+            if (locked || !validOutputPath) {
                 event.setCancelled(true);
+            } else if (markedOutput) {
+                event.setCancelled(true);
+                scheduleMarkedOutputTransfer(event.getSource(), event.getDestination(), moved, block, restrictedOutput);
             }
             scheduleScan(event.getSource());
             return;
         }
 
         if (isDepotInventory(event.getDestination())) {
+            Block block = depotBlock(event.getDestination());
+            HopperInputMode mode = block == null ? HopperInputMode.SALVAGE_ONLY : hopperInputMode(block);
+            HopperInputDisposition disposition = classifyHopperInput(event.getItem());
+            if (!acceptsHopperInput(mode, disposition)) {
+                event.setCancelled(true);
+                return;
+            }
             scheduleScan(event.getDestination());
         }
+    }
+
+    private boolean isHopperDirectlyBelow(Inventory destination, Block depotBlock) {
+        if (destination == null || depotBlock == null) {
+            return false;
+        }
+        Location location = destination.getLocation();
+        if (location == null) {
+            return false;
+        }
+        Block hopper = location.getBlock();
+        if (hopper.getType() != Material.HOPPER) {
+            return false;
+        }
+        Block above = hopper.getRelative(BlockFace.UP);
+        Block canonical = canonicalDepotBlock(depotBlock);
+        Block pair = pairedDepotBlock(canonical);
+        return sameBlock(above, canonical) || (pair != null && sameBlock(above, pair));
+    }
+
+    private void scheduleMarkedOutputTransfer(
+        Inventory source,
+        Inventory destination,
+        ItemStack requested,
+        Block depotBlock,
+        boolean requireBelow
+    ) {
+        if (source == null || destination == null || requested == null || depotBlock == null) {
+            return;
+        }
+        Location destinationLocation = destination.getLocation();
+        String destinationKey = destinationLocation == null
+            ? "inventory-" + System.identityHashCode(destination)
+            : destinationLocation.getWorld().getUID() + ":" + destinationLocation.getBlockX()
+                + ":" + destinationLocation.getBlockY() + ":" + destinationLocation.getBlockZ();
+        String transferKey = blockKey(canonicalDepotBlock(depotBlock)) + "->" + destinationKey;
+        if (!pendingOutputTransfers.add(transferKey)) {
+            return;
+        }
+        ItemStack requestedClone = requested.clone();
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            try {
+                Block liveDepot = depotBlock(source);
+                if (liveDepot == null || !isDepotBlock(liveDepot)) {
+                    return;
+                }
+                if (requireBelow && !isHopperDirectlyBelow(destination, liveDepot)) {
+                    return;
+                }
+                transferMarkedOutput(source, destination, requestedClone, liveDepot);
+            } finally {
+                pendingOutputTransfers.remove(transferKey);
+            }
+        });
+    }
+
+    private void transferMarkedOutput(Inventory source, Inventory destination, ItemStack requested, Block depotBlock) {
+        int requestedAmount = Math.max(1, requested.getAmount());
+        for (int slot = 0; slot < source.getStorageContents().length; slot++) {
+            ItemStack stored = source.getItem(slot);
+            if (!isSalvageOutput(stored) || !stored.isSimilar(requested)) {
+                continue;
+            }
+
+            ItemStack clean = cleanSalvageOutput(stored);
+            int moving = Math.min(requestedAmount, stored.getAmount());
+            int accepted = Math.min(moving, destinationCapacity(destination, clean));
+            if (accepted <= 0) {
+                return;
+            }
+
+            int remainingAmount = stored.getAmount() - accepted;
+            if (remainingAmount <= 0) {
+                source.setItem(slot, null);
+            } else {
+                ItemStack remaining = stored.clone();
+                remaining.setAmount(remainingAmount);
+                source.setItem(slot, remaining);
+            }
+
+            ItemStack delivery = clean.clone();
+            delivery.setAmount(accepted);
+            Map<Integer, ItemStack> leftovers = destination.addItem(delivery);
+            int rejected = leftovers.values().stream().mapToInt(ItemStack::getAmount).sum();
+            if (rejected > 0) {
+                ItemStack restore = stored.clone();
+                restore.setAmount(rejected);
+                Map<Integer, ItemStack> restoreLeftovers = source.addItem(restore);
+                restoreLeftovers.values().forEach(leftover ->
+                    depotBlock.getWorld().dropItemNaturally(
+                        depotBlock.getLocation().add(0.5, 0.8, 0.5),
+                        cleanSalvageOutput(leftover)
+                    )
+                );
+            }
+            scheduleScan(source);
+            return;
+        }
+    }
+
+    private int destinationCapacity(Inventory destination, ItemStack item) {
+        if (destination == null || item == null || item.getType().isAir()) {
+            return 0;
+        }
+        int capacity = 0;
+        int perSlot = Math.min(item.getMaxStackSize(), destination.getMaxStackSize());
+        for (ItemStack existing : destination.getStorageContents()) {
+            if (existing == null || existing.getType().isAir()) {
+                capacity += perSlot;
+            } else if (existing.isSimilar(item)) {
+                capacity += Math.max(0, perSlot - existing.getAmount());
+            }
+            if (capacity >= item.getAmount()) {
+                return item.getAmount();
+            }
+        }
+        return capacity;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onDeath(PlayerDeathEvent event) {
         for (int i = 0; i < event.getDrops().size(); i++) {
             ItemStack item = event.getDrops().get(i);
-            if (isQueued(item) || isProcessing(item)) {
+            if (hasDepotState(item)) {
                 event.getDrops().set(i, cleanDepotState(item));
             }
         }
@@ -496,6 +741,187 @@ public final class SalvagingDepotListener implements Listener {
     @EventHandler(ignoreCancelled = true)
     public void onChunkUnload(ChunkUnloadEvent event) {
         removeChunkHolograms(event.getChunk());
+    }
+
+    private void openSettingsMenu(Player player, Block block) {
+        Inventory menu = Bukkit.createInventory(
+            new DepotSettingsHolder(blockKey(canonicalDepotBlock(block))),
+            27,
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize("<gradient:#74ee15:#22c55e><bold>Depot Hopper Settings</bold></gradient>"),
+                "Depot Settings"
+            )
+        );
+        renderSettingsMenu(menu, canonicalDepotBlock(block));
+        player.openInventory(menu);
+    }
+
+    private void renderSettingsMenu(Inventory menu, Block block) {
+        ItemStack filler = settingsItem(Material.GRAY_STAINED_GLASS_PANE, "<dark_gray> ", List.of(), null);
+        for (int slot = 0; slot < menu.getSize(); slot++) {
+            menu.setItem(slot, filler);
+        }
+
+        HopperInputMode currentMode = hopperInputMode(block);
+        boolean outputBelow = resultsOnlyBelow(block);
+        menu.setItem(4, settingsItem(
+            Material.HOPPER,
+            "<green><bold>Hopper Input</bold></green>",
+            List.of(
+                "<gray>Choose what hoppers may insert.</gray>",
+                "<gray>Manual chest use is never filtered.</gray>",
+                "<gray>Current:</gray> <white>" + currentMode.displayName + "</white>"
+            ),
+            null
+        ));
+        menu.setItem(10, modeSettingsItem(
+            Material.IRON_CHESTPLATE,
+            HopperInputMode.SALVAGE_ONLY,
+            currentMode,
+            List.of(
+                "<gray>Only gear this depot can salvage enters.</gray>",
+                "<gray>Everything else stays in the source hopper.</gray>",
+                "<green>Safest default.</green>"
+            )
+        ));
+        menu.setItem(12, modeSettingsItem(
+            Material.CHEST,
+            HopperInputMode.ACCEPT_ALL,
+            currentMode,
+            List.of(
+                "<gray>Accept every item as ordinary storage.</gray>",
+                "<gray>Unsalvageable items are never deleted.</gray>"
+            )
+        ));
+        menu.setItem(14, modeSettingsItem(
+            Material.LAVA_BUCKET,
+            HopperInputMode.GUARDED_TRASH,
+            currentMode,
+            List.of(
+                "<gray>Salvage gear and dispose of plain junk.</gray>",
+                "<yellow>Junk waits " + cancelWindowSeconds() + "s before deletion.</yellow>",
+                "<gray>Custom, named, enchanted, valuable,</gray>",
+                "<gray>data-bearing, and unstackable items are rejected.</gray>"
+            )
+        ));
+        menu.setItem(16, settingsItem(
+            outputBelow ? Material.LIME_DYE : Material.GRAY_DYE,
+            outputBelow
+                ? "<green><bold>Results-Only Output: ON</bold></green>"
+                : "<gray><bold>Results-Only Output: OFF</bold></gray>",
+            List.of(
+                "<gray>When enabled, only salvage results can</gray>",
+                "<gray>leave through a hopper directly below.</gray>",
+                "<gray>Side hoppers and stored items are blocked.</gray>",
+                "<yellow>Click to " + (outputBelow ? "disable" : "enable") + ".</yellow>"
+            ),
+            "toggle_output"
+        ));
+        menu.setItem(21, settingsItem(
+            Material.WRITABLE_BOOK,
+            "<aqua><bold>Safety Notes</bold></aqua>",
+            List.of(
+                "<gray>Processing gear cannot be hopper-extracted.</gray>",
+                "<gray>Protected items are never auto-deleted.</gray>",
+                "<gray>Remove queued junk before its timer ends to save it.</gray>",
+                "<gray>Settings apply to both halves of a large depot.</gray>"
+            ),
+            null
+        ));
+        menu.setItem(23, settingsItem(
+            Material.BARRIER,
+            "<red><bold>Close</bold></red>",
+            List.of("<gray>Return to the world.</gray>"),
+            "close"
+        ));
+    }
+
+    private ItemStack modeSettingsItem(
+        Material material,
+        HopperInputMode mode,
+        HopperInputMode current,
+        List<String> description
+    ) {
+        List<String> lore = new ArrayList<>(description);
+        lore.add(mode == current ? "<green><bold>SELECTED</bold></green>" : "<yellow>Click to select.</yellow>");
+        return settingsItem(
+            material,
+            mode == current
+                ? "<green><bold>" + mode.displayName + "</bold></green>"
+                : "<white><bold>" + mode.displayName + "</bold></white>",
+            lore,
+            "mode:" + mode.id
+        );
+    }
+
+    private ItemStack settingsItem(Material material, String name, List<String> lore, String action) {
+        ItemStack item = new ItemStack(material);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        meta.displayName(MM.deserialize(MenuItemUtil.visibleMiniName(name)));
+        meta.lore(MenuItemUtil.visibleMiniLore(name, lore).stream().map(MM::deserialize).toList());
+        meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+        if (action != null) {
+            meta.getPersistentDataContainer().set(keySettingsAction, PersistentDataType.STRING, action);
+        }
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private void handleSettingsClick(InventoryClickEvent event, Player player, DepotSettingsHolder holder) {
+        boolean alreadyCancelled = event.isCancelled();
+        event.setCancelled(true);
+        if (alreadyCancelled
+            || player == null
+            || event.getClickedInventory() == null
+            || event.getClickedInventory().getType() == InventoryType.PLAYER
+            || (event.getClick() != ClickType.LEFT && event.getClick() != ClickType.RIGHT)) {
+            return;
+        }
+
+        Block block = blockFromKey(holder.blockKey());
+        if (block == null || !isDepotBlock(block)) {
+            player.closeInventory();
+            player.sendMessage(MessageUtil.warn("That Salvaging Depot is no longer available."));
+            return;
+        }
+        if (!isWithinSettingsRange(player, block)) {
+            player.closeInventory();
+            player.sendMessage(MessageUtil.warn("Move closer to the Salvaging Depot to change its settings."));
+            return;
+        }
+        block = canonicalDepotBlock(block);
+        ItemStack clicked = event.getCurrentItem();
+        if (!MenuItemUtil.isVisibleItem(clicked)) {
+            return;
+        }
+        String action = settingsAction(clicked);
+        if (action == null) {
+            return;
+        }
+        if ("close".equals(action)) {
+            player.closeInventory();
+            return;
+        }
+        if ("toggle_output".equals(action)) {
+            setDepotSettings(block, hopperInputMode(block), !resultsOnlyBelow(block));
+        } else if (action.startsWith("mode:")) {
+            setDepotSettings(block, HopperInputMode.fromId(action.substring("mode:".length())), resultsOnlyBelow(block));
+        } else {
+            return;
+        }
+
+        scheduleBlockScan(block);
+        renderSettingsMenu(event.getView().getTopInventory(), block);
+        player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 0.7f, 1.25f);
+    }
+
+    private String settingsAction(ItemStack item) {
+        ItemMeta meta = item == null ? null : item.getItemMeta();
+        return meta == null ? null : meta.getPersistentDataContainer().get(keySettingsAction, PersistentDataType.STRING);
     }
 
     private void registerRecipe() {
@@ -556,11 +982,11 @@ public final class SalvagingDepotListener implements Listener {
         if (block.getType() != Material.CHEST) {
             return;
         }
-        BlockState state = block.getState();
-        if (state instanceof Chest chest) {
-            chest.getPersistentDataContainer().set(keyDepotBlock, PersistentDataType.STRING, ITEM_ID);
-            chest.update(true, false);
-        }
+        markDepotBlock(block);
+        repairAdjacentDepotPair(block);
+        Block adjacent = adjacentDepot(block);
+        markDepotBlock(block);
+        if (adjacent != null) markDepotBlock(adjacent);
         knownDepotBlocks.add(blockKey(block));
         reconcileDepot(block);
         block.getWorld().playSound(block.getLocation().add(0.5, 0.5, 0.5), Sound.BLOCK_ANVIL_PLACE, 0.75f, 1.35f);
@@ -637,7 +1063,7 @@ public final class SalvagingDepotListener implements Listener {
     private void syncChunkDepots(Chunk chunk) {
         removeStaleChunkHolograms(chunk);
         Set<String> scannedDepots = new java.util.HashSet<>();
-        for (BlockState tile : chunk.getTileEntities()) {
+        for (BlockState tile : chunk.getTileEntities(false)) {
             if (!(tile instanceof Chest chest)) {
                 continue;
             }
@@ -646,6 +1072,10 @@ public final class SalvagingDepotListener implements Listener {
                 continue;
             }
             knownDepotBlocks.add(blockKey(block));
+            if (repairAdjacentDepotPair(block)) {
+                reconcileDepot(block);
+                continue;
+            }
             Block canonical = canonicalDepotBlock(block);
             if (!scannedDepots.add(blockKey(canonical))) continue;
             ensureHologram(canonical);
@@ -677,31 +1107,73 @@ public final class SalvagingDepotListener implements Listener {
         block = canonicalDepotBlock(block);
         rememberDepotInventory(inventory, block);
         ItemStack[] contents = inventory.getStorageContents();
+        HopperInputMode inputMode = hopperInputMode(block);
+        int queued = 0;
+        int trashQueued = 0;
+        int started = 0;
+        int completed = 0;
+        int discarded = 0;
         for (int slot = 0; slot < contents.length; slot++) {
             try {
-                scanDepotSlot(inventory, block, slot, contents[slot]);
+                switch (scanDepotSlot(inventory, block, inputMode, slot, contents[slot])) {
+                    case QUEUED -> queued++;
+                    case TRASH_QUEUED -> trashQueued++;
+                    case STARTED -> started++;
+                    case COMPLETED -> completed++;
+                    case DISCARDED -> discarded++;
+                    case NONE, RESTORED -> {
+                    }
+                }
             } catch (RuntimeException ex) {
                 plugin.getLogger().warning("Skipped a Salvaging Depot slot at " + blockKey(block)
                     + " because " + describeItem(contents[slot]) + " could not be scanned: " + ex.getMessage());
             }
         }
+        emitScanFeedback(inventory, block, queued, trashQueued, started, completed, discarded);
     }
 
-    private void scanDepotSlot(Inventory inventory, Block block, int slot, ItemStack item) {
+    private DepotScanResult scanDepotSlot(
+        Inventory inventory,
+        Block block,
+        HopperInputMode inputMode,
+        int slot,
+        ItemStack item
+    ) {
         if (item == null || item.getType().isAir()) {
-            return;
+            return DepotScanResult.NONE;
         }
         if (isProcessing(item)) {
             UUID processId = processingId(item);
             long readyAt = processingReadyAt(item);
-            if (processId != null) {
-                if (readyAt <= System.currentTimeMillis()) {
-                    finishProcessing(blockKey(block), processId);
-                    return;
-                }
-                scheduleCompletion(blockKey(block), processId, readyAt);
+            if (!isValidProcessingState(processId, readyAt)) {
+                inventory.setItem(slot, cleanProcessingItem(item));
+                plugin.getLogger().warning("Restored malformed Salvaging Depot processing data at "
+                    + blockKey(block) + " instead of leaving the item locked.");
+                return DepotScanResult.RESTORED;
             }
-            return;
+            if (readyAt <= System.currentTimeMillis()) {
+                return finishProcessingSlot(inventory, block, blockKey(block), processId, slot);
+            }
+            scheduleCompletionScan(blockKey(block), readyAt);
+            return DepotScanResult.NONE;
+        }
+        if (isSalvageOutput(item)) {
+            return DepotScanResult.NONE;
+        }
+        if (isTrashQueued(item)) {
+            long readyAt = trashReadyAt(item);
+            ItemStack cleanItem = cleanTrashQueuedItem(item);
+            if (inputMode != HopperInputMode.GUARDED_TRASH
+                || classifyHopperInput(cleanItem) != HopperInputDisposition.DELETABLE) {
+                inventory.setItem(slot, cleanItem);
+                return DepotScanResult.RESTORED;
+            }
+            if (readyAt > System.currentTimeMillis()) {
+                scheduleQueueScan(blockKey(block), readyAt);
+                return DepotScanResult.NONE;
+            }
+            inventory.setItem(slot, null);
+            return DepotScanResult.DISCARDED;
         }
         if (isQueued(item)) {
             long readyAt = queueReadyAt(item);
@@ -709,91 +1181,159 @@ public final class SalvagingDepotListener implements Listener {
             List<ItemStack> outputs = salvageOutputs(cleanItem);
             if (outputs.isEmpty()) {
                 inventory.setItem(slot, cleanItem);
-                return;
+                return DepotScanResult.RESTORED;
             }
             if (readyAt > System.currentTimeMillis()) {
                 scheduleQueueScan(blockKey(block), readyAt);
-                return;
+                return DepotScanResult.NONE;
             }
             startProcessing(inventory, block, slot, cleanItem);
-            return;
+            return DepotScanResult.STARTED;
         }
         List<ItemStack> outputs = salvageOutputs(item);
         if (outputs.isEmpty()) {
-            return;
+            if (inputMode == HopperInputMode.GUARDED_TRASH && !isProtectedFromAutoDelete(item)) {
+                long readyAt = System.currentTimeMillis() + cancelWindowMillis();
+                inventory.setItem(slot, markTrashQueued(item, readyAt));
+                scheduleQueueScan(blockKey(block), readyAt);
+                return DepotScanResult.TRASH_QUEUED;
+            }
+            return DepotScanResult.NONE;
         }
 
         long readyAt = System.currentTimeMillis() + cancelWindowMillis();
         inventory.setItem(slot, markQueued(item, readyAt));
         scheduleQueueScan(blockKey(block), readyAt);
-        notifyDepotViewers(inventory, "<gold>Queued for salvage.</gold> <gray>Remove it within <white>" + cancelWindowSeconds() + "s</white> to cancel.</gray>");
-        block.getWorld().playSound(block.getLocation().add(0.5, 0.6, 0.5), Sound.BLOCK_COMPARATOR_CLICK, 0.55f, 1.45f);
-        block.getWorld().spawnParticle(Particle.WAX_ON, block.getLocation().add(0.5, 1.05, 0.5), 8, 0.20, 0.14, 0.20, 0.01);
+        return DepotScanResult.QUEUED;
     }
 
     private void startProcessing(Inventory inventory, Block block, int slot, ItemStack item) {
         UUID processId = UUID.randomUUID();
         long readyAt = System.currentTimeMillis() + processingMillis();
         inventory.setItem(slot, markProcessing(item, processId, readyAt));
-        scheduleCompletion(blockKey(block), processId, readyAt);
-        block.getWorld().playSound(block.getLocation().add(0.5, 0.6, 0.5), Sound.BLOCK_GRINDSTONE_USE, 0.7f, 1.15f);
-        block.getWorld().spawnParticle(Particle.WAX_OFF, block.getLocation().add(0.5, 1.05, 0.5), 12, 0.24, 0.18, 0.24, 0.02);
+        scheduleCompletionScan(blockKey(block), readyAt);
+    }
+
+    private void emitScanFeedback(
+        Inventory inventory,
+        Block block,
+        int queued,
+        int trashQueued,
+        int started,
+        int completed,
+        int discarded
+    ) {
+        if (queued <= 0 && trashQueued <= 0 && started <= 0 && completed <= 0 && discarded <= 0) return;
+        Location soundLocation = block.getLocation().add(0.5, 0.6, 0.5);
+        Location particleLocation = block.getLocation().add(0.5, 1.05, 0.5);
+        if (queued > 0) {
+            String subject = queued == 1 ? "Item queued" : queued + " items queued";
+            notifyDepotViewers(inventory, "<gold>" + subject + " for salvage.</gold> <gray>Remove "
+                + (queued == 1 ? "it" : "them") + " within <white>" + cancelWindowSeconds() + "s</white> to cancel.</gray>");
+            block.getWorld().playSound(soundLocation, Sound.BLOCK_COMPARATOR_CLICK, 0.55f, 1.45f);
+            block.getWorld().spawnParticle(Particle.WAX_ON, particleLocation, Math.min(24, 7 + queued), 0.20, 0.14, 0.20, 0.01);
+        }
+        if (started > 0) {
+            block.getWorld().playSound(soundLocation, Sound.BLOCK_GRINDSTONE_USE, 0.7f, 1.15f);
+            block.getWorld().spawnParticle(Particle.WAX_OFF, particleLocation, Math.min(28, 10 + started), 0.24, 0.18, 0.24, 0.02);
+        }
+        if (completed > 0) {
+            block.getWorld().playSound(soundLocation, Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 0.65f, 1.55f);
+            block.getWorld().spawnParticle(Particle.END_ROD, particleLocation, Math.min(32, 12 + completed), 0.22, 0.22, 0.22, 0.015);
+        }
+        if (trashQueued > 0) {
+            String subject = trashQueued == 1 ? "Plain junk item queued" : trashQueued + " plain junk stacks queued";
+            notifyDepotViewers(inventory, "<yellow>" + subject + " for disposal.</yellow> <gray>Remove "
+                + (trashQueued == 1 ? "it" : "them") + " within <white>" + cancelWindowSeconds() + "s</white> to cancel.</gray>");
+            block.getWorld().playSound(soundLocation, Sound.BLOCK_COMPARATOR_CLICK, 0.45f, 0.75f);
+        }
+        if (discarded > 0) {
+            block.getWorld().playSound(soundLocation, Sound.BLOCK_LAVA_EXTINGUISH, 0.45f, 1.35f);
+            block.getWorld().spawnParticle(Particle.SMOKE, particleLocation, Math.min(18, 5 + discarded), 0.18, 0.12, 0.18, 0.01);
+        }
     }
 
     private void scheduleScan(Inventory inventory) {
-        Bukkit.getScheduler().runTask(plugin, () -> scanScheduledInventory(inventory));
-        Bukkit.getScheduler().runTaskLater(plugin, () -> scanScheduledInventory(inventory), 2L);
-        Bukkit.getScheduler().runTaskLater(plugin, () -> scanScheduledInventory(inventory), 10L);
-    }
-
-    private void scanScheduledInventory(Inventory inventory) {
         Block block = depotBlock(inventory);
-        if (block != null) {
-            scanDepot(block, inventory);
-        }
+        if (block == null) return;
+        String blockKey = blockKey(canonicalDepotBlock(block));
+        scheduleDepotScan(blockKey, 1L, immediateScanTasks);
+        scheduleDepotScan(blockKey, 10L, settledScanTasks);
     }
 
     private void scheduleBlockScan(Block block) {
-        if (block == null) {
-            return;
-        }
-        Bukkit.getScheduler().runTask(plugin, () -> {
-            if (isDepotBlock(block)) {
-                scanDepot(block);
+        if (block == null || !isDepotBlock(block)) return;
+        String blockKey = blockKey(canonicalDepotBlock(block));
+        scheduleDepotScan(blockKey, 1L, immediateScanTasks);
+        scheduleDepotScan(blockKey, 10L, settledScanTasks);
+    }
+
+    private void scheduleDepotScan(String blockKey, long delay, Map<String, BukkitTask> tasks) {
+        if (blockKey == null) return;
+        BukkitTask existing = tasks.get(blockKey);
+        if (existing != null && !existing.isCancelled()) return;
+        BukkitTask task = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            tasks.remove(blockKey);
+            Location location = locationFromBlockKey(blockKey);
+            if (location != null && location.getWorld() != null && location.isChunkLoaded()) {
+                scanDepot(location.getBlock());
             }
-        });
-        Bukkit.getScheduler().runTaskLater(plugin, () -> {
-            if (block != null) {
-                scanDepot(block);
-            }
-        }, 10L);
+        }, delay);
+        tasks.put(blockKey, task);
     }
 
     private void scheduleQueueScan(String blockKey, long readyAt) {
-        long delay = readyAt <= 0L
-            ? cancelWindowTicks()
-            : Math.max(1L, (readyAt - System.currentTimeMillis() + 49L) / 50L);
-        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+        if (blockKey == null) return;
+        long targetReadyAt = readyAt <= 0L ? System.currentTimeMillis() + cancelWindowMillis() : readyAt;
+        BukkitTask existing = queueScanTasks.get(blockKey);
+        Long existingReadyAt = queueScanReadyAt.get(blockKey);
+        boolean existingActive = existing != null && !existing.isCancelled();
+        if (!shouldReplaceQueueScan(existingReadyAt, existingActive, targetReadyAt)) {
+            return;
+        }
+        if (existing != null) existing.cancel();
+
+        long delay = Math.max(1L, (targetReadyAt - System.currentTimeMillis() + 49L) / 50L);
+        BukkitTask task = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            queueScanTasks.remove(blockKey);
+            queueScanReadyAt.remove(blockKey);
             Location location = locationFromBlockKey(blockKey);
             if (location == null || location.getWorld() == null || !location.isChunkLoaded()) {
                 return;
             }
             scanDepot(location.getBlock());
         }, delay);
+        queueScanTasks.put(blockKey, task);
+        queueScanReadyAt.put(blockKey, targetReadyAt);
     }
 
-    private void scheduleCompletion(String blockKey, UUID processId, long readyAt) {
-        if (processId == null || processingTasks.containsKey(processId)) {
+    static boolean shouldReplaceQueueScan(Long existingReadyAt, boolean existingActive, long requestedReadyAt) {
+        return !existingActive || existingReadyAt == null || requestedReadyAt < existingReadyAt;
+    }
+
+    private void scheduleCompletionScan(String blockKey, long readyAt) {
+        if (blockKey == null) return;
+        long targetReadyAt = readyAt <= 0L ? System.currentTimeMillis() + processingMillis() : readyAt;
+        BukkitTask existing = completionScanTasks.get(blockKey);
+        Long existingReadyAt = completionScanReadyAt.get(blockKey);
+        boolean existingActive = existing != null && !existing.isCancelled();
+        if (!shouldReplaceQueueScan(existingReadyAt, existingActive, targetReadyAt)) {
             return;
         }
-        long delay = readyAt <= 0L
-            ? processingTicks()
-            : Math.max(1L, (readyAt - System.currentTimeMillis() + 49L) / 50L);
+        if (existing != null) existing.cancel();
+
+        long delay = Math.max(1L, (targetReadyAt - System.currentTimeMillis() + 49L) / 50L);
         BukkitTask task = Bukkit.getScheduler().runTaskLater(plugin, () -> {
-            processingTasks.remove(processId);
-            finishProcessing(blockKey, processId);
+            completionScanTasks.remove(blockKey);
+            completionScanReadyAt.remove(blockKey);
+            Location location = locationFromBlockKey(blockKey);
+            if (location == null || location.getWorld() == null || !location.isChunkLoaded()) {
+                return;
+            }
+            scanDepot(location.getBlock());
         }, delay);
-        processingTasks.put(processId, task);
+        completionScanTasks.put(blockKey, task);
+        completionScanReadyAt.put(blockKey, targetReadyAt);
     }
 
     private ItemStack markQueued(ItemStack item, long readyAt) {
@@ -811,42 +1351,48 @@ public final class SalvagingDepotListener implements Listener {
         return marked;
     }
 
-    private void finishProcessing(String blockKey, UUID processId) {
-        Location location = locationFromBlockKey(blockKey);
-        if (location == null || location.getWorld() == null || !location.isChunkLoaded()) {
-            return;
+    private ItemStack markTrashQueued(ItemStack item, long readyAt) {
+        ItemStack marked = item.clone();
+        ItemMeta meta = marked.getItemMeta();
+        if (meta == null) {
+            return marked;
+        }
+        meta.getPersistentDataContainer().set(keyTrashReadyAt, PersistentDataType.LONG, readyAt);
+        List<Component> lore = mutableLore(meta);
+        lore.add(Component.empty());
+        lore.add(MM.deserialize("<red>Queued for guarded disposal...</red> <dark_gray>take it back within "
+            + cancelWindowSeconds() + "s to cancel</dark_gray>"));
+        meta.lore(lore);
+        marked.setItemMeta(meta);
+        return marked;
+    }
+
+    private DepotScanResult finishProcessingSlot(
+        Inventory inventory,
+        Block block,
+        String blockKey,
+        UUID processId,
+        int slot
+    ) {
+        if (slot < 0 || slot >= inventory.getSize()) return DepotScanResult.NONE;
+        ItemStack item = inventory.getItem(slot);
+        if (!processId.equals(processingId(item))) return DepotScanResult.NONE;
+
+        ItemStack cleanItem = cleanProcessingItem(item);
+        List<ItemStack> outputs = salvageOutputs(cleanItem);
+        if (outputs.isEmpty()) {
+            inventory.setItem(slot, cleanItem);
+            plugin.getLogger().warning("Restored a Salvaging Depot item because no safe salvage output could be calculated at " + blockKey + ".");
+            return DepotScanResult.RESTORED;
         }
 
-        Block block = location.getBlock();
-        Inventory inventory = depotInventory(block);
-        if (inventory == null || !isDepotBlock(block)) {
-            return;
-        }
-
-        ItemStack[] contents = inventory.getStorageContents();
-        for (int slot = 0; slot < contents.length; slot++) {
-            ItemStack item = contents[slot];
-            if (!processId.equals(processingId(item))) {
-                continue;
-            }
-
-            ItemStack cleanItem = cleanProcessingItem(item);
-            List<ItemStack> outputs = salvageOutputs(cleanItem);
-            if (outputs.isEmpty()) {
-                inventory.setItem(slot, cleanItem);
-                plugin.getLogger().warning("Restored a Salvaging Depot item because no safe salvage output could be calculated at " + blockKey + ".");
-                return;
-            }
-
-            inventory.setItem(slot, null);
-            Map<Integer, ItemStack> leftovers = inventory.addItem(outputs.toArray(ItemStack[]::new));
-            leftovers.values().forEach(leftover ->
-                block.getWorld().dropItemNaturally(block.getLocation().add(0.5, 0.8, 0.5), leftover)
-            );
-            block.getWorld().playSound(block.getLocation().add(0.5, 0.6, 0.5), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 0.65f, 1.55f);
-            block.getWorld().spawnParticle(Particle.END_ROD, block.getLocation().add(0.5, 1.0, 0.5), 16, 0.22, 0.22, 0.22, 0.015);
-            return;
-        }
+        List<ItemStack> markedOutputs = outputs.stream().map(this::markSalvageOutput).toList();
+        inventory.setItem(slot, null);
+        Map<Integer, ItemStack> leftovers = inventory.addItem(markedOutputs.toArray(ItemStack[]::new));
+        leftovers.values().forEach(leftover ->
+            block.getWorld().dropItemNaturally(block.getLocation().add(0.5, 0.8, 0.5), cleanSalvageOutput(leftover))
+        );
+        return DepotScanResult.COMPLETED;
     }
 
     private ItemStack markProcessing(ItemStack item, UUID processId, long readyAt) {
@@ -894,7 +1440,7 @@ public final class SalvagingDepotListener implements Listener {
     }
 
     private ItemStack cleanDepotState(ItemStack item) {
-        return cleanProcessingItem(cleanQueuedItem(item));
+        return cleanSalvageOutput(cleanProcessingItem(cleanTrashQueuedItem(cleanQueuedItem(item))));
     }
 
     private ItemStack cleanQueuedItem(ItemStack item) {
@@ -941,6 +1487,50 @@ public final class SalvagingDepotListener implements Listener {
         return clean;
     }
 
+    private ItemStack cleanTrashQueuedItem(ItemStack item) {
+        ItemStack clean = item == null ? null : item.clone();
+        if (clean == null || clean.getType().isAir()) {
+            return clean;
+        }
+        ItemMeta meta = clean.getItemMeta();
+        if (meta == null) {
+            return clean;
+        }
+        meta.getPersistentDataContainer().remove(keyTrashReadyAt);
+        List<Component> lore = meta.lore();
+        if (lore != null && !lore.isEmpty()) {
+            meta.lore(removeDepotStateLore(lore, "Queued for guarded disposal..."));
+        }
+        clean.setItemMeta(meta);
+        return clean;
+    }
+
+    private ItemStack markSalvageOutput(ItemStack item) {
+        ItemStack marked = item == null ? null : item.clone();
+        if (marked == null || marked.getType().isAir()) {
+            return marked;
+        }
+        ItemMeta meta = marked.getItemMeta();
+        if (meta != null) {
+            meta.getPersistentDataContainer().set(keySalvageOutput, PersistentDataType.BYTE, (byte) 1);
+            marked.setItemMeta(meta);
+        }
+        return marked;
+    }
+
+    private ItemStack cleanSalvageOutput(ItemStack item) {
+        ItemStack clean = item == null ? null : item.clone();
+        if (clean == null || clean.getType().isAir()) {
+            return clean;
+        }
+        ItemMeta meta = clean.getItemMeta();
+        if (meta != null) {
+            meta.getPersistentDataContainer().remove(keySalvageOutput);
+            clean.setItemMeta(meta);
+        }
+        return clean;
+    }
+
     private List<Component> mutableLore(ItemMeta meta) {
         List<Component> lore = meta == null ? null : meta.lore();
         return lore == null ? new ArrayList<>() : new ArrayList<>(lore);
@@ -966,15 +1556,40 @@ public final class SalvagingDepotListener implements Listener {
     }
 
     private boolean isProcessing(ItemStack item) {
-        return processingId(item) != null;
+        if (item == null || item.getType().isAir()) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        return pdc.has(keyProcessingId, PersistentDataType.STRING)
+            || pdc.has(keyProcessingReadyAt, PersistentDataType.LONG);
+    }
+
+    static boolean isValidProcessingState(UUID processId, long readyAt) {
+        return processId != null && readyAt > 0L;
     }
 
     private boolean isQueued(ItemStack item) {
         return queueReadyAt(item) > 0L;
     }
 
+    private boolean isTrashQueued(ItemStack item) {
+        return trashReadyAt(item) > 0L;
+    }
+
+    private boolean isSalvageOutput(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return false;
+        }
+        ItemMeta meta = item.getItemMeta();
+        return meta != null && meta.getPersistentDataContainer().has(keySalvageOutput, PersistentDataType.BYTE);
+    }
+
     private boolean hasDepotState(ItemStack item) {
-        return isQueued(item) || isProcessing(item);
+        return isQueued(item) || isTrashQueued(item) || isProcessing(item) || isSalvageOutput(item);
     }
 
     private void purgeQueuedItemsOutsideDepot(Player player) {
@@ -1052,6 +1667,18 @@ public final class SalvagingDepotListener implements Listener {
         return readyAt == null ? 0L : readyAt;
     }
 
+    private long trashReadyAt(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return 0L;
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return 0L;
+        }
+        Long readyAt = meta.getPersistentDataContainer().get(keyTrashReadyAt, PersistentDataType.LONG);
+        return readyAt == null ? 0L : readyAt;
+    }
+
     private UUID processingId(ItemStack item) {
         if (item == null || item.getType().isAir()) {
             return null;
@@ -1080,7 +1707,98 @@ public final class SalvagingDepotListener implements Listener {
             return 0L;
         }
         Long readyAt = meta.getPersistentDataContainer().get(keyProcessingReadyAt, PersistentDataType.LONG);
-        return readyAt == null ? System.currentTimeMillis() + processingMillis() : readyAt;
+        return readyAt == null ? 0L : readyAt;
+    }
+
+    private HopperInputDisposition classifyHopperInput(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return HopperInputDisposition.PROTECTED;
+        }
+        if (!salvageOutputs(item).isEmpty()) {
+            return HopperInputDisposition.SALVAGEABLE;
+        }
+        return isProtectedFromAutoDelete(item)
+            ? HopperInputDisposition.PROTECTED
+            : HopperInputDisposition.DELETABLE;
+    }
+
+    private boolean isProtectedFromAutoDelete(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return true;
+        }
+        if (isPluginManagedItem(item)
+            || isConservativelyProtectedMaterial(item.getType())
+            || item.getMaxStackSize() <= 1
+            || !InventoryRecipeUtil.isPlainMaterial(plugin, item, item.getType())) {
+            return true;
+        }
+        ItemMeta meta = item.getItemMeta();
+        return meta != null && (
+            meta.hasDisplayName()
+                || meta.hasLore()
+                || meta.hasEnchants()
+                || !meta.getPersistentDataContainer().isEmpty()
+        );
+    }
+
+    static boolean isConservativelyProtectedMaterial(Material material) {
+        if (material == null) {
+            return true;
+        }
+        String name = material.name();
+        if (name.endsWith("_ORE")
+            || name.endsWith("_INGOT")
+            || name.endsWith("_NUGGET")
+            || name.endsWith("_SHULKER_BOX")
+            || name.endsWith("_BUNDLE")
+            || name.endsWith("_SPAWN_EGG")
+            || name.endsWith("_HEAD")
+            || name.endsWith("_SKULL")
+            || name.endsWith("_BANNER")
+            || name.endsWith("_BANNER_PATTERN")
+            || name.endsWith("_SMITHING_TEMPLATE")
+            || name.endsWith("_POTTERY_SHERD")
+            || name.startsWith("RAW_")
+            || name.contains("BOOK")
+            || name.contains("MAP")
+            || name.contains("POTION")
+            || name.contains("MUSIC_DISC")) {
+            return true;
+        }
+        return switch (material) {
+            case DIAMOND,
+                 EMERALD,
+                 NETHERITE_SCRAP,
+                 ANCIENT_DEBRIS,
+                 COAL,
+                 CHARCOAL,
+                 REDSTONE,
+                 LAPIS_LAZULI,
+                 QUARTZ,
+                 AMETHYST_SHARD,
+                 ECHO_SHARD,
+                 NETHER_STAR,
+                 HEART_OF_THE_SEA,
+                 NAUTILUS_SHELL,
+                 TOTEM_OF_UNDYING,
+                 TRIAL_KEY,
+                 OMINOUS_TRIAL_KEY,
+                 BREEZE_ROD,
+                 HEAVY_CORE,
+                 DRAGON_EGG,
+                 ENCHANTED_GOLDEN_APPLE,
+                 GOLDEN_APPLE,
+                 EXPERIENCE_BOTTLE,
+                 ENDER_PEARL,
+                 ENDER_EYE,
+                 BLAZE_ROD,
+                 GHAST_TEAR,
+                 MAGMA_CREAM,
+                 SLIME_BALL,
+                 PRISMARINE_CRYSTALS,
+                 PRISMARINE_SHARD -> true;
+            default -> false;
+        };
     }
 
     private List<ItemStack> salvageOutputs(ItemStack item) {
@@ -1676,24 +2394,150 @@ public final class SalvagingDepotListener implements Listener {
         if (adjacentChests.size() != 1) return false;
         Block adjacent = adjacentChests.getFirst();
         boolean depot = isDepotBlock(adjacent) || pendingDepotBlocks.contains(blockKey(adjacent));
-        return allowsDepotPlacement(1, depot, isConnectedChestPair(block, adjacent));
+        boolean canFormPair = isConnectedChestPair(block, adjacent) || !isChestPartOfDouble(adjacent);
+        return allowsDepotPlacement(1, depot, canFormPair);
     }
 
-    static boolean allowsDepotPlacement(int adjacentChestCount, boolean adjacentIsDepot, boolean connectedPair) {
+    static boolean allowsDepotPlacement(int adjacentChestCount, boolean adjacentIsDepot, boolean canFormPair) {
         return adjacentChestCount == 0
-            || adjacentChestCount == 1 && adjacentIsDepot && connectedPair;
+            || adjacentChestCount == 1 && adjacentIsDepot && canFormPair;
+    }
+
+    private boolean isChestPartOfDouble(Block block) {
+        if (block == null || block.getType() != Material.CHEST) {
+            return false;
+        }
+        BlockState state = liveBlockState(block);
+        return state instanceof Chest chest && chest.getInventory().getHolder(false) instanceof DoubleChest;
+    }
+
+    private void markDepotBlock(Block block) {
+        if (block == null || block.getType() != Material.CHEST) {
+            return;
+        }
+        BlockState state = liveBlockState(block);
+        if (state instanceof Chest chest) {
+            chest.getPersistentDataContainer().set(keyDepotBlock, PersistentDataType.STRING, ITEM_ID);
+            chest.update(true, false);
+        }
+    }
+
+    private boolean connectDepotChests(Block first, Block second) {
+        if (first == null
+            || second == null
+            || first.getType() != Material.CHEST
+            || second.getType() != Material.CHEST
+            || first.getY() != second.getY()
+            || Math.abs(first.getX() - second.getX()) + Math.abs(first.getZ() - second.getZ()) != 1) {
+            return false;
+        }
+        if (!(first.getBlockData() instanceof org.bukkit.block.data.type.Chest firstData)
+            || !(second.getBlockData() instanceof org.bukkit.block.data.type.Chest secondData)) {
+            return false;
+        }
+
+        org.bukkit.block.data.type.Chest firstOriginal =
+            (org.bukkit.block.data.type.Chest) firstData.clone();
+        org.bukkit.block.data.type.Chest secondOriginal =
+            (org.bukkit.block.data.type.Chest) secondData.clone();
+        BlockFace facing = pairFacing(first, second, firstOriginal.getFacing(), secondOriginal.getFacing());
+        if (applyChestPairData(first, second, firstOriginal, secondOriginal, facing,
+            org.bukkit.block.data.type.Chest.Type.LEFT, org.bukkit.block.data.type.Chest.Type.RIGHT)) {
+            return true;
+        }
+        if (applyChestPairData(first, second, firstOriginal, secondOriginal, facing,
+            org.bukkit.block.data.type.Chest.Type.RIGHT, org.bukkit.block.data.type.Chest.Type.LEFT)) {
+            return true;
+        }
+
+        first.setBlockData(firstOriginal, false);
+        second.setBlockData(secondOriginal, false);
+        return false;
+    }
+
+    private boolean repairAdjacentDepotPair(Block block) {
+        if (!isDepotBlock(block)) {
+            return false;
+        }
+        Block adjacent = adjacentDepot(block);
+        if (adjacent == null || isConnectedChestPair(block, adjacent)) {
+            return false;
+        }
+        if (isChestPartOfDouble(block) || isChestPartOfDouble(adjacent)) {
+            return false;
+        }
+        if (!connectDepotChests(block, adjacent)) {
+            plugin.getLogger().warning("Could not join adjacent Salvaging Depots at "
+                + blockKey(block) + " and " + blockKey(adjacent) + ".");
+            return false;
+        }
+        markDepotBlock(block);
+        markDepotBlock(adjacent);
+        return true;
+    }
+
+    private boolean applyChestPairData(
+        Block first,
+        Block second,
+        org.bukkit.block.data.type.Chest firstOriginal,
+        org.bukkit.block.data.type.Chest secondOriginal,
+        BlockFace facing,
+        org.bukkit.block.data.type.Chest.Type firstType,
+        org.bukkit.block.data.type.Chest.Type secondType
+    ) {
+        org.bukkit.block.data.type.Chest firstCandidate =
+            (org.bukkit.block.data.type.Chest) firstOriginal.clone();
+        org.bukkit.block.data.type.Chest secondCandidate =
+            (org.bukkit.block.data.type.Chest) secondOriginal.clone();
+        firstCandidate.setFacing(facing);
+        secondCandidate.setFacing(facing);
+        firstCandidate.setType(firstType);
+        secondCandidate.setType(secondType);
+        first.setBlockData(firstCandidate, false);
+        second.setBlockData(secondCandidate, false);
+        return isConnectedChestPair(first, second);
+    }
+
+    private BlockFace pairFacing(
+        Block first,
+        Block second,
+        BlockFace firstFacing,
+        BlockFace secondFacing
+    ) {
+        if (isValidPairFacing(first, second, firstFacing)) {
+            return firstFacing;
+        }
+        if (isValidPairFacing(first, second, secondFacing)) {
+            return secondFacing;
+        }
+        return first.getX() == second.getX() ? BlockFace.EAST : BlockFace.NORTH;
+    }
+
+    static boolean isValidPairFacing(int deltaX, int deltaZ, BlockFace facing) {
+        if (Math.abs(deltaX) + Math.abs(deltaZ) != 1 || facing == null) {
+            return false;
+        }
+        return switch (facing) {
+            case NORTH, SOUTH -> deltaX != 0;
+            case EAST, WEST -> deltaZ != 0;
+            default -> false;
+        };
+    }
+
+    private boolean isValidPairFacing(Block first, Block second, BlockFace facing) {
+        return isValidPairFacing(second.getX() - first.getX(), second.getZ() - first.getZ(), facing);
     }
 
     private boolean isConnectedChestPair(Block first, Block second) {
         if (first == null || second == null || first.getType() != Material.CHEST || second.getType() != Material.CHEST) {
             return false;
         }
-        BlockState state = first.getState();
+        BlockState state = liveBlockState(first);
         if (!(state instanceof Chest chest) || !(chest.getInventory().getHolder(false) instanceof DoubleChest doubleChest)) {
             return false;
         }
-        Block left = containerBlock(doubleChest.getLeftSide());
-        Block right = containerBlock(doubleChest.getRightSide());
+        Block left = containerBlock(doubleChest.getLeftSide(false));
+        Block right = containerBlock(doubleChest.getRightSide(false));
         return sameBlock(first, left) && sameBlock(second, right)
             || sameBlock(first, right) && sameBlock(second, left);
     }
@@ -1734,7 +2578,7 @@ public final class SalvagingDepotListener implements Listener {
         if (block == null || block.getType() != Material.CHEST) {
             return false;
         }
-        BlockState state = block.getState();
+        BlockState state = liveBlockState(block);
         if (state instanceof TileState tile
             && ITEM_ID.equals(tile.getPersistentDataContainer().get(keyDepotBlock, PersistentDataType.STRING))) {
             return true;
@@ -1763,12 +2607,6 @@ public final class SalvagingDepotListener implements Listener {
             rememberDepotInventory(inventory, block);
             return block;
         }
-        block = depotBlock(inventory.getHolder());
-        if (block != null) {
-            rememberDepotInventory(inventory, block);
-            return block;
-        }
-
         // A detached double-chest Inventory can survive for a few scheduled ticks after one half breaks.
         // Never resolve that stale 54-slot view through its old location or cache entry.
         if (inventory.getSize() > 27) return null;
@@ -1814,6 +2652,14 @@ public final class SalvagingDepotListener implements Listener {
         synchronized (depotBlocksByInventory) {
             depotBlocksByInventory.entrySet().removeIf(entry -> groupKeys.contains(entry.getValue()));
         }
+        for (String key : groupKeys) {
+            cancelTask(immediateScanTasks, key);
+            cancelTask(settledScanTasks, key);
+            cancelTask(queueScanTasks, key);
+            cancelTask(completionScanTasks, key);
+            queueScanReadyAt.remove(key);
+            completionScanReadyAt.remove(key);
+        }
     }
 
     private Block depotBlock(InventoryHolder holder) {
@@ -1822,8 +2668,8 @@ public final class SalvagingDepotListener implements Listener {
             return direct;
         }
         if (holder instanceof DoubleChest doubleChest) {
-            Block left = containerBlock(doubleChest.getLeftSide());
-            Block right = containerBlock(doubleChest.getRightSide());
+            Block left = containerBlock(doubleChest.getLeftSide(false));
+            Block right = containerBlock(doubleChest.getRightSide(false));
             if (!isDepotBlock(left) || !isDepotBlock(right)) return null;
             return canonicalBlock(left, right);
         }
@@ -1845,7 +2691,7 @@ public final class SalvagingDepotListener implements Listener {
         if (!isDepotBlock(block)) {
             return null;
         }
-        BlockState state = block.getState();
+        BlockState state = liveBlockState(block);
         if (!(state instanceof Chest chest)) {
             return null;
         }
@@ -1859,18 +2705,18 @@ public final class SalvagingDepotListener implements Listener {
 
     private Inventory depotLocalInventory(Block block) {
         if (!isDepotBlock(block)) return null;
-        BlockState state = block.getState();
+        BlockState state = liveBlockState(block);
         return state instanceof Chest chest ? chest.getBlockInventory() : null;
     }
 
     private Block pairedDepotBlock(Block block) {
         if (!isDepotBlock(block)) return null;
-        BlockState state = block.getState();
+        BlockState state = liveBlockState(block);
         if (!(state instanceof Chest chest) || !(chest.getInventory().getHolder(false) instanceof DoubleChest doubleChest)) {
             return null;
         }
-        Block left = containerBlock(doubleChest.getLeftSide());
-        Block right = containerBlock(doubleChest.getRightSide());
+        Block left = containerBlock(doubleChest.getLeftSide(false));
+        Block right = containerBlock(doubleChest.getRightSide(false));
         if (!isDepotBlock(left) || !isDepotBlock(right)) return null;
         if (sameBlock(block, left)) return right;
         if (sameBlock(block, right)) return left;
@@ -1881,6 +2727,11 @@ public final class SalvagingDepotListener implements Listener {
         if (!isDepotBlock(block)) return block;
         Block pair = pairedDepotBlock(block);
         return pair == null ? block : canonicalBlock(block, pair);
+    }
+
+    @SuppressWarnings("deprecation")
+    private BlockState liveBlockState(Block block) {
+        return block.getState(false);
     }
 
     private Block canonicalBlock(Block first, Block second) {
@@ -1901,13 +2752,116 @@ public final class SalvagingDepotListener implements Listener {
 
     private void reconcileDepot(Block block) {
         if (!isDepotBlock(block)) return;
+        repairAdjacentDepotPair(block);
         Block canonical = canonicalDepotBlock(block);
         Block pair = pairedDepotBlock(canonical);
+        synchronizeDepotSettings(canonical);
         boolean large = pair != null;
         updateDepotName(canonical, large);
         if (pair != null) updateDepotName(pair, true);
         ensureHologram(canonical);
         scanDepot(canonical);
+    }
+
+    private void synchronizeDepotSettings(Block block) {
+        if (!isDepotBlock(block)) {
+            return;
+        }
+        Block canonical = canonicalDepotBlock(block);
+        Block pair = pairedDepotBlock(canonical);
+        HopperInputMode mode = readExplicitHopperInputMode(canonical);
+        if (mode == null && pair != null) {
+            mode = readExplicitHopperInputMode(pair);
+        }
+        if (mode == null) {
+            mode = HopperInputMode.SALVAGE_ONLY;
+        }
+
+        Boolean outputBelow = readExplicitResultsOnlyBelow(canonical);
+        if (outputBelow == null && pair != null) {
+            outputBelow = readExplicitResultsOnlyBelow(pair);
+        }
+        setDepotSettings(canonical, mode, Boolean.TRUE.equals(outputBelow));
+    }
+
+    private HopperInputMode hopperInputMode(Block block) {
+        if (!isDepotBlock(block)) {
+            return HopperInputMode.SALVAGE_ONLY;
+        }
+        Block canonical = canonicalDepotBlock(block);
+        HopperInputMode explicit = readExplicitHopperInputMode(canonical);
+        if (explicit != null) {
+            return explicit;
+        }
+        Block pair = pairedDepotBlock(canonical);
+        HopperInputMode paired = pair == null ? null : readExplicitHopperInputMode(pair);
+        return paired == null ? HopperInputMode.SALVAGE_ONLY : paired;
+    }
+
+    private boolean resultsOnlyBelow(Block block) {
+        if (!isDepotBlock(block)) {
+            return false;
+        }
+        Block canonical = canonicalDepotBlock(block);
+        Boolean explicit = readExplicitResultsOnlyBelow(canonical);
+        if (explicit != null) {
+            return explicit;
+        }
+        Block pair = pairedDepotBlock(canonical);
+        return pair != null && Boolean.TRUE.equals(readExplicitResultsOnlyBelow(pair));
+    }
+
+    private HopperInputMode readExplicitHopperInputMode(Block block) {
+        if (block == null) {
+            return null;
+        }
+        BlockState state = liveBlockState(block);
+        if (!(state instanceof TileState tile)) {
+            return null;
+        }
+        String value = tile.getPersistentDataContainer().get(keyHopperInputMode, PersistentDataType.STRING);
+        return value == null ? null : HopperInputMode.fromId(value);
+    }
+
+    private Boolean readExplicitResultsOnlyBelow(Block block) {
+        if (block == null) {
+            return null;
+        }
+        BlockState state = liveBlockState(block);
+        if (!(state instanceof TileState tile)) {
+            return null;
+        }
+        Byte value = tile.getPersistentDataContainer().get(keyResultsOnlyBelow, PersistentDataType.BYTE);
+        return value == null ? null : value != 0;
+    }
+
+    private void setDepotSettings(Block block, HopperInputMode mode, boolean outputBelow) {
+        if (!isDepotBlock(block)) {
+            return;
+        }
+        Block canonical = canonicalDepotBlock(block);
+        writeDepotSettings(canonical, mode, outputBelow);
+        Block pair = pairedDepotBlock(canonical);
+        if (pair != null) {
+            writeDepotSettings(pair, mode, outputBelow);
+        }
+    }
+
+    private void writeDepotSettings(Block block, HopperInputMode mode, boolean outputBelow) {
+        BlockState state = liveBlockState(block);
+        if (!(state instanceof Chest chest)) {
+            return;
+        }
+        PersistentDataContainer pdc = chest.getPersistentDataContainer();
+        String modeId = (mode == null ? HopperInputMode.SALVAGE_ONLY : mode).id;
+        byte outputValue = outputBelow ? (byte) 1 : (byte) 0;
+        if (modeId.equals(pdc.get(keyHopperInputMode, PersistentDataType.STRING))
+            && pdc.getOrDefault(keyResultsOnlyBelow, PersistentDataType.BYTE, (byte) -1) == outputValue) {
+            return;
+        }
+        pdc.set(keyHopperInputMode, PersistentDataType.STRING, modeId);
+        pdc.set(keyResultsOnlyBelow, PersistentDataType.BYTE, outputValue);
+        chest.update(true, false);
     }
 
     private void updateDepotName(Block block, boolean large) {
@@ -2069,6 +3023,35 @@ public final class SalvagingDepotListener implements Listener {
             }
             return new Location(world, Integer.parseInt(parts[1]), Integer.parseInt(parts[2]), Integer.parseInt(parts[3]));
         } catch (IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
+    private Block blockFromKey(String key) {
+        Location location = locationFromBlockKey(key);
+        return location == null || !location.isChunkLoaded() ? null : location.getBlock();
+    }
+
+    private boolean isWithinSettingsRange(Player player, Block block) {
+        if (player == null || block == null || !player.getWorld().getUID().equals(block.getWorld().getUID())) {
+            return false;
+        }
+        Location center = block.getLocation().add(0.5D, 0.5D, 0.5D);
+        return isWithinSettingsRange(true, player.getLocation().distanceSquared(center));
+    }
+
+    static boolean isWithinSettingsRange(boolean sameWorld, double distanceSquared) {
+        return sameWorld
+            && Double.isFinite(distanceSquared)
+            && distanceSquared >= 0.0D
+            && distanceSquared <= SETTINGS_RANGE_SQUARED;
+    }
+
+    private record DepotSettingsHolder(String blockKey)
+        implements InventoryHolder, MenuDupeGuardListener.ReadOnlyMenuHolder {
+
+        @Override
+        public Inventory getInventory() {
             return null;
         }
     }

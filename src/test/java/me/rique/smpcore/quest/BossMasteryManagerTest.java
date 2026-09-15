@@ -34,7 +34,28 @@ class BossMasteryManagerTest {
         }
         assertNull(BossMasteryManager.commonRewardId(10));
         assertEquals(0.0, BossMasteryManager.huntmarkDamageBonusForRank(3));
-        assertEquals(0.04, BossMasteryManager.huntmarkDamageBonusForRank(4));
-        assertEquals(0.04, BossMasteryManager.huntmarkDamageBonusForRank(5));
+        assertEquals(0.05, BossMasteryManager.huntmarkDamageBonusForRank(4));
+        assertEquals(0.05, BossMasteryManager.huntmarkDamageBonusForRank(5));
+    }
+
+    @Test
+    void masteryPayoutsScaleIntoWorthwhileLateBossRewards() {
+        assertEquals(110L, BossMasteryManager.rankOneEssence(1));
+        assertEquals(380L, BossMasteryManager.rankOneEssence(10));
+        assertEquals(5, BossMasteryManager.rankTwoMaterialAmount(1));
+        assertEquals(10, BossMasteryManager.rankTwoMaterialAmount(10));
+        assertEquals(260L, BossMasteryManager.rankFiveEssence(1));
+        assertEquals(800L, BossMasteryManager.rankFiveEssence(10));
+    }
+
+    @Test
+    void pursuitOffenseWorksWithOnePieceButMitigationNeedsTheFullSet() {
+        assertEquals(0.0, BossMasteryManager.pursuitBossDamageBonus(0));
+        assertEquals(0.15, BossMasteryManager.pursuitBossDamageBonus(1));
+        assertEquals(0.15, BossMasteryManager.pursuitBossDamageBonus(4));
+
+        assertEquals(0.0, BossMasteryManager.pursuitBossDamageReduction(3, false));
+        assertEquals(0.12, BossMasteryManager.pursuitBossDamageReduction(4, false));
+        assertEquals(0.0, BossMasteryManager.pursuitBossDamageReduction(4, true));
     }
 }

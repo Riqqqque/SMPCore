@@ -34,7 +34,7 @@ public final class ItemModelMigrationListener implements Listener {
         normalizeLore(event.getInventory());
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPickup(EntityPickupItemEvent event) {
         ItemStack item = event.getItem().getItemStack();
         boolean modelChanged = ItemModelUtil.clearVanillaBackedModel(item);

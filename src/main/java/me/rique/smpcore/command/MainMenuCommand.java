@@ -7,6 +7,7 @@ import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
@@ -39,23 +40,19 @@ public final class MainMenuCommand implements Listener {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
-    private static final int MAIN_MENU_SIZE = 36;
+    private static final int MAIN_MENU_SIZE = 54;
     private static final int SECTION_MENU_SIZE = 27;
     private static final int STATS_MENU_SIZE = 54;
     private static final String ACTION_PROFILE_MENU = "profile_menu";
-    private static final String ACTION_GEAR_MENU = "gear_menu";
-    private static final String ACTION_CHALLENGES_MENU = "challenges_menu";
-    private static final String ACTION_COMMUNITY_MENU = "community_menu";
+    private static final String ACTION_BOSSES_MENU = "bosses_menu";
     private static final String ACTION_CROSSPLAY = "crossplay";
     private static final String ACTION_STATS = "stats";
     private static final String ACTION_CUSTOM_STATS = "custom_stats";
     private static final String ACTION_CUSTOM_STATS_REFRESH = "custom_stats_refresh";
     private static final String ACTION_SETTINGS = "settings";
     private static final String ACTION_RELIQUARY = "reliquary";
-    private static final String ACTION_ARMORY = "armory";
-    private static final String ACTION_MYTHICS = "mythics";
     private static final String ACTION_BOSSES = "bosses";
-    private static final String ACTION_ENCHANTS = "enchants";
+    private static final String ACTION_RITUALS = "rituals";
     private static final String ACTION_BREWS = "brews";
     private static final String ACTION_POWERS = "powers";
     private static final String ACTION_TEAMS = "teams";
@@ -111,7 +108,7 @@ public final class MainMenuCommand implements Listener {
         Inventory inventory = Bukkit.createInventory(
             new MainMenuHolder(),
             MAIN_MENU_SIZE,
-            BedrockCompat.menuTitle(player, MM.deserialize("<gradient:#7c3aed:#22d3ee><bold>Veil Menu</bold></gradient>"), "Menu")
+            BedrockCompat.menuTitle(player, MM.deserialize("<gradient:#7c3aed:#22d3ee><bold>Menu</bold></gradient>"), "Menu")
         );
 
         decorateFrame(inventory);
@@ -119,35 +116,44 @@ public final class MainMenuCommand implements Listener {
         inventory.setItem(10, sectionButton(Material.COMPASS, "<aqua><bold>Profile</bold></aqua>", List.of(
             "<gray>Stats, class, and settings.</gray>"
         ), actionKey, ACTION_PROFILE_MENU));
-        inventory.setItem(12, sectionButton(Material.NETHERITE_CHESTPLATE, "<gold><bold>Gear & Recipes</bold></gold>", List.of(
-            "<gray>Reliquary, Armory, and enchants.</gray>"
-        ), actionKey, ACTION_GEAR_MENU));
-        inventory.setItem(14, sectionButton(Material.WITHER_SKELETON_SKULL, "<red><bold>Bosses & Mythics</bold></red>", List.of(
-            "<gray>Rituals, fusions, and boss brews.</gray>"
-        ), actionKey, ACTION_CHALLENGES_MENU));
-        inventory.setItem(16, sectionButton(Material.SHIELD, "<green><bold>Community</bold></green>", List.of(
-            "<gray>Teams, rankings, and familiars.</gray>"
-        ), actionKey, ACTION_COMMUNITY_MENU));
+        inventory.setItem(12, sectionButton(Material.ENCHANTED_BOOK, "<gold><bold>Reliquary</bold></gold>", List.of(
+            "<gray>Gear, recipes, Armory, and custom enchants.</gray>",
+            "<dark_gray>The single home for every custom item path.</dark_gray>"
+        ), actionKey, ACTION_RELIQUARY));
+        inventory.setItem(14, sectionButton(Material.WITHER_SKELETON_SKULL, "<red><bold>Bosses</bold></red>", List.of(
+            "<gray>Mechanics, rituals, drops, and boss brews.</gray>"
+        ), actionKey, ACTION_BOSSES_MENU));
+        inventory.setItem(16, familiarMenuButton(plugin, player, actionKey));
 
+        inventory.setItem(20, sectionButton(Material.SHIELD, "<green><bold>Teams</bold></green>", List.of(
+            "<gray>Team tools, allies, homes, and progression.</gray>"
+        ), actionKey, ACTION_TEAMS));
         inventory.setItem(22, essenceOverview(plugin, player));
+        inventory.setItem(24, sectionButton(Material.GOLD_BLOCK, "<gold><bold>Leaderboards</bold></gold>", List.of(
+            "<gray>Combat, activity, bosses, duels, and reports.</gray>"
+        ), actionKey, ACTION_LEADERBOARDS));
 
-        inventory.setItem(27, button(Material.KNOWLEDGE_BOOK, "<gold><bold>Changelog</bold></gold>", List.of(
+        inventory.setItem(46, button(Material.KNOWLEDGE_BOOK, "<gold><bold>Changelog</bold></gold>", List.of(
             "<gray>Read the latest server changes.</gray>"
         ), actionKey, ACTION_CHANGELOG));
         if (BedrockCompat.isBedrockPlayer(player) && plugin.getCrossplayManager() != null) {
-            inventory.setItem(29, button(Material.RECOVERY_COMPASS, "<aqua><bold>Bedrock Controls</bold></aqua>", List.of(
+            inventory.setItem(48, button(Material.RECOVERY_COMPASS, "<aqua><bold>Bedrock Controls</bold></aqua>", List.of(
                 "<gray>Ability shortcuts and crossplay help.</gray>",
                 "<yellow>Tap to open.</yellow>"
             ), actionKey, ACTION_CROSSPLAY));
         }
-        inventory.setItem(31, button(Material.BARRIER, "<red><bold>Close</bold></red>", List.of(
+        inventory.setItem(49, button(Material.BARRIER, "<red><bold>Close</bold></red>", List.of(
             "<gray>Close this menu.</gray>"
         ), actionKey, ACTION_CLOSE));
-        inventory.setItem(35, button(Material.WRITABLE_BOOK, "<yellow><bold>Wiki</bold></yellow>", List.of(
+        inventory.setItem(52, button(Material.WRITABLE_BOOK, "<yellow><bold>Wiki</bold></yellow>", List.of(
             "<gray>Open the server guide.</gray>"
         ), actionKey, ACTION_WIKI));
 
         player.openInventory(inventory);
+    }
+
+    public static void openBossesMenu(SMPCore plugin, Player player) {
+        new MainMenuCommand(plugin).openSectionMenu(player, MenuSection.BOSSES);
     }
 
     public static void refreshEssenceNumbers(SMPCore plugin, Player player) {
@@ -201,45 +207,23 @@ public final class MainMenuCommand implements Listener {
                     "<yellow>Click to configure.</yellow>"
                 ), menuActionKey, ACTION_SETTINGS));
             }
-            case GEAR -> {
-                inventory.setItem(11, button(Material.ENCHANTED_BOOK, "<gold><bold>Reliquary</bold></gold>", List.of(
-                    "<gray>Recipes, tools, armor, and relics.</gray>",
-                    "<yellow>Click to browse.</yellow>"
-                ), menuActionKey, ACTION_RELIQUARY));
-                inventory.setItem(13, button(Material.NETHERITE_CHESTPLATE, "<light_purple><bold>Armory of the Veil</bold></light_purple>", List.of(
-                    "<gray>Boss-forged weapons and armor.</gray>",
-                    "<yellow>Click to open.</yellow>"
-                ), menuActionKey, ACTION_ARMORY));
-                inventory.setItem(15, button(Material.EXPERIENCE_BOTTLE, "<aqua><bold>Custom Enchants</bold></aqua>", List.of(
-                    "<gray>Effects, valid gear, and recipes.</gray>",
-                    "<yellow>Click to view.</yellow>"
-                ), menuActionKey, ACTION_ENCHANTS));
-            }
-            case CHALLENGES -> {
+            case BOSSES -> {
                 boolean bossBrewsUnlocked = plugin.getWitchManager() != null && plugin.getWitchManager().hasBossBrewingUnlocked(player);
-                inventory.setItem(11, button(Material.WITHER_SKELETON_SKULL, "<red><bold>Boss Rituals</bold></red>", List.of(
-                    "<gray>Shrines, catalysts, and drops.</gray>",
-                    "<yellow>Click to view.</yellow>"
-                ), menuActionKey, ACTION_BOSSES));
-                inventory.setItem(13, button(Material.END_CRYSTAL, "<light_purple><bold>Mythic Nexus</bold></light_purple>", List.of(
-                    "<gray>Fusion pairings and mythic rewards.</gray>",
+                inventory.setItem(11, button(Material.WITHER_SKELETON_SKULL, "<red><bold>Boss Drops</bold></red>", List.of(
+                    "<gray>Browse every boss and its drop table.</gray>",
                     "<yellow>Click to inspect.</yellow>"
-                ), menuActionKey, ACTION_MYTHICS));
+                ), menuActionKey, ACTION_BOSSES));
+                inventory.setItem(13, button(Material.RESPAWN_ANCHOR, "<light_purple><bold>Rituals & Mechanics</bold></light_purple>", List.of(
+                    "<gray>Summon costs, arena rules, and boss counters.</gray>",
+                    "<yellow>Click to study the path.</yellow>"
+                ), menuActionKey, ACTION_RITUALS));
                 inventory.setItem(15, button(Material.POTION, "<blue><bold>Boss Brews</bold></blue>", List.of(
                     "<gray>Potions brewed with boss materials.</gray>",
-                    bossBrewsUnlocked ? "<yellow>Click for recipes.</yellow>" : "<dark_gray>Complete Vespera's Moonlit Thesis.</dark_gray>"
+                    bossBrewsUnlocked
+                        ? "<green>Brewing unlocked.</green>"
+                        : "<yellow>Preview now; brewing unlocks after Vespera's Moonlit Thesis.</yellow>",
+                    "<dark_gray>Click to inspect every recipe.</dark_gray>"
                 ), menuActionKey, ACTION_BREWS));
-            }
-            case COMMUNITY -> {
-                inventory.setItem(11, button(Material.SHIELD, "<green><bold>Teams</bold></green>", List.of(
-                    "<gray>Browse teams and open team tools.</gray>",
-                    "<yellow>Click to open.</yellow>"
-                ), menuActionKey, ACTION_TEAMS));
-                inventory.setItem(13, button(Material.GOLD_BLOCK, "<gold><bold>Leaderboards</bold></gold>", List.of(
-                    "<gray>Kills, playtime, bosses, and reports.</gray>",
-                    "<yellow>Click to compete.</yellow>"
-                ), menuActionKey, ACTION_LEADERBOARDS));
-                inventory.setItem(15, familiarMenuButton(plugin, player, menuActionKey));
             }
         }
 
@@ -304,9 +288,7 @@ public final class MainMenuCommand implements Listener {
         }
         switch (action) {
             case ACTION_PROFILE_MENU -> openSectionMenu(player, MenuSection.PROFILE);
-            case ACTION_GEAR_MENU -> openSectionMenu(player, MenuSection.GEAR);
-            case ACTION_CHALLENGES_MENU -> openSectionMenu(player, MenuSection.CHALLENGES);
-            case ACTION_COMMUNITY_MENU -> openSectionMenu(player, MenuSection.COMMUNITY);
+            case ACTION_BOSSES_MENU -> openSectionMenu(player, MenuSection.BOSSES);
             case ACTION_CROSSPLAY -> {
                 if (plugin.getCrossplayManager() != null) {
                     plugin.getCrossplayManager().openControls(player);
@@ -316,10 +298,8 @@ public final class MainMenuCommand implements Listener {
             case ACTION_CUSTOM_STATS -> openCustomStatsMenu(player);
             case ACTION_SETTINGS -> openSettings(player);
             case ACTION_RELIQUARY -> openReliquary(player);
-            case ACTION_ARMORY -> openArmory(player);
-            case ACTION_MYTHICS -> openMythics(player);
-            case ACTION_BOSSES -> openBossRituals(player);
-            case ACTION_ENCHANTS -> openEnchants(player);
+            case ACTION_BOSSES -> openBossDrops(player);
+            case ACTION_RITUALS -> openBossRituals(player);
             case ACTION_BREWS -> openBossBrews(player);
             case ACTION_POWERS -> openPowers(player);
             case ACTION_TEAMS -> openTeams(player);
@@ -338,15 +318,30 @@ public final class MainMenuCommand implements Listener {
         if (!player.isOnline()) {
             return;
         }
-        switch (action) {
-            case ACTION_BACK -> openMenu(plugin, player);
-            case ACTION_REFRESH -> openPlayerStatsMenu(player);
-            case ACTION_CUSTOM_STATS -> openCustomStatsMenu(player);
-            case ACTION_CUSTOM_STATS_REFRESH -> openCustomStatsMenu(player);
-            case ACTION_CLOSE -> player.closeInventory();
-            default -> {
+        switch (statsMenuDestination(action)) {
+            case MAIN_MENU -> openMenu(plugin, player);
+            case BASE_STATS -> openPlayerStatsMenu(player);
+            case CUSTOM_STATS -> openCustomStatsMenu(player);
+            case CLOSE -> player.closeInventory();
+            case NONE -> {
             }
         }
+    }
+
+    static StatsMenuDestination statsMenuDestination(String action) {
+        if (ACTION_BACK.equals(action)) {
+            return StatsMenuDestination.MAIN_MENU;
+        }
+        if (ACTION_STATS.equals(action) || ACTION_REFRESH.equals(action)) {
+            return StatsMenuDestination.BASE_STATS;
+        }
+        if (ACTION_CUSTOM_STATS.equals(action) || ACTION_CUSTOM_STATS_REFRESH.equals(action)) {
+            return StatsMenuDestination.CUSTOM_STATS;
+        }
+        if (ACTION_CLOSE.equals(action)) {
+            return StatsMenuDestination.CLOSE;
+        }
+        return StatsMenuDestination.NONE;
     }
 
     private void openReliquary(Player player) {
@@ -357,24 +352,16 @@ public final class MainMenuCommand implements Listener {
         plugin.getLegendaryListener().openRecipeMenuFromMainMenu(player);
     }
 
-    private void openMythics(Player player) {
-        if (!player.hasPermission("smpcore.legendary.recipe")) {
-            player.sendMessage(MessageUtil.error("You do not have permission to view mythics."));
+    private void openBossDrops(Player player) {
+        if (!player.hasPermission("smpcore.bossrituals")) {
+            player.sendMessage(MessageUtil.error("You do not have permission to view boss drops."));
             return;
         }
-        plugin.getLegendaryListener().openMythicFusionMenuFromMainMenu(player);
-    }
-
-    private void openArmory(Player player) {
-        if (!player.hasPermission("smpcore.legendary.recipe")) {
-            player.sendMessage(MessageUtil.error("You do not have permission to view the Armory of the Veil."));
+        if (plugin.getBossManager() == null) {
+            player.sendMessage(MessageUtil.error("Boss drops are not ready yet."));
             return;
         }
-        if (plugin.getSeasonRelicManager() == null) {
-            player.sendMessage(MessageUtil.error("The Armory of the Veil is not ready yet."));
-            return;
-        }
-        plugin.getSeasonRelicManager().openArmoryMenuFromMainMenu(player);
+        plugin.getBossManager().openDropCatalogMenuFromMainMenu(player);
     }
 
     private void openBossRituals(Player player) {
@@ -389,16 +376,8 @@ public final class MainMenuCommand implements Listener {
         plugin.getBossManager().openRitualMenu(player);
     }
 
-    private void openEnchants(Player player) {
-        if (!player.hasPermission("smpcore.enchants")) {
-            player.sendMessage(MessageUtil.error("You do not have permission to view custom enchants."));
-            return;
-        }
-        plugin.getCustomEnchantListener().openEnchantMenu(player);
-    }
-
     private void openPowers(Player player) {
-        if (!player.hasPermission("smpcore.superpower.admin")) {
+        if (!OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.superpower.admin")) {
             player.sendMessage(MessageUtil.error("You do not have permission to view class info."));
             return;
         }
@@ -573,13 +552,13 @@ public final class MainMenuCommand implements Listener {
     private List<String> customCombatStatsLore(Player player) {
         boolean goblinBonus = plugin.getGoblinHuntManager() != null && plugin.getGoblinHuntManager().hasCompletedActiveHunt(player);
         double ward = plugin.getPriestManager() == null ? 1.0D : plugin.getPriestManager().bossWardDamageMultiplier(player);
-        double pvpSet = plugin.getSeasonRelicManager() == null ? 0.0D : plugin.getSeasonRelicManager().equippedFullSetPlayerDamageBonus(player);
+        double pvpSet = plugin.getSeasonRelicManager() == null ? 0.0D : plugin.getSeasonRelicManager().equippedArmorSetPlayerDamageBonus(player);
         double taken = plugin.getReforgeManager() == null ? 1.0D : plugin.getReforgeManager().equippedDamageTakenMultiplier(player);
         int aggro = plugin.getVeilOrbManager() == null ? 0 : plugin.getVeilOrbManager().aggroBonus(player);
         return List.of(
             customPercentLine("Goblin hunt damage", goblinBonus ? 0.02D : 0.0D),
             customPercentLine("Boss Ward damage", ward - 1.0D),
-            customPercentLine("Full-set player damage", pvpSet),
+            customPercentLine("Boss-armor player damage", pvpSet),
             "<gray>Reforge damage taken: <white>" + formatStat(taken * 100.0D) + "%</white>.</gray>",
             "<gray>Boss aggro bonus: <white>+" + aggro + "</white>.</gray>",
             "<dark_gray>Vanilla totals are under Base Stats.</dark_gray>"
@@ -682,6 +661,10 @@ public final class MainMenuCommand implements Listener {
                 inventory.setItem(slot, filler);
             }
         }
+        inventory.setItem(0, pane(Material.PURPLE_STAINED_GLASS_PANE));
+        inventory.setItem(8, pane(Material.CYAN_STAINED_GLASS_PANE));
+        inventory.setItem(inventory.getSize() - 9, pane(Material.PURPLE_STAINED_GLASS_PANE));
+        inventory.setItem(inventory.getSize() - 1, pane(Material.CYAN_STAINED_GLASS_PANE));
     }
 
     private static boolean isFrameSlot(int slot, int size) {
@@ -786,7 +769,7 @@ public final class MainMenuCommand implements Listener {
     private ItemStack classMenuButton(Player player) {
         List<String> lore = new ArrayList<>();
         lore.add("<gray>Current: <white>" + powerName(plugin, player) + "</white></gray>");
-        if (player.hasPermission("smpcore.superpower.admin")) {
+        if (OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.superpower.admin")) {
             lore.add("<gray>View classes, passives, and commands.</gray>");
             lore.add("<yellow>Click to open class controls.</yellow>");
             return button(
@@ -1044,23 +1027,11 @@ public final class MainMenuCommand implements Listener {
             "Profile",
             "<gray>Your stats, class, and settings.</gray>"
         ),
-        GEAR(
-            Material.NETHERITE_CHESTPLATE,
-            "<gold><bold>Gear & Recipes</bold></gold>",
-            "Gear & Recipes",
-            "<gray>Equipment, recipes, and upgrades.</gray>"
-        ),
-        CHALLENGES(
+        BOSSES(
             Material.WITHER_SKELETON_SKULL,
-            "<red><bold>Bosses & Mythics</bold></red>",
-            "Bosses & Mythics",
-            "<gray>Boss rituals, fusions, and brews.</gray>"
-        ),
-        COMMUNITY(
-            Material.SHIELD,
-            "<green><bold>Community</bold></green>",
-            "Community",
-            "<gray>Teams, rankings, and familiars.</gray>"
+            "<red><bold>Bosses</bold></red>",
+            "Bosses",
+            "<gray>Mechanics, rituals, drops, and brews.</gray>"
         );
 
         private final Material icon;
@@ -1090,5 +1061,13 @@ public final class MainMenuCommand implements Listener {
         private String description() {
             return description;
         }
+    }
+
+    enum StatsMenuDestination {
+        MAIN_MENU,
+        BASE_STATS,
+        CUSTOM_STATS,
+        CLOSE,
+        NONE
     }
 }

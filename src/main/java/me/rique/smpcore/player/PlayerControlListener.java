@@ -1,7 +1,10 @@
 package me.rique.smpcore.player;
 
+import com.destroystokyo.paper.event.player.PlayerStartSpectatingEntityEvent;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.MessageUtil;
+import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -11,9 +14,13 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
+import org.bukkit.event.player.PlayerGameModeChangeEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
+import org.bukkit.event.player.PlayerToggleFlightEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
 
 import java.util.Set;
 import java.util.UUID;
@@ -21,9 +28,11 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class PlayerControlListener implements Listener {
 
+    private final SMPCore plugin;
     private final Set<UUID> frozenPlayers = ConcurrentHashMap.newKeySet();
 
     public PlayerControlListener(SMPCore plugin) {
+        this.plugin = plugin;
     }
 
     public boolean toggleFrozen(Player player) {
@@ -105,11 +114,64 @@ public final class PlayerControlListener implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onStartSpectatingEntity(PlayerStartSpectatingEntityEvent event) {
+        event.setCancelled(true);
+        event.getPlayer().setSpectatorTarget(null);
+        event.getPlayer().sendActionBar(MessageUtil.warn("Entity-camera teleporting is disabled while spectating."));
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onSpectatorTeleport(PlayerTeleportEvent event) {
+        if (!isNativeSpectatorTeleport(event.getCause())) {
+            return;
+        }
+        event.setCancelled(true);
+        event.getPlayer().setSpectatorTarget(null);
+        event.getPlayer().setFallDistance(0.0F);
+        event.getPlayer().sendActionBar(MessageUtil.warn("Entity-camera teleporting is disabled while spectating."));
+    }
+
+    static boolean isNativeSpectatorTeleport(PlayerTeleportEvent.TeleportCause cause) {
+        return cause == PlayerTeleportEvent.TeleportCause.SPECTATE;
+    }
+
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         if (isFrozen(event.getPlayer().getUniqueId())) {
             event.getPlayer().sendMessage(MessageUtil.warn("You are still frozen by staff."));
         }
+        reconcileFlightNextTick(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onFlightToggle(PlayerToggleFlightEvent event) {
+        if (!event.isFlying() || plugin.getPlayerManager().isFlightAuthorized(event.getPlayer())) {
+            return;
+        }
+        event.setCancelled(true);
+        event.getPlayer().setFlying(false);
+        event.getPlayer().setAllowFlight(false);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onGameModeChange(PlayerGameModeChangeEvent event) {
+        if (!event.isCancelled() && event.getNewGameMode() != GameMode.CREATIVE) {
+            reconcileFlightNextTick(event.getPlayer());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onRespawn(PlayerRespawnEvent event) {
+        reconcileFlightNextTick(event.getPlayer());
+    }
+
+    private void reconcileFlightNextTick(Player player) {
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (plugin.isEnabled() && player.isOnline()) {
+                plugin.getPlayerManager().reconcileFlightAccess(player);
+            }
+        });
     }
 
     private boolean cancelIfFrozen(Player player) {

@@ -10,7 +10,7 @@ Speak to **Orin the Artificer** for the same information in a Bedrock-friendly G
 | 2 | Enchant | Add vanilla and custom enchants while the item is editable. |
 | 3 | Reforge | A new prefix replaces the old one; corrupted gear cannot be reforged. |
 | 4 | Direct orbs | Add the chosen stat or boss aggro before the final lock. |
-| 5 | Runic Loom | Raise an existing enchant while the item is still editable. |
+| 5 | Runic Loom | Raise an existing enchant or remove one exact enchant while the item is still editable. |
 | 6A | Awakening | Rare final upgrade; awakened gear cannot be corrupted. |
 | 6B | Corruption | Alternative final gamble that permanently seals survivors. |
 
@@ -34,11 +34,14 @@ Use the orb on the target item in your inventory. The menu previews the result b
 - **Warden's Lure Orb:** armor only; adds +5 custom-boss aggro. One per armor piece.
 - **Veilshift Orb:** armor, weapons, and tools; rolls one bonus stat. A later Veilshift Orb replaces the previous orb stat.
 - **Runebloom Orb:** fuel for the Runic Loom rather than a direct item click.
+- **Unweaving Orb:** cheaper Loom fuel that removes one chosen enchant with no XP refund.
 - **Orb of the Mystics:** a rare Enderman drop that summons one random legendary altar. It is single-use and the caller has a one-hour cooldown.
 
 ## Runic Loom
 
-The Runic Loom raises one enchant already on an item.
+The Runic Loom has two pages: Upgrade and Remove.
+
+### Upgrade page
 
 1. Insert armor, a tool, or a weapon with at least four existing enchants.
 2. Insert 1 Runebloom Orb.
@@ -46,6 +49,14 @@ The Runic Loom raises one enchant already on an item.
 4. The successful roll adds +1 or +2, clamped to the loom's safe cap.
 
 Corrupted gear and enchants already at the runic cap are rejected. The normal Runebloom Orb recipe is 1 Awakening Shard, 2 Riftglass Lenses, 32 XP Bottles, and 32 Lapis Lazuli. Morvessa also has a 5% drop chance.
+
+### Remove page
+
+1. Press **Remove Enchants** in the bottom-left of the Loom.
+2. Insert one editable item and 1 Unweaving Orb.
+3. Choose the exact enchant to remove.
+
+One Unweaving Orb removes one enchant and refunds no XP. Its recipe is 4 Amethyst Shards, 8 XP Bottles, 16 Lapis Lazuli, and 8 String. Veil weapons and armor cannot be stripped in a grindstone; this page is their safe removal path. Base enchants built into a Veil armor set cannot be removed.
 
 ## Awakening Table
 
@@ -116,11 +127,17 @@ Both source legendaries and the core are consumed. The sources are permanently r
 ### Salvaging Depot
 
 - Accepts ordinary salvageable armor, weapons, and tools.
-- Place two Salvaging Depots directly beside each other to form one 54-slot Large Salvaging Depot. Both halves share processing, protection, and one centered hologram.
+- Place two Salvaging Depots directly beside each other to form one 54-slot Large Salvaging Depot. Both halves share processing, protection, and one centered hologram. The plugin joins the halves even if the client initially places them as two single chests.
 - A third depot or a normal chest cannot connect. Breaking either half safely returns that depot and only that half's stored items; the remaining half becomes a normal 27-slot depot.
 - Gives a 10-second cancel window, then locks for 6 seconds of processing.
 - Accepts gear at any durability, including fully worn items. Damage lowers the return, but valid gear still gives at least its primary scrap.
 - Rejects relics, legendaries, class items, backpacks, and stations.
+- Sneak-right-click the depot to configure hopper behavior:
+  - `Salvageable Gear Only` accepts only items the depot can actually salvage. This is the safe default.
+  - `Accept Everything` uses the depot as ordinary hopper-fed storage and never deletes unsalvageable items.
+  - `Guarded Trash` salvages valid gear and queues ordinary plain junk for deletion after the same 10-second cancel window. Custom, named, enchanted, valuable, data-bearing, and unstackable items are rejected instead of deleted.
+  - `Results-Only Output` allows only marked salvage results to leave through a hopper directly beneath either half of the depot. Side hoppers and stored items stay blocked.
+- Hopper settings are stored on the placed depot and apply to both halves of a Large Salvaging Depot.
 - Holograms use a short range and do not reveal private bases through floors.
 
 ### Agricultural Pylon

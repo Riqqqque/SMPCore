@@ -2,6 +2,7 @@ package me.rique.smpcore.boss;
 
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.event.block.Action;
 import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
@@ -10,30 +11,67 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BossDungeonManagerTest {
 
     @Test
-    void summonCostsKeepThemedKeysButReduceRepeatableMaterialLoss() {
-        assertCost("yule_the_minion", Material.BELL, Material.GOLDEN_SWORD, Material.BELL, 1, Material.GOLDEN_SWORD, 1, Material.SOUL_SAND, 1, Material.GOLD_BLOCK, 2);
-        assertCost("kael_the_ashen", Material.SOUL_CAMPFIRE, Material.BOW, Material.SOUL_CAMPFIRE, 1, Material.BOW, 1, Material.BONE_BLOCK, 3);
-        assertCost("vesper_the_widow_queen", Material.COBWEB, Material.FERMENTED_SPIDER_EYE, Material.COBWEB, 1, Material.FERMENTED_SPIDER_EYE, 1, Material.MOSS_BLOCK, 1, Material.BLACK_CANDLE, 2);
-        assertCost("aurelion_the_rift_seraph", Material.END_ROD, Material.ENDER_EYE, Material.END_ROD, 1, Material.ENDER_EYE, 1, Material.PURPUR_BLOCK, 1, Material.END_STONE_BRICKS, 2);
-        assertCost("morvessa_the_runebloom_witch", Material.BREWING_STAND, Material.DRAGON_BREATH, Material.BREWING_STAND, 1, Material.DRAGON_BREATH, 1, Material.AMETHYST_BLOCK, 1, Material.FLOWERING_AZALEA_LEAVES, 2);
-        assertCost("nereida_the_abyss_mother", Material.CONDUIT, Material.HEART_OF_THE_SEA, Material.CONDUIT, 1, Material.HEART_OF_THE_SEA, 1, Material.PRISMARINE, 1, Material.SEA_LANTERN, 2);
-        assertCost("iron_saint", Material.ANVIL, Material.IRON_BLOCK, Material.ANVIL, 1, Material.IRON_BLOCK, 2, Material.SMITHING_TABLE, 1);
-        assertCost("mirewood_the_root_tyrant", Material.MANGROVE_ROOTS, Material.SPORE_BLOSSOM, Material.MANGROVE_ROOTS, 1, Material.SPORE_BLOSSOM, 1, Material.MOSS_BLOCK, 1, Material.OAK_SAPLING, 2);
-        assertCost("corrupted_oathkeeper", Material.RESPAWN_ANCHOR, Material.NETHER_STAR, Material.RESPAWN_ANCHOR, 1, Material.NETHER_STAR, 1, Material.CRYING_OBSIDIAN, 1, Material.MAGMA_BLOCK, 2, Material.SCULK_CATALYST, 2);
+    void protectedDungeonBlocksDoNotPreventEating() {
+        assertTrue(BossDungeonManager.allowsProtectedDungeonFoodUse(Action.RIGHT_CLICK_BLOCK, true));
+        assertFalse(BossDungeonManager.allowsProtectedDungeonFoodUse(Action.RIGHT_CLICK_BLOCK, false));
+        assertFalse(BossDungeonManager.allowsProtectedDungeonFoodUse(Action.RIGHT_CLICK_AIR, true));
+        assertFalse(BossDungeonManager.allowsProtectedDungeonFoodUse(Action.LEFT_CLICK_BLOCK, true));
+    }
 
-        Map<Material, Integer> warden = BossDungeonManager.summonCosts("voralith_the_crimson_warden", Material.SCULK_SHRIEKER, Material.ECHO_SHARD);
-        assertEquals(1, warden.get(Material.SCULK_SHRIEKER));
-        assertEquals(1, warden.get(Material.ECHO_SHARD));
-        assertEquals(1, warden.get(Material.SCULK_CATALYST));
-        assertEquals(1, warden.get(Material.REDSTONE_BLOCK));
-        assertEquals(2, warden.get(Material.SOUL_LANTERN));
-        assertTrue(!warden.containsKey(Material.REINFORCED_DEEPSLATE), "unobtainable blocks cannot be survival entry costs");
+    @Test
+    void summonCostsUseExactlyOneFocusAndOneCatalyst() {
+        assertCost(Material.BELL, Material.GOLDEN_SWORD);
+        assertCost(Material.SOUL_CAMPFIRE, Material.BOW);
+        assertCost(Material.COBWEB, Material.FERMENTED_SPIDER_EYE);
+        assertCost(Material.MANGROVE_ROOTS, Material.SPORE_BLOSSOM);
+        assertCost(Material.PRISMARINE_BRICKS, Material.WATER_BUCKET);
+        assertCost(Material.ANVIL, Material.IRON_BLOCK);
+        assertCost(Material.END_ROD, Material.ENDER_EYE);
+        assertCost(Material.BREWING_STAND, Material.DRAGON_BREATH);
+        assertCost(Material.SCULK_SHRIEKER, Material.ECHO_SHARD);
+        assertCost(Material.RESPAWN_ANCHOR, Material.NETHER_STAR);
+    }
+
+    @Test
+    void summonCostsRejectInvalidMaterialPairs() {
+        assertThrows(IllegalArgumentException.class, () -> BossDungeonManager.summonCosts(null, Material.BELL));
+        assertThrows(IllegalArgumentException.class, () -> BossDungeonManager.summonCosts(Material.BELL, null));
+        assertThrows(IllegalArgumentException.class, () -> BossDungeonManager.summonCosts(Material.BELL, Material.BELL));
+    }
+
+    @Test
+    void tierFiveUsesSimpleOceanMaterialsInsteadOfTreasureOnlyHearts() {
+        assertEquals(Material.PRISMARINE_BRICKS, BossManager.THALASSA_RITUAL_FOCUS);
+        assertEquals(Material.WATER_BUCKET, BossManager.THALASSA_RITUAL_CATALYST);
+        assertFalse(BossDungeonManager.summonCosts(
+            BossManager.THALASSA_RITUAL_FOCUS,
+            BossManager.THALASSA_RITUAL_CATALYST
+        )
+            .containsKey(Material.HEART_OF_THE_SEA));
+        assertFalse(BossDungeonManager.summonCosts(
+            BossManager.THALASSA_RITUAL_FOCUS,
+            BossManager.THALASSA_RITUAL_CATALYST
+        )
+            .containsKey(Material.CONDUIT));
+    }
+
+    @Test
+    void bossSpectatorZoneCoversTheFullDungeonInterior() {
+        assertTrue(BossDungeonManager.spectatorOffsetAllowed(0.0D, 0.0D, 0.0D));
+        assertTrue(BossDungeonManager.spectatorOffsetAllowed(39.45D, -0.95D, 39.45D));
+        assertTrue(BossDungeonManager.spectatorOffsetAllowed(-39.45D, 59.95D, -39.45D));
+        assertFalse(BossDungeonManager.spectatorOffsetAllowed(39.46D, 0.0D, 0.0D));
+        assertFalse(BossDungeonManager.spectatorOffsetAllowed(0.0D, -0.96D, 0.0D));
+        assertFalse(BossDungeonManager.spectatorOffsetAllowed(0.0D, 59.96D, 0.0D));
+        assertFalse(BossDungeonManager.spectatorOffsetAllowed(Double.NaN, 0.0D, 0.0D));
     }
 
     @Test
@@ -91,11 +129,49 @@ class BossDungeonManagerTest {
         assertTrue(!BossDungeonManager.shouldRestoreDungeonExitState(false, true, false));
     }
 
-    private void assertCost(String bossId, Material focus, Material catalyst, Object... entries) {
-        Map<Material, Integer> actual = BossDungeonManager.summonCosts(bossId, focus, catalyst);
-        assertEquals(entries.length / 2, actual.size());
-        for (int i = 0; i < entries.length; i += 2) {
-            assertEquals(entries[i + 1], actual.get(entries[i]), bossId + " cost mismatch for " + entries[i]);
-        }
+    @Test
+    void bossCatalogBackButtonsKeepTheirOriginalDestination() {
+        assertEquals(
+            BossDungeonManager.CatalogBackDestination.MAIN_MENU,
+            BossDungeonManager.catalogBackDestination(BossDungeonManager.CatalogBackTarget.MAIN_MENU)
+        );
+        assertEquals(
+            BossDungeonManager.CatalogBackDestination.ENTRANCE,
+            BossDungeonManager.catalogBackDestination(BossDungeonManager.CatalogBackTarget.ENTRANCE)
+        );
+        assertEquals(
+            BossDungeonManager.CatalogBackDestination.LEAVE_DUNGEON,
+            BossDungeonManager.catalogBackDestination(BossDungeonManager.CatalogBackTarget.LEAVE_DUNGEON)
+        );
+        assertEquals(
+            BossDungeonManager.CatalogBackDestination.ENTRANCE,
+            BossDungeonManager.catalogBackDestination(null)
+        );
+    }
+
+    @Test
+    void arenaCleanupRecognizesCurrentAndLegacyBossMinionMarkers() {
+        assertTrue(BossManager.shouldCleanupBossMinion(true, false, false));
+        assertTrue(BossManager.shouldCleanupBossMinion(false, true, false));
+        assertTrue(BossManager.shouldCleanupBossMinion(false, false, true));
+        assertFalse(BossManager.shouldCleanupBossMinion(false, false, false));
+    }
+
+    @Test
+    void rareBossArmorRollUsesAnExactTwoPercentBoundary() {
+        assertTrue(BossManager.rollsBossArmorReward(0.0D));
+        assertTrue(BossManager.rollsBossArmorReward(0.019999999D));
+        assertFalse(BossManager.rollsBossArmorReward(0.02D));
+        assertFalse(BossManager.rollsBossArmorReward(1.0D));
+        assertFalse(BossManager.rollsBossArmorReward(-0.001D));
+        assertFalse(BossManager.rollsBossArmorReward(Double.NaN));
+        assertEquals(0.02D, BossManager.BOSS_ARMOR_REWARD_CHANCE);
+    }
+
+    private void assertCost(Material focus, Material catalyst) {
+        Map<Material, Integer> actual = BossDungeonManager.summonCosts(focus, catalyst);
+        assertEquals(2, actual.size());
+        assertEquals(1, actual.get(focus));
+        assertEquals(1, actual.get(catalyst));
     }
 }

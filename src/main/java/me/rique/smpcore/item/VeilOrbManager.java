@@ -85,6 +85,7 @@ public final class VeilOrbManager implements Listener {
     public static final String AGGRO_ORB_ID = "warden_lure_orb";
     public static final String STAT_ORB_ID = "veilshift_orb";
     public static final String ENCHANT_ORB_ID = "runebloom_orb";
+    public static final String ENCHANT_REMOVAL_ORB_ID = "unweaving_orb";
     public static final String SOLO_DEVICE_ID = "lone_star_engine";
     public static final String RUNIC_LOOM_ID = "runic_loom";
     public static final String FATE_CRUCIBLE_ID = "fate_crucible";
@@ -97,6 +98,9 @@ public final class VeilOrbManager implements Listener {
     private static final int FATE_ITEM_SLOT = 22;
     private static final int FATE_BUTTON_SLOT = 31;
     private static final int INFO_SLOT = 4;
+    private static final int MODE_SLOT = 36;
+    private static final int PREVIOUS_PAGE_SLOT = 37;
+    private static final int NEXT_PAGE_SLOT = 43;
     private static final int CLOSE_SLOT = 40;
     private static final int[] ENCHANT_OPTION_SLOTS = {10, 11, 12, 13, 14, 15, 16, 28, 29, 30, 32, 33, 34};
     private static final int RUNIC_REQUIRED_ENCHANTS = 4;
@@ -234,6 +238,7 @@ public final class VeilOrbManager implements Listener {
         return AGGRO_ORB_ID.equals(id)
             || STAT_ORB_ID.equals(id)
             || ENCHANT_ORB_ID.equals(id)
+            || ENCHANT_REMOVAL_ORB_ID.equals(id)
             || (plugin.getSeasonRelicManager() != null && plugin.getSeasonRelicManager().isSoulImprint(item));
     }
 
@@ -493,7 +498,7 @@ public final class VeilOrbManager implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onKick(PlayerKickEvent event) {
         returnOpenStationInputs(event.getPlayer());
     }
@@ -542,13 +547,6 @@ public final class VeilOrbManager implements Listener {
             BedrockCompat.menuTitle(player, MM.deserialize("<gradient:#7dd3fc:#c084fc><bold>Runic Loom</bold></gradient>"), "Runic Loom")
         );
         fill(inventory);
-        inventory.setItem(INFO_SLOT, item(Material.ENCHANTING_TABLE, "<gradient:#7dd3fc:#c084fc><bold>Runic Loom</bold></gradient>", List.of(
-            "<gray>Adds <gold>+1</gold> or <gold>+2</gold> to one enchant.</gray>",
-            "<gray>Needs gear with at least <white>4 enchants</white>.</gray>",
-            "<gray>Vanilla enchants cap at normal max <gold>+2</gold>.</gray>",
-            "<gray>Consumes one <white>Runebloom Orb</white>.</gray>",
-            "<dark_gray>Corrupted items are locked.</dark_gray>"
-        )));
         inventory.setItem(RUNIC_ITEM_SLOT, null);
         inventory.setItem(RUNIC_ORB_SLOT, null);
         refreshRunicLoom(inventory);
@@ -590,17 +588,42 @@ public final class VeilOrbManager implements Listener {
             player.closeInventory();
             return;
         }
+        String action = menuAction(event.getCurrentItem());
+        if ("switch_runic_mode".equals(action)) {
+            holder.setMode(holder.mode() == RunicMode.UPGRADE ? RunicMode.REMOVE : RunicMode.UPGRADE);
+            holder.setPage(0);
+            refreshRunicLoom(top);
+            player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 0.55f, 1.25f);
+            return;
+        }
+        if ("previous_runic_page".equals(action)) {
+            holder.setPage(holder.page() - 1);
+            refreshRunicLoom(top);
+            return;
+        }
+        if ("next_runic_page".equals(action)) {
+            holder.setPage(holder.page() + 1);
+            refreshRunicLoom(top);
+            return;
+        }
         if (rawSlot == RUNIC_ITEM_SLOT || rawSlot == RUNIC_ORB_SLOT) {
             boolean itemSlot = rawSlot == RUNIC_ITEM_SLOT;
-            moveCursorIntoMutableSlot(player, top, rawSlot, event.getCursor(), itemSlot ? this::isRunicItem : this::isRunicOrb, itemSlot);
+            moveCursorIntoMutableSlot(
+                player,
+                top,
+                rawSlot,
+                event.getCursor(),
+                itemSlot ? candidate -> runicItemReason(candidate, holder.mode()) == null : this::isLoomFuelOrb,
+                itemSlot
+            );
             Bukkit.getScheduler().runTask(plugin, () -> refreshRunicLoom(top));
             return;
         }
-        String action = menuAction(event.getCurrentItem());
-        if (!"upgrade_enchant".equals(action)) {
-            return;
+        if ("upgrade_enchant".equals(action) && holder.mode() == RunicMode.UPGRADE) {
+            executeRunicUpgrade(player, holder, top, menuValue(event.getCurrentItem()));
+        } else if ("remove_enchant".equals(action) && holder.mode() == RunicMode.REMOVE) {
+            executeRunicRemoval(player, holder, top, menuValue(event.getCurrentItem()));
         }
-        executeRunicUpgrade(player, holder, top, menuValue(event.getCurrentItem()));
     }
 
     private void handleFateClick(Player player, FateCrucibleHolder holder, InventoryClickEvent event) {
@@ -635,8 +658,12 @@ public final class VeilOrbManager implements Listener {
         }
         ItemStack item = top.getItem(RUNIC_ITEM_SLOT);
         ItemStack orb = top.getItem(RUNIC_ORB_SLOT);
-        if (!isRunicItem(item)) {
-            player.sendMessage(MessageUtil.warn(runicItemReason(item)));
+        if (holder.mode() != RunicMode.UPGRADE) {
+            return;
+        }
+        String reason = runicItemReason(item, RunicMode.UPGRADE);
+        if (reason != null) {
+            player.sendMessage(MessageUtil.warn(reason));
             refreshRunicLoom(top);
             return;
         }
@@ -668,6 +695,53 @@ public final class VeilOrbManager implements Listener {
         player.spawnParticle(Particle.ENCHANT, player.getLocation().add(0.0, 1.1, 0.0), 45, 0.6, 0.45, 0.6, 0.08);
         String capNote = appliedIncrease < increase ? " <dark_gray>(cap reached)</dark_gray>" : "";
         player.sendMessage(MessageUtil.success("Raised <white>" + selected.display() + "</white> by <gold>+" + appliedIncrease + "</gold>." + capNote));
+        refreshRunicLoom(top);
+    }
+
+    private void executeRunicRemoval(Player player, RunicLoomHolder holder, Inventory top, String encodedOption) {
+        if (holder.mode() != RunicMode.REMOVE) {
+            return;
+        }
+        if (!stationStillValid(holder.station(), StationType.RUNIC_LOOM)) {
+            player.closeInventory();
+            player.sendMessage(MessageUtil.warn("That Runic Loom is gone."));
+            return;
+        }
+        ItemStack item = top.getItem(RUNIC_ITEM_SLOT);
+        ItemStack orb = top.getItem(RUNIC_ORB_SLOT);
+        String reason = runicItemReason(item, RunicMode.REMOVE);
+        if (reason != null) {
+            player.sendMessage(MessageUtil.warn(reason));
+            refreshRunicLoom(top);
+            return;
+        }
+        if (!isRemovalOrb(orb)) {
+            player.sendMessage(MessageUtil.warn("Add one Unweaving Orb first."));
+            refreshRunicLoom(top);
+            return;
+        }
+        EnchantOption selected = removalEnchantOptions(item).stream()
+            .filter(option -> option.encoded().equals(encodedOption))
+            .findFirst()
+            .orElse(null);
+        if (selected == null) {
+            player.sendMessage(MessageUtil.warn("That enchant is no longer removable."));
+            refreshRunicLoom(top);
+            return;
+        }
+
+        ItemStack result = item.clone();
+        if (!removeEnchant(result, selected)) {
+            player.sendMessage(MessageUtil.warn("That enchant could not be removed."));
+            refreshRunicLoom(top);
+            return;
+        }
+        top.setItem(RUNIC_ITEM_SLOT, result);
+        consumeOne(top, RUNIC_ORB_SLOT);
+        holder.setPage(0);
+        player.playSound(player.getLocation(), Sound.BLOCK_GRINDSTONE_USE, 0.7f, 1.35f);
+        player.spawnParticle(Particle.REVERSE_PORTAL, player.getLocation().add(0.0, 1.1, 0.0), 24, 0.45, 0.4, 0.45, 0.04);
+        player.sendMessage(MessageUtil.success("Removed <white>" + selected.display() + "</white> with one Unweaving Orb."));
         refreshRunicLoom(top);
     }
 
@@ -703,43 +777,126 @@ public final class VeilOrbManager implements Listener {
     }
 
     private void refreshRunicLoom(Inventory inventory) {
+        if (!(inventory.getHolder(false) instanceof RunicLoomHolder holder)) {
+            return;
+        }
         for (int slot : ENCHANT_OPTION_SLOTS) {
             inventory.setItem(slot, null);
         }
+        inventory.setItem(PREVIOUS_PAGE_SLOT, null);
+        inventory.setItem(NEXT_PAGE_SLOT, null);
+        RunicMode mode = holder.mode();
+        inventory.setItem(INFO_SLOT, runicInfoItem(mode));
+        inventory.setItem(MODE_SLOT, actionItem(
+            mode == RunicMode.UPGRADE ? Material.SHEARS : Material.ENCHANTING_TABLE,
+            mode == RunicMode.UPGRADE
+                ? "<gradient:#fda4af:#c084fc><bold>Remove Enchants</bold></gradient>"
+                : "<gradient:#7dd3fc:#c084fc><bold>Upgrade Enchants</bold></gradient>",
+            List.of(
+                mode == RunicMode.UPGRADE
+                    ? "<gray>Open the Unweaving page.</gray>"
+                    : "<gray>Return to Runebloom upgrades.</gray>",
+                "<yellow>Click to switch.</yellow>"
+            ),
+            "switch_runic_mode"
+        ));
+
         ItemStack item = inventory.getItem(RUNIC_ITEM_SLOT);
         ItemStack orb = inventory.getItem(RUNIC_ORB_SLOT);
         if (isEmpty(item)) {
             inventory.setItem(RUNIC_ITEM_SLOT, ghost(Material.NETHERITE_SWORD, "<gray>Gear Slot</gray>", "<dark_gray>Place armor, a tool, or a weapon.</dark_gray>"));
         }
         if (isEmpty(orb)) {
-            inventory.setItem(RUNIC_ORB_SLOT, ghost(Material.EXPERIENCE_BOTTLE, "<gray>Orb Slot</gray>", "<dark_gray>Consumes one Runebloom Orb.</dark_gray>"));
+            inventory.setItem(
+                RUNIC_ORB_SLOT,
+                ghost(
+                    mode == RunicMode.UPGRADE ? Material.EXPERIENCE_BOTTLE : Material.AMETHYST_SHARD,
+                    "<gray>Orb Slot</gray>",
+                    mode == RunicMode.UPGRADE
+                        ? "<dark_gray>Consumes one Runebloom Orb.</dark_gray>"
+                        : "<dark_gray>Consumes one Unweaving Orb.</dark_gray>"
+                )
+            );
         }
-        String reason = runicItemReason(item);
+        String reason = runicItemReason(item, mode);
         if (reason != null) {
             inventory.setItem(RUNIC_STATUS_SLOT, item(Material.BARRIER, "<red><bold>Not Ready</bold></red>", List.of("<gray>" + reason + "</gray>")));
             return;
         }
-        if (!isRunicOrb(orb)) {
-            inventory.setItem(RUNIC_STATUS_SLOT, item(Material.EXPERIENCE_BOTTLE, "<yellow><bold>Add Runebloom Orb</bold></yellow>", List.of("<gray>One orb is consumed per upgrade.</gray>")));
-            return;
-        }
-        List<EnchantOption> options = enchantOptions(item);
-        if (options.isEmpty()) {
-            inventory.setItem(RUNIC_STATUS_SLOT, item(Material.BARRIER, "<red><bold>No Enchants Found</bold></red>", List.of("<gray>This item has no upgradeable enchants.</gray>")));
-            return;
-        }
-        inventory.setItem(RUNIC_STATUS_SLOT, item(Material.LIME_DYE, "<green><bold>Choose An Enchant</bold></green>", List.of("<gray>Click one enchant below.</gray>", "<gray>Rolls <gold>+1</gold> or <gold>+2</gold>, capped safely.</gray>")));
-        options.sort(Comparator.comparing(EnchantOption::display, String.CASE_INSENSITIVE_ORDER));
-        for (int i = 0; i < options.size() && i < ENCHANT_OPTION_SLOTS.length; i++) {
-            EnchantOption option = options.get(i);
-            ItemStack icon = item(Material.ENCHANTED_BOOK, "<aqua><bold>" + miniEscape(option.display()) + "</bold></aqua>", List.of(
-                "<gray>Current:</gray> <white>" + option.level() + "</white><dark_gray>/</dark_gray><white>" + option.maxLevel() + "</white>",
-                "<gray>Result:</gray> <gold>" + runicResultPreview(option) + "</gold>",
-                "<yellow>Click to upgrade.</yellow>"
+        boolean correctOrb = mode == RunicMode.UPGRADE ? isRunicOrb(orb) : isRemovalOrb(orb);
+        if (!correctOrb) {
+            String orbName = mode == RunicMode.UPGRADE ? "Runebloom Orb" : "Unweaving Orb";
+            inventory.setItem(RUNIC_STATUS_SLOT, item(
+                mode == RunicMode.UPGRADE ? Material.EXPERIENCE_BOTTLE : Material.AMETHYST_SHARD,
+                "<yellow><bold>Add " + orbName + "</bold></yellow>",
+                List.of("<gray>One orb is consumed per selected enchant.</gray>")
             ));
-            tagMenu(icon, "upgrade_enchant", option.encoded());
-            inventory.setItem(ENCHANT_OPTION_SLOTS[i], icon);
+            return;
         }
+        List<EnchantOption> options = mode == RunicMode.UPGRADE ? enchantOptions(item) : removalEnchantOptions(item);
+        if (options.isEmpty()) {
+            inventory.setItem(RUNIC_STATUS_SLOT, item(
+                Material.BARRIER,
+                "<red><bold>No Enchants Found</bold></red>",
+                List.of("<gray>This item has no " + (mode == RunicMode.UPGRADE ? "upgradeable" : "removable") + " enchants.</gray>")
+            ));
+            return;
+        }
+        options.sort(Comparator.comparing(EnchantOption::display, String.CASE_INSENSITIVE_ORDER));
+        int pageCount = runicPageCount(options.size());
+        holder.setPage(Math.min(holder.page(), pageCount - 1));
+        int page = holder.page();
+        inventory.setItem(RUNIC_STATUS_SLOT, item(
+            mode == RunicMode.UPGRADE ? Material.LIME_DYE : Material.PINK_DYE,
+            mode == RunicMode.UPGRADE
+                ? "<green><bold>Choose An Enchant</bold></green>"
+                : "<light_purple><bold>Choose One To Remove</bold></light_purple>",
+            mode == RunicMode.UPGRADE
+                ? List.of("<gray>Rolls <gold>+1</gold> or <gold>+2</gold>, capped safely.</gray>", "<dark_gray>Page " + (page + 1) + "/" + pageCount + "</dark_gray>")
+                : List.of("<gray>Removal is exact and gives no XP.</gray>", "<dark_gray>Page " + (page + 1) + "/" + pageCount + "</dark_gray>")
+        ));
+        int start = page * ENCHANT_OPTION_SLOTS.length;
+        int end = Math.min(options.size(), start + ENCHANT_OPTION_SLOTS.length);
+        for (int index = start; index < end; index++) {
+            EnchantOption option = options.get(index);
+            List<String> lore = mode == RunicMode.UPGRADE
+                ? List.of(
+                    "<gray>Current:</gray> <white>" + option.level() + "</white><dark_gray>/</dark_gray><white>" + option.maxLevel() + "</white>",
+                    "<gray>Result:</gray> <gold>" + runicResultPreview(option) + "</gold>",
+                    "<yellow>Click to upgrade.</yellow>"
+                )
+                : List.of(
+                    "<gray>Current level:</gray> <white>" + option.level() + "</white>",
+                    "<gray>Cost:</gray> <light_purple>1 Unweaving Orb</light_purple>",
+                    "<yellow>Click to remove only this enchant.</yellow>"
+                );
+            ItemStack icon = item(Material.ENCHANTED_BOOK, "<aqua><bold>" + miniEscape(option.display()) + "</bold></aqua>", lore);
+            tagMenu(icon, mode == RunicMode.UPGRADE ? "upgrade_enchant" : "remove_enchant", option.encoded());
+            int slotIndex = index - start;
+            inventory.setItem(ENCHANT_OPTION_SLOTS[slotIndex], icon);
+        }
+        if (page > 0) {
+            inventory.setItem(PREVIOUS_PAGE_SLOT, actionItem(Material.ARROW, "<yellow><bold>Previous Page</bold></yellow>", List.of(), "previous_runic_page"));
+        }
+        if (page + 1 < pageCount) {
+            inventory.setItem(NEXT_PAGE_SLOT, actionItem(Material.ARROW, "<yellow><bold>Next Page</bold></yellow>", List.of(), "next_runic_page"));
+        }
+    }
+
+    private ItemStack runicInfoItem(RunicMode mode) {
+        return item(Material.ENCHANTING_TABLE, "<gradient:#7dd3fc:#c084fc><bold>Runic Loom</bold></gradient>", mode == RunicMode.UPGRADE
+            ? List.of(
+                "<gray>Raises one existing enchant by <gold>+1</gold> or <gold>+2</gold>.</gray>",
+                "<gray>Needs gear with at least <white>4 enchants</white>.</gray>",
+                "<gray>Consumes one <white>Runebloom Orb</white>.</gray>",
+                "<dark_gray>Corrupted items are locked.</dark_gray>"
+            )
+            : List.of(
+                "<gray>Removes one enchant you choose.</gray>",
+                "<gray>Consumes one <light_purple>Unweaving Orb</light_purple>.</gray>",
+                "<gray>Base set enchants cannot be removed.</gray>",
+                "<dark_gray>No XP is refunded. Corrupted items are locked.</dark_gray>"
+            ));
     }
 
     private void refreshFateCrucible(Inventory inventory) {
@@ -993,7 +1150,7 @@ public final class VeilOrbManager implements Listener {
         return rolls;
     }
 
-    private String runicItemReason(ItemStack item) {
+    private String runicItemReason(ItemStack item, RunicMode mode) {
         if (isGhost(item) || isEmpty(item)) {
             return "Place one armor, weapon, or tool.";
         }
@@ -1006,21 +1163,28 @@ public final class VeilOrbManager implements Listener {
         if (isCorruptionLocked(item)) {
             return "Corrupted items are locked.";
         }
-        if (CustomLoreUtil.hasAnyEnchantConflict(item)) {
+        if (mode == RunicMode.UPGRADE && CustomLoreUtil.hasAnyEnchantConflict(item)) {
             return "Resolve conflicting enchants before using the Loom.";
         }
-        if (runicEnchantCount(item) < RUNIC_REQUIRED_ENCHANTS) {
+        if (mode == RunicMode.UPGRADE && runicEnchantCount(item) < RUNIC_REQUIRED_ENCHANTS) {
             return "This item needs at least 4 enchants.";
+        }
+        if (mode == RunicMode.REMOVE && removalEnchantOptions(item).isEmpty()) {
+            return "This item has no removable enchants.";
         }
         return null;
     }
 
-    private boolean isRunicItem(ItemStack item) {
-        return runicItemReason(item) == null;
-    }
-
     private boolean isRunicOrb(ItemStack item) {
         return ENCHANT_ORB_ID.equals(relicId(item));
+    }
+
+    private boolean isRemovalOrb(ItemStack item) {
+        return ENCHANT_REMOVAL_ORB_ID.equals(relicId(item));
+    }
+
+    private boolean isLoomFuelOrb(ItemStack item) {
+        return isRunicOrb(item) || isRemovalOrb(item);
     }
 
     private List<EnchantOption> enchantOptions(ItemStack item) {
@@ -1055,6 +1219,80 @@ public final class VeilOrbManager implements Listener {
             }
         }
         return out;
+    }
+
+    private List<EnchantOption> removalEnchantOptions(ItemStack item) {
+        if (isEmpty(item)) {
+            return List.of();
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return List.of();
+        }
+        List<EnchantOption> out = new ArrayList<>();
+        for (Map.Entry<Enchantment, Integer> entry : meta.getEnchants().entrySet()) {
+            Enchantment enchantment = entry.getKey();
+            int intrinsicLevel = plugin.getSeasonRelicManager() == null
+                ? 0
+                : plugin.getSeasonRelicManager().intrinsicVeilEnchantLevel(item, enchantment);
+            if (entry.getValue() <= intrinsicLevel) {
+                continue;
+            }
+            NamespacedKey key = enchantment.getKey();
+            out.add(new EnchantOption("vanilla", key.toString(), prettyEnchantName(key), Math.max(1, entry.getValue()), Math.max(1, entry.getValue())));
+        }
+        if (plugin.getCustomEnchantListener() != null) {
+            for (CustomEnchantListener.ManagedEnchantOption option : plugin.getCustomEnchantListener().managedEnchantOptions(item)) {
+                out.add(new EnchantOption("custom", option.id(), option.displayName(), Math.max(1, option.level()), Math.max(1, option.level())));
+            }
+        }
+        if (plugin.getReplenishListener() != null && plugin.getReplenishListener().hasReplenish(item)) {
+            out.add(new EnchantOption("replenish", "replenish", "Replenish", 1, 1));
+        }
+        return out;
+    }
+
+    private boolean removeEnchant(ItemStack item, EnchantOption option) {
+        if ("custom".equals(option.type())) {
+            return plugin.getCustomEnchantListener() != null
+                && plugin.getCustomEnchantListener().removeManagedEnchant(item, option.key());
+        }
+        if ("replenish".equals(option.type())) {
+            return plugin.getReplenishListener() != null
+                && plugin.getReplenishListener().removeReplenish(item);
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        Enchantment found = null;
+        for (Enchantment enchantment : meta.getEnchants().keySet()) {
+            if (enchantment.getKey().toString().equals(option.key())) {
+                found = enchantment;
+                break;
+            }
+        }
+        if (found == null) {
+            return false;
+        }
+        int intrinsicLevel = plugin.getSeasonRelicManager() == null
+            ? 0
+            : plugin.getSeasonRelicManager().intrinsicVeilEnchantLevel(item, found);
+        if (intrinsicLevel > 0) {
+            if (meta.getEnchantLevel(found) <= intrinsicLevel) {
+                return false;
+            }
+            meta.addEnchant(found, intrinsicLevel, true);
+        } else if (!meta.removeEnchant(found)) {
+            return false;
+        }
+        item.setItemMeta(meta);
+        CustomLoreUtil.refreshEnchantLore(item);
+        return true;
+    }
+
+    static int runicPageCount(int optionCount) {
+        return Math.max(1, (Math.max(0, optionCount) + ENCHANT_OPTION_SLOTS.length - 1) / ENCHANT_OPTION_SLOTS.length);
     }
 
     private int applyEnchantIncrease(ItemStack item, EnchantOption option, int increase) {
@@ -1598,7 +1836,46 @@ public final class VeilOrbManager implements Listener {
         }
     }
 
-    private record RunicLoomHolder(UUID playerId, BlockKey station) implements InventoryHolder, MenuDupeGuardListener.RecoveryTrackedMenuHolder {
+    private enum RunicMode {
+        UPGRADE,
+        REMOVE
+    }
+
+    private static final class RunicLoomHolder implements InventoryHolder, MenuDupeGuardListener.RecoveryTrackedMenuHolder {
+        private final UUID playerId;
+        private final BlockKey station;
+        private RunicMode mode = RunicMode.UPGRADE;
+        private int page;
+
+        private RunicLoomHolder(UUID playerId, BlockKey station) {
+            this.playerId = playerId;
+            this.station = station;
+        }
+
+        private UUID playerId() {
+            return playerId;
+        }
+
+        private BlockKey station() {
+            return station;
+        }
+
+        private RunicMode mode() {
+            return mode;
+        }
+
+        private void setMode(RunicMode mode) {
+            this.mode = mode == null ? RunicMode.UPGRADE : mode;
+        }
+
+        private int page() {
+            return page;
+        }
+
+        private void setPage(int page) {
+            this.page = Math.max(0, page);
+        }
+
         @Override public String recoverySurface() { return "Runic Loom"; }
         @Override public int[] recoverySlots() { return new int[] { RUNIC_ITEM_SLOT, RUNIC_ORB_SLOT }; }
         @Override

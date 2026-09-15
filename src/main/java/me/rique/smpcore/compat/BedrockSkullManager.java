@@ -5,6 +5,7 @@ import com.destroystokyo.paper.profile.ProfileProperty;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.AtomicYamlFile;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.Location;
@@ -119,7 +120,8 @@ public final class BedrockSkullManager implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onAdminPlaceSkull(BlockPlaceEvent event) {
-        if (!available || !event.getPlayer().hasPermission("smpcore.bedrockskulls.admin")) return;
+        if (!available
+            || !OperatorGameplayMode.allowsPassiveBypass(event.getPlayer(), "smpcore.bedrockskulls.admin")) return;
         RegistrationResult result = registerItem(event.getItemInHand());
         if (result == RegistrationResult.ADDED) {
             event.getPlayer().sendMessage(MessageUtil.info("Registered this skull for Bedrock. It will appear after the next server restart."));

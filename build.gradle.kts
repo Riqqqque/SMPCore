@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "me.rique"
-version = "1.0.400"
+version = "1.0.477"
 description = "SMPCore - Core plugin for Paper 26.2"
 
 java {

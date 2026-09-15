@@ -67,11 +67,12 @@ public final class BossMasteryManager implements Listener {
     static final List<Integer> RANK_REQUIREMENTS = List.of(1, 3, 6, 10, 15);
     private static final int[] BOSS_SLOTS = {10, 11, 12, 13, 14, 15, 16, 20, 22, 24};
     private static final int[] RANK_SLOTS = {11, 13, 15, 29, 31};
+    private static final int[] CLAIM_SLOTS = {20, 22, 24, 38, 40};
     private static final MiniMessage MM = MiniMessage.miniMessage();
     private static final long ELEVENTH_BELL_COOLDOWN_MS = 180_000L;
     private static final long ELEVENTH_BELL_DURATION_MS = 15_000L;
-    static final double HUNTMARK_BOSS_DAMAGE_BONUS = 0.04;
-    private static final long OATHKEEPER_RANK_TWO_ESSENCE = 300L;
+    static final double HUNTMARK_BOSS_DAMAGE_BONUS = 0.05;
+    private static final long OATHKEEPER_RANK_TWO_ESSENCE = 600L;
     private static final Set<String> MASTERY_ARMOR_IDS = Set.of(
         "gloam_hunters_hood", "briar_hunters_coat", "depth_hunters_leggings", "argent_trailboots"
     );
@@ -198,25 +199,29 @@ public final class BossMasteryManager implements Listener {
             int required = RANK_REQUIREMENTS.get(rank - 1);
             Reward reward = rewardFor(boss, rank);
             RankState rankState = rankState(state, rank);
+            ItemStack preview = reward.item();
             String stateLine = switch (rankState) {
                 case CLAIMED -> "<green>Claimed</green>";
-                case READY -> "<yellow>" + BedrockCompat.menuActionWord(player) + " to claim</yellow>";
+                case READY -> "<green>Ready to claim below.</green>";
                 case WAITING -> "<gray>Progress: <white>" + Math.min(state.kills, required) + "/" + required + "</white></gray>";
                 case LOCKED -> "<dark_gray>Claim the previous rank first.</dark_gray>";
             };
-            Material icon = switch (rankState) {
-                case CLAIMED -> Material.LIME_STAINED_GLASS_PANE;
-                case READY -> reward.icon;
-                case WAITING -> Material.YELLOW_STAINED_GLASS_PANE;
-                case LOCKED -> Material.GRAY_STAINED_GLASS_PANE;
-            };
-            inventory.setItem(RANK_SLOTS[rank - 1], menuItem(icon, rankState == RankState.READY
-                ? "<green><bold>RANK " + roman(rank) + " READY</bold></green>"
-                : "<gold><bold>RANK " + roman(rank) + "</bold></gold>", List.of(
-                    "<gray>Requirement: <white>" + required + " victories</white></gray>",
-                    "<gray>Reward: <white>" + reward.summary + "</white></gray>",
-                    stateLine
-                ), rankState == RankState.READY ? "claim:" + boss.id() + ":" + rank : null));
+            List<String> rewardLore = List.of(
+                "<gold>Ledger Rank " + roman(rank) + "</gold>",
+                "<gray>Requirement: <white>" + required + " victories</white></gray>",
+                "<gray>Reward: <white>" + reward.summary + "</white></gray>",
+                stateLine,
+                preview == null
+                    ? "<dark_gray>This rank pays currency directly.</dark_gray>"
+                    : "<yellow>" + BedrockCompat.menuActionWord(player) + " to inspect the exact item.</yellow>"
+            );
+            inventory.setItem(
+                RANK_SLOTS[rank - 1],
+                preview == null
+                    ? menuItem(reward.icon, "<gold><bold>RANK " + roman(rank) + " REWARD</bold></gold>", rewardLore, null)
+                    : rewardPreviewEntry(preview, rewardLore, "preview:" + boss.id() + ":" + rank)
+            );
+            inventory.setItem(CLAIM_SLOTS[rank - 1], claimButton(player, boss, rank, rankState, state.kills, required));
         }
         inventory.setItem(36, menuItem(Material.ARROW, "<yellow><bold>BACK</bold></yellow>", List.of("<gray>Return to all bosses.</gray>"), "back"));
         inventory.setItem(44, menuItem(Material.BARRIER, "<red><bold>CLOSE</bold></red>", List.of(), "close"));
@@ -335,7 +340,7 @@ public final class BossMasteryManager implements Listener {
         meta.lore(CustomLoreUtil.buildStyledLore(meta, material, "LEGENDARY", "BOSS MASTERY ARMOR", List.of(
             "<gray>Bossbroker's Pursuit set - " + slot + ".</gray>"
         ), List.of(
-            CustomLoreUtil.section("Full Set", "Relentless Pursuit", "<green>+15% damage to custom bosses.</green>", "<aqua>12% less ordinary boss damage.</aqua>", "<dark_gray>Failed mechanics ignore this defense.</dark_gray>")
+            CustomLoreUtil.section("Mix & Match", "Relentless Pursuit", "<green>Any piece: +15% damage to custom bosses.</green>", "<aqua>Full set: 12% less ordinary boss damage.</aqua>", "<dark_gray>Failed mechanics ignore this defense.</dark_gray>")
         )));
         item.setItemMeta(meta);
         return item;
@@ -389,16 +394,21 @@ public final class BossMasteryManager implements Listener {
             double weapon = event.getDamager() instanceof Projectile projectile
                 ? projectile.getPersistentDataContainer().getOrDefault(projectileBonusKey, PersistentDataType.DOUBLE, 0.0)
                 : weaponBonus(attacker.getInventory().getItemInMainHand());
-            double set = wearsPursuitSet(attacker) ? 0.15 : 0.0;
+            double set = pursuitBossDamageBonus(pursuitPieceCount(attacker));
             double huntmark = huntmarkBonus(attacker.getUniqueId(), bossId);
             if (weapon + set + huntmark > 0.0) {
                 event.setDamage(event.getDamage() * (1.0 + weapon + set + huntmark));
             }
         }
 
-        if (event.getEntity() instanceof Player victim && wearsPursuitSet(victim)
-            && isBossDamage(event.getDamager()) && !plugin.getBossManager().isLethalBossMechanicDamage(victim)) {
-            event.setDamage(event.getDamage() * 0.88);
+        if (event.getEntity() instanceof Player victim && isBossDamage(event.getDamager())) {
+            double reduction = pursuitBossDamageReduction(
+                pursuitPieceCount(victim),
+                plugin.getBossManager().isLethalBossMechanicDamage(victim)
+            );
+            if (reduction > 0.0) {
+                event.setDamage(event.getDamage() * (1.0 - reduction));
+            }
         }
 
         if (attacker != null) echoBellDamage(attacker, event.getEntity(), event.getFinalDamage());
@@ -505,6 +515,19 @@ public final class BossMasteryManager implements Listener {
             if (boss != null) openBoss(player, boss);
             return;
         }
+        if (action.startsWith("preview:")) {
+            String[] previewParts = action.split(":");
+            if (previewParts.length != 3) return;
+            BossManager.BossType boss = BossManager.BossType.fromId(previewParts[1]);
+            int rank;
+            try {
+                rank = Integer.parseInt(previewParts[2]);
+            } catch (NumberFormatException ignored) {
+                return;
+            }
+            if (boss != null && rank >= 1 && rank <= 5) openRewardPreview(player, boss, rank);
+            return;
+        }
         String[] parts = action.split(":");
         if (parts.length != 3 || !parts[0].equals("claim")) return;
         BossManager.BossType boss = BossManager.BossType.fromId(parts[1]);
@@ -571,20 +594,32 @@ public final class BossMasteryManager implements Listener {
     private Reward rewardFor(BossManager.BossType boss, int rank) {
         int index = Math.max(0, Math.min(9, boss.progressionTier() - 1));
         return switch (rank) {
-            case 1 -> new Reward(Material.AMETHYST_SHARD, null, 0, 40L + boss.progressionTier() * 20L,
-                (40 + boss.progressionTier() * 20) + " Essence");
+            case 1 -> new Reward(Material.AMETHYST_SHARD, null, 0, rankOneEssence(boss.progressionTier()),
+                rankOneEssence(boss.progressionTier()) + " Essence");
             case 2 -> {
                 String commonReward = commonRewardId(boss.progressionTier());
                 yield commonReward == null
                     ? new Reward(Material.AMETHYST_SHARD, null, 0, OATHKEEPER_RANK_TWO_ESSENCE, OATHKEEPER_RANK_TWO_ESSENCE + " Essence")
-                    : relicReward(commonReward, 3 + Math.min(5, boss.progressionTier()));
+                    : relicReward(commonReward, rankTwoMaterialAmount(boss.progressionTier()));
             }
             case 3 -> relicReward(UTILITY_REWARDS[index], 1);
             case 4 -> huntmarkReward(boss);
-            case 5 -> new Reward(masteryIcon(index), MASTERY_REWARDS[index], 1, 100L + boss.progressionTier() * 40L,
-                masteryName(MASTERY_REWARDS[index]) + " + " + (100 + boss.progressionTier() * 40) + " Essence");
+            case 5 -> new Reward(masteryIcon(index), MASTERY_REWARDS[index], 1, rankFiveEssence(boss.progressionTier()),
+                masteryName(MASTERY_REWARDS[index]) + " + " + rankFiveEssence(boss.progressionTier()) + " Essence");
             default -> throw new IllegalArgumentException("rank");
         };
+    }
+
+    static long rankOneEssence(int tier) {
+        return 80L + Math.max(1, Math.min(10, tier)) * 30L;
+    }
+
+    static int rankTwoMaterialAmount(int tier) {
+        return 4 + Math.min(6, Math.max(1, tier));
+    }
+
+    static long rankFiveEssence(int tier) {
+        return 200L + Math.max(1, Math.min(10, tier)) * 60L;
     }
 
     static String commonRewardId(int tier) {
@@ -776,12 +811,22 @@ public final class BossMasteryManager implements Listener {
         return damager instanceof Projectile projectile && plugin.getBossManager().isBossOwnedProjectile(projectile);
     }
 
-    private boolean wearsPursuitSet(Player player) {
+    private int pursuitPieceCount(Player player) {
         PlayerInventory inventory = player.getInventory();
-        return "gloam_hunters_hood".equals(masteryId(inventory.getHelmet()))
-            && "briar_hunters_coat".equals(masteryId(inventory.getChestplate()))
-            && "depth_hunters_leggings".equals(masteryId(inventory.getLeggings()))
-            && "argent_trailboots".equals(masteryId(inventory.getBoots()));
+        int count = 0;
+        if ("gloam_hunters_hood".equals(masteryId(inventory.getHelmet()))) count++;
+        if ("briar_hunters_coat".equals(masteryId(inventory.getChestplate()))) count++;
+        if ("depth_hunters_leggings".equals(masteryId(inventory.getLeggings()))) count++;
+        if ("argent_trailboots".equals(masteryId(inventory.getBoots()))) count++;
+        return count;
+    }
+
+    static double pursuitBossDamageBonus(int equippedPieces) {
+        return equippedPieces > 0 ? 0.15 : 0.0;
+    }
+
+    static double pursuitBossDamageReduction(int equippedPieces, boolean lethalMechanicDamage) {
+        return equippedPieces >= 4 && !lethalMechanicDamage ? 0.12 : 0.0;
     }
 
     private double weaponBonus(ItemStack item) {
@@ -814,6 +859,80 @@ public final class BossMasteryManager implements Listener {
         if (action != null) meta.getPersistentDataContainer().set(menuActionKey, PersistentDataType.STRING, action);
         item.setItemMeta(meta);
         return item;
+    }
+
+    private ItemStack rewardPreviewEntry(ItemStack reward, List<String> ledgerLore, String action) {
+        ItemStack preview = reward.clone();
+        ItemMeta meta = preview.getItemMeta();
+        if (meta == null) {
+            return menuItem(reward.getType(), "<gold><bold>ITEM REWARD</bold></gold>", ledgerLore, action);
+        }
+        List<Component> lore = meta.lore() == null ? new ArrayList<>() : new ArrayList<>(meta.lore());
+        CustomLoreUtil.addSpacer(lore);
+        lore.addAll(MenuItemUtil.visibleMiniLore("Reward", ledgerLore).stream().map(MM::deserialize).toList());
+        meta.lore(lore);
+        meta.getPersistentDataContainer().set(menuActionKey, PersistentDataType.STRING, action);
+        preview.setItemMeta(meta);
+        return preview;
+    }
+
+    private ItemStack claimButton(
+        Player player,
+        BossManager.BossType boss,
+        int rank,
+        RankState state,
+        int victories,
+        int required
+    ) {
+        Material material = switch (state) {
+            case CLAIMED -> Material.LIME_STAINED_GLASS_PANE;
+            case READY -> Material.LIME_CONCRETE;
+            case WAITING -> Material.YELLOW_STAINED_GLASS_PANE;
+            case LOCKED -> Material.GRAY_STAINED_GLASS_PANE;
+        };
+        String name = switch (state) {
+            case CLAIMED -> "<green><bold>RANK " + roman(rank) + " CLAIMED</bold></green>";
+            case READY -> "<green><bold>CLAIM RANK " + roman(rank) + "</bold></green>";
+            case WAITING -> "<yellow><bold>RANK " + roman(rank) + " IN PROGRESS</bold></yellow>";
+            case LOCKED -> "<gray><bold>RANK " + roman(rank) + " LOCKED</bold></gray>";
+        };
+        List<String> lore = switch (state) {
+            case CLAIMED -> List.of("<gray>This reward has already been collected.</gray>");
+            case READY -> List.of("<yellow>" + BedrockCompat.menuActionWord(player) + " to claim this reward.</yellow>");
+            case WAITING -> List.of("<gray>Victories: <white>" + Math.min(victories, required) + "/" + required + "</white></gray>");
+            case LOCKED -> List.of("<dark_gray>Claim the previous rank first.</dark_gray>");
+        };
+        return menuItem(material, name, lore, state == RankState.READY ? "claim:" + boss.id() + ":" + rank : null);
+    }
+
+    private void openRewardPreview(Player player, BossManager.BossType boss, int rank) {
+        Reward reward = rewardFor(boss, rank);
+        ItemStack preview = reward.item();
+        if (preview == null) {
+            player.sendMessage(MessageUtil.info("Rank " + roman(rank) + " pays <white>" + reward.summary + "</white>."));
+            return;
+        }
+        Inventory inventory = Bukkit.createInventory(
+            new MasteryMenuHolder(player.getUniqueId(), boss.id()),
+            27,
+            BedrockCompat.menuTitle(
+                player,
+                MM.deserialize("<gradient:#65a30d:#facc15><bold>Rank " + roman(rank) + " Reward</bold></gradient>"),
+                "Rank " + roman(rank) + " Reward"
+            )
+        );
+        fill(inventory);
+        inventory.setItem(4, menuItem(Material.SPYGLASS, "<gold><bold>EXACT ITEM PREVIEW</bold></gold>", List.of(
+            "<gray>" + boss.plainDisplayName() + " - Rank " + roman(rank) + "</gray>",
+            "<gray>Includes its real enchants, stats, lore, and amount.</gray>",
+            "<dark_gray>This preview cannot be removed from the menu.</dark_gray>"
+        ), null));
+        inventory.setItem(13, preview);
+        inventory.setItem(18, menuItem(Material.ARROW, "<yellow><bold>BACK</bold></yellow>", List.of(
+            "<gray>Return to " + boss.plainDisplayName() + " mastery.</gray>"
+        ), "boss:" + boss.id()));
+        inventory.setItem(26, menuItem(Material.BARRIER, "<red><bold>CLOSE</bold></red>", List.of(), "close"));
+        player.openInventory(inventory);
     }
 
     private String action(ItemStack item) {

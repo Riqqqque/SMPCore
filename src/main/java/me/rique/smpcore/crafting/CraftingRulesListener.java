@@ -36,6 +36,7 @@ import java.util.Locale;
  * - Golden apple uses the configured surround material around an apple.
  * - 9 Rotten Flesh can be crafted into Leather.
  * - Iron, copper, and gold can be crafted into Bells.
+ * - 5 String can be crafted into a Cobweb.
  * - Optional block for netherite armor smithing upgrades.
  */
 public final class CraftingRulesListener implements Listener {
@@ -44,6 +45,7 @@ public final class CraftingRulesListener implements Listener {
     private final NamespacedKey goldenAppleRecipeKey;
     private final NamespacedKey leatherFromRottenFleshRecipeKey;
     private final NamespacedKey bellRecipeKey;
+    private final NamespacedKey cobwebRecipeKey;
 
     public CraftingRulesListener(SMPCore plugin) {
         this.plugin = plugin;
@@ -51,9 +53,11 @@ public final class CraftingRulesListener implements Listener {
         this.goldenAppleRecipeKey = new NamespacedKey(plugin, "golden_apple_nugget_recipe");
         this.leatherFromRottenFleshRecipeKey = new NamespacedKey(plugin, "leather_from_rotten_flesh");
         this.bellRecipeKey = new NamespacedKey(plugin, "bell_recipe");
+        this.cobwebRecipeKey = new NamespacedKey(plugin, "cobweb_from_string");
         registerGoldenAppleRecipe();
         registerLeatherRecipe();
         registerBellRecipe();
+        registerCobwebRecipe();
 
         Bukkit.getScheduler().runTask(plugin, () -> {
             for (Player player : Bukkit.getOnlinePlayers()) {
@@ -127,13 +131,13 @@ public final class CraftingRulesListener implements Listener {
     public void onPrepareSmithing(PrepareSmithingEvent event) {
         ItemStack source = null;
         boolean preserveCustomEnchants = false;
-        boolean preserveVeilArmorTrim = false;
+        boolean preserveCustomArmorTrim = false;
         if (event.getInventory() instanceof SmithingInventory smithing) {
             source = smithing.getInputEquipment();
             preserveCustomEnchants = isCustomEnchantedVanillaGear(source);
             if (isProtectedCustomItem(source) && !preserveCustomEnchants) {
-                preserveVeilArmorTrim = isVeilArmorTrimRecipe(smithing, source, event.getResult());
-                if (!preserveVeilArmorTrim) {
+                preserveCustomArmorTrim = isSupportedCustomArmorTrimRecipe(smithing, source, event.getResult());
+                if (!preserveCustomArmorTrim) {
                     event.setResult(null);
                     return;
                 }
@@ -149,8 +153,8 @@ public final class CraftingRulesListener implements Listener {
             event.setResult(null);
             return;
         }
-        if (preserveVeilArmorTrim) {
-            event.setResult(preserveVeilArmorTrim(source, result));
+        if (preserveCustomArmorTrim) {
+            event.setResult(preserveCustomArmorTrim(source, result));
             return;
         }
         if (!preserveCustomEnchants) return;
@@ -176,7 +180,7 @@ public final class CraftingRulesListener implements Listener {
 
         ItemStack source = smith.getInputEquipment();
         if (isProtectedCustomItem(source) && !isCustomEnchantedVanillaGear(source)) {
-            if (!isVeilArmorTrimRecipe(smith, source, smith.getResult())) {
+            if (!isSupportedCustomArmorTrimRecipe(smith, source, smith.getResult())) {
                 event.setCancelled(true);
                 player.sendMessage(MessageUtil.warn("Custom items cannot be used in vanilla smithing recipes."));
                 return;
@@ -230,10 +234,21 @@ public final class CraftingRulesListener implements Listener {
         Bukkit.addRecipe(shaped);
     }
 
+    private void registerCobwebRecipe() {
+        Bukkit.removeRecipe(cobwebRecipeKey);
+
+        ShapedRecipe shaped = new ShapedRecipe(cobwebRecipeKey, new ItemStack(Material.COBWEB));
+        shaped.shape(cobwebRecipeShape());
+        shaped.setIngredient('S', Material.STRING);
+        shaped.setGroup("smpcore_crafting");
+        Bukkit.addRecipe(shaped);
+    }
+
     public void reloadConfig() {
         registerGoldenAppleRecipe();
         registerLeatherRecipe();
         registerBellRecipe();
+        registerCobwebRecipe();
         Bukkit.getScheduler().runTask(plugin, () -> {
             for (Player player : Bukkit.getOnlinePlayers()) {
                 discoverCustomRecipes(player);
@@ -245,6 +260,7 @@ public final class CraftingRulesListener implements Listener {
         player.discoverRecipe(goldenAppleRecipeKey);
         player.discoverRecipe(leatherFromRottenFleshRecipeKey);
         player.discoverRecipe(bellRecipeKey);
+        player.discoverRecipe(cobwebRecipeKey);
     }
 
     private boolean shouldBlockProtectedIngredientInVanillaCraft(PrepareItemCraftEvent event) {
@@ -284,7 +300,12 @@ public final class CraftingRulesListener implements Listener {
         NamespacedKey key = keyed.getKey();
         return goldenAppleRecipeKey.equals(key)
             || leatherFromRottenFleshRecipeKey.equals(key)
-            || bellRecipeKey.equals(key);
+            || bellRecipeKey.equals(key)
+            || cobwebRecipeKey.equals(key);
+    }
+
+    static String[] cobwebRecipeShape() {
+        return new String[]{"S S", " S ", "S S"};
     }
 
     private boolean usesOnlyPlainRecipeIngredients(ItemStack[] matrix) {
@@ -308,11 +329,13 @@ public final class CraftingRulesListener implements Listener {
             && (event.getSlotType() == InventoryType.SlotType.RESULT || event.getRawSlot() == 3);
     }
 
-    private boolean isVeilArmorTrimRecipe(SmithingInventory smithing, ItemStack source, ItemStack result) {
+    private boolean isSupportedCustomArmorTrimRecipe(SmithingInventory smithing, ItemStack source, ItemStack result) {
         if (!isArmorTrimRecipe(smithing)) {
             return false;
         }
-        if (plugin.getSeasonRelicManager() == null || !plugin.getSeasonRelicManager().isVeilArmor(source)) {
+        boolean veilArmor = plugin.getSeasonRelicManager() != null && plugin.getSeasonRelicManager().isVeilArmor(source);
+        boolean wildboundArmor = plugin.getBeastwardenManager() != null && plugin.getBeastwardenManager().isWildboundArmor(source);
+        if (!veilArmor && !wildboundArmor) {
             return false;
         }
         if (!(source.getItemMeta() instanceof ArmorMeta) || result == null || result.getType().isAir()) {
@@ -325,7 +348,7 @@ public final class CraftingRulesListener implements Listener {
         return smithing != null && smithing.getRecipe() instanceof SmithingTrimRecipe;
     }
 
-    private ItemStack preserveVeilArmorTrim(ItemStack source, ItemStack result) {
+    private ItemStack preserveCustomArmorTrim(ItemStack source, ItemStack result) {
         ItemStack updated = source.clone();
         updated.setAmount(1);
 

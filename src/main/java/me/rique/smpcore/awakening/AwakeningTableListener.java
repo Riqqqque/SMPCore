@@ -633,7 +633,7 @@ public final class AwakeningTableListener implements Listener {
         Bukkit.getScheduler().runTask(plugin, () -> syncEquippedAwakeningArmor(event.getPlayer()));
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onKick(PlayerKickEvent event) {
         handleDisconnect(event.getPlayer());
     }
@@ -1836,7 +1836,7 @@ public final class AwakeningTableListener implements Listener {
         if (!plugin.getConfigManager().awakeningTableHologramEnabled) {
             return;
         }
-        for (BlockState state : chunk.getTileEntities()) {
+        for (BlockState state : chunk.getTileEntities(false)) {
             if (!(state instanceof EnchantingTable enchantingTable)) {
                 continue;
             }

@@ -151,7 +151,7 @@ public final class StoryService implements Listener {
         unload(event.getPlayer());
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onKick(PlayerKickEvent event) {
         unload(event.getPlayer());
     }

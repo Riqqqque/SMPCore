@@ -57,6 +57,19 @@ class PackagedResourceValidationTest {
     }
 
     @Test
+    void wildTravelDefaultsToThirtySecondCooldown() throws IOException {
+        LoaderOptions options = new LoaderOptions();
+        options.setAllowDuplicateKeys(false);
+        Yaml yaml = new Yaml(new SafeConstructor(options));
+        try (Reader reader = Files.newBufferedReader(Path.of("src", "main", "resources", "config.yml"), StandardCharsets.UTF_8)) {
+            Map<?, ?> config = yaml.load(reader);
+            Map<?, ?> wild = (Map<?, ?>) config.get("wild");
+            assertEquals(30, wild.get("cooldown-seconds"));
+            assertEquals(Boolean.TRUE, wild.get("cooldown-30-seconds-migrated"));
+        }
+    }
+
+    @Test
     void tabListDefaultsAreCompleteAndDoNotContainPersonalOwners() throws IOException {
         LoaderOptions options = new LoaderOptions();
         options.setAllowDuplicateKeys(false);

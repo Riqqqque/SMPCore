@@ -12,6 +12,7 @@ import me.rique.smpcore.util.ItemEscrowService.EscrowedItem;
 import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.GameAnnouncementUtil;
 import me.rique.smpcore.util.VisualRangeUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -58,6 +59,7 @@ import org.bukkit.event.block.BlockPistonRetractEvent;
 import org.bukkit.event.block.BlockSpreadEvent;
 import org.bukkit.event.block.SpongeAbsorbEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.entity.AreaEffectCloudApplyEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
@@ -67,6 +69,7 @@ import org.bukkit.event.entity.EntityRegainHealthEvent;
 import org.bukkit.event.entity.EntityResurrectEvent;
 import org.bukkit.event.entity.EntitySpawnEvent;
 import org.bukkit.event.entity.EntityToggleGlideEvent;
+import org.bukkit.event.entity.PotionSplashEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -92,6 +95,7 @@ import org.bukkit.inventory.meta.BundleMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectTypeCategory;
 import org.bukkit.projectiles.ProjectileSource;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.Vector;
@@ -140,6 +144,8 @@ public final class DuelManager implements Listener {
         EntityType.EGG,
         EntityType.ENDER_PEARL,
         EntityType.SPLASH_POTION,
+        EntityType.LINGERING_POTION,
+        EntityType.TNT_MINECART,
         EntityType.EXPERIENCE_BOTTLE,
         EntityType.EXPERIENCE_ORB
     );
@@ -260,6 +266,19 @@ public final class DuelManager implements Listener {
             && !Objects.equals(activeMatch.sideOf(first), activeMatch.sideOf(second));
     }
 
+    public boolean allowsDuelPotionEffect(Player shooter, Player victim, Collection<PotionEffect> effects) {
+        if (shooter == null || victim == null || activeMatch == null || activeMatch.phase != MatchPhase.FIGHTING
+            || !activeMatch.isFighter(shooter.getUniqueId()) || !activeMatch.isFighter(victim.getUniqueId())) {
+            return false;
+        }
+        if (shooter.getUniqueId().equals(victim.getUniqueId()) || areOpponents(shooter.getUniqueId(), victim.getUniqueId())) {
+            return true;
+        }
+        return effects == null || effects.stream()
+            .filter(Objects::nonNull)
+            .noneMatch(effect -> effect.getType().getCategory() == PotionEffectTypeCategory.HARMFUL);
+    }
+
     public boolean isActiveArena(Location location) {
         return activeMatch != null && arena != null && arena.contains(location);
     }
@@ -296,6 +315,11 @@ public final class DuelManager implements Listener {
         Material held = event.getItem() == null ? Material.AIR : event.getItem().getType();
         return temporaryBlocks.containsKey(BlockKey.of(event.getClickedBlock()))
             || (held.isBlock() && !isInventoryMaterial(held))
+            || held == Material.POTION
+            || held == Material.SPLASH_POTION
+            || held == Material.LINGERING_POTION
+            || held == Material.ENDER_PEARL
+            || held == Material.TNT_MINECART
             || held == Material.FLINT_AND_STEEL
             || held == Material.FIRE_CHARGE
             || held == Material.END_CRYSTAL
@@ -315,7 +339,7 @@ public final class DuelManager implements Listener {
     public boolean allowsArenaEntityPlacement(Player player, Entity entity) {
         return player != null && entity != null && isFighting(player)
             && arena.contains(entity.getLocation())
-            && entity.getType() == EntityType.END_CRYSTAL;
+            && (entity.getType() == EntityType.END_CRYSTAL || entity.getType() == EntityType.TNT_MINECART);
     }
 
     public boolean allowsArenaEntitySpawn(Entity entity) {
@@ -400,7 +424,8 @@ public final class DuelManager implements Listener {
                 "<gray>Rounds last 2m 30s.</gray>",
                 "<gray>Eliminate the whole enemy team.</gray>",
                 "<gray>Timeouts use team damage, then health.</gray>",
-                "<gray>TNT damages players, never the arena.</gray>"
+                "<gray>Potions, pearls, TNT minecarts, and</gray>",
+                "<gray>other temporary PvP tools are allowed.</gray>"
             )));
 
         Challenge pending = challenges.get(player.getUniqueId());
@@ -1225,7 +1250,7 @@ public final class DuelManager implements Listener {
         settleWagers(match, reason == EndReason.WIN || reason == EndReason.FORFEIT ? winnerId : null);
         if (winnerId != null && (reason == EndReason.WIN || reason == EndReason.FORFEIT)) {
             String winnerName = fighterName(match, winnerId);
-            Bukkit.broadcast(MessageUtil.success("<white>" + safeName(winnerName) + "</white> won a Veilward " + match.teamSize + "v" + match.teamSize + " duel"
+            GameAnnouncementUtil.broadcast(MessageUtil.success("<white>" + safeName(winnerName) + "</white> won a Veilward " + match.teamSize + "v" + match.teamSize + " duel"
                 + (reason == EndReason.FORFEIT ? " by forfeit." : " <white>" + match.firstScore + "-" + match.secondScore + "</white>.")));
             if (plugin.getLeaderboardManager() != null) {
                 for (UUID memberId : match.team(winnerId)) {
@@ -1366,7 +1391,7 @@ public final class DuelManager implements Listener {
         if (player != null && player.isOnline() && plugin.getEssenceManager().isLoaded(player)
             && plugin.getEssenceManager().canCreditFully(player, amount)
             && plugin.getEssenceManager().credit(player, amount, reason)) {
-            player.sendMessage(MessageUtil.success("Received <white>" + amount + " Essence</white> from duel betting."));
+            BedrockCompat.sendGameMessage(player, MessageUtil.success("Received <white>" + amount + " Essence</white> from duel betting."));
             if (betWin && plugin.getLeaderboardManager() != null) plugin.getLeaderboardManager().recordDuelBetWin(player);
             return;
         }
@@ -1515,7 +1540,7 @@ public final class DuelManager implements Listener {
             player.sendMessage(MessageUtil.warn("You are already involved in the current duel."));
             return false;
         }
-        if (plugin.getBossManager() != null && plugin.getBossManager().isActiveBossFight(player)) {
+        if (isBlockedByBossEncounter(player)) {
             player.sendMessage(MessageUtil.warn("Finish your boss fight before entering a duel."));
             return false;
         }
@@ -1534,9 +1559,26 @@ public final class DuelManager implements Listener {
         return player != null
             && player.isOnline()
             && (activeMatch == null || (!activeMatch.isFighter(player.getUniqueId()) && !activeMatch.spectators.contains(player.getUniqueId())))
-            && (plugin.getBossManager() == null || !plugin.getBossManager().isActiveBossFight(player))
+            && !isBlockedByBossEncounter(player)
             && (plugin.getCombatLogListener() == null || !plugin.getCombatLogListener().isInPlayerCombat(player))
             && !player.isDead();
+    }
+
+    private boolean isBlockedByBossEncounter(Player player) {
+        if (player == null) return false;
+        var dungeon = plugin.getBossDungeonManager();
+        boolean inDungeonWorld = dungeon != null && dungeon.isDungeonWorld(player.getWorld());
+        boolean activeDungeonParticipant = dungeon != null && dungeon.blocksExternalTeleport(player);
+        boolean activeBossFight = plugin.getBossManager() != null && plugin.getBossManager().isActiveBossFight(player);
+        return bossStateBlocksDuel(inDungeonWorld, activeDungeonParticipant, activeBossFight);
+    }
+
+    static boolean bossStateBlocksDuel(
+        boolean inDungeonWorld,
+        boolean activeDungeonParticipant,
+        boolean activeBossFight
+    ) {
+        return activeDungeonParticipant || (!inDungeonWorld && activeBossFight);
     }
 
     private boolean canEnterRoster(List<Player> roster, Player requester) {
@@ -1658,6 +1700,10 @@ public final class DuelManager implements Listener {
         if (match == null) return;
         Player attacker = event instanceof EntityDamageByEntityEvent byEntity ? attackingPlayer(byEntity.getDamager()) : null;
         if (!(event.getEntity() instanceof Player victim) || !match.isFighter(victim.getUniqueId())) {
+            if (attacker != null && match.isFighter(attacker.getUniqueId()) && event.getEntity().getType() == EntityType.TNT_MINECART) {
+                spawnedEntityOwners.put(event.getEntity().getUniqueId(), attacker.getUniqueId());
+                return;
+            }
             if (attacker != null && match.isFighter(attacker.getUniqueId()) && !(event.getEntity() instanceof EnderCrystal)) event.setCancelled(true);
             return;
         }
@@ -1820,8 +1866,16 @@ public final class DuelManager implements Listener {
         if (activeMatch == null || internalTeleports.contains(event.getPlayer().getUniqueId())) return;
         UUID playerId = event.getPlayer().getUniqueId();
         if (!activeMatch.isFighter(playerId) && !activeMatch.spectators.contains(playerId)) return;
+        if (event.getCause() == PlayerTeleportEvent.TeleportCause.ENDER_PEARL
+            && isFighting(event.getPlayer())
+            && event.getTo() != null
+            && arena.containsExpanded(event.getTo(), 0.35D)) {
+            return;
+        }
         event.setCancelled(true);
-        event.getPlayer().sendActionBar(MM.deserialize("<red>Teleporting is disabled during a duel.</red>"));
+        event.getPlayer().sendActionBar(MM.deserialize(event.getCause() == PlayerTeleportEvent.TeleportCause.ENDER_PEARL
+            ? "<red>That pearl would leave the duel arena.</red>"
+            : "<red>Teleporting is disabled during a duel.</red>"));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -1846,20 +1900,16 @@ public final class DuelManager implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onBlockBreak(BlockBreakEvent event) {
-        if (!allowsArenaBlockBreak(event.getPlayer(), event.getBlock())) return;
-        event.setDropItems(false);
-        event.setExpToDrop(0);
-    }
-
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void guardArenaBlockBreak(BlockBreakEvent event) {
         if (activeMatch == null || arena == null || !arena.contains(event.getBlock().getLocation())) return;
         if (!allowsArenaBlockBreak(event.getPlayer(), event.getBlock())) {
             event.setCancelled(true);
             event.getPlayer().sendActionBar(MM.deserialize("<red>Only temporary duel blocks can be broken.</red>"));
+            return;
         }
+        event.setDropItems(false);
+        event.setExpToDrop(0);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -1988,6 +2038,33 @@ public final class DuelManager implements Listener {
             spawnedEntities.add(event.getEntity().getUniqueId());
             spawnedEntityOwners.put(event.getEntity().getUniqueId(), event.getPlayer().getUniqueId());
         }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onDuelPotionSplash(PotionSplashEvent event) {
+        if (!(event.getPotion().getShooter() instanceof Player shooter) || activeMatch == null
+            || !activeMatch.isFighter(shooter.getUniqueId()) || !spawnedEntities.contains(event.getPotion().getUniqueId())) {
+            return;
+        }
+        for (var affected : event.getAffectedEntities()) {
+            if (affected instanceof Player victim
+                && !allowsDuelPotionEffect(shooter, victim, event.getPotion().getEffects())) {
+                event.setIntensity(victim, 0.0D);
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onDuelLingeringPotionApply(AreaEffectCloudApplyEvent event) {
+        AreaEffectCloud cloud = event.getEntity();
+        if (!(cloud.getSource() instanceof Player shooter) || activeMatch == null
+            || !activeMatch.isFighter(shooter.getUniqueId()) || !spawnedEntities.contains(cloud.getUniqueId())) {
+            return;
+        }
+        List<PotionEffect> effects = new ArrayList<>(cloud.getBasePotionType().getPotionEffects());
+        effects.addAll(cloud.getCustomEffects());
+        event.getAffectedEntities().removeIf(entity -> !(entity instanceof Player victim)
+            || !allowsDuelPotionEffect(shooter, victim, effects));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -2888,6 +2965,7 @@ public final class DuelManager implements Listener {
         if (event instanceof EntityDamageByEntityEvent byEntity) {
             return byEntity.getDamager() instanceof Projectile
                 || byEntity.getDamager() instanceof TNTPrimed
+                || byEntity.getDamager().getType() == EntityType.TNT_MINECART
                 || byEntity.getDamager() instanceof EnderCrystal;
         }
         return event.getCause() == EntityDamageEvent.DamageCause.BLOCK_EXPLOSION

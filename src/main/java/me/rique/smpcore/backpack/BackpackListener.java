@@ -398,7 +398,7 @@ public final class BackpackListener implements Listener {
         event.setCancelled(true);
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onKick(PlayerKickEvent event) {
         finishOpenBackpack(event.getPlayer());
     }

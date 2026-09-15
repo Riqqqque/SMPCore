@@ -11,6 +11,8 @@ Open them with:
 
 ## Current Boards
 
+The overview is arranged into clear Combat, Activity, Bosses, and Duels columns. Each individual board uses player heads, a three-place podium, and a separate ranks 4-10 row instead of generic item placeholders.
+
 - `Player Kills` - player kills credited by Minecraft's killer tracking.
 - `Deaths` - player deaths.
 - `Boss Kills` - custom boss kills credited when a tracked boss dies.
@@ -18,6 +20,8 @@ Open them with:
 - `Boss Fights` - custom boss fight participations.
 - `Mob Kills` - non-player mob kills.
 - `Playtime` - time spent online, saved every minute, when players leave, and refreshed before the playtime board opens.
+- `Duel Wins` - completed Veilward arena wins.
+- `Duel Bets Won` - successful arena wagers.
 - `My Boss Reports` - your recent boss fights, outcome, rank, damage, healing received, and whether double drops were active.
 
 ## Notes

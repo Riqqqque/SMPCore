@@ -20,6 +20,7 @@ import me.rique.smpcore.util.MenuDupeGuardListener;
 import me.rique.smpcore.util.MenuItemUtil;
 import me.rique.smpcore.util.MessageUtil;
 import com.destroystokyo.paper.event.player.PlayerLaunchProjectileEvent;
+import io.papermc.paper.event.player.PlayerSwapWithEquipmentSlotEvent;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TextReplacementConfig;
 import net.kyori.adventure.title.Title;
@@ -66,6 +67,7 @@ import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerItemDamageEvent;
 import org.bukkit.event.player.PlayerItemHeldEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerSwapHandItemsEvent;
@@ -133,7 +135,6 @@ public final class SeasonRelicManager implements Listener {
     private static final int SOUL_IMPRINT_REQUIRED_CLICKS = 3;
     private static final int CONFESSOR_LEDGER_MAX_USES = 4;
     private static final long SOUL_IMPRINT_CONFIRM_MS = 15_000L;
-    private static final double SEASON_WEAPON_PVP_MULTIPLIER = 0.78;
     private static final double FULL_SET_BOSS_DAMAGE_REDUCTION = 0.06;
     private static final double MAX_BOSS_DAMAGE_REDUCTION = 0.40;
     private static final String SOUL_IMPRINT_FIRST_OWNER_PATH = "milestones.soul-imprint-first.owner";
@@ -154,6 +155,7 @@ public final class SeasonRelicManager implements Listener {
     private final Map<UUID, ArmoryBackTarget> menuBackTargets = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<UUID, Long> bedrockRelicActivationDebounces = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<UUID, SoulImprintConfirmation> soulImprintConfirmations = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<UUID, BossArmorDamageContext> bossArmorDamageContexts = new HashMap<>();
     private final Set<UUID> trueSightGlowingTargets = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private BukkitTask passiveTask;
 
@@ -186,6 +188,8 @@ public final class SeasonRelicManager implements Listener {
         }
         bedrockRelicActivationDebounces.clear();
         soulImprintConfirmations.clear();
+        bossArmorDamageContexts.clear();
+        menuBackTargets.clear();
         clearTrueSightGlow(Set.of());
     }
 
@@ -267,6 +271,31 @@ public final class SeasonRelicManager implements Listener {
     public boolean isVeilArmor(ItemStack item) {
         RelicDefinition definition = relics.get(relicId(item));
         return definition != null && definition.kind() == RelicKind.ARMOR;
+    }
+
+    public boolean hasRequiredBossArmor(Player player, int bossTier) {
+        int requiredTier = BossBalance.requiredArmorPathTier(bossTier);
+        if (requiredTier <= 0) {
+            return true;
+        }
+        if (player == null) {
+            return false;
+        }
+        ItemStack[] armor = player.getInventory().getArmorContents();
+        if (armor.length != 4) {
+            return false;
+        }
+        for (ItemStack item : armor) {
+            RelicDefinition definition = relics.get(relicId(item));
+            if (definition == null || definition.kind() != RelicKind.ARMOR || definition.armorSetId() == null) {
+                return false;
+            }
+            int armorTier = armorSetTier(definition.armorSetId());
+            if (armorTier < requiredTier || armorTier == Integer.MAX_VALUE) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public String displayNameFor(String input) {
@@ -377,13 +406,22 @@ public final class SeasonRelicManager implements Listener {
         return createItem(definition, false);
     }
 
+    public ItemStack createRandomBossArmorReward(int bossTier) {
+        String setId = bossArmorRewardSet(bossTier);
+        List<RelicDefinition> pieces = setId == null ? List.of() : armorSets.getOrDefault(setId, List.of());
+        if (pieces.isEmpty()) {
+            return null;
+        }
+        return createItem(pieces.get(ThreadLocalRandom.current().nextInt(pieces.size())), false);
+    }
+
     public ItemStack createArmoryPreview(Player player) {
         ItemStack item = createGuiItem(
             Material.ECHO_SHARD,
             "<gradient:#7c3aed:#22d3ee><bold>Armory of the Veil</bold></gradient>",
             List.of(
-                "<gray>Season 5 weapons, armor, materials,</gray>",
-                "<gray>and utility relics live here.</gray>",
+                "<gray>Season 5 weapons, armor, boss materials,</gray>",
+                "<gray>and the Path of Ascension live here.</gray>",
                 "<dark_gray>" + BedrockCompat.menuActionWord(player) + " to open</dark_gray>"
             )
         );
@@ -399,6 +437,12 @@ public final class SeasonRelicManager implements Listener {
             }
         }
         return ids;
+    }
+
+    public List<String> reliquaryUtilityRelicIds() {
+        return relicsByCategory.getOrDefault(RelicCategory.UTILITIES, List.of()).stream()
+            .map(RelicDefinition::id)
+            .toList();
     }
 
     public ItemStack createRelicPreview(Player player, String relicId) {
@@ -418,7 +462,13 @@ public final class SeasonRelicManager implements Listener {
     }
 
     public void openReliquaryEntry(Player player, String recipeId, boolean reliquaryReturnsToMainMenu) {
-        setBackTarget(player, reliquaryReturnsToMainMenu ? ArmoryBackTarget.RELIQUARY_THEN_MAIN_MENU : ArmoryBackTarget.RELIQUARY);
+        RelicDefinition definition = definition(recipeId);
+        setBackTarget(
+            player,
+            definition != null && definition.category() == RelicCategory.UTILITIES
+                ? ArmoryBackTarget.RELIQUARY_TOOLS
+                : reliquaryReturnsToMainMenu ? ArmoryBackTarget.RELIQUARY_THEN_MAIN_MENU : ArmoryBackTarget.RELIQUARY
+        );
         if (isArmoryMenuId(recipeId)) {
             openArmoryMenuInternal(player);
             return;
@@ -460,16 +510,24 @@ public final class SeasonRelicManager implements Listener {
             "<gradient:#7c3aed:#22d3ee><bold>Armory of the Veil</bold></gradient>",
             List.of(
                 "<gray>Season 5: Season of the Veil.</gray>",
-                "<gray>Boss trophies forge the weapons, armor,</gray>",
-                "<gray>and utility relics for the next climb.</gray>"
+                "<gray>Boss trophies forge the weapons and armor</gray>",
+                "<gray>that carry you through the next climb.</gray>"
             )
         ));
 
         inventory.setItem(19, categoryItem(player, RelicCategory.WEAPONS));
         inventory.setItem(21, categoryItem(player, RelicCategory.ARMOR_SETS));
         inventory.setItem(23, categoryItem(player, RelicCategory.ARMOR_PIECES));
-        inventory.setItem(25, categoryItem(player, RelicCategory.UTILITIES));
-        inventory.setItem(31, categoryItem(player, RelicCategory.MATERIALS));
+        inventory.setItem(25, categoryItem(player, RelicCategory.MATERIALS));
+        inventory.setItem(31, createGuiItem(
+            Material.RECOVERY_COMPASS,
+            "<gradient:#c084fc:#fb7185><bold>Looking for Utility Relics?</bold></gradient>",
+            List.of(
+                "<gray>Seasonal utilities now share one complete catalog</gray>",
+                "<gray>under <white>Reliquary → Tools & Gear</white>.</gray>",
+                "<dark_gray>Use Back to return to the Reliquary.</dark_gray>"
+            )
+        ));
         inventory.setItem(13, createGuiItem(
             Material.COMPASS,
             "<gradient:#facc15:#fb7185><bold>Path of Ascension</bold></gradient>",
@@ -598,11 +656,15 @@ public final class SeasonRelicManager implements Listener {
 
         inventory.setItem(40, createGuiItem(
             Material.NETHER_STAR,
-            "<gradient:#ff4d6d:#facc15><bold>Full Set Bonus</bold></gradient>",
+            "<gradient:#ff4d6d:#facc15><bold>Set Perks & Ward</bold></gradient>",
             List.of(
-                "<gray>" + setBonusPlain(setId) + "</gray>",
-                "<green>Full set: +" + balancePercent(fullSetPlayerDamageBonus(setId)) + " damage to players.</green>",
-                "<dark_gray>Wear all four pieces together to wake it.</dark_gray>"
+                "<gray>Any piece: " + setBonusPlain(setId) + "</gray>",
+                "<green>Any piece: +" + balancePercent(armorSetPlayerDamageBonus(setId)) + " damage to players.</green>",
+                armorSetBossDamageBonus(setId) > 0.0
+                    ? "<aqua>Any Tier 5+ piece: +" + balancePercent(armorSetBossDamageBonus(setId)) + " boss damage.</aqua>"
+                    : "<dark_gray>Higher-tier sets add boss damage.</dark_gray>",
+                "<aqua>Full matching set: " + balancePercent(matchingSetBossDamageReduction(pieces.getFirst().rarity(), true)) + " Boss Ward.</aqua>",
+                "<dark_gray>Mixed offense bonuses use the strongest piece and do not stack.</dark_gray>"
             )
         ));
         inventory.setItem(BACK_SLOT, backItem("Back to Veil Sets"));
@@ -665,11 +727,9 @@ public final class SeasonRelicManager implements Listener {
             }
             case "kael_the_ashen" -> {
                 drops.add(scaledBossMaterial("solar_ember", 4, qualifiedPlayers, random));
-                if (random.nextDouble() < 0.30) drops.add(stacked("titan_gear", 1));
             }
             case "vesper_the_widow_queen" -> {
                 drops.add(scaledBossMaterial("widow_silk", 4, qualifiedPlayers, random));
-                if (random.nextDouble() < 0.35) drops.add(stacked("verdant_heart", 1));
             }
             case "voralith_the_crimson_warden" -> {
                 drops.add(scaledBossMaterial("crimson_rib", 4, qualifiedPlayers, random));
@@ -691,7 +751,9 @@ public final class SeasonRelicManager implements Listener {
             }
             case "nereida_the_abyss_mother" -> {
                 drops.add(scaledBossMaterial("abyssal_pearl", 4, qualifiedPlayers, random));
-                if (random.nextDouble() < 0.40) drops.add(stacked("tideheart", 1));
+                if (random.nextDouble() < BossBalance.TIDEVEIL_HEART_DROP_CHANCE) {
+                    drops.add(stacked("tideheart", 1));
+                }
             }
             case "iron_saint" -> {
                 drops.add(scaledBossMaterial("titan_gear", 4, qualifiedPlayers, random));
@@ -699,7 +761,9 @@ public final class SeasonRelicManager implements Listener {
             }
             case "mirewood_the_root_tyrant" -> {
                 drops.add(scaledBossMaterial("living_bark", 4, qualifiedPlayers, random));
-                if (random.nextDouble() < 0.40) drops.add(stacked("verdant_heart", 1));
+                if (random.nextDouble() < BossBalance.BRIARHEART_DROP_CHANCE) {
+                    drops.add(stacked("verdant_heart", 1));
+                }
             }
             case "corrupted_oathkeeper" -> {
                 int essenceAmount = 2 + (random.nextDouble() < 0.25 ? 1 : 0);
@@ -708,6 +772,19 @@ public final class SeasonRelicManager implements Listener {
             }
             default -> {
             }
+        }
+        drops.removeIf(drop -> {
+            String relicId = relicId(drop);
+            return relicId != null && !BossBalance.allowsRelicDrop(normalized, relicId);
+        });
+        for (BossBalance.MiscDrop miscDrop : BossBalance.miscDrops(normalized)) {
+            if (random.nextDouble() >= miscDrop.chance()) {
+                continue;
+            }
+            int amount = miscDrop.minimumAmount() == miscDrop.maximumAmount()
+                ? miscDrop.minimumAmount()
+                : random.nextInt(miscDrop.minimumAmount(), miscDrop.maximumAmount() + 1);
+            drops.add(new ItemStack(miscDrop.material(), amount));
         }
         return drops;
     }
@@ -963,7 +1040,7 @@ public final class SeasonRelicManager implements Listener {
         return new AnvilRecipe(
             result.result(),
             result.levelCost(),
-            "Applied permanent enchants to <white>" + escapeMiniMessage(readableItemName(result.result())) + "</white>.",
+            "Applied enchants to <white>" + escapeMiniMessage(readableItemName(result.result())) + "</white>.",
             "Enchanted a Veil season weapon through the crossplay custom anvil.",
             false
         );
@@ -976,7 +1053,7 @@ public final class SeasonRelicManager implements Listener {
         SeasonWeaponEnchantResult result = seasonWeaponEnchantResult(left, right, event.getResult(), true);
         if (result == null) {
             ItemStack vanillaResult = event.getResult();
-            if (isSeasonBossWeapon(left) && vanillaResult != null && !vanillaResult.getType().isAir()) {
+            if (isSeasonBossGear(left) && vanillaResult != null && !vanillaResult.getType().isAir()) {
                 ItemStack refreshed = vanillaResult.clone();
                 refreshSeasonRelicStats(refreshed);
                 event.setResult(refreshed);
@@ -995,7 +1072,7 @@ public final class SeasonRelicManager implements Listener {
     public void onPrepareSeasonWeaponGrindstone(PrepareGrindstoneEvent event) {
         ItemStack upper = event.getInventory().getUpperItem();
         ItemStack lower = event.getInventory().getLowerItem();
-        if (isSeasonBossWeapon(upper) || isSeasonBossWeapon(lower)) {
+        if (isSeasonBossGear(upper) || isSeasonBossGear(lower)) {
             event.setResult(null);
         }
     }
@@ -1008,13 +1085,13 @@ public final class SeasonRelicManager implements Listener {
         if (!(event.getView().getTopInventory() instanceof GrindstoneInventory grindstone)) {
             return;
         }
-        if (!isSeasonBossWeapon(grindstone.getUpperItem()) && !isSeasonBossWeapon(grindstone.getLowerItem())) {
+        if (!isSeasonBossGear(grindstone.getUpperItem()) && !isSeasonBossGear(grindstone.getLowerItem())) {
             return;
         }
         event.setCancelled(true);
         grindstone.setResult(null);
         if (event.getWhoClicked() instanceof Player player) {
-            player.sendMessage(MessageUtil.warn("Veil weapon enchants are permanent."));
+            player.sendMessage(MessageUtil.warn("Veil gear enchants can only be removed at a Runic Loom with an Unweaving Orb."));
         }
     }
 
@@ -1101,6 +1178,26 @@ public final class SeasonRelicManager implements Listener {
         return definition != null && definition.kind() == RelicKind.WEAPON;
     }
 
+    private boolean isSeasonBossGear(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return false;
+        }
+        RelicDefinition definition = relics.get(relicId(item));
+        return definition != null
+            && (definition.kind() == RelicKind.WEAPON || definition.kind() == RelicKind.ARMOR);
+    }
+
+    public int intrinsicVeilEnchantLevel(ItemStack item, Enchantment enchantment) {
+        if (item == null || enchantment == null || item.getType().isAir()) {
+            return 0;
+        }
+        RelicDefinition definition = relics.get(relicId(item));
+        return definition != null
+            && definition.kind() == RelicKind.ARMOR
+            && definition.armorSetId() != null
+            && Enchantment.UNBREAKING.equals(enchantment) ? 4 : 0;
+    }
+
     static boolean allowsExtraCombatEnchant(Material material, String enchantmentId) {
         if (material == null || enchantmentId == null || material == Material.BOW || material == Material.CROSSBOW) {
             return false;
@@ -1176,7 +1273,12 @@ public final class SeasonRelicManager implements Listener {
                 openArmoryParent(player);
             } else if (holder.view() == MenuView.RELIC && holder.relicId() != null) {
                 RelicDefinition definition = relics.get(holder.relicId());
-                if (definition != null && definition.armorSetId() != null) {
+                if (definition != null
+                    && definition.category() == RelicCategory.UTILITIES
+                    && backTarget(player) == ArmoryBackTarget.RELIQUARY_TOOLS
+                    && plugin.getLegendaryListener() != null) {
+                    plugin.getLegendaryListener().openReliquaryToolsMenu(player);
+                } else if (definition != null && definition.armorSetId() != null) {
                     openArmorSetMenu(player, definition.armorSetId());
                 } else if (holder.category() != null) {
                     openCategoryMenu(player, holder.category());
@@ -1289,8 +1391,35 @@ public final class SeasonRelicManager implements Listener {
             && !markBedrockRelicActivation(player)) {
             return;
         }
-        event.setCancelled(true);
+        denyVanillaUse(event);
         requestUtilityActivation(player, definition, player.isSneaking(), hand);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onLedgerEquipmentSwap(PlayerSwapWithEquipmentSlotEvent event) {
+        Player player = event.getPlayer();
+        String mainHandId = relicId(player.getInventory().getItemInMainHand());
+        String offHandId = relicId(player.getInventory().getItemInOffHand());
+        if (!shouldBlockLedgerEquipmentSwap(mainHandId, offHandId)) {
+            return;
+        }
+        event.setCancelled(true);
+
+        EquipmentSlot ledgerHand = "saints_ledger".equals(mainHandId)
+            ? EquipmentSlot.HAND
+            : EquipmentSlot.OFF_HAND;
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!player.isOnline()
+                || player.getOpenInventory().getTopInventory().getHolder(false) instanceof RelicUseConfirmationHolder) {
+                return;
+            }
+            ItemStack ledger = itemInHand(player, ledgerHand);
+            RelicDefinition definition = relics.get(relicId(ledger));
+            if (definition == null || definition.activeAbility() != ActiveAbility.SAINT_LEDGER) {
+                return;
+            }
+            requestUtilityActivation(player, definition, player.isSneaking(), ledgerHand);
+        });
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
@@ -1320,6 +1449,12 @@ public final class SeasonRelicManager implements Listener {
         return hand == EquipmentSlot.OFF_HAND
             ? player.getInventory().getItemInOffHand()
             : player.getInventory().getItemInMainHand();
+    }
+
+    private void denyVanillaUse(PlayerInteractEvent event) {
+        event.setCancelled(true);
+        event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
+        event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
     }
 
     public boolean activateHeldCrossplayAbility(Player player, boolean alternate) {
@@ -1439,6 +1574,7 @@ public final class SeasonRelicManager implements Listener {
         UUID playerId = event.getPlayer().getUniqueId();
         bedrockRelicActivationDebounces.remove(playerId);
         soulImprintConfirmations.remove(playerId);
+        bossArmorDamageContexts.remove(playerId);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -1513,10 +1649,44 @@ public final class SeasonRelicManager implements Listener {
             return;
         }
 
+        BossManager bossManager = plugin.getBossManager();
+        boolean mechanicDamage = bossManager != null && bossManager.isBossMechanicDamage(player);
+        bossArmorDamageContexts.put(
+            player.getUniqueId(),
+            new BossArmorDamageContext(
+                Bukkit.getCurrentTick(),
+                mechanicDamage
+            )
+        );
+
+        int bossTier = bossManager == null ? 0 : bossManager.bossEncounterTier(source);
+        boolean failedMechanic = bossManager != null && bossManager.isLethalBossMechanicDamage(player);
+        boolean hasRequiredArmor = hasRequiredBossArmor(player, bossTier);
+        double missingArmorMultiplier = failedMechanic
+            ? 1.0
+            : BossBalance.missingArmorDamageMultiplier(bossTier, hasRequiredArmor);
+        if (missingArmorMultiplier > 1.0) {
+            event.setDamage(event.getDamage() * missingArmorMultiplier);
+            return;
+        }
+
         double reduction = seasonalBossDamageReduction(player);
         if (reduction > 0.0) {
             event.setDamage(Math.max(0.0, event.getDamage() * (1.0 - reduction)));
         }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBossArmorDurabilityDamage(PlayerItemDamageEvent event) {
+        BossManager bossManager = plugin.getBossManager();
+        boolean activeMechanicDamage = bossManager != null && bossManager.isBossMechanicDamage(event.getPlayer());
+        BossArmorDamageContext context = bossArmorDamageContexts.get(event.getPlayer().getUniqueId());
+        boolean currentBossHit = context != null && context.serverTick() == Bukkit.getCurrentTick();
+        if ((!activeMechanicDamage && !currentBossHit) || !isArmorMaterial(event.getItem().getType())) {
+            return;
+        }
+        boolean mechanicDamage = activeMechanicDamage || (currentBossHit && context.mechanicDamage());
+        event.setDamage(protectedBossDurabilityDamage(event.getDamage(), mechanicDamage, isVeilArmor(event.getItem())));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -1528,7 +1698,22 @@ public final class SeasonRelicManager implements Listener {
         if (attacker == null || attacker.equals(target)) {
             return;
         }
-        double bonus = fullSetPlayerDamageBonus(fullArmorSet(attacker));
+        double bonus = equippedArmorSetPlayerDamageBonus(attacker);
+        if (bonus > 0.0) {
+            event.setDamage(event.getDamage() * (1.0 + bonus));
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onHighTierArmorBossDamage(EntityDamageByEntityEvent event) {
+        if (!(event.getEntity() instanceof LivingEntity target) || !isBossEncounterEntity(target)) {
+            return;
+        }
+        Player attacker = resolveAttacker(event.getDamager());
+        if (attacker == null) {
+            return;
+        }
+        double bonus = equippedArmorSetBossDamageBonus(attacker);
         if (bonus > 0.0) {
             event.setDamage(event.getDamage() * (1.0 + bonus));
         }
@@ -1538,20 +1723,25 @@ public final class SeasonRelicManager implements Listener {
         Set<UUID> activeTrueSightTargets = new LinkedHashSet<>();
         for (Player player : Bukkit.getOnlinePlayers()) {
             detectSoulImprintHeld(player);
-            applySetBonus(player, fullArmorSet(player));
+            String matchingFullSet = fullArmorSet(player);
+            for (String setId : equippedArmorSetIds(player)) {
+                applySetBonus(player, setId, setId.equals(matchingFullSet));
+            }
             applyStandaloneArmorPassives(player);
             revealHiddenThreats(player, activeTrueSightTargets);
         }
         clearTrueSightGlow(activeTrueSightTargets);
     }
 
-    private void applySetBonus(Player player, String setId) {
+    private void applySetBonus(Player player, String setId, boolean matchingFullSet) {
         if (setId == null) {
             return;
         }
         switch (setId) {
             case "crimson_guard" -> {
-                applyPassivePotion(player, PotionEffectType.RESISTANCE, 0);
+                if (matchingFullSet) {
+                    applyPassivePotion(player, PotionEffectType.RESISTANCE, 0);
+                }
                 if (player.getHealth() <= Math.max(6.0, maxHealth(player) * 0.35)) {
                     applyPassivePotion(player, PotionEffectType.STRENGTH, 1);
                     applyPassivePotion(player, PotionEffectType.REGENERATION, 0);
@@ -1578,11 +1768,15 @@ public final class SeasonRelicManager implements Listener {
             case "riftwalker" -> {
                 applyPassivePotion(player, PotionEffectType.SLOW_FALLING, 0);
                 applyPassivePotion(player, PotionEffectType.SPEED, 1);
-                applyPassivePotion(player, PotionEffectType.RESISTANCE, 0);
+                if (matchingFullSet) {
+                    applyPassivePotion(player, PotionEffectType.RESISTANCE, 0);
+                }
             }
             case "eclipse_mantle" -> {
                 applyPassivePotion(player, PotionEffectType.NIGHT_VISION, PASSIVE_NIGHT_VISION_TICKS, 0);
-                applyPassivePotion(player, PotionEffectType.RESISTANCE, 0);
+                if (matchingFullSet) {
+                    applyPassivePotion(player, PotionEffectType.RESISTANCE, 0);
+                }
                 if (isInVeilDarkness(player)) {
                     applyPassivePotion(player, PotionEffectType.STRENGTH, 0);
                     applyPassivePotion(player, PotionEffectType.SPEED, 1);
@@ -2049,6 +2243,10 @@ public final class SeasonRelicManager implements Listener {
         return expectedId != null && expectedId.equals(heldId);
     }
 
+    static boolean shouldBlockLedgerEquipmentSwap(String mainHandId, String offHandId) {
+        return "saints_ledger".equals(mainHandId) || "saints_ledger".equals(offHandId);
+    }
+
     static boolean shouldResolveHeldRelic(boolean directPlayerDamage, boolean abilityDamage) {
         return directPlayerDamage && !abilityDamage;
     }
@@ -2303,9 +2501,6 @@ public final class SeasonRelicManager implements Listener {
             case NONE -> {
             }
         }
-        if (target instanceof Player) {
-            event.setDamage(event.getDamage() * SEASON_WEAPON_PVP_MULTIPLIER);
-        }
     }
 
     private int craftRelic(Player player, String relicId) {
@@ -2315,11 +2510,20 @@ public final class SeasonRelicManager implements Listener {
         }
         PlayerInventory inventory = player.getInventory();
         ItemStack[] storage = inventory.getStorageContents();
+        List<InventoryRecipeUtil.MissingIngredient> missing = new ArrayList<>();
         for (RecipeIngredient ingredient : definition.recipe()) {
-            if (countIngredient(storage, ingredient) < ingredient.amount()) {
-                player.sendMessage(MessageUtil.error("Missing <white>" + ingredient.amount() + "x " + ingredient.name(this) + "</white>."));
-                return 0;
+            int available = countIngredient(storage, ingredient);
+            if (available < ingredient.amount()) {
+                missing.add(new InventoryRecipeUtil.MissingIngredient(
+                    ingredient.name(this),
+                    ingredient.amount(),
+                    available
+                ));
             }
+        }
+        if (!missing.isEmpty()) {
+            player.sendMessage(MessageUtil.error(InventoryRecipeUtil.missingIngredientsMessage(missing)));
+            return 0;
         }
         ItemStack reward = createRelicItem(definition.id());
         ItemStack[] nextStorage = cloneStorageContents(storage);
@@ -2711,6 +2915,10 @@ public final class SeasonRelicManager implements Listener {
                 inventory.setItem(i, filler);
             }
         }
+        inventory.setItem(0, createGuiItem(Material.PURPLE_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, MenuItemUtil.INACTIVE_SLOT_LORE));
+        inventory.setItem(8, createGuiItem(Material.CYAN_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, MenuItemUtil.INACTIVE_SLOT_LORE));
+        inventory.setItem(inventory.getSize() - 9, createGuiItem(Material.PURPLE_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, MenuItemUtil.INACTIVE_SLOT_LORE));
+        inventory.setItem(inventory.getSize() - 1, createGuiItem(Material.CYAN_STAINED_GLASS_PANE, MenuItemUtil.INACTIVE_SLOT_NAME, MenuItemUtil.INACTIVE_SLOT_LORE));
     }
 
     private boolean isFrameSlot(int slot, int size) {
@@ -2739,9 +2947,13 @@ public final class SeasonRelicManager implements Listener {
         CustomLoreUtil.Rarity rarity = first == null ? CustomLoreUtil.Rarity.EPIC : first.rarity();
         List<String> lore = new ArrayList<>();
         lore.add("<gold>Boss Path Tier: <white>" + armorSetTier(setId) + "</white></gold>");
-        lore.add("<gray>" + setBonusPlain(setId) + "</gray>");
-        lore.add("<green>Full set: +" + balancePercent(fullSetPlayerDamageBonus(setId)) + " player damage.</green>");
-        lore.add("<aqua>Full set Boss Ward: " + balancePercent((bossDamageReduction(rarity) * 4.0) + FULL_SET_BOSS_DAMAGE_REDUCTION) + ".</aqua>");
+        lore.add("<gray>Any piece: " + setBonusPlain(setId) + "</gray>");
+        lore.add("<green>Any piece: +" + balancePercent(armorSetPlayerDamageBonus(setId)) + " player damage.</green>");
+        if (armorSetBossDamageBonus(setId) > 0.0) {
+            lore.add("<aqua>Any Tier 5+ piece: +" + balancePercent(armorSetBossDamageBonus(setId)) + " boss damage.</aqua>");
+        }
+        lore.add("<aqua>Full matching set: " + balancePercent(matchingSetBossDamageReduction(rarity, true)) + " Boss Ward.</aqua>");
+        lore.add("<dark_gray>Mixed offense bonuses use the strongest piece.</dark_gray>");
         lore.add("<dark_gray> ");
         lore.add("<gray>Pieces: <white>" + pieces.size() + "/4</white></gray>");
         lore.add("<dark_gray>" + BedrockCompat.menuActionWord(player) + " to inspect the set</dark_gray>");
@@ -2851,7 +3063,7 @@ public final class SeasonRelicManager implements Listener {
                 || meta.hasCustomModelDataComponent() || meta.hasItemModel()) {
                 return true;
             }
-            if (meta instanceof Damageable damageable && damageable.getDamage() > 0) {
+            if (meta instanceof Damageable damageable && !acceptsRecipeIngredientDamage(damageable.getDamage())) {
                 return true;
             }
         }
@@ -2883,6 +3095,10 @@ public final class SeasonRelicManager implements Listener {
             return true;
         }
         return plugin.getBossManager() != null && plugin.getBossManager().isDominionCore(item);
+    }
+
+    static boolean acceptsRecipeIngredientDamage(int damage) {
+        return damage >= 0;
     }
 
     private ItemStack displayExternalRelic(String id, int amount) {
@@ -2922,6 +3138,25 @@ public final class SeasonRelicManager implements Listener {
         }
         List<RelicDefinition> setPieces = armorSets.getOrDefault(setId, List.of());
         return setPieces.size() >= 4 ? setId : null;
+    }
+
+    private Set<String> equippedArmorSetIds(Player player) {
+        Set<String> equipped = new LinkedHashSet<>();
+        for (ItemStack item : player.getInventory().getArmorContents()) {
+            RelicDefinition definition = relics.get(relicId(item));
+            if (definition != null && definition.kind() == RelicKind.ARMOR && definition.armorSetId() != null) {
+                equipped.add(definition.armorSetId());
+            }
+        }
+        return equipped;
+    }
+
+    public double equippedArmorSetPlayerDamageBonus(Player player) {
+        return player == null ? 0.0 : strongestArmorSetPlayerDamageBonus(equippedArmorSetIds(player));
+    }
+
+    private double equippedArmorSetBossDamageBonus(Player player) {
+        return player == null ? 0.0 : strongestArmorSetBossDamageBonus(equippedArmorSetIds(player));
     }
 
     private Player resolveAttacker(Entity damager) {
@@ -3094,16 +3329,19 @@ public final class SeasonRelicManager implements Listener {
     }
 
     private double seasonalBossDamageReduction(Player player) {
-        double reduction = 0.0;
-        for (ItemStack item : player.getInventory().getArmorContents()) {
-            RelicDefinition definition = relics.get(relicId(item));
-            if (definition != null && definition.kind() == RelicKind.ARMOR) {
-                reduction += bossDamageReduction(definition.rarity());
-            }
+        String setId = fullArmorSet(player);
+        List<RelicDefinition> pieces = armorSets.getOrDefault(setId, List.of());
+        if (pieces.size() < 4) {
+            return 0.0;
         }
-        if (fullArmorSet(player) != null) {
-            reduction += FULL_SET_BOSS_DAMAGE_REDUCTION;
+        return matchingSetBossDamageReduction(pieces.getFirst().rarity(), true);
+    }
+
+    static double matchingSetBossDamageReduction(CustomLoreUtil.Rarity rarity, boolean matchingFullSet) {
+        if (!matchingFullSet || rarity == null) {
+            return 0.0;
         }
+        double reduction = (bossDamageReduction(rarity) * 4.0) + FULL_SET_BOSS_DAMAGE_REDUCTION;
         return Math.min(MAX_BOSS_DAMAGE_REDUCTION, Math.max(0.0, reduction));
     }
 
@@ -3125,6 +3363,30 @@ public final class SeasonRelicManager implements Listener {
             case RARE -> 0.035;
             default -> 0.020;
         };
+    }
+
+    static int protectedBossDurabilityDamage(int damage, boolean mechanicDamage, boolean bossArmor) {
+        if (damage <= 0) {
+            return 0;
+        }
+        if (mechanicDamage) {
+            return 1;
+        }
+        if (!bossArmor) {
+            return damage;
+        }
+        return (damage / 2) + (damage % 2);
+    }
+
+    private static boolean isArmorMaterial(Material material) {
+        if (material == null) {
+            return false;
+        }
+        EquipmentSlot slot = material.getEquipmentSlot();
+        return slot == EquipmentSlot.HEAD
+            || slot == EquipmentSlot.CHEST
+            || slot == EquipmentSlot.LEGS
+            || slot == EquipmentSlot.FEET;
     }
 
     private static String balancePercent(double value) {
@@ -3261,6 +3523,13 @@ public final class SeasonRelicManager implements Listener {
                 CustomLoreUtil.section("Requirement", "4 Enchants", "<gray>The target item must already have at least four enchants.</gray>")
             ),
             List.of(relic("awakening_shard", 1), relic("rift_lens", 2), mat(Material.EXPERIENCE_BOTTLE, 32), mat(Material.LAPIS_LAZULI, 32))));
+        add(out, orbRelic(VeilOrbManager.ENCHANT_REMOVAL_ORB_ID, Material.AMETHYST_SHARD, "Unweaving Orb", CustomLoreUtil.Rarity.RARE,
+            "A small runic lens that unthreads one unwanted enchant.",
+            List.of(
+                CustomLoreUtil.section("Use", "Runic Loom Removal", "<gray>Switch the Loom to Remove mode and choose one enchant.</gray>"),
+                CustomLoreUtil.section("Cost", "One Orb Per Enchant", "<gray>Removal is exact and gives no XP refund.</gray>")
+            ),
+            List.of(mat(Material.AMETHYST_SHARD, 4), mat(Material.EXPERIENCE_BOTTLE, 8), mat(Material.LAPIS_LAZULI, 16), mat(Material.STRING, 8))));
         add(out, deviceRelic(VeilOrbManager.SOLO_DEVICE_ID, Material.RECOVERY_COMPASS, "Lone Star Engine", CustomLoreUtil.Rarity.LEGENDARY,
             "A pocket engine that wakes up when you are truly fighting alone.",
             List.of(
@@ -3269,10 +3538,10 @@ public final class SeasonRelicManager implements Listener {
             ),
             List.of(relic("saint_alloy", 1), relic("titan_gear", 5), mat(Material.RECOVERY_COMPASS, 1), mat(Material.DIAMOND_BLOCK, 2))));
         add(out, stationRelic(VeilOrbManager.RUNIC_LOOM_ID, Material.ENCHANTING_TABLE, "Runic Loom", CustomLoreUtil.Rarity.LEGENDARY,
-            "A placeable table for controlled enchant upgrades.",
+            "A placeable table for controlled enchant upgrades and removal.",
             List.of(
-                CustomLoreUtil.section("Use", "Choose An Enchant", "<gray>Insert gear and one Runebloom Orb.</gray>"),
-                CustomLoreUtil.section("Roll", "+1 or +2", "<gray>Each upgrade has even odds.</gray>")
+                CustomLoreUtil.section("Upgrade", "Runebloom Orb", "<gray>Choose one existing enchant to raise by +1 or +2.</gray>"),
+                CustomLoreUtil.section("Remove", "Unweaving Orb", "<gray>Switch pages and remove one exact enchant.</gray>")
             ),
             List.of(mat(Material.ENCHANTING_TABLE, 1), relic("awakening_shard", 1), relic("rift_lens", 2), mat(Material.LAPIS_BLOCK, 3), mat(Material.EXPERIENCE_BOTTLE, 16))));
         add(out, stationRelic(VeilOrbManager.FATE_CRUCIBLE_ID, Material.LODESTONE, "Fate Crucible", CustomLoreUtil.Rarity.MYTHIC,
@@ -3486,7 +3755,7 @@ public final class SeasonRelicManager implements Listener {
         List<RecipeIngredient> recipe
     ) {
         return new RelicDefinition(
-            id, material, name, rarity, RelicKind.CATALYST, RelicCategory.MATERIALS,
+            id, material, name, rarity, RelicKind.CATALYST, supportRelicCategory(!recipe.isEmpty()),
             null, null, 0, WeaponEffect.NONE, ActiveAbility.NONE, 0,
             List.of("<gray>" + line + "</gray>"),
             List.of(
@@ -3508,7 +3777,7 @@ public final class SeasonRelicManager implements Listener {
         List<RecipeIngredient> recipe
     ) {
         return new RelicDefinition(
-            id, material, name, rarity, RelicKind.CATALYST, RelicCategory.MATERIALS,
+            id, material, name, rarity, RelicKind.CATALYST, supportRelicCategory(!recipe.isEmpty()),
             null, null, 0, WeaponEffect.NONE, ActiveAbility.NONE, 0,
             List.of("<gray>" + line + "</gray>"),
             sections,
@@ -3532,6 +3801,10 @@ public final class SeasonRelicManager implements Listener {
             sections,
             List.of(), recipe, Set.of(commandToken(name))
         );
+    }
+
+    static RelicCategory supportRelicCategory(boolean craftable) {
+        return craftable ? RelicCategory.UTILITIES : RelicCategory.MATERIALS;
     }
 
     private static RelicDefinition stationRelic(
@@ -3596,7 +3869,6 @@ public final class SeasonRelicManager implements Listener {
         if (tunedDamage != 0.0) attributes.add(new AttributeBonus(Attribute.ATTACK_DAMAGE, tunedDamage, AttributeModifier.Operation.ADD_NUMBER, EquipmentSlotGroup.MAINHAND));
         if (tunedSpeed != 0.0) attributes.add(new AttributeBonus(Attribute.ATTACK_SPEED, tunedSpeed, AttributeModifier.Operation.ADD_NUMBER, EquipmentSlotGroup.MAINHAND));
         int bossBonus = (int) Math.round((bossDamageMultiplier(rarity) - 1.0) * 100.0);
-        int pvpPenalty = (int) Math.round((1.0 - SEASON_WEAPON_PVP_MULTIPLIER) * 100.0);
         List<CustomLoreUtil.LoreSection> sections = new ArrayList<>();
         List<String> forgedStats = new ArrayList<>();
         if (tunedDamage != 0.0) forgedStats.add("+" + compactNumber(tunedDamage) + " Damage");
@@ -3604,12 +3876,13 @@ public final class SeasonRelicManager implements Listener {
         if (!forgedStats.isEmpty()) {
             sections.add(CustomLoreUtil.section("Stats", String.join(" • ", forgedStats)));
         }
-        sections.add(CustomLoreUtil.section("Combat", "+" + bossBonus + "% Boss • -" + pvpPenalty + "% PvP"));
+        sections.add(CustomLoreUtil.section("Path", "Boss Tier " + weaponTier(id), "<gray>Weapons are ordered from Tier 1 to Tier 10.</gray>"));
+        sections.add(CustomLoreUtil.section("Combat", "+" + bossBonus + "% Boss Damage", "<gray>No built-in PvP damage penalty.</gray>"));
         sections.add(CustomLoreUtil.section(
             "Enchants",
-            "Permanent",
-            "Melee weapons accept combat books.",
-            "Grindstones cannot remove enchants."
+            "Enchantable",
+            "<gray>Accepts compatible vanilla and custom enchants.</gray>",
+            "<gray>Remove one enchant at the Runic Loom with an Unweaving Orb.</gray>"
         ));
         sections.add(CustomLoreUtil.section("Echo", effect.label(), effect.description()));
         return new RelicDefinition(
@@ -3741,10 +4014,23 @@ public final class SeasonRelicManager implements Listener {
             List.of("<gray>" + line + "</gray>"),
             List.of(
                 CustomLoreUtil.section("Stats", armorStatsLabel(attributes)),
-                CustomLoreUtil.section("Full Set", setTitle(setId), setBonusText(setId)),
-                CustomLoreUtil.section("Ward", balancePercent(bossDamageReduction(rarity)) + " Boss Reduction / Piece"),
-                CustomLoreUtil.section("Set Combat", "+" + balancePercent(fullSetPlayerDamageBonus(setId)) + " PvP • "
-                    + balancePercent((bossDamageReduction(rarity) * 4.0) + FULL_SET_BOSS_DAMAGE_REDUCTION) + " Boss Ward")
+                CustomLoreUtil.section("Piece Perk", setTitle(setId), setBonusText(setId)),
+                CustomLoreUtil.section("Full Set Ward", balancePercent(matchingSetBossDamageReduction(rarity, true)) + " Boss Damage Reduction"),
+                CustomLoreUtil.section(
+                    "Boss Offense",
+                    armorSetBossDamageBonus(setId) > 0.0
+                        ? "+" + balancePercent(armorSetBossDamageBonus(setId)) + " Boss Damage / Piece"
+                        : "Unlocked by Tier 5+ Sets"
+                ),
+                CustomLoreUtil.section(
+                    "Upgrades",
+                    "Enchantable / Reforgeable",
+                    "<gray>Accepts compatible vanilla and custom enchants.</gray>",
+                    "<gray>Accepts reforges until corruption locks further changes.</gray>"
+                ),
+                CustomLoreUtil.section("Mix & Match", "+" + balancePercent(armorSetPlayerDamageBonus(setId)) + " PvP / Piece",
+                    "<gray>Offense bonuses use the strongest equipped set piece.</gray>",
+                    "<gray>Only Boss Ward and Resistance require all four matching pieces.</gray>")
             ),
             attributes,
             recipe,
@@ -3831,17 +4117,17 @@ public final class SeasonRelicManager implements Listener {
 
     private static String setBonusPlain(String setId) {
         return switch (setId) {
-            case "crimson_guard" -> "Resistance I. At low health, gain Strength II and Regeneration I.";
+            case "crimson_guard" -> "At low health, gain Strength II and Regeneration I. Full set: Resistance I.";
             case "widow_court" -> "Speed II, Jump Boost I, and poison is cleansed while worn.";
             case "ashen_saint" -> "Fire Resistance, Haste II, and Strength I.";
             case "tidebound" -> "Water Breathing. In water or rain, gain Dolphin's Grace, Speed II, and Regeneration I.";
-            case "riftwalker" -> "Slow Falling, Speed II, and Resistance I.";
-            case "eclipse_mantle" -> "Night Vision and Resistance I. In darkness, gain Strength I and Speed II.";
-            default -> "Wear every piece to wake the set.";
+            case "riftwalker" -> "Slow Falling and Speed II. Full set: Resistance I.";
+            case "eclipse_mantle" -> "Night Vision. In darkness, gain Strength I and Speed II. Full set: Resistance I.";
+            default -> "Equip any piece to wake its perks.";
         };
     }
 
-    static double fullSetPlayerDamageBonus(String setId) {
+    static double armorSetPlayerDamageBonus(String setId) {
         return switch (setId == null ? "" : setId) {
             case "widow_court", "tidebound" -> 0.03;
             case "ashen_saint" -> 0.04;
@@ -3851,8 +4137,43 @@ public final class SeasonRelicManager implements Listener {
         };
     }
 
-    public double equippedFullSetPlayerDamageBonus(Player player) {
-        return player == null ? 0.0D : fullSetPlayerDamageBonus(fullArmorSet(player));
+    static double armorSetBossDamageBonus(String setId) {
+        int tier = armorSetTier(setId);
+        return tier >= 5 && tier < Integer.MAX_VALUE ? 0.05 : 0.0;
+    }
+
+    static double strongestArmorSetPlayerDamageBonus(Collection<String> setIds) {
+        if (setIds == null || setIds.isEmpty()) {
+            return 0.0;
+        }
+        return setIds.stream()
+            .filter(Objects::nonNull)
+            .mapToDouble(SeasonRelicManager::armorSetPlayerDamageBonus)
+            .max()
+            .orElse(0.0);
+    }
+
+    static double strongestArmorSetBossDamageBonus(Collection<String> setIds) {
+        if (setIds == null || setIds.isEmpty()) {
+            return 0.0;
+        }
+        return setIds.stream()
+            .filter(Objects::nonNull)
+            .mapToDouble(SeasonRelicManager::armorSetBossDamageBonus)
+            .max()
+            .orElse(0.0);
+    }
+
+    static boolean meetsRequiredArmorTier(int requiredTier, Collection<Integer> equippedTiers) {
+        if (requiredTier <= 0) {
+            return true;
+        }
+        if (equippedTiers == null || equippedTiers.size() != 4) {
+            return false;
+        }
+        return equippedTiers.stream().allMatch(tier ->
+            tier != null && tier >= requiredTier && tier < Integer.MAX_VALUE
+        );
     }
 
     private static int armorSetTier(String setId) {
@@ -3867,6 +4188,15 @@ public final class SeasonRelicManager implements Listener {
         };
     }
 
+    static String bossArmorRewardSet(int bossTier) {
+        if (bossTier <= 3) return "widow_court";
+        if (bossTier <= 5) return "tidebound";
+        if (bossTier == 6) return "ashen_saint";
+        if (bossTier == 7) return "riftwalker";
+        if (bossTier <= 9) return "crimson_guard";
+        return bossTier == 10 ? "eclipse_mantle" : null;
+    }
+
     private static int armoryTier(RelicDefinition definition) {
         if (definition == null) {
             return Integer.MAX_VALUE;
@@ -3874,7 +4204,11 @@ public final class SeasonRelicManager implements Listener {
         if (definition.armorSetId() != null) {
             return armorSetTier(definition.armorSetId());
         }
-        return switch (definition.id()) {
+        return weaponTier(definition.id());
+    }
+
+    static int weaponTier(String relicId) {
+        return switch (relicId == null ? "" : relicId) {
             case "oathbreaker_mattock" -> 1;
             case "cindershard_dagger", "ashen_verdict" -> 2;
             case "widowfang" -> 3;
@@ -3933,7 +4267,10 @@ public final class SeasonRelicManager implements Listener {
             "Veil Weapons",
             Material.NETHERITE_SWORD,
             "<gradient:#ff4d6d:#f97316><bold>Veil Weapons</bold></gradient>",
-            List.of("<gray>Sixteen PvP-aware weapons and tools with cooldown-gated or conditional pressure.</gray>")
+            List.of(
+                "<gray>Sixteen boss-path weapons ordered from Tier 1 to Tier 10.</gray>",
+                "<gray>All accept compatible enchants and have no built-in PvP penalty.</gray>"
+            )
         ),
         ARMOR_SETS(
             "armor_sets",
@@ -3951,17 +4288,23 @@ public final class SeasonRelicManager implements Listener {
         ),
         UTILITIES(
             "utilities",
-            "Veil Utility",
+            "Seasonal Utility Relics",
             Material.RECOVERY_COMPASS,
-            "<gradient:#c084fc:#fb7185><bold>Utility Relics</bold></gradient>",
-            List.of("<gray>Tactical tools, tables, travel, cleansing, repairs, and survival relics.</gray>")
+            "<gradient:#c084fc:#fb7185><bold>Seasonal Utility Relics</bold></gradient>",
+            List.of(
+                "<gray>Every craftable seasonal catalyst, orb, station,</gray>",
+                "<gray>tactical tool, repair item, and survival relic.</gray>"
+            )
         ),
         MATERIALS(
             "materials",
             "Boss Materials",
             Material.ECHO_SHARD,
             "<gradient:#94a3b8:#f8fafc><bold>Boss Materials</bold></gradient>",
-            List.of("<gray>Trophies dropped by custom bosses and used in Veil recipes.</gray>")
+            List.of(
+                "<gray>Trophies and progression materials dropped by custom bosses.</gray>",
+                "<gray>Craftable utility relics are in Reliquary → Tools & Gear.</gray>"
+            )
         );
 
         private final String id;
@@ -4018,6 +4361,7 @@ public final class SeasonRelicManager implements Listener {
     private enum ArmoryBackTarget {
         RELIQUARY,
         RELIQUARY_THEN_MAIN_MENU,
+        RELIQUARY_TOOLS,
         MAIN_MENU
     }
 
@@ -4185,6 +4529,9 @@ public final class SeasonRelicManager implements Listener {
     }
 
     private record AttributeBonus(Attribute attribute, double amount, AttributeModifier.Operation operation, EquipmentSlotGroup slot) {
+    }
+
+    private record BossArmorDamageContext(int serverTick, boolean mechanicDamage) {
     }
 
     private record RelicDefinition(

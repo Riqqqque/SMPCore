@@ -26,6 +26,18 @@ public final class InventoryRecipeUtil {
         }
     }
 
+    public record MissingIngredient(String name, int required, int available) {
+        public MissingIngredient {
+            name = name == null || name.isBlank() ? "Unknown Material" : name;
+            required = Math.max(0, required);
+            available = Math.max(0, available);
+        }
+
+        public int missing() {
+            return Math.max(0, required - available);
+        }
+    }
+
     public static Ingredient plainMaterial(SMPCore plugin, Material material, int amount) {
         return new Ingredient(prettyMaterial(material), amount, item -> isPlainMaterial(plugin, item, material));
     }
@@ -47,15 +59,42 @@ public final class InventoryRecipeUtil {
     }
 
     public static boolean hasIngredients(Player player, Collection<Ingredient> ingredients) {
-        if (player == null) {
-            return false;
+        return player != null && ingredients != null && missingIngredients(player, ingredients).isEmpty();
+    }
+
+    public static List<MissingIngredient> missingIngredients(Player player, Collection<Ingredient> ingredients) {
+        List<MissingIngredient> missing = new ArrayList<>();
+        if (player == null || ingredients == null) {
+            return missing;
         }
         for (Ingredient ingredient : ingredients) {
-            if (countIngredient(player, ingredient) < ingredient.amount()) {
-                return false;
+            if (ingredient == null || ingredient.amount() <= 0) {
+                continue;
+            }
+            int available = countIngredient(player, ingredient);
+            if (available < ingredient.amount()) {
+                missing.add(new MissingIngredient(ingredient.name(), ingredient.amount(), available));
             }
         }
-        return true;
+        return missing;
+    }
+
+    public static String missingIngredientsMessage(Collection<MissingIngredient> missingIngredients) {
+        if (missingIngredients == null || missingIngredients.isEmpty()) {
+            return "";
+        }
+        List<String> parts = new ArrayList<>();
+        for (MissingIngredient ingredient : missingIngredients) {
+            if (ingredient == null || ingredient.missing() <= 0) {
+                continue;
+            }
+            parts.add("<white>" + ingredient.missing() + "x " + ingredient.name()
+                + "</white> <gray>(need <white>" + ingredient.required()
+                + "</white>, have <white>" + ingredient.available() + "</white>)</gray>");
+        }
+        return parts.isEmpty()
+            ? ""
+            : "Missing materials: " + String.join("<dark_gray>; </dark_gray>", parts) + ".";
     }
 
     public static int countIngredient(Player player, Ingredient ingredient) {

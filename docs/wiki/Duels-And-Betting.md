@@ -16,9 +16,10 @@ Rounds also start at 20 hunger, 5 saturation, and zero carried exhaustion. After
 - No Healing blocks healing during active rounds.
 - Melee Only accepts direct melee damage only.
 - Every round lasts 2 minutes 30 seconds. A knocked-out teammate spectates until the next round. Eliminating the whole opposing team wins the round; a timeout compares team damage dealt, then average remaining team health.
-- Use `/duel spectate` to watch the active match and `/duel leave` to return. Spectators can move up to 29 blocks from the configured viewing point, but cannot fly underground or leave the viewing area.
+- Use `/duel spectate` to watch the active match and `/duel leave` to return. Spectators can move up to 29 blocks from the configured viewing point, but cannot fly underground, leave the viewing area, or attach and teleport to fighters.
+- Players watching from the boss dungeon may accept a duel challenge and leave for the duel. Active boss fighters must finish their encounter first.
 
-Elytras, external storage, item dropping, arena escapes, and unrelated commands are disabled during a match. TNT, wind charges, cobwebs, crystals, anchors, buckets, and ordinary temporary PvP blocks can be used. TNT still hurts fighters but never damages the arena. Water, lava, temporary blocks, projectiles, and explosives are cleared after every round.
+Elytras, external storage, item dropping, arena escapes, and unrelated commands are disabled during a match. Drinkable, splash, and lingering potions, ender pearls, TNT minecarts, TNT, wind charges, cobwebs, crystals, anchors, buckets, rails, and ordinary temporary PvP blocks can be used. Pearls only land inside the playable arena. TNT and TNT minecarts still hurt fighters but never damage the arena. A TNT minecart can deal at most five hearts of damage to a living target from one explosion. Water, lava, temporary blocks, potion clouds, minecarts, projectiles, and explosives are cleared after every round.
 
 ## Betting
 
@@ -27,6 +28,8 @@ Use `/duel bet` during the 15-second pre-fight window. Select a side, adjust the
 Viewers outside the arena may also hold a normal item stack and click **Bet Held Stack**, or use `/duel bet item <amount>`. Backpacks, custom relics, bundles, and filled containers are blocked. Each exact item forms its own pool, so dirt never competes with diamonds and an unmatched item wager is refunded. Arena fighters and spectators use Essence only because their exact inventory is restored after the match.
 
 Winning bettors split each matching pool in proportion to their stake. If nobody backed one side, the match is cancelled, or the server safely stops the duel, stakes are refunded. Essence over the balance cap and item payouts without an empty slot remain safely pending instead of dropping or disappearing.
+
+The final match winner is announced server-wide in both chat and above the hotbar. Winning bettors also receive their payout result through both channels on Java and Bedrock.
 
 ## Admin Setup
 

@@ -39,6 +39,7 @@ public final class SpawnerManager {
     private static final int BASE_MIN_DELAY = 200;
     private static final int BASE_MAX_DELAY = 800;
     private static final int VANILLA_SPAWN_COUNT = 4;
+    private static final Color HOLOGRAM_BACKGROUND = Color.fromARGB(160, 0, 0, 0);
 
     public enum MergeResult {
         SUCCESS,
@@ -266,29 +267,80 @@ public final class SpawnerManager {
     /** Push speed modifiers into the actual CreatureSpawner block state. */
     public void applySpeedToBlock(Location loc, SpawnerData data) {
         if (!(loc.getBlock().getState() instanceof CreatureSpawner cs)) return;
-        int maxSugar = plugin.getConfigManager().spawnerMaxSugar;
-        double maxMult = plugin.getConfigManager().spawnerMaxMultiplier;
-        int minDelay = Math.max(
+        SpawnerBlockSettings settings = calculateBlockSettings(
+            data,
+            plugin.getConfigManager().spawnerMaxSugar,
+            plugin.getConfigManager().spawnerMaxMultiplier,
             plugin.getConfigManager().spawnerMinDelayFloor,
-            data.adjustedDelay(BASE_MIN_DELAY, maxSugar, maxMult)
+            plugin.getConfigManager().spawnerStackSpawnCountCap,
+            plugin.getConfigManager().spawnerMaxNearbyEntitiesCap
         );
-        int maxDelay = Math.max(minDelay, data.adjustedDelay(BASE_MAX_DELAY, maxSugar, maxMult));
+
+        int currentMinDelay = cs.getMinSpawnDelay();
+        int currentMaxDelay = cs.getMaxSpawnDelay();
+        int currentDelay = cs.getDelay();
+        int clampedDelay = clampActiveDelay(currentDelay, settings.minDelay(), settings.maxDelay());
+        boolean delayRangeChanged = currentMinDelay != settings.minDelay()
+            || currentMaxDelay != settings.maxDelay();
+        boolean blockSettingsChanged = delayRangeChanged
+            || currentDelay != clampedDelay
+            || cs.getSpawnCount() != settings.spawnCount()
+            || cs.getMaxNearbyEntities() != settings.maxNearbyEntities();
+        boolean storedDataChanged = !spawnerStateMatches(cs, data);
+        if (!blockSettingsChanged && !storedDataChanged) return;
+
+        if (delayRangeChanged) {
+            // Respect Bukkit's min/max relationship while moving either range boundary.
+            if (settings.minDelay() > currentMaxDelay) {
+                cs.setMaxSpawnDelay(settings.maxDelay());
+                cs.setMinSpawnDelay(settings.minDelay());
+            } else {
+                cs.setMinSpawnDelay(settings.minDelay());
+                cs.setMaxSpawnDelay(settings.maxDelay());
+            }
+        }
+        if (cs.getSpawnCount() != settings.spawnCount()) {
+            cs.setSpawnCount(settings.spawnCount());
+        }
+        if (cs.getMaxNearbyEntities() != settings.maxNearbyEntities()) {
+            cs.setMaxNearbyEntities(settings.maxNearbyEntities());
+        }
+        if (currentDelay != clampedDelay) {
+            cs.setDelay(clampedDelay);
+        }
+        if (storedDataChanged) {
+            writeDataToSpawnerState(cs, data);
+        }
+        cs.update(true, false);
+    }
+
+    static SpawnerBlockSettings calculateBlockSettings(
+        SpawnerData data,
+        int maxSugar,
+        double maxMultiplier,
+        int minDelayFloor,
+        int spawnCountCap,
+        int maxNearbyEntitiesCap
+    ) {
+        int minDelay = Math.max(
+            Math.max(1, minDelayFloor),
+            data.adjustedDelay(BASE_MIN_DELAY, maxSugar, maxMultiplier)
+        );
+        int maxDelay = Math.max(minDelay, data.adjustedDelay(BASE_MAX_DELAY, maxSugar, maxMultiplier));
         int scaledSpawnCount = Math.max(
             VANILLA_SPAWN_COUNT,
             (int) Math.round(VANILLA_SPAWN_COUNT * Math.sqrt(Math.max(1, data.stackCount())))
         );
-        scaledSpawnCount = Math.min(plugin.getConfigManager().spawnerStackSpawnCountCap, scaledSpawnCount);
+        scaledSpawnCount = Math.min(Math.max(VANILLA_SPAWN_COUNT, spawnCountCap), scaledSpawnCount);
         int maxNearbyEntities = Math.max(
             16,
-            Math.min(plugin.getConfigManager().spawnerMaxNearbyEntitiesCap, scaledSpawnCount * 4)
+            Math.min(Math.max(16, maxNearbyEntitiesCap), scaledSpawnCount * 4)
         );
-        cs.setMinSpawnDelay(minDelay);
-        cs.setMaxSpawnDelay(maxDelay);
-        cs.setSpawnCount(scaledSpawnCount);
-        cs.setMaxNearbyEntities(maxNearbyEntities);
-        cs.setDelay(minDelay);
-        writeDataToSpawnerState(cs, data);
-        cs.update(true, false);
+        return new SpawnerBlockSettings(minDelay, maxDelay, scaledSpawnCount, maxNearbyEntities);
+    }
+
+    static int clampActiveDelay(int currentDelay, int minDelay, int maxDelay) {
+        return Math.max(minDelay, Math.min(maxDelay, currentDelay));
     }
 
     public double effectiveSpeedMultiplier(SpawnerData data) {
@@ -311,7 +363,16 @@ public final class SpawnerManager {
         }
 
         String blockKey = key(data.world(), data.x(), data.y(), data.z());
-        destroyHologram(blockKey);
+        UUID existingId = holograms.get(blockKey);
+        if (existingId != null) {
+            Entity existing = Bukkit.getEntity(existingId);
+            if (existing instanceof TextDisplay display && display.isValid()) {
+                refreshHologram(display, world, data);
+                return;
+            }
+            holograms.remove(blockKey, existingId);
+            if (existing != null) existing.remove();
+        }
 
         Location pos = new Location(world, data.x() + 0.5, data.y() + 1.5, data.z() + 0.5);
         TextDisplay display = world.spawn(pos, TextDisplay.class, entity -> {
@@ -321,7 +382,7 @@ public final class SpawnerManager {
             VisualRangeUtil.applyHologramRange(entity, plugin.getConfigManager().spawnerHologramViewRange);
             entity.setPersistent(false);
             entity.setSeeThrough(false);
-            entity.setBackgroundColor(Color.fromARGB(160, 0, 0, 0));
+            entity.setBackgroundColor(HOLOGRAM_BACKGROUND);
             entity.getPersistentDataContainer().set(keySpawnerHologram, PersistentDataType.BYTE, (byte) 1);
         });
 
@@ -344,13 +405,34 @@ public final class SpawnerManager {
         }
 
         Entity entity = Bukkit.getEntity(uid);
-        if (entity instanceof TextDisplay td) {
+        if (entity instanceof TextDisplay td && td.isValid()) {
             World world = loc.getWorld();
             if (world != null) {
-                td.text(buildHologramText(world, data));
+                refreshHologram(td, world, data);
             }
         } else {
             spawnHologram(data);
+        }
+    }
+
+    public void queueHologramUpdate(Location loc) {
+        if (loc == null || loc.getWorld() == null) return;
+        scheduleHologramUpdate(key(loc));
+    }
+
+    private void refreshHologram(TextDisplay display, World world, SpawnerData data) {
+        Component nextText = buildHologramText(world, data);
+        if (!nextText.equals(display.text())) {
+            display.text(nextText);
+        }
+        float nextRange = VisualRangeUtil.clampHologramViewRange(
+            plugin.getConfigManager().spawnerHologramViewRange
+        );
+        if (Float.compare(display.getViewRange(), nextRange) != 0) {
+            display.setViewRange(nextRange);
+        }
+        if (display.isSeeThrough()) {
+            display.setSeeThrough(false);
         }
     }
 
@@ -444,6 +526,18 @@ public final class SpawnerManager {
             PersistentDataType.BYTE,
             data.aiNerfed() ? (byte) 1 : (byte) 0
         );
+    }
+
+    private static boolean spawnerStateMatches(CreatureSpawner cs, SpawnerData data) {
+        PersistentDataContainer pdc = cs.getPersistentDataContainer();
+        Integer stackCount = pdc.get(SpawnerListener.STACK_COUNT_KEY, PersistentDataType.INTEGER);
+        Integer sugarCount = pdc.get(SpawnerListener.SUGAR_COUNT_KEY, PersistentDataType.INTEGER);
+        Byte redstoneControlled = pdc.get(SpawnerListener.REDSTONE_CONTROLLED_KEY, PersistentDataType.BYTE);
+        Byte aiNerfed = pdc.get(SpawnerListener.AI_NERFED_KEY, PersistentDataType.BYTE);
+        return stackCount != null && stackCount == data.stackCount()
+            && sugarCount != null && sugarCount == data.sugarCount()
+            && redstoneControlled != null && (redstoneControlled == (byte) 1) == data.redstoneControlled()
+            && aiNerfed != null && (aiNerfed == (byte) 1) == data.aiNerfed();
     }
 
     private String formatMobName(String entityType) {
@@ -570,5 +664,8 @@ public final class SpawnerManager {
             }
         });
         return queued;
+    }
+
+    record SpawnerBlockSettings(int minDelay, int maxDelay, int spawnCount, int maxNearbyEntities) {
     }
 }

@@ -51,13 +51,14 @@ public final class RiskyInventoryRecoveryManager implements Listener {
     private static final int MAX_ITEM_BYTES = 2 * 1024 * 1024;
     private static final int MAX_SNAPSHOT_BYTES = 10 * 1024 * 1024;
     private static final int MAX_PENDING_ITEMS = 96;
+    private static final long SNAPSHOT_DEDUPLICATION_MILLIS = 5_000L;
 
     private final SMPCore plugin;
     private final RiskyInventoryRecoveryRepository repository;
     private final NamespacedKey restoreMarkerKey;
     private final Map<UUID, PendingCapture> pending = new LinkedHashMap<>();
     private final Map<UUID, BukkitTask> flushTasks = new LinkedHashMap<>();
-    private final Map<String, String> lastSnapshotDigests = new ConcurrentHashMap<>();
+    private final Map<String, SnapshotFingerprint> lastSnapshotDigests = new ConcurrentHashMap<>();
     private final Map<Class<?>, Surface> trackedSurfaceCache = new ConcurrentHashMap<>();
     private final ThreadPoolExecutor writer;
 
@@ -108,7 +109,13 @@ public final class RiskyInventoryRecoveryManager implements Listener {
         if (event.getClick() == org.bukkit.event.inventory.ClickType.SWAP_OFFHAND) {
             add(items, player.getInventory().getItemInOffHand(), "offhand", 40);
         }
-        queue(player, surface, "click " + event.getAction().name().toLowerCase(java.util.Locale.ROOT), items, false);
+        queue(
+            player,
+            surface,
+            "click " + event.getAction().name().toLowerCase(java.util.Locale.ROOT),
+            items,
+            containsShulker(items)
+        );
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
@@ -119,7 +126,7 @@ public final class RiskyInventoryRecoveryManager implements Listener {
         if (surface == null || event.getRawSlots().stream().noneMatch(surface::tracks)) return;
         List<Candidate> items = new ArrayList<>();
         add(items, event.getOldCursor(), "cursor", -1);
-        queue(player, surface, "inventory drag", items, false);
+        queue(player, surface, "inventory drag", items, containsShulker(items));
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
@@ -168,7 +175,7 @@ public final class RiskyInventoryRecoveryManager implements Listener {
         flushNow(event.getPlayer().getUniqueId());
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onKick(PlayerKickEvent event) {
         flushNow(event.getPlayer().getUniqueId());
     }
@@ -209,6 +216,13 @@ public final class RiskyInventoryRecoveryManager implements Listener {
             repository.rollbackRestore(token);
             return new RestoreResult(false, "The recorded item failed validation.", null);
         }
+        List<String> existingLocations = findExactItemLocations(player, item);
+        if (!existingLocations.isEmpty()) {
+            repository.rollbackRestore(token);
+            return new RestoreResult(false,
+                "Recovery blocked: the exact recorded item is still present at "
+                    + String.join(", ", existingLocations) + ".", null);
+        }
         if (plugin.getBackpackListener() != null && plugin.getBackpackListener().isBackpack(item)) {
             repository.rollbackRestore(token);
             return new RestoreResult(false, "Backpacks must be restored with /backpackadmin so their storage ID stays unique.", null);
@@ -247,6 +261,34 @@ public final class RiskyInventoryRecoveryManager implements Listener {
         plugin.getLogger().warning("Restored risky-inventory snapshot " + token.snapshot().id() + " item "
             + (token.itemIndex() + 1) + " to " + player.getName() + ".");
         return new RestoreResult(true, "Restored " + displayName(item) + " from " + token.snapshot().surface() + ".", item.clone());
+    }
+
+    public List<String> findExactItemLocations(Player player, ItemStack recordedItem) {
+        if (player == null || !player.isOnline() || empty(recordedItem)) {
+            return List.of();
+        }
+        byte[] recorded;
+        try {
+            recorded = recordedItem.serializeAsBytes();
+        } catch (RuntimeException ex) {
+            return List.of();
+        }
+
+        List<String> locations = new ArrayList<>();
+        for (int slot = 0; slot < player.getInventory().getSize(); slot++) {
+            addExactLocation(locations, recorded, player.getInventory().getItem(slot), playerSlotName(slot));
+        }
+        addExactLocation(locations, recorded, player.getItemOnCursor(), "cursor");
+        for (int slot = 0; slot < player.getEnderChest().getSize(); slot++) {
+            addExactLocation(locations, recorded, player.getEnderChest().getItem(slot), "ender chest slot " + (slot + 1));
+        }
+        Inventory top = player.getOpenInventory().getTopInventory();
+        if (top.getType() != org.bukkit.event.inventory.InventoryType.CRAFTING) {
+            for (int slot = 0; slot < top.getSize(); slot++) {
+                addExactLocation(locations, recorded, top.getItem(slot), "open menu slot " + (slot + 1));
+            }
+        }
+        return List.copyOf(locations);
     }
 
     public void shutdown() {
@@ -291,8 +333,7 @@ public final class RiskyInventoryRecoveryManager implements Listener {
         ));
         current.reason(reason);
         for (Candidate item : items) {
-            if (current.items().size() >= MAX_PENDING_ITEMS) break;
-            current.items().add(item);
+            current.addDistinct(item);
         }
         if (immediate) {
             flushNow(playerId);
@@ -313,6 +354,7 @@ public final class RiskyInventoryRecoveryManager implements Listener {
         Map<String, SerializedItem> unique = new LinkedHashMap<>();
         int total = 0;
         for (Candidate candidate : capture.items()) {
+            if (total >= MAX_SNAPSHOT_BYTES) break;
             byte[] bytes;
             try { bytes = candidate.item().serializeAsBytes(); }
             catch (RuntimeException ex) { continue; }
@@ -325,15 +367,18 @@ public final class RiskyInventoryRecoveryManager implements Listener {
         if (unique.isEmpty()) return;
         String snapshotDigest = snapshotDigest(unique.values());
         String digestKey = capture.playerId() + "|" + capture.surface().name();
-        String previousDigest = lastSnapshotDigests.put(digestKey, snapshotDigest);
-        if (snapshotDigest.equals(previousDigest)) return;
+        long createdAt = System.currentTimeMillis();
+        SnapshotFingerprint previous = lastSnapshotDigests.get(digestKey);
+        if (shouldSkipDuplicateSnapshot(previous, snapshotDigest, createdAt)) return;
+        SnapshotFingerprint fingerprint = new SnapshotFingerprint(snapshotDigest, createdAt);
+        lastSnapshotDigests.put(digestKey, fingerprint);
         SerializedSnapshot snapshot = new SerializedSnapshot(
-            UUID.randomUUID(), capture.playerId(), capture.playerName(), System.currentTimeMillis(),
+            UUID.randomUUID(), capture.playerId(), capture.playerName(), createdAt,
             capture.surface().name(), capture.reason(), List.copyOf(unique.values())
         );
         if (!submitWriter(() -> {
-            if (!repository.save(snapshot)) lastSnapshotDigests.remove(digestKey, snapshotDigest);
-        })) lastSnapshotDigests.remove(digestKey, snapshotDigest);
+            if (!repository.save(snapshot)) lastSnapshotDigests.remove(digestKey, fingerprint);
+        })) lastSnapshotDigests.remove(digestKey, fingerprint);
     }
 
     private Surface surface(Inventory inventory) {
@@ -447,6 +492,53 @@ public final class RiskyInventoryRecoveryManager implements Listener {
         return item == null || item.getType() == Material.AIR || item.getAmount() <= 0;
     }
 
+    private static boolean containsShulker(List<Candidate> items) {
+        return items != null && items.stream().anyMatch(candidate -> isShulker(candidate.item()));
+    }
+
+    private static boolean isShulker(ItemStack item) {
+        return !empty(item) && isShulkerMaterial(item.getType());
+    }
+
+    private static void addExactLocation(List<String> locations, byte[] recorded, ItemStack candidate, String location) {
+        if (empty(candidate)) return;
+        try {
+            if (serializedItemsMatch(recorded, candidate.serializeAsBytes())) locations.add(location);
+        } catch (RuntimeException ignored) { }
+    }
+
+    private static String playerSlotName(int slot) {
+        if (slot >= 0 && slot <= 8) return "hotbar slot " + (slot + 1);
+        if (slot >= 9 && slot <= 35) return "inventory slot " + (slot + 1);
+        return switch (slot) {
+            case 36 -> "boots slot";
+            case 37 -> "leggings slot";
+            case 38 -> "chestplate slot";
+            case 39 -> "helmet slot";
+            case 40 -> "offhand";
+            default -> "player slot " + (slot + 1);
+        };
+    }
+
+    static boolean serializedItemsMatch(byte[] recorded, byte[] candidate) {
+        return recorded != null && candidate != null && MessageDigest.isEqual(recorded, candidate);
+    }
+
+    static boolean isShulkerMaterial(Material material) {
+        return material != null && material.name().endsWith("SHULKER_BOX");
+    }
+
+    static boolean shouldSkipDuplicateSnapshot(
+        SnapshotFingerprint previous,
+        String digest,
+        long createdAt
+    ) {
+        return previous != null
+            && previous.digest().equals(digest)
+            && createdAt >= previous.createdAt()
+            && createdAt - previous.createdAt() < SNAPSHOT_DEDUPLICATION_MILLIS;
+    }
+
     public static String displayName(ItemStack item) {
         if (empty(item)) return "invalid item";
         ItemMeta meta = item.getItemMeta();
@@ -487,7 +579,15 @@ public final class RiskyInventoryRecoveryManager implements Listener {
     private record Surface(String name, int[] slots, boolean bulkStorage) {
         boolean tracks(int slot) { return bulkStorage || Arrays.stream(slots).anyMatch(value -> value == slot); }
     }
-    private record Candidate(String source, int slot, ItemStack item) { }
+    record SnapshotFingerprint(String digest, long createdAt) { }
+    private record Candidate(String source, int slot, ItemStack item) {
+        boolean sameState(Candidate other) {
+            return other != null
+                && slot == other.slot
+                && source.equals(other.source)
+                && item.equals(other.item);
+        }
+    }
     private static final class PendingCapture {
         private final UUID playerId;
         private final String playerName;
@@ -503,6 +603,13 @@ public final class RiskyInventoryRecoveryManager implements Listener {
         String reason() { return reason; }
         void reason(String value) { reason = value; }
         List<Candidate> items() { return items; }
+        void addDistinct(Candidate candidate) {
+            if (candidate == null || items.size() >= MAX_PENDING_ITEMS
+                || items.stream().anyMatch(existing -> existing.sameState(candidate))) {
+                return;
+            }
+            items.add(candidate);
+        }
     }
 
     public record SnapshotInfo(String shortId, UUID id, long createdAt, String surface, String reason,

@@ -3,6 +3,7 @@ package me.rique.smpcore.game;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.CustomLoreUtil;
+import me.rique.smpcore.util.GameAnnouncementUtil;
 import me.rique.smpcore.util.ItemEscrowService;
 import me.rique.smpcore.util.ItemEscrowService.EscrowedItem;
 import me.rique.smpcore.util.MenuDupeGuardListener;
@@ -12,6 +13,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Particle;
 import org.bukkit.Sound;
@@ -316,7 +318,10 @@ public final class SpinBetManager implements Listener {
         }
 
         boolean challengerWins = ThreadLocalRandom.current().nextBoolean();
-        SpinMatch match = new SpinMatch(matchId, challenger.getUniqueId(), target.getUniqueId(), left, right, challengerWins);
+        SpinMatch match = new SpinMatch(
+            matchId, challenger.getUniqueId(), target.getUniqueId(), left, right, challengerWins,
+            challenger.getLocation().clone()
+        );
         match.inventory = createConfirmationInventory(match, challenger, target);
         matches.put(matchId, match);
 
@@ -541,6 +546,7 @@ public final class SpinBetManager implements Listener {
             playLoserEffects(loser);
             BedrockCompat.syncGameInventory(loser);
         }
+        announceNearbyWin(match, winner, winnerName, loserName, false);
         plugin.getLogger().info("Spin bet " + match.matchId() + " finished: " + winnerName + " beat " + loserName + ".");
         scheduleClose(match);
     }
@@ -676,6 +682,7 @@ public final class SpinBetManager implements Listener {
             BedrockCompat.sendGameMessage(forfeiter, MessageUtil.warn("You forfeited the spin bet and lost your wager."));
             BedrockCompat.syncGameInventory(forfeiter);
         }
+        announceNearbyWin(match, winner, winnerName, forfeiterName, true);
         plugin.getLogger().info("Spin bet " + match.matchId() + " forfeited by "
             + forfeiterName + "; both wagers awarded to " + winnerName + ": " + reason);
         scheduleClose(match);
@@ -695,6 +702,20 @@ public final class SpinBetManager implements Listener {
                 }
             }
         }, 20L * 3L);
+    }
+
+    private void announceNearbyWin(SpinMatch match, Player winner, String winnerName, String loserName, boolean forfeit) {
+        Component message = MessageUtil.success(
+            "<white>" + miniEscape(winnerName) + "</white> won a spin bet against <white>"
+                + miniEscape(loserName) + "</white>" + (forfeit ? " by forfeit." : ".")
+        );
+        Set<UUID> soundExclusions = winner == null ? Set.of() : Set.of(winner.getUniqueId());
+        int recipients = GameAnnouncementUtil.announceNearby(
+            match.origin, winner, message, Sound.ENTITY_FIREWORK_ROCKET_TWINKLE, 0.55F, 1.2F, soundExclusions
+        );
+        if (recipients == 0 && winner != null && winner.isOnline()) {
+            plugin.getLogger().warning("Could not deliver the nearby spin-bet win announcement for " + winnerName + ".");
+        }
     }
 
     private void returnEscrowToOwner(EscrowedItem wager, boolean notify) {
@@ -999,7 +1020,7 @@ public final class SpinBetManager implements Listener {
         handleLeave(event.getPlayer(), "player quit");
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerKick(PlayerKickEvent event) {
         handleLeave(event.getPlayer(), "player kicked");
     }
@@ -1098,6 +1119,7 @@ public final class SpinBetManager implements Listener {
         private final EscrowedItem left;
         private final EscrowedItem right;
         private final boolean challengerWins;
+        private final Location origin;
         private Inventory inventory;
         private BukkitTask task;
         private int step;
@@ -1106,13 +1128,22 @@ public final class SpinBetManager implements Listener {
         private final Set<UUID> confirmations = new HashSet<>();
         private final Set<UUID> decisionPending = new HashSet<>();
 
-        private SpinMatch(UUID matchId, UUID challengerId, UUID targetId, EscrowedItem left, EscrowedItem right, boolean challengerWins) {
+        private SpinMatch(
+            UUID matchId,
+            UUID challengerId,
+            UUID targetId,
+            EscrowedItem left,
+            EscrowedItem right,
+            boolean challengerWins,
+            Location origin
+        ) {
             this.matchId = matchId;
             this.challengerId = challengerId;
             this.targetId = targetId;
             this.left = left;
             this.right = right;
             this.challengerWins = challengerWins;
+            this.origin = origin;
         }
 
         private UUID matchId() {

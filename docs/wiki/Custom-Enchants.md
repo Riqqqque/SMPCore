@@ -25,7 +25,7 @@ Custom enchants use normal gameplay surfaces where possible: enchant table rolls
 - Telekinesis I: tool and weapon enchant. Mining and mob drops go straight into your inventory when space is available. Overflow drops normally.
 - Smelting Touch I: pickaxe enchant. Smelts mined drops when a real cooking recipe exists. Netherrack is intentionally ignored.
 - Wise I-III: pickaxe, sword, and hoe enchant. Gives +15%, +30%, or +40% XP from all sources while held. Breaking or right-click harvesting crops with it drops at least 2 XP.
-- Dash I: sword and axe enchant. Right-click to dash forward. Sneak while right-clicking interactable blocks if you want Dash to trigger instead of opening the block. Current cooldown is 15 seconds and shows above the hotbar.
+- Dash I-III: sword and axe enchant. Each level adds one dash charge. Right-click to dash forward; each use costs one hunger bar, draining saturation before visible hunger. Each spent charge refills after 15 seconds. Sneak while right-clicking interactable blocks if you want Dash to trigger instead of opening the block. Remaining charges and the next refill appear above the hotbar.
 - Frostbite I-II: melee enchant. Hits can briefly slow ordinary enemies. Boss-encounter enemies ignore the control effect.
 - Harvesting I-III: hoe enchant. Mature crops can produce one extra crop drop.
 - Bulwark I-III: armor enchant. Worn pieces reduce incoming damage, capped at 30% total reduction.
@@ -45,7 +45,7 @@ Essence Capture exclusions:
 
 - Double Jump I: boot enchant. Found in Ancient City loot with a 23% chest chance by default.
 - Double-tap jump while airborne to launch upward and steer forward. It stays available until used or until you land.
-- Each use costs 2 hunger by default. If you are too hungry, a message explains why it did not activate.
+- Each use costs 2 hunger by default, spending saturation before visible hunger. Compatible saturation displays update immediately; the vanilla hunger bar does not show stored saturation. If you cannot cover the cost, a message explains why it did not activate.
 
 ## Boss-Crafted Enchant Books
 
@@ -91,7 +91,7 @@ Veil Heart    | Book       | Veil Heart
 
 ## Admin Book Commands
 
-- `/dashbook`
+- `/dashbook [target]` gives Dash I, or use `/dashbook <level> [target]` for Dash I-III.
 - `/doublejumpbook`
 - `/smeltingtouchbook`
 - `/wisebook`
@@ -103,11 +103,13 @@ Veil Heart    | Book       | Veil Heart
 
 - Custom enchant books apply through anvils and consume XP levels.
 - Java anvils and the Bedrock-safe custom path use the same validation, level caps, compatibility checks, and one-book consumption rules. Ordinary Bedrock operations use a real server-created anvil rather than an approximate custom calculation.
+- Anvil previews and finished items rebuild their enchant line from the actual result, so existing and newly added enchants always appear together.
 - Custom-enchanted vanilla tools and armor, including Replenish hoes, keep their SMPCore enchants when upgraded in a smithing table. Actual custom relics are still blocked from vanilla crafting and smithing, except Veil armor can use normal armor trims.
-- Custom enchants can be removed safely in a grindstone. Custom books must be ground by themselves so a second item cannot be consumed accidentally.
+- Custom enchants on ordinary gear can be removed safely in a grindstone. Custom books must be ground by themselves so a second item cannot be consumed accidentally.
+- Veil weapons and armor are grindstone-locked. Use the Runic Loom's Remove page and one craftable Unweaving Orb to remove one chosen vanilla or custom enchant without touching the rest.
 - Canceled enchant-table attempts do not grant Replenish or another custom enchant afterward.
 - Smelting Touch and Silk Touch cannot coexist. The anvil rejects the combination, while legacy conflicts keep Smelting Touch and remove Silk Touch.
 - The Runic Loom refuses conflicted gear before consuming a Runebloom Orb.
-- Dash cooldowns are stored on the player, so relogging does not bypass them.
+- Dash charge timers are stored on the player, so relogging or swapping weapons does not refill them.
 - Boss-crafted enchant books require real Veil boss materials.
 - Boss-crafted enchant books are tracked by the item audit system.

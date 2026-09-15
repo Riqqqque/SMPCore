@@ -65,8 +65,10 @@ public final class MotdListener implements Listener {
 
     private String renderMotd(List<String> lines, ServerListPingEvent event) {
         String raw = String.join("\n", lines);
+        int hidden = plugin.getPlayerManager() == null ? 0 : plugin.getPlayerManager().vanishedPlayerIds().size();
+        int visibleOnline = Math.max(0, event.getNumPlayers() - hidden);
         return raw
-            .replace("{online}", String.valueOf(event.getNumPlayers()))
+            .replace("{online}", String.valueOf(visibleOnline))
             .replace("{max}", String.valueOf(event.getMaxPlayers()))
             .replace("{host}", safe(event.getHostname()))
             .replace("{newline}", "\n");

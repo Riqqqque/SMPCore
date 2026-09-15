@@ -3,6 +3,8 @@ package me.rique.smpcore.power;
 import org.bukkit.util.Vector;
 import org.junit.jupiter.api.Test;
 
+import java.util.UUID;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -45,6 +47,7 @@ class SuperpowerManagerTest {
     void classCommandParserRecognizesAliasesAndNamespacedCommands() {
         assertTrue(SuperpowerManager.isClassAbilityCommand("/shadow toggle"));
         assertTrue(SuperpowerManager.isClassAbilityCommand("/sb"));
+        assertTrue(SuperpowerManager.isClassAbilityCommand("/bulwark"));
         assertTrue(SuperpowerManager.isClassAbilityCommand("/smpcore:msummon 4"));
         assertTrue(SuperpowerManager.isClassAbilityCommand("  /SMPCORE:DOMAINEXP  "));
         assertFalse(SuperpowerManager.isClassAbilityCommand("/spawn"));
@@ -59,6 +62,26 @@ class SuperpowerManagerTest {
         assertTrue(SuperpowerManager.shouldIgnorePassiveMobTarget(true, false));
         assertFalse(SuperpowerManager.shouldIgnorePassiveMobTarget(true, true));
         assertFalse(SuperpowerManager.shouldIgnorePassiveMobTarget(false, false));
+    }
+
+    @Test
+    void sentinelBraceReducesIncomingDamageByFortyPercent() {
+        assertEquals(6.0D, SuperpowerManager.sentinelBraceDamage(10.0D), 0.0001D);
+        assertEquals(0.0D, SuperpowerManager.sentinelBraceDamage(-5.0D), 0.0001D);
+    }
+
+    @Test
+    void physicallyGiftedUsesDistinctMobPlayerAndBossMultipliers() {
+        assertEquals(2.0D, SuperpowerManager.physicallyGiftedDamageMultiplier(false, false), 0.0001D);
+        assertEquals(1.75D, SuperpowerManager.physicallyGiftedDamageMultiplier(true, false), 0.0001D);
+        assertEquals(1.50D, SuperpowerManager.physicallyGiftedDamageMultiplier(false, true), 0.0001D);
+        assertEquals(1.50D, SuperpowerManager.physicallyGiftedDamageMultiplier(true, true), 0.0001D);
+    }
+
+    @Test
+    void physicallyGiftedAliasesResolveToTheSameClass() {
+        assertEquals(SuperpowerType.PHYSICALLY_GIFTED, SuperpowerType.fromId("physically gifted"));
+        assertEquals(SuperpowerType.PHYSICALLY_GIFTED, SuperpowerType.fromId("heavenly restriction"));
     }
 
     @Test
@@ -78,5 +101,17 @@ class SuperpowerManagerTest {
         assertFalse(SuperpowerManager.needsVirtualLapisRefill(true, false, true, 64));
         assertFalse(SuperpowerManager.needsVirtualLapisRefill(true, false, false, 12));
         assertFalse(SuperpowerManager.needsVirtualLapisRefill(false, true, false, 0));
+    }
+
+    @Test
+    void druidGrimoireOnlyStaysWithItsBoundDruid() {
+        UUID druid = UUID.randomUUID();
+        UUID otherPlayer = UUID.randomUUID();
+
+        assertTrue(SuperpowerManager.canKeepDruidGrimoire(true, druid, druid));
+        assertTrue(SuperpowerManager.canKeepDruidGrimoire(true, druid, null));
+        assertFalse(SuperpowerManager.canKeepDruidGrimoire(true, otherPlayer, druid));
+        assertFalse(SuperpowerManager.canKeepDruidGrimoire(false, druid, druid));
+        assertFalse(SuperpowerManager.canKeepDruidGrimoire(true, null, druid));
     }
 }

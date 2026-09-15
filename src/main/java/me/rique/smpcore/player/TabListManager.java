@@ -111,8 +111,6 @@ public final class TabListManager implements Listener {
             .sorted(ENTRY_ORDER)
             .toList();
         Set<UUID> onlineIds = new HashSet<>();
-        Component header = header(entries.size());
-
         for (int index = 0; index < entries.size(); index++) {
             TabEntry entry = entries.get(index);
             Player player = entry.player();
@@ -127,6 +125,7 @@ public final class TabListManager implements Listener {
                 player.setPlayerListOrder(index);
             }
 
+            Component header = header(visibleOnlineCount(player, entries));
             Component footer = footer(entry);
             PlayerPanel panel = new PlayerPanel(header, footer);
             if (!Objects.equals(panel, lastPanels.put(playerId, panel))) {
@@ -137,6 +136,20 @@ public final class TabListManager implements Listener {
         lastRows.keySet().removeIf(id -> !onlineIds.contains(id));
         lastOrders.keySet().removeIf(id -> !onlineIds.contains(id));
         lastPanels.keySet().removeIf(id -> !onlineIds.contains(id));
+    }
+
+    private static int visibleOnlineCount(Player viewer, List<TabEntry> entries) {
+        if (viewer == null || entries == null || entries.isEmpty()) {
+            return 0;
+        }
+        int visible = 0;
+        for (TabEntry entry : entries) {
+            Player target = entry.player();
+            if (target != null && (viewer.equals(target) || viewer.canSee(target))) {
+                visible++;
+            }
+        }
+        return visible;
     }
 
     private TabEntry entryFor(Player player) {

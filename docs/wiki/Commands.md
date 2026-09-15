@@ -10,7 +10,7 @@ Commands you cannot use are normally staff-only, class-only, or locked until `/s
 
 - `/menu` - main player hub.
 - `/settings` - Drop Safety, Spawn Music, and Boss Music.
-- `/reliquary` - custom items, recipes, Armory, utilities, and Mythic links.
+- `/reliquary` - the complete custom item hub: Armory, enchants, utilities, tools, legendaries, and Mythic links.
 - `/enchants` - custom enchant guide and boss-enchant recipes.
 - `/powerinfo` - class information.
 - `/familiar` - summon, dismiss, and inspect unlocked familiars.
@@ -58,12 +58,16 @@ Common aliases include `/smpmenu`, `/prefs`, `/lrecipes`, `/familiars`, `/lb`, `
 ### Teams and community
 
 - `/team create "name" [color]` - create a team.
-- `/team invite <player>` - owner invitation.
+- `/team invite <player>` - owner or captain invitation.
+- `/team captain add|remove <member>` - owner-only captain management. Captains can invite, control team damage, and sever alliances, but cannot create alliances, kick, or disband.
+- `/team captain list` - show the current captains.
+- `/team damage [on|off|toggle|status]` - owner/captain teammate and ally damage control. Allied PvP only works when both teams opt in.
 - `/team leave` - leave your team.
 - `/team disband` - owner-only team deletion; the vault must be empty.
 - `/team info` - members, owner, color, and allies.
 - `/team rename "name"` and `/team color <color>` - owner customization.
-- `/team ally add|accept|deny|remove <team>` - alliance management.
+- `/team ally add|accept|deny <team>` - leader-only alliance creation and requests.
+- `/team ally remove <team>` - leaders and captains can sever an existing alliance.
 - `/teams [search]` - searchable team browser.
 - `/teamvault` - team storage.
 - `/teamglow` - privately outline only your teammates through walls; the setting survives relogs and no extra name label is added.
@@ -86,10 +90,14 @@ Read [Duels and Betting](Duels-And-Betting) before placing a wager.
 ### Travel and survival
 
 - `/spawn` - exact spawn from any normal dimension, with safe cross-world loading and a short cooldown. Active boss fighters cannot use it to escape an encounter.
-- `/wild` (`/rtp`, `/randomtp`) - find safe Overworld ground inside the live world border. It stays away from protected spawn, loads candidate chunks asynchronously, and has a five-minute cooldown after a successful teleport.
+- `/wild` (`/rtp`, `/randomtp`) - find safe Overworld ground inside the live world border. It stays away from protected spawn, loads candidate chunks asynchronously, and has a 30-second cooldown after a successful teleport.
 - `/warp list` - show every public server warp.
 - `/warp <name>` or `/<name>` - travel to a public warp, such as `/tavern`.
 - `/sethome`, `/home`, `/homes`, `/delhome` - personal homes with safe cross-world travel. `/home` automatically leaves seats or mounts; combat, duel and boss arenas, world borders, and scheduled dimension locks still apply.
+- `/allysethome <name> [ally team]` - team leaders can set an unlimited shared home for one active alliance.
+- `/allyhome <name> [ally team]` - visit a shared alliance home. The ally name is optional when there is only one possible match.
+- `/allyhomes [ally team]` - list the shared homes available through active alliances.
+- `/allydelhome <name> [ally team]` - team leaders can delete a shared alliance home.
 - `/veinminer on|off|status` - toggle or inspect Vein Miner.
 - `/veinminer blocks` - personal vein list.
 - `/veinminer addblock [block]` and `/veinminer removeblock [block]` - edit that list.
@@ -102,6 +110,7 @@ Only the matching class can normally use these. Every class command and alias is
 
 - Veil Assassin: `/smokebomb`
 - Juggernaut: `/unstoppableforce`
+- Sentinel: `/bulwark`
 - Nightshade: `/shadow`, `/nightshadevision on|off|toggle|status`
 - Deadeye: `/deadeyearrows on|off|toggle|status`
 - Stormcaller: `/stormcaller on|off|toggle|status`
@@ -115,6 +124,15 @@ Only the matching class can normally use these. Every class command and alias is
 - The Honored One: `/infinity on|off|toggle|status`, `/domainexpansion`
 
 ## Staff Commands
+
+Operators keep access to staff commands but follow normal gameplay protections by default. `/staffmode on` temporarily enables passive staff interaction bypasses for the current session. Use `/staffmode off` when finished; reconnecting also returns to normal gameplay. `/staffmode status` shows the current state.
+
+### Staff manager
+
+- `/manager` - open the permission-aware staff command center. Commands are grouped by job with syntax, explanations, access requirements, and impact labels.
+- `/manager search <word>` - search by command, alias, system, or staff task.
+
+Routine status actions can run directly from the menu. Commands that need a player, amount, location, restore confirmation, or other high-impact input are placed into chat for review instead of running immediately. The menu still enforces each command's own permission.
 
 ### Launch, spawn, and access
 
@@ -145,6 +163,9 @@ Every main NPC root supports `spawn`, `remove`, `list`, and `refresh`:
 `/spawnnpc`, `/corruptionwarden`, `/mayor`, `/artificer`, `/dungeonkeeper`, `/brewmaster`, `/adventurer`, `/dealer`, `/croupier`, `/duelmaster`, `/goblinhunter`, `/miner`, `/farmer`, `/witch`, `/overseer`, `/beastwarden`, `/bossbroker`, `/blackmarket`, and `/fisher`.
 
 Run the root without a subcommand for its usage. See [NPC Directory](NPC-Directory) for names and player-facing jobs.
+
+- `/npchome here <Citizens ID>` - set a managed NPC's protected home to your exact location.
+- `/npchome set <ID> <world> <x> <y> <z>` - restore a managed NPC from console or in game, including unloaded NPCs.
 
 ### Boss Dungeon and testing
 
@@ -186,7 +207,7 @@ Run the root without a subcommand for its usage. See [NPC Directory](NPC-Directo
 - `/customitem give <item> [player]` - custom utility, boss trophy, and Veil items.
 - `/customitem give veinwake_pick <player>` - give an audited Veinwake Pick to an online player.
 - `/backpackadmin list|view|restore ...` and `/backpackadmin confirm|cancel` - inspect and safely restore bounded backpack snapshots.
-- `/itemrecovery list|view|restore ...` and `/itemrecovery confirm|cancel` - inspect and restore one verified item from a risky custom-inventory record.
+- `/itemrecovery list|view|verify|restore ...` and `/itemrecovery confirm|cancel` - inspect, live-check, and restore one verified item from a risky custom-inventory record.
 - `/legendary give <item> [player]` - legendary test item.
 - `/reforger spawn|remove|list|refresh` and `/reforger stone [player]` - Brannik and test stones.
 - `/priest spawn|remove|list|refresh` - Father Aldren.
@@ -215,6 +236,15 @@ Run the root without a subcommand for its usage. See [NPC Directory](NPC-Directo
 
 ### General staff utilities
 
-SMPCore also provides permission-gated moderation and convenience commands including `/fly`, `/speed`, `/heal`, `/feed`, `/god`, `/vanish`, `/freeze`, `/unfreeze`, `/invsee`, `/enderchest`, `/nick`, `/announce`, `/smite`, `/day`, `/night`, `/sun`, `/storm`, `/gmc`, `/gms`, `/gma`, and `/gmsp`.
+SMPCore also provides permission-gated moderation and convenience commands including `/fly`, `/speed`, `/heal`, `/feed`, `/god`, `/vanish`, `/freeze`, `/unfreeze`, `/invsee`, `/enderchest`, `/nick`, `/ban <player> [reason]`, `/kick <player> [reason]`, `/unban <player>`, `/announce`, `/smite`, `/day`, `/night`, `/sun`, `/storm`, `/gmc`, `/gms`, `/gma`, and `/gmsp`. Ban and kick reasons are optional; omit them to use the default reason.
+
+Vanish controls:
+
+- `/vanish` toggles normal secure vanish.
+- `/vanish spectator` hides you and enters a trace-free free-flight view. `/svanish spectator` is an alias.
+- `/vanish off` returns you to the location and game mode you had before spectator vanish.
+- `/vanish status` shows the active mode.
+
+Vanished staff are removed from player bodies, nameplates, Tab, `/list`, server-list samples and counts, teammate glow, familiars, tamed pets, mounts, summons, owned projectiles, mob targeting, item pickup, combat, inventories, and world interactions. Active class effects that could leave visible world traces are paused or closed. Only staff deliberately using the vanish-see permission in staff mode can see them.
 
 Permissions are defined in `paper-plugin.yml`. The [Admin Setup Checklist](Admin-Setup-Checklist) gives the safest order for configuring a fresh server.

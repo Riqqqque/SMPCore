@@ -1,5 +1,7 @@
 package me.rique.smpcore.npc;
 
+import io.papermc.paper.event.entity.EntityKnockbackEvent;
+import io.papermc.paper.event.entity.EntityMoveEvent;
 import me.rique.smpcore.SMPCore;
 import me.rique.smpcore.util.BedrockCompat;
 import me.rique.smpcore.util.MenuDupeGuardListener;
@@ -25,14 +27,19 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityTeleportEvent;
+import org.bukkit.event.entity.PlayerLeashEntityEvent;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerArmorStandManipulateEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.server.PluginEnableEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
+import org.bukkit.event.world.EntitiesLoadEvent;
+import org.bukkit.event.vehicle.VehicleEnterEvent;
 import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
@@ -42,6 +49,8 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.util.Vector;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -56,6 +65,7 @@ public final class GuideNpcManager implements Listener {
     private static final int MENU_SIZE = 36;
     private static final int CLOSE_SLOT = 31;
     private static final long NPC_OPEN_DEBOUNCE_MS = 450L;
+    private static final double NPC_POSITION_TOLERANCE_SQUARED = 0.0025D;
 
     private static final String ACTION_WELCOME = "welcome";
     private static final String ACTION_CHANGELOG = "changelog";
@@ -72,12 +82,15 @@ public final class GuideNpcManager implements Listener {
     private static final String ACTION_GEAR_MYTHIC = "gear_mythic";
     private static final String ACTION_GEAR_UTILITIES = "gear_utilities";
     private static final String ACTION_GEAR_ORDER = "gear_order";
+    private static final long NPC_POSITION_CHECK_TICKS = 5L;
 
     private final SMPCore plugin;
     private final NamespacedKey keyNpcType;
     private final NamespacedKey keyMenuAction;
     private final Map<UUID, Long> nextNpcOpenAt = new ConcurrentHashMap<>();
+    private final Map<UUID, Location> npcSpawnPoints = new ConcurrentHashMap<>();
     private GuideNpcBridge npcBridge;
+    private BukkitTask npcPositionTask;
 
     public GuideNpcManager(SMPCore plugin) {
         this.plugin = plugin;
@@ -87,10 +100,21 @@ public final class GuideNpcManager implements Listener {
 
     public void start() {
         tryEnableCitizensBridge();
+        trackLoadedNpcs();
+        npcPositionTask = Bukkit.getScheduler().runTaskTimer(
+            plugin,
+            this::restoreNpcPositions,
+            NPC_POSITION_CHECK_TICKS,
+            NPC_POSITION_CHECK_TICKS
+        );
         scheduleRefreshes();
     }
 
     public void shutdown() {
+        if (npcPositionTask != null) {
+            npcPositionTask.cancel();
+            npcPositionTask = null;
+        }
         for (Player player : Bukkit.getOnlinePlayers()) {
             Inventory top = player.getOpenInventory().getTopInventory();
             if (top.getHolder(false) instanceof GuideMenuHolder) {
@@ -102,10 +126,11 @@ public final class GuideNpcManager implements Listener {
             npcBridge = null;
         }
         nextNpcOpenAt.clear();
+        npcSpawnPoints.clear();
     }
 
     public Entity spawnNpc(GuideNpcType type, Location location) {
-        Location spawn = centeredSpawnLocation(location);
+        Location spawn = normalizedSpawnLocation(location);
         Entity citizensNpc = spawnCitizensNpc(type, spawn);
         if (citizensNpc != null) {
             spawnEffects(type, citizensNpc.getLocation());
@@ -117,6 +142,10 @@ public final class GuideNpcManager implements Listener {
         spawnEffects(type, armorStand.getLocation());
         plugin.getLogger().info("Spawned " + type.displayName + " at " + locationSummary(armorStand.getLocation()) + ".");
         return armorStand;
+    }
+
+    public Location normalizedSpawnLocation(Location location) {
+        return centeredSpawnLocation(location);
     }
 
     public int removeNearest(GuideNpcType type, Location origin, double radius) {
@@ -162,6 +191,32 @@ public final class GuideNpcManager implements Listener {
             }
         }
         return refreshed;
+    }
+
+    public void trackNpc(Entity entity, Location preferredSpawn) {
+        if (!NpcAnchorStore.isManagedNpc(entity)) {
+            return;
+        }
+        Location anchor = NpcAnchorStore.read(entity);
+        if (anchor == null) {
+            anchor = preferredSpawn == null ? entity.getLocation() : preferredSpawn;
+            NpcAnchorStore.remember(entity, anchor);
+        }
+        if (anchor.getWorld() != null) {
+            npcSpawnPoints.put(entity.getUniqueId(), anchor.clone());
+        }
+    }
+
+    public boolean setNpcAnchor(Entity entity, Location anchor) {
+        if (!NpcAnchorStore.isManagedNpc(entity) || anchor == null || anchor.getWorld() == null) {
+            return false;
+        }
+        Location safeAnchor = anchor.clone();
+        NpcAnchorStore.remember(entity, safeAnchor);
+        npcSpawnPoints.put(entity.getUniqueId(), safeAnchor);
+        entity.leaveVehicle();
+        entity.setVelocity(new Vector());
+        return entity.teleport(safeAnchor, PlayerTeleportEvent.TeleportCause.COMMAND);
     }
 
     public void openMenuFromNpc(Player player, GuideNpcType type) {
@@ -458,13 +513,13 @@ public final class GuideNpcManager implements Listener {
             "<red>Some outcomes weaken or destroy it.</red>"
         ), ACTION_GEAR_CORRUPTION));
         inventory.setItem(16, item(Material.ENDER_EYE, "<light_purple><bold>All Orbs</bold></light_purple>", List.of(
-            "<gray>Warden's Lure, Veilshift, Runebloom,</gray>",
+            "<gray>Warden's Lure, Veilshift, Runebloom, Unweaving,</gray>",
             "<gray>Orb of the Mystics, and " + soulImprintName(player) + ".</gray>",
             "<yellow>Click to learn where each one belongs.</yellow>"
         ), ACTION_GEAR_ORBS));
         inventory.setItem(19, item(Material.LOOM, "<aqua><bold>Runic Loom</bold></aqua>", List.of(
-            "<gray>Push an existing enchant beyond its normal edge.</gray>",
-            "<yellow>Click for requirements and safe caps.</yellow>"
+            "<gray>Upgrade or selectively remove existing enchants.</gray>",
+            "<yellow>Click for both pages, fuels, and safe caps.</yellow>"
         ), ACTION_GEAR_RUNIC));
         inventory.setItem(21, item(Material.LODESTONE, "<red><bold>Fate Crucible</bold></red>", List.of(
             "<gray>Gamble an entire rare-currency stack.</gray>",
@@ -553,19 +608,23 @@ public final class GuideNpcManager implements Listener {
         inventory.setItem(12, help(Material.ENDER_EYE, "Veilshift Orb", "Click armor, a weapon, or a tool.", "Rolls one bonus stat; another orb replaces it."));
         inventory.setItem(14, help(Material.EXPERIENCE_BOTTLE, "Runebloom Orb", "Fuel for the Runic Loom.", "Raises one chosen existing enchant by +1 or +2."));
         inventory.setItem(16, help(Material.ENDER_PEARL, "Orb of the Mystics", "A single-use Enderman drop that summons", "a random legendary altar; caller cooldown is 1 hour."));
+        inventory.setItem(18, help(Material.AMETHYST_SHARD, "Unweaving Orb", "Cheap Runic Loom removal fuel.", "Removes one enchant you choose and refunds no XP."));
         inventory.setItem(20, help(Material.END_CRYSTAL, imprintName, "Click the same eligible gear item three times.", "Creates a copy that cannot be imprinted or corrupted again."));
         inventory.setItem(22, help(Material.LODESTONE, "Fate-Compatible Currency", "Veil orbs and " + imprintName + " can be gambled", "as a whole stack in the Fate Crucible."));
         inventory.setItem(24, help(Material.BOOK, "Find Recipes", "Open /reliquary, then Armory of the Veil", "or Mythic Works for exact ingredient lists."));
     }
 
     private void renderRunicHelp(Inventory inventory) {
-        inventory.setItem(4, helpTitle(Material.LOOM, "Runic Loom", "Controlled enchant growth beyond normal limits."));
+        inventory.setItem(4, helpTitle(Material.LOOM, "Runic Loom", "Controlled enchant upgrades and exact removal."));
         inventory.setItem(10, help(Material.NETHERITE_SWORD, "Eligible Gear", "Insert one armor, tool, or weapon with", "at least 4 existing enchants."));
         inventory.setItem(12, help(Material.EXPERIENCE_BOTTLE, "Fuel", "Insert 1 Runebloom Orb.", "One orb is consumed for every successful upgrade."));
         inventory.setItem(14, help(Material.ENCHANTED_BOOK, "Choose the Enchant", "The menu lists eligible enchants already on the item.", "Pick exactly which enchant receives the roll."));
         inventory.setItem(16, help(Material.LIME_DYE, "The Roll", "Even odds of +1 or +2.", "The result is clamped to the loom's safe cap."));
         inventory.setItem(22, help(Material.BARRIER, "Restrictions", "Corrupted gear is locked out.", "An enchant already at the runic cap cannot rise again."));
         inventory.setItem(24, help(Material.CRAFTING_TABLE, "Reliable Orb Route", "1 Awakening Shard, 2 Riftglass Lenses,", "32 XP Bottles, and 32 Lapis Lazuli."));
+        inventory.setItem(28, help(Material.SHEARS, "Remove Page", "Use the bottom-left page button to switch modes.", "Choose one removable enchant; nothing else is touched."));
+        inventory.setItem(30, help(Material.AMETHYST_SHARD, "Unweaving Recipe", "4 Amethyst, 8 XP Bottles, 16 Lapis,", "and 8 String. One orb removes one enchant."));
+        inventory.setItem(32, help(Material.GRINDSTONE, "Veil Gear Lock", "Grindstones cannot strip Veil weapons or armor.", "Use this removal page for those items."));
     }
 
     private void renderFateHelp(Player player, Inventory inventory) {
@@ -773,6 +832,131 @@ public final class GuideNpcManager implements Listener {
             equipment.setItemInMainHand(new ItemStack(type.handItem));
         }
         armorStand.getPersistentDataContainer().set(keyNpcType, PersistentDataType.STRING, type.id);
+        trackNpc(armorStand, armorStand.getLocation());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onNpcMove(EntityMoveEvent event) {
+        Entity entity = event.getEntity();
+        if (!event.hasChangedPosition() || !anchoredNpc(entity) || allowsControlledNpcMovement(entity)) {
+            return;
+        }
+        event.setCancelled(true);
+        entity.setVelocity(new Vector());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onNpcKnockback(EntityKnockbackEvent event) {
+        Entity entity = event.getEntity();
+        if (!anchoredNpc(entity)) {
+            return;
+        }
+        event.setCancelled(true);
+        entity.setVelocity(new Vector());
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onNpcTeleport(EntityTeleportEvent event) {
+        if (!anchoredNpc(event.getEntity()) || allowsControlledNpcMovement(event.getEntity())) {
+            return;
+        }
+        Location anchor = npcSpawnPoints.get(event.getEntity().getUniqueId());
+        Location destination = event.getTo();
+        if (anchor != null && (destination.getWorld() != anchor.getWorld()
+            || npcPositionNeedsRestore(destination.distanceSquared(anchor)))) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onNpcPlayerTeleport(PlayerTeleportEvent event) {
+        if (!anchoredNpc(event.getPlayer()) || allowsControlledNpcMovement(event.getPlayer())) {
+            return;
+        }
+        Location anchor = npcSpawnPoints.get(event.getPlayer().getUniqueId());
+        Location destination = event.getTo();
+        if (anchor != null && (destination.getWorld() != anchor.getWorld()
+            || npcPositionNeedsRestore(destination.distanceSquared(anchor)))) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onNpcEnterVehicle(VehicleEnterEvent event) {
+        if (anchoredNpc(event.getEntered())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onNpcLeash(PlayerLeashEntityEvent event) {
+        if (anchoredNpc(event.getEntity())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler
+    public void onNpcEntitiesLoad(EntitiesLoadEvent event) {
+        for (Entity entity : event.getEntities()) {
+            if (NpcAnchorStore.isManagedNpc(entity)) {
+                trackNpc(entity, entity.getLocation());
+            }
+        }
+    }
+
+    private void trackLoadedNpcs() {
+        for (World loadedWorld : Bukkit.getWorlds()) {
+            for (Entity entity : loadedWorld.getEntities()) {
+                if (NpcAnchorStore.isManagedNpc(entity)) {
+                    trackNpc(entity, entity.getLocation());
+                }
+            }
+        }
+    }
+
+    private void restoreNpcPositions() {
+        for (Map.Entry<UUID, Location> entry : npcSpawnPoints.entrySet()) {
+            Entity entity = Bukkit.getEntity(entry.getKey());
+            if (entity == null || !entity.isValid() || !NpcAnchorStore.isManagedNpc(entity)) {
+                npcSpawnPoints.remove(entry.getKey(), entry.getValue());
+                continue;
+            }
+            if (allowsControlledNpcMovement(entity)) {
+                continue;
+            }
+            Location anchor = entry.getValue();
+            Location current = entity.getLocation();
+            boolean differentWorld = current.getWorld() != anchor.getWorld();
+            double distanceSquared = differentWorld ? Double.POSITIVE_INFINITY : current.distanceSquared(anchor);
+            if (!npcPositionNeedsRestore(distanceSquared)) {
+                if (entity.getVelocity().lengthSquared() > 1.0E-8D) {
+                    entity.setVelocity(new Vector());
+                }
+                continue;
+            }
+            entity.leaveVehicle();
+            entity.setVelocity(new Vector());
+            entity.teleport(anchor, PlayerTeleportEvent.TeleportCause.PLUGIN);
+        }
+    }
+
+    private boolean anchoredNpc(Entity entity) {
+        if (!NpcAnchorStore.isManagedNpc(entity)) {
+            return false;
+        }
+        if (!npcSpawnPoints.containsKey(entity.getUniqueId())) {
+            trackNpc(entity, entity.getLocation());
+        }
+        return npcSpawnPoints.containsKey(entity.getUniqueId());
+    }
+
+    private boolean allowsControlledNpcMovement(Entity entity) {
+        return plugin.getSpawnLifeManager() != null
+            && plugin.getSpawnLifeManager().allowsNpcMovement(entity);
+    }
+
+    static boolean npcPositionNeedsRestore(double distanceSquared) {
+        return !Double.isFinite(distanceSquared) || distanceSquared > NPC_POSITION_TOLERANCE_SQUARED;
     }
 
     private List<Entity> findFallbackNpcs(GuideNpcType type) {

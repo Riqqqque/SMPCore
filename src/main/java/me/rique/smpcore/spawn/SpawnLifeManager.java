@@ -125,6 +125,10 @@ public final class SpawnLifeManager implements Listener {
         ambientTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickAmbientNpcs, 100L, 40L);
     }
 
+    public boolean allowsNpcMovement(Entity entity) {
+        return entity != null && fetchByDog.containsKey(entity.getUniqueId());
+    }
+
     public void shutdown() {
         if (fetchTask != null) {
             fetchTask.cancel();

@@ -11,6 +11,12 @@ Quick references:
 - [Boss Dungeon](Bosses-And-Rituals) - costs, combat rules, queue, arena, and test controls.
 - [Bedrock and Geyser](Bedrock-And-Geyser) - connection, controls, packs, mappings, and verification.
 
+## Operator Gameplay Mode
+
+Operators join under normal player rules. OP still grants staff commands, but it no longer silently bypasses spawn protection, travel cooldowns, world borders, scheduled dimensions, naked-PvP safeguards, shop and stall ownership, boss-dungeon protection, hidden collectibles, or admin-only station placement.
+
+Use `/staffmode on` only while doing hands-on staff work that needs those interaction bypasses. `/staffmode off` returns to normal gameplay immediately, and reconnecting always starts with staff mode off. `/staffmode` or `/staffmode status` shows the current state.
+
 ## The Eleventh Oath
 
 The story layer uses the existing NPC, boss, quest, item, and dungeon IDs. It never replaces their normal menus, objectives, costs, loot, or recovery rules.

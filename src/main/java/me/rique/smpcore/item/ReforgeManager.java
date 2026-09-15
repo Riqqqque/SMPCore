@@ -454,7 +454,7 @@ public final class ReforgeManager implements Listener {
         Bukkit.getScheduler().runTaskLater(plugin, () -> discoverRecipes(event.getPlayer()), 20L);
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerKick(PlayerKickEvent event) {
         returnOpenReforgeInputs(event.getPlayer());
     }
@@ -533,6 +533,9 @@ public final class ReforgeManager implements Listener {
         }
         equipDwarf(armorStand);
         armorStand.getPersistentDataContainer().set(keyNpc, PersistentDataType.BYTE, (byte) 1);
+        if (plugin.getGuideNpcManager() != null) {
+            plugin.getGuideNpcManager().trackNpc(armorStand, armorStand.getLocation());
+        }
     }
 
     private void equipDwarf(ArmorStand armorStand) {

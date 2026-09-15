@@ -63,6 +63,17 @@ public final class InventoryRecoveryCommand {
                             .executes(context -> view(plugin, context.getSource().getSender(),
                                 StringArgumentType.getString(context, "player"),
                                 StringArgumentType.getString(context, "snapshot"))))))
+                .then(Commands.literal("verify")
+                    .then(Commands.argument("player", StringArgumentType.word())
+                        .suggests((context, builder) -> suggestPlayers(builder))
+                        .then(Commands.argument("snapshot", StringArgumentType.word())
+                            .suggests((context, builder) -> suggestSnapshots(plugin,
+                                StringArgumentType.getString(context, "player"), builder))
+                            .then(Commands.argument("item", IntegerArgumentType.integer(1))
+                                .executes(context -> verify(plugin, context.getSource().getSender(),
+                                    StringArgumentType.getString(context, "player"),
+                                    StringArgumentType.getString(context, "snapshot"),
+                                    IntegerArgumentType.getInteger(context, "item")))))))
                 .then(Commands.literal("restore")
                     .then(Commands.argument("player", StringArgumentType.word())
                         .suggests((context, builder) -> suggestPlayers(builder))
@@ -88,6 +99,7 @@ public final class InventoryRecoveryCommand {
         sender.sendMessage(MessageUtil.info("Risky inventory recovery:"));
         sender.sendMessage(MessageUtil.info("/itemrecovery list <player> [page]"));
         sender.sendMessage(MessageUtil.info("/itemrecovery view <player> [latest|id]"));
+        sender.sendMessage(MessageUtil.info("/itemrecovery verify <player> <id> <item-number>"));
         sender.sendMessage(MessageUtil.info("/itemrecovery restore <player> <id> <item-number>"));
         sender.sendMessage(MessageUtil.info("/itemrecovery confirm or /itemrecovery cancel"));
         return Command.SINGLE_SUCCESS;
@@ -142,6 +154,47 @@ public final class InventoryRecoveryCommand {
                 + MM.escapeTags(name) + "  <gray>" + item.source() + " slot " + item.slot() + "</gray>  <yellow>"
                 + RiskyInventoryRecoveryManager.stateName(item.state()) + "</yellow>"));
         }
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int verify(SMPCore plugin, CommandSender sender, String input, String selector, int itemNumber) {
+        ResolvedPlayer resolved = resolvePlayer(plugin, input);
+        if (resolved == null) {
+            sender.sendMessage(MessageUtil.error("Player not found. Use an exact name or UUID."));
+            return 0;
+        }
+        Player target = Bukkit.getPlayer(resolved.uuid());
+        if (target == null || !target.isOnline()) {
+            sender.sendMessage(MessageUtil.error("The player must be online to verify their live inventory and ender chest."));
+            return 0;
+        }
+        SnapshotResult result = plugin.getRiskyInventoryRecoveryManager().findSnapshot(resolved.uuid(), selector);
+        if (result.snapshot() == null) {
+            sender.sendMessage(MessageUtil.error(result.error()));
+            return 0;
+        }
+        RecoveryItem selected = result.snapshot().items().stream()
+            .filter(item -> item.number() == itemNumber).findFirst().orElse(null);
+        if (selected == null || selected.item() == null) {
+            sender.sendMessage(MessageUtil.error("That item number is invalid."));
+            return 0;
+        }
+
+        List<String> locations = plugin.getRiskyInventoryRecoveryManager()
+            .findExactItemLocations(target, selected.item());
+        String itemName = MM.escapeTags(RiskyInventoryRecoveryManager.displayName(selected.item()));
+        if (!locations.isEmpty()) {
+            sender.sendMessage(MessageUtil.warn("Exact match found for <white>" + itemName + "</white> at <yellow>"
+                + MM.escapeTags(String.join(", ", locations)) + "</yellow>. Do not compensate this record."));
+            plugin.getLogger().info("Inventory claim check by " + sender.getName() + " found snapshot "
+                + result.snapshot().info().shortId() + " item " + itemNumber + " still present for " + resolved.name()
+                + " at " + String.join(", ", locations) + ".");
+            return Command.SINGLE_SUCCESS;
+        }
+        sender.sendMessage(MessageUtil.info("No exact live match was found for <white>" + itemName
+            + "</white>. This is evidence for review, not proof by itself; compare surrounding snapshots before restoring."));
+        plugin.getLogger().info("Inventory claim check by " + sender.getName() + " found no exact live match for snapshot "
+            + result.snapshot().info().shortId() + " item " + itemNumber + " for " + resolved.name() + ".");
         return Command.SINGLE_SUCCESS;
     }
 
@@ -213,6 +266,8 @@ public final class InventoryRecoveryCommand {
         }
         target.sendMessage(MessageUtil.success("Staff restored a verified missing item from inventory recovery."));
         sender.sendMessage(MessageUtil.success(result.message()));
+        plugin.getLogger().warning("Inventory recovery approved by " + sender.getName() + " for " + pending.targetName()
+            + ", snapshot " + pending.snapshotId() + ", item " + pending.itemNumber() + ".");
         return Command.SINGLE_SUCCESS;
     }
 

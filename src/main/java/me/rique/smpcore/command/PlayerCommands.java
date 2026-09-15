@@ -14,6 +14,7 @@ import me.rique.smpcore.power.SuperpowerType;
 import me.rique.smpcore.util.CommandSuggestionUtil;
 import me.rique.smpcore.util.LocationUtil;
 import me.rique.smpcore.util.MessageUtil;
+import me.rique.smpcore.util.OperatorGameplayMode;
 import me.rique.smpcore.util.ScheduledDimensionPolicy;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -65,6 +66,7 @@ public final class PlayerCommands {
         registerDomainExpansion(commands, plugin);
         registerInfinity(commands, plugin);
         registerUnstoppableForce(commands, plugin);
+        registerSentinelBulwark(commands, plugin);
         registerDeadeyeArrows(commands, plugin);
         registerArcanistBook(commands, plugin);
         registerOathSummon(commands, plugin);
@@ -565,6 +567,25 @@ public final class PlayerCommands {
         return powers.handleUnstoppableForceCommand(player) ? Command.SINGLE_SUCCESS : 0;
     }
 
+    private static void registerSentinelBulwark(Commands commands, SMPCore plugin) {
+        commands.register(
+            Commands.literal("bulwark")
+                .requires(src -> canUsePowerCommand(plugin, src.getSender(), SuperpowerType.SENTINEL))
+                .executes(ctx -> runSentinelBulwark(plugin, (Player) ctx.getSource().getSender()))
+                .build(),
+            "Raise a Sentinel bulwark around nearby teammates"
+        );
+    }
+
+    private static int runSentinelBulwark(SMPCore plugin, Player player) {
+        SuperpowerManager powers = plugin.getSuperpowerManager();
+        if (powers == null) {
+            player.sendMessage(MessageUtil.error("Class system is not ready yet."));
+            return 0;
+        }
+        return powers.handleSentinelBulwarkCommand(player) ? Command.SINGLE_SUCCESS : 0;
+    }
+
     private static void registerDeadeyeArrows(Commands commands, SMPCore plugin) {
         commands.register(
             Commands.literal("deadeyearrows")
@@ -924,7 +945,7 @@ public final class PlayerCommands {
         if (to != World.Environment.NETHER && to != World.Environment.THE_END) {
             return false;
         }
-        boolean bypass = player.hasPermission("smpcore.startsmp.bypass-dimension-lock");
+        boolean bypass = OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.startsmp.bypass-dimension-lock");
         boolean unlocked = plugin.getSmpStartManager() == null || plugin.getSmpStartManager().isDimensionUnlocked(to);
         if (!ScheduledDimensionPolicy.blocksTravel(from, to, bypass, unlocked)) {
             return false;
@@ -935,7 +956,7 @@ public final class PlayerCommands {
     }
 
     private static boolean canUseSpawn(SMPCore plugin, Player player) {
-        if (player.hasPermission("smpcore.spawn.cooldown.bypass")) {
+        if (OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.spawn.cooldown.bypass")) {
             return true;
         }
         int cooldownSeconds = plugin.getConfigManager().spawnCooldownSeconds;
@@ -954,7 +975,8 @@ public final class PlayerCommands {
 
     private static void startSpawnCooldown(SMPCore plugin, Player player) {
         int cooldownSeconds = plugin.getConfigManager().spawnCooldownSeconds;
-        if (cooldownSeconds <= 0 || player.hasPermission("smpcore.spawn.cooldown.bypass")) {
+        if (cooldownSeconds <= 0
+            || OperatorGameplayMode.allowsPassiveBypass(player, "smpcore.spawn.cooldown.bypass")) {
             return;
         }
         UUID playerId = player.getUniqueId();
@@ -1047,6 +1069,9 @@ public final class PlayerCommands {
         }
         if (player.hasPermission("smpcore.home")) {
             lines.add("<gray><white>/home [name]</white>, <white>/sethome [name]</white>, <white>/delhome [name]</white>, <white>/homes</white></gray>");
+        }
+        if (player.hasPermission("smpcore.allyhome")) {
+            lines.add("<gray><white>/allyhome <name> [ally]</white>, <white>/allyhomes</white> - Shared alliance homes</gray>");
         }
         if (player.hasPermission("smpcore.team")) {
             lines.add("<gray><white>/team</white> - Team management commands</gray>");

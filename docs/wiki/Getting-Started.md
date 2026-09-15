@@ -42,7 +42,7 @@ Awakening and corruption are alternative final paths. Awakened items cannot be c
 
 1. Open `/bossrituals` to preview the ten boss tiers and costs.
 2. Prepare enchanted diamond gear for the **Veilbound Marshal**.
-3. Bring 25 Essence, 1 Bell, 1 Golden Sword, 1 Soul Sand, and 2 Gold Blocks.
+3. Bring 25 Essence, 1 Bell, and 1 Golden Sword.
 4. Speak to **Malakar the Gatekeeper** at spawn and enter the Boss Dungeon.
 5. Confirm the boss with the inner Gatekeeper. Payment is taken only when your fight reaches the front of the queue.
 6. Your team members already in the dungeon join automatically. Other online teammates and allies can accept during the 10-second preparation countdown.
